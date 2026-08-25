@@ -65,7 +65,7 @@ pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
 }
 
 /// Returns whether this AST has any diagnostic errors.
-pub fn hasErrors(self: *AST) bool {
+pub fn hasErrors(self: *const AST) bool {
     return self.tokenize_diagnostics.items.len > 0 or self.parse_diagnostics.items.len > 0;
 }
 
@@ -420,7 +420,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
 
     return switch (diagnostic.tag) {
         .multiple_platforms => reportParseProblem(ctx, "Multiple Platforms", "I was parsing an app header, and it names more than one platform.", "An app can use exactly one `platform` entry. Keep the platform entry you want to run with, and make every other dependency a normal package string.", .{ .example = "app [main] { pf: platform \"../platform/main.roc\", json: \"../json/main.roc\" }" }),
-        .no_platform => reportParseProblem(ctx, "Missing Platform", "I was parsing an app header, and I could not find a platform entry.", "App headers must include one field whose value starts with `platform`. That platform tells Roc how to run the app.", .{ .example = "app [main] { pf: platform \"../basic-cli/platform.roc\" }" }),
         .invalid_roc_version => reportParseProblem(ctx, "Invalid Roc Version", "I was parsing the `roc` entry of a header, and I did not recognize this version.", "The `roc` entry pins the version of the Roc compiler this file is written for. It must be a string holding either a nightly tag or a release version.", .{ .example = "roc: \"nightly-2026-08-05-24f0b47\"", .show_found = false }),
         .duplicate_roc_version => reportParseProblem(ctx, "Duplicate Roc Version", "I was parsing a header, and it pins the `roc` version more than once.", "A header can pin at most one compiler version. Remove the extra `roc` entries.", .{ .example = "roc: \"nightly-2026-08-05-24f0b47\"", .show_found = false }),
         .roc_version_key_is_reserved => reportParseProblem(ctx, "Reserved Dependency Name", "I was parsing a dependency record, and `roc` is used as the name of a platform or package.", "The `roc` name is reserved for pinning the compiler version, so it cannot name a dependency. Pick a different name for this one.", .{ .example = "pf: platform \"../platform/main.roc\"", .show_found = false }),
@@ -474,6 +473,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .import_exposing_no_open => reportParseProblem(ctx, "Expected Exposing List", "I was parsing an import exposing clause, and I expected `[` after `exposing`.", "The imported names go in square brackets after `exposing`.", .{ .example = "import Json exposing [decode, encode]" }),
         .import_exposing_no_close => reportParseProblem(ctx, "Expected Closing Bracket", "I was parsing an import exposing clause, and I expected a closing `]`.", "Close the exposing list after the final imported name.", .{ .example = "import Json exposing [decode, encode]" }),
         .expected_type_field_name => reportParseProblem(ctx, "Expected Type Field", "I was parsing a record type, and I expected a field name.", "Record type fields start with lowercase names, `_`, or named underscores, followed by `:` and the field type.", .{ .example = "{ name : Str, age : U64 }" }),
+        .optional_unnamed_record_field => reportParseProblem(ctx, "Optional Padding Field", "I found an optional marker on an unnamed record field.", "Unnamed record fields are fixed layout padding and cannot be accessed, so their presence cannot be optional. Give the field a lowercase name or remove the `?` marker.", .{ .example = "{ value ?: U64, _padding : U32 }" }),
         .expected_colon_after_type_field_name => reportParseProblem(ctx, "Expected Field Type", "I was parsing a record type field, and I expected `:` after the field name.", "Record type fields use a colon between the field name and its type.", .{ .example = "{ name : Str }" }),
         .expected_arrow => reportParseProblem(ctx, "Expected Function Arrow", "I was parsing a function type, and I expected `->` or `=>` before the return type.", "Function types list argument types first, then an arrow, then the return type.", .{ .example = "Str, U64 -> Bool" }),
         .multi_arrow_needs_parens => reportParseProblem(ctx, "Ambiguous Function Type", "I was parsing a function type, and multiple arrows need parentheses.", "Use parentheses to say whether the function returns another function or takes a function as an argument.", .{ .example = "a -> (b -> c)\n(a -> b) -> c", .show_found = false }),
@@ -496,8 +496,10 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .return_outside_function => reportParseProblem(ctx, "Return Outside Function", "I was parsing a statement, and `return` appeared outside a function body.", "`return` exits from the current function. Move it inside a function body, or remove it if this code is already the final expression.", .{ .example = "foo = |x| {\n    if x < 0 { return Err(Negative) }\n    Ok(x)\n}" }),
         .expected_expr_record_field_name => reportParseProblem(ctx, "Expected Record Field", "I was parsing a record expression, and I expected a lowercase field name.", "Record fields start with lowercase names. After the name, either write `: value` or omit the value to use field punning.", .{ .example = "{ name: \"Ada\", age }" }),
         .record_field_name_cannot_be_var => reportParseProblem(ctx, "Invalid Record Field Name", "Record field names cannot start with a dollar sign.", "Names that start with `$` are reassignable variables declared with the `var` keyword, so they cannot be used as record field names.", .{ .show_found = false }),
+        .optional_field_mark_after_colon => reportParseProblem(ctx, "Invalid Optional Field Syntax", "I was parsing a record type, and this optional field puts the `?` after the `:`.", "Optional fields are written with the `?` before the `:`: `?:` declares the field optional.", .{ .example = "{ name ?: Str }", .show_found = false }),
         .expected_ty_apply_close_round => reportParseProblem(ctx, "Expected Type Argument End", "I was parsing type arguments, and I expected `)`.", "Type applications put their arguments inside parentheses.", .{ .example = "Dict(Str, U64)" }),
         .expected_expr_apply_close_round => reportParseProblem(ctx, "Expected Call Argument End", "I was parsing function or method call arguments, and I expected `)`.", "Function call arguments go inside parentheses and are separated with commas.", .{ .example = "add(1, 2)" }),
+        .optional_field_access_cannot_be_called_directly => reportParseProblem(ctx, "Optional Field Query Cannot Be Called Directly", "I found call arguments immediately after an optional field query.", "The `.?` operator queries a runtime-optional field and produces a `Try`, not the field value itself. Handle or propagate the query result first, then call the extracted function.", .{ .example = "call = |record, arg| record.?function?(arg)" }),
         .where_expected_open_bracket => reportParseProblem(ctx, "Expected Where Clause List", "I was parsing a `where` clause, and I expected `[`.", "Where constraints are written in a square-bracketed list after `where`.", .{ .example = "where [a.hash : a -> U64]" }),
         .where_expected_close_bracket => reportParseProblem(ctx, "Expected Where Clause End", "I was parsing a `where` clause, and I expected `]`.", "Close the where constraint list after the final constraint.", .{ .example = "where [a.hash : a -> U64]" }),
         .where_expected_var => reportParseProblem(ctx, "Expected Type Variable", "I was parsing a `where` constraint, and I expected a lowercase type variable.", "A where constraint starts with the type variable being constrained.", .{ .example = "where [a.hash : a -> U64]" }),
@@ -521,7 +523,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .expected_ty_anno_close_round_or_comma => reportParseProblem(ctx, "Expected Type Separator", "I was parsing type parameters, and I expected `,` or `)`.", "Separate type parameters with commas and close the parameter list with `)`.", .{ .example = "Result(ok, err)" }),
         .expected_expr_comma => reportParseProblem(ctx, "Expected Comma", "I was parsing a record update, and I expected `,` before the fields.", "A record update writes the base record after `..`, then a comma, then the updated fields.", .{ .example = "{ ..person, name: \"Ada\" }" }),
         .expected_expr_close_curly => reportParseProblem(ctx, "Expected Closing Brace", "I was parsing a block expression, and I expected `}` before the file ended.", "Close the block after its final statement or expression.", .{ .example = "{\n    answer = 42\n    answer\n}" }),
-        .expr_dot_suffix_not_allowed => reportParseProblem(ctx, "Expected Record Accessor", "I was parsing access after `.`, and I expected a field name or tuple index.", "Record access uses a lowercase field name like `.name`. Tuple access uses a number like `.0`. Uppercase names, malformed names, and a bare `.` are not valid accessors.", .{ .example = "person.name\npair.0" }),
+        .expr_dot_suffix_not_allowed => reportParseProblem(ctx, "Expected Record Accessor", "I was parsing access after `.`, and I expected a field name or tuple index.", "Required record access uses `.name`, optional record access uses `.?name`, and tuple access uses `.0`. Accessor names must be lowercase and adjacent to their punctuation.", .{ .example = "person.name\nmaybe_person.?name\npair.0" }),
         .incomplete_import => reportParseProblem(ctx, "Incomplete Import", "I was parsing an import, and the module path is incomplete.", "Imports must name a module, optionally with a qualifier and exposing list.", .{ .example = "import Json/Decode exposing [decode]" }),
         .file_import_expected_as => reportParseProblem(ctx, "Expected File Import Name", "I was parsing a file import, and I expected `as` after the path.", "File imports give the file contents a local name using `as`.", .{ .example = "import \"data.txt\" as data : Str" }),
         .file_import_expected_name => reportParseProblem(ctx, "Expected File Import Binding", "I was parsing a file import, and I expected a lowercase binding name.", "The name after `as` is the local value that will contain the imported file contents.", .{ .example = "import \"data.txt\" as data : Str" }),
@@ -556,7 +558,6 @@ pub const Diagnostic = struct {
     /// different types of diagnostic errors
     pub const Tag = enum {
         multiple_platforms,
-        no_platform,
         invalid_roc_version,
         duplicate_roc_version,
         roc_version_key_is_reserved,
@@ -610,6 +611,8 @@ pub const Diagnostic = struct {
         import_exposing_no_open,
         import_exposing_no_close,
         expected_type_field_name,
+        /// Optional fields must be named; `_` fields are fixed layout padding.
+        optional_unnamed_record_field,
         expected_colon_after_type_field_name,
         expected_arrow,
         multi_arrow_needs_parens,
@@ -633,8 +636,11 @@ pub const Diagnostic = struct {
         expected_expr_record_field_name,
         /// `$name` idents are reassignable variables and cannot name record fields
         record_field_name_cannot_be_var,
+        optional_field_mark_after_colon,
         expected_ty_apply_close_round,
         expected_expr_apply_close_round,
+        /// `record.?field(args)` attempts to call the `Try` produced by an optional field query.
+        optional_field_access_cannot_be_called_directly,
         where_expected_open_bracket,
         where_expected_close_bracket,
         where_expected_var,
@@ -788,6 +794,42 @@ pub fn resolveQualifiedName(
 
         return raw_text;
     }
+}
+
+/// Push a qualified name assembled from its interned identifier tokens. Unlike
+/// `resolveQualifiedName`, this intentionally excludes trivia between segments.
+fn pushQualifiedNameString(
+    self: *const AST,
+    env: *const CommonEnv,
+    tree: *SExprTree,
+    qualifiers: Token.Span,
+    final_token: Token.Idx,
+) std.mem.Allocator.Error!void {
+    const qualifier_tokens = self.store.tokenSlice(qualifiers);
+    const final_ident = self.tokens.resolveIdentifier(final_token) orelse unreachable;
+
+    var byte_count = env.getIdent(final_ident).len;
+    for (qualifier_tokens) |raw_token| {
+        const segment = self.tokens.resolveIdentifier(@intCast(raw_token)) orelse unreachable;
+        byte_count += env.getIdent(segment).len + 1;
+    }
+
+    const begin = try tree.reserveStringBuffer(byte_count);
+    const buffer = tree.reservedStringBuffer(begin);
+    var offset: usize = 0;
+    for (qualifier_tokens) |raw_token| {
+        const segment = self.tokens.resolveIdentifier(@intCast(raw_token)) orelse unreachable;
+        const text = env.getIdent(segment);
+        std.mem.copyForwards(u8, buffer[offset..][0..text.len], text);
+        offset += text.len;
+        buffer[offset] = '.';
+        offset += 1;
+    }
+    const final_text = env.getIdent(final_ident);
+    std.mem.copyForwards(u8, buffer[offset..][0..final_text.len], final_text);
+    offset += final_text.len;
+    std.debug.assert(offset == buffer.len);
+    try tree.pushReservedString(begin, buffer);
 }
 
 /// Resolves the complete target spelling selected by import parsing.
@@ -1692,6 +1734,37 @@ pub const BinOp = struct {
     }
 };
 
+/// Whether a record-field access segment requires the field to be present or
+/// queries a runtime-optional field.
+pub const FieldAccessMode = enum(u8) {
+    required,
+    optional,
+};
+
+/// One source-ordered segment in a contiguous record-field access path.
+///
+/// `field_token` is the composite dotted token (`.field` or `.?field`), so it
+/// carries the exact source region and spelling of this segment without a
+/// synthetic identifier expression.
+pub const FieldAccessSegment = struct {
+    field_token: Token.Idx,
+    mode: FieldAccessMode,
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+};
+
+/// A maximal contiguous record-field access path.
+///
+/// Parentheses and non-field suffixes form path boundaries. For example,
+/// `a.?b.c.?d` is one node whose receiver is `a` and whose segments are
+/// `[b optional, c required, d optional]`, while `(a.?b).c` is two nodes.
+pub const FieldAccess = struct {
+    receiver: Expr.Idx,
+    segments: FieldAccessSegment.Span,
+    region: TokenizedRegion,
+};
+
 /// TODO
 pub const Unary = struct {
     operator: Token.Idx,
@@ -1762,7 +1835,10 @@ pub const File = struct {
 pub const Header = union(enum) {
     app: struct {
         provides: Collection.Idx,
-        platform_idx: RecordField.Idx,
+        /// The `pf: platform "..."` entry of `packages`, or null when the
+        /// header names no platform. An app that names no platform gets the
+        /// built-in Echo platform, exactly as a headerless app does.
+        platform_idx: ?RecordField.Idx,
         packages: Collection.Idx,
         /// The optional `roc: "<version>"` entry of `packages`. Like
         /// `platform_idx`, this still appears in `packages` too.
@@ -1852,8 +1928,10 @@ pub const Header = union(enum) {
                 try tree.endNode(provides_begin, attrs2);
 
                 // Platform
-                const platform = ast.store.getRecordField(a.platform_idx);
-                try platform.pushToSExprTree(gpa, env, ast, tree);
+                if (a.platform_idx) |platform_idx| {
+                    const platform = ast.store.getRecordField(platform_idx);
+                    try platform.pushToSExprTree(gpa, env, ast, tree);
+                }
 
                 // Packages
                 const packages_coll = ast.store.getCollection(a.packages);
@@ -2615,7 +2693,12 @@ pub const TypeAnno = union(enum) {
 /// TODO
 pub const AnnoRecordField = struct {
     name: Token.Idx,
+    /// The `?` token when this field is optional, or `null` for a required field.
+    optional_mark: ?Token.Idx,
     ty: TypeAnno.Idx,
+    /// The default value expression for a defaulted field (`a : U8 ?? 10`),
+    /// or `null` for a field with no default.
+    default_value: ?Expr.Idx = null,
     region: TokenizedRegion,
 
     pub const Idx = enum(u32) { _ };
@@ -2626,10 +2709,20 @@ pub const AnnoRecordField = struct {
         try tree.pushStaticAtom("anno-record-field");
         try ast.appendRegionInfoToSexprTree(env, tree, self.region);
         try tree.pushStringPair("name", ast.resolve(self.name));
+        if (self.optional_mark != null) try tree.pushBoolPair("optional", true);
         const attrs = tree.beginNode();
 
         const anno = ast.store.getTypeAnno(self.ty);
         try anno.pushToSExprTree(gpa, env, ast, tree);
+
+        if (self.default_value) |default_idx| {
+            const default_begin = tree.beginNode();
+            try tree.pushStaticAtom("default");
+            const default_attrs = tree.beginNode();
+            const default_expr = ast.store.getExpr(default_idx);
+            try default_expr.pushToSExprTree(gpa, env, ast, tree);
+            try tree.endNode(default_begin, default_attrs);
+        }
 
         try tree.endNode(begin, attrs);
     }
@@ -2822,10 +2915,9 @@ pub const Expr = union(enum) {
         token: Token.Idx,
         region: TokenizedRegion,
     },
-    /// Record field access, written `receiver.field` with no argument list.
-    /// Calling a function stored in the field is a separate ordinary apply,
-    /// written `(receiver.field)(args)`.
-    field_access: BinOp,
+    /// A maximal contiguous record-field access path. Each segment explicitly
+    /// records required (`.field`) or optional (`.?field`) access.
+    field_access: FieldAccess,
     /// Attached method call, written `receiver.method(args)`.
     method_call: struct {
         receiver: Expr.Idx,
@@ -3152,10 +3244,11 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-tag");
                 try ast.appendRegionInfoToSexprTree(env, tree, tag.region);
 
-                // Resolve the fully qualified name
-                const strip_tokens = [_]Token.Tag{.NoSpaceDotUpperIdent};
-                const fully_qualified_name = ast.resolveQualifiedName(tag.qualifiers, tag.token, &strip_tokens);
-                try tree.pushStringPair("raw", fully_qualified_name);
+                const raw_begin = tree.beginNode();
+                try tree.pushStaticAtom("raw");
+                try ast.pushQualifiedNameString(env, tree, tag.qualifiers, tag.token);
+                const raw_attrs = tree.beginNode();
+                try tree.endNode(raw_begin, raw_attrs);
                 const attrs = tree.beginNode();
 
                 try tree.endNode(begin, attrs);
@@ -3253,10 +3346,7 @@ pub const Expr = union(enum) {
                 // Add raw attribute
                 const raw_begin = tree.beginNode();
                 try tree.pushStaticAtom("raw");
-                // Resolve the fully qualified name
-                const strip_tokens = [_]Token.Tag{ .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent };
-                const fully_qualified_name = ast.resolveQualifiedName(ident.qualifiers, ident.token, &strip_tokens);
-                try tree.pushString(fully_qualified_name);
+                try ast.pushQualifiedNameString(env, tree, ident.qualifiers, ident.token);
                 const attrs2 = tree.beginNode();
                 try tree.endNode(raw_begin, attrs2);
 
@@ -3383,11 +3473,21 @@ pub const Expr = union(enum) {
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
 
-                // Push left expression
-                try ast.store.getExpr(a.left).pushToSExprTree(gpa, env, ast, tree);
+                const receiver = tree.beginNode();
+                try tree.pushStaticAtom("receiver");
+                const receiver_attrs = tree.beginNode();
+                try ast.store.getExpr(a.receiver).pushToSExprTree(gpa, env, ast, tree);
+                try tree.endNode(receiver, receiver_attrs);
 
-                // Push right expression
-                try ast.store.getExpr(a.right).pushToSExprTree(gpa, env, ast, tree);
+                for (ast.store.fieldAccessSegmentSlice(a.segments)) |segment| {
+                    const segment_node = tree.beginNode();
+                    try tree.pushStaticAtom("segment");
+                    try tree.pushStringPair("mode", @tagName(segment.mode));
+                    const field_ident = ast.tokens.resolveIdentifier(segment.field_token) orelse unreachable;
+                    try tree.pushStringPair("field", env.getIdent(field_ident));
+                    const segment_attrs = tree.beginNode();
+                    try tree.endNode(segment_node, segment_attrs);
+                }
 
                 try tree.endNode(begin, attrs);
             },

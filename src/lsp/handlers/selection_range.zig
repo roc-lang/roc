@@ -78,18 +78,35 @@ pub fn handler(comptime ServerType: type) type {
 
             for (positions.items) |pos_value| {
                 if (std.meta.activeTag(pos_value) != .object) {
-                    try results.append(self.allocator, null);
-                    continue;
+                    try self.sendError(id, .invalid_params, "position must be an object");
+                    return;
                 }
                 const pos_obj = pos_value.object;
 
-                const line: u32 = blk: {
-                    const v = pos_obj.get("line") orelse break :blk 0;
-                    break :blk if (std.meta.activeTag(v) == .integer) @intCast(v.integer) else 0;
+                const line_value = pos_obj.get("line") orelse {
+                    try self.sendError(id, .invalid_params, "missing line");
+                    return;
                 };
-                const character: u32 = blk: {
-                    const v = pos_obj.get("character") orelse break :blk 0;
-                    break :blk if (std.meta.activeTag(v) == .integer) @intCast(v.integer) else 0;
+                if (std.meta.activeTag(line_value) != .integer) {
+                    try self.sendError(id, .invalid_params, "line must be an integer");
+                    return;
+                }
+                const line = std.math.cast(u32, line_value.integer) orelse {
+                    try self.sendError(id, .invalid_params, "line must be a non-negative integer");
+                    return;
+                };
+
+                const character_value = pos_obj.get("character") orelse {
+                    try self.sendError(id, .invalid_params, "missing character");
+                    return;
+                };
+                if (std.meta.activeTag(character_value) != .integer) {
+                    try self.sendError(id, .invalid_params, "character must be an integer");
+                    return;
+                }
+                const character = std.math.cast(u32, character_value.integer) orelse {
+                    try self.sendError(id, .invalid_params, "character must be a non-negative integer");
+                    return;
                 };
 
                 const selection_range = computeSelectionRange(self.allocator, text, line, character) catch |err| switch (err) {
@@ -389,7 +406,31 @@ fn collectContainingRegionsFromExpr(
             try collectContainingRegionsFromExpr(allocator, ast, b.right, target_offset, regions);
         },
         .field_access => |f| {
-            try collectContainingRegionsFromExpr(allocator, ast, f.left, target_offset, regions);
+            // A flat field-access node replaces the nested expression nodes that
+            // previously represented each prefix of a chain. Preserve those
+            // semantic selections directly from the receiver and segment token
+            // boundaries. The complete chain was appended above, so visit the
+            // proper prefixes from outermost to innermost before the receiver.
+            const receiver_region = ast.store.getExpr(f.receiver).to_tokenized_region();
+            const segments = ast.store.fieldAccessSegmentSlice(f.segments);
+
+            var prefix_len = segments.len -| 1;
+            while (prefix_len > 0) {
+                prefix_len -= 1;
+                const prefix_region = ast.tokenizedRegionToRegion(.{
+                    .start = receiver_region.start,
+                    .end = segments[prefix_len].field_token + 1,
+                });
+
+                if (rangeContainsOffset(prefix_region.start.offset, prefix_region.end.offset, target_offset)) {
+                    try regions.append(allocator, .{
+                        .start = prefix_region.start.offset,
+                        .end = prefix_region.end.offset,
+                    });
+                }
+            }
+
+            try collectContainingRegionsFromExpr(allocator, ast, f.receiver, target_offset, regions);
         },
         .method_call => |m| {
             try collectContainingRegionsFromExpr(allocator, ast, m.receiver, target_offset, regions);
@@ -505,4 +546,25 @@ fn offsetToPosition(offset: u32, line_offsets: *const LineOffsets) Position {
         .line = line,
         .character = offset - line_start,
     };
+}
+
+test "selection ranges preserve flat field access prefixes" {
+    const source = "main = root.first.?second.third\n";
+    const selection = try computeSelectionRange(std.testing.allocator, source, 0, 8);
+    defer freeSelectionRange(std.testing.allocator, selection);
+
+    try std.testing.expectEqual(@as(u32, 7), selection.range.start.character);
+    try std.testing.expectEqual(@as(u32, 11), selection.range.end.character);
+
+    const first_prefix = selection.parent.?;
+    try std.testing.expectEqual(@as(u32, 7), first_prefix.range.start.character);
+    try std.testing.expectEqual(@as(u32, 17), first_prefix.range.end.character);
+
+    const second_prefix = first_prefix.parent.?;
+    try std.testing.expectEqual(@as(u32, 7), second_prefix.range.start.character);
+    try std.testing.expectEqual(@as(u32, 25), second_prefix.range.end.character);
+
+    const full_chain = second_prefix.parent.?;
+    try std.testing.expectEqual(@as(u32, 7), full_chain.range.start.character);
+    try std.testing.expectEqual(@as(u32, 31), full_chain.range.end.character);
 }

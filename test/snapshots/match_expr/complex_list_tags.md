@@ -197,7 +197,7 @@ match events {
 							(p-assign (ident "#interp_3"))
 							(e-call
 								(e-runtime-error (tag "qualified_ident_does_not_exist"))
-								(e-call
+								(e-call (constraint-fn-var 385)
 									(e-lookup-external
 										(builtin))
 									(e-lookup-local
@@ -315,5 +315,5 @@ match events {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "Str"))
 ~~~

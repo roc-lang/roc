@@ -5,12 +5,14 @@ const shim_io = @import("shim_io");
 const builtins = @import("builtins");
 const build_options = @import("build_options");
 const host_alloc = @import("host_alloc");
+const host_crash_handlers = @import("host_crash_handlers");
 
 pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
 pub const std_options_debug_io = shim_io.io();
 pub const std_options_debug_threaded_io = null;
-// See `shim_io.std_options_no_stack_tracing` for why stack tracing is disabled.
-pub const std_options = shim_io.std_options_no_stack_tracing;
+// See `shim_io.std_options_static_archive` for why these settings matter to a
+// static archive that roc links into a program.
+pub const std_options = shim_io.std_options_static_archive;
 
 /// Host environment - contains DebugAllocator for leak detection
 const HostEnv = struct {
@@ -63,6 +65,7 @@ fn __main() callconv(.c) void {}
 
 // C compatible main for runtime
 fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
+    host_crash_handlers.installForCurrentThread();
     const exit_code = platform_main(argc, argv) catch |err| {
         std.debug.print("{s}", .{"HOST ERROR: "});
         std.debug.print("{s}", .{@errorName(err)});

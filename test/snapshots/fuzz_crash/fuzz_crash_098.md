@@ -12,24 +12,21 @@ a=(0\r.e)
 MISPLACED CARRIAGE RETURN - :0:0:0:0
 MISSING METHOD - fuzz_crash_098.md:1:4:1:5
 # PROBLEMS
-
-MISPLACED CARRIAGE RETURN
+── ✗ misplaced carriage return ─────────────────────────────────────────────────
 
 Carriage return characters (\r) are not allowed in Roc source code.
 
+── ✗ missing method ────────────────────────────────────── fuzz_crash_098.md:1:4
 
+This from_numeral method is being called on a value whose type doesn't have
+that method.
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  a=(0\r.e)                                                                  │
- │     ‾                                                                      │
- └───────────────────────────────────────────────────── fuzz_crash_098.md:1:4 ┘
+a=(0\r.e)
+   ^
 
-    The value's type, which does not have a method named `from_numeral`, is:
+The value's type, which does not have a method named from_numeral, is:
 
-        { e: _field, .. }
+    { e: _field, .. }
 
 # TOKENS
 ~~~zig
@@ -45,8 +42,9 @@ EndOfFile,
 			(p-ident (raw "a"))
 			(e-tuple
 				(e-field-access
-					(e-int (raw "0"))
-					(e-ident (raw ".e")))))))
+					(receiver
+						(e-int (raw "0")))
+					(segment (mode "required") (field "e")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -57,9 +55,11 @@ a = ((0).e)
 (can-ir
 	(d-let
 		(p-assign (ident "a"))
-		(e-field-access (field "e")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "erroneous_value_expr"))))))
+				(e-runtime-error (tag "erroneous_value_expr")))
+			(segments
+				(segment (name "e") (mode "required"))))))
 ~~~
 # TYPES
 ~~~clojure

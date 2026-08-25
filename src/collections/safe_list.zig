@@ -481,14 +481,6 @@ pub fn SafeList(comptime T: type) type {
             pub fn count(self: *Iterator) u32 {
                 return self.len - @intFromEnum(self.current);
             }
-
-            pub fn shift(self: *Iterator) void {
-                const cur_int = @intFromEnum(self.current);
-                if (cur_int < self.len) {
-                    self.current = @as(Idx, @enumFromInt(cur_int + 1));
-                    self.len -= 1;
-                }
-            }
         };
 
         /// Iterate over the elements in a span
@@ -530,13 +522,31 @@ pub fn SafeList(comptime T: type) type {
 /// less likely since indices are only created for valid list entries.
 pub fn SafeMultiList(comptime T: type) type {
     return struct {
+        const Self = @This();
+
         items: std.MultiArrayList(T) = .empty,
 
         /// Index of an item in the list.
         pub const Idx = enum(u32) { first = 0, _ };
 
-        /// A non-type-safe slice of the list.
-        pub const Slice = std.MultiArrayList(T).Slice;
+        /// A non-type-safe range view. Resolve fields from the backing list on
+        /// demand so this value never carries MultiArrayList's cached pointer
+        /// array across a target ABI boundary.
+        pub const Slice = struct {
+            list: *const Self,
+            start: usize,
+            len: usize,
+
+            pub inline fn items(self: Slice, comptime field_name: Field) []@FieldType(T, @tagName(field_name)) {
+                const all_items = self.list.field(field_name);
+                return all_items[self.start..][0..self.len];
+            }
+
+            pub inline fn get(self: Slice, index: usize) T {
+                std.debug.assert(index < self.len);
+                return @call(.always_inline, std.MultiArrayList(T).get, .{ self.list.items, self.start + index });
+            }
+        };
 
         /// A type-safe slice of the list.
         pub const Range = SafeRange(Idx);
@@ -630,46 +640,15 @@ pub fn SafeMultiList(comptime T: type) type {
         }
 
         /// Convert a range to a slice
-        pub fn sliceRange(self: *const SafeMultiList(T), range: Range) Slice {
-            // Empty ranges have undefined start, return empty slice directly
-            if (range.count == 0) {
-                const base = self.items.slice();
-                // Return a zero-length slice based on the existing slice
-                return .{
-                    .ptrs = base.ptrs,
-                    .len = 0,
-                    .capacity = 0,
-                };
-            }
+        pub inline fn sliceRange(self: *const SafeMultiList(T), range: Range) Slice {
+            if (range.count == 0) return .{ .list = self, .start = 0, .len = 0 };
 
             const start: usize = @intFromEnum(range.start);
             const end: usize = start + range.count;
 
             std.debug.assert(start <= end);
             std.debug.assert(end <= self.items.len);
-
-            const base = self.items.slice();
-
-            var new_ptrs: [base.ptrs.len][*]u8 = undefined;
-
-            // This has to be inline, so `cur_field` can be known at comptime
-            inline for (0..base.ptrs.len) |i| {
-                const cur_field = @as(Field, @enumFromInt(i));
-                const cur_items = base.items(cur_field);
-
-                new_ptrs[i] = if (cur_items.len == 0)
-                    @as([*]u8, @ptrFromInt(@alignOf(T)))
-                else if (start >= cur_items.len)
-                    @ptrCast(cur_items.ptr + cur_items.len)
-                else
-                    @ptrCast(&cur_items[start]);
-            }
-
-            return .{
-                .ptrs = new_ptrs,
-                .len = end - start,
-                .capacity = base.capacity - start,
-            };
+            return .{ .list = self, .start = start, .len = end - start };
         }
 
         /// Set the value of an element in this list.
@@ -685,6 +664,36 @@ pub fn SafeMultiList(comptime T: type) type {
         /// Make sure that the backing array has at least capacity for the specified number of elements.
         pub fn ensureTotalCapacity(self: *SafeMultiList(T), gpa: Allocator, capacity: usize) std.mem.Allocator.Error!void {
             try self.items.ensureTotalCapacity(gpa, capacity);
+        }
+
+        /// An iterator over all the indices in this list.
+        pub const Iterator = struct {
+            array: *const SafeMultiList(T),
+            len: u32,
+            current: Idx,
+
+            pub fn next(self: *Iterator) ?T {
+                const cur_idx = self.current;
+                const cur_int = @intFromEnum(cur_idx);
+                if (self.len == cur_int) {
+                    return null;
+                }
+                self.current = @enumFromInt(cur_int + 1);
+                return self.array.get(cur_idx);
+            }
+
+            pub fn count(self: *Iterator) u32 {
+                return self.len - @intFromEnum(self.current);
+            }
+        };
+
+        /// Iterate over the elements in a span
+        pub fn iterRange(self: *const SafeMultiList(T), range: Range) Iterator {
+            return Iterator{
+                .array = self,
+                .len = @intFromEnum(range.start) + range.count,
+                .current = range.start,
+            };
         }
 
         /// An iterator over the indices of all elements in a list.
@@ -705,6 +714,15 @@ pub fn SafeMultiList(comptime T: type) type {
                 return @enumFromInt(idx);
             }
         };
+
+        /// Iterate over the indices of the elements in a span
+        pub fn iterRangeIndices(self: *const SafeMultiList(T), range: Range) IndexIterator {
+            std.debug.assert(@intFromEnum(range.start) + range.count <= self.len());
+            return IndexIterator{
+                .len = @intFromEnum(range.start) + range.count,
+                .current = @intFromEnum(range.start),
+            };
+        }
 
         /// Iterator over all indices in this list.
         pub fn iterIndices(self: *const SafeMultiList(T)) IndexIterator {
@@ -2108,4 +2126,172 @@ test "SafeList deserialization with high address (issue 8728)" {
         // But with usize, this works correctly
         try testing.expectEqual(@as(usize, 0x9000_0000_0000_0100), expected_address);
     }
+}
+
+test "SafeMultiList(T) iterRange over middle span yields elements in order then null" {
+    const gpa = testing.allocator;
+
+    const Struct = struct { num: u32, char: u8 };
+    const StructMultiList = SafeMultiList(Struct);
+
+    var multilist = try StructMultiList.initCapacity(gpa, 6);
+    defer multilist.deinit(gpa);
+
+    _ = try multilist.appendSlice(gpa, &[_]Struct{
+        .{ .num = 100, .char = 'a' },
+        .{ .num = 200, .char = 'b' },
+        .{ .num = 300, .char = 'c' },
+        .{ .num = 400, .char = 'd' },
+        .{ .num = 500, .char = 'e' },
+        .{ .num = 600, .char = 'f' },
+    });
+
+    // Middle span: indices [2, 4) -> elements 'c' and 'd'.
+    const range = StructMultiList.Range{ .start = @enumFromInt(2), .count = 2 };
+    var iter = multilist.iterRange(range);
+
+    const first = iter.next().?;
+    try testing.expectEqual(@as(u32, 300), first.num);
+    try testing.expectEqual(@as(u8, 'c'), first.char);
+
+    const second = iter.next().?;
+    try testing.expectEqual(@as(u32, 400), second.num);
+    try testing.expectEqual(@as(u8, 'd'), second.char);
+
+    // Exhausted, and stays null on repeated calls.
+    try testing.expectEqual(@as(?Struct, null), iter.next());
+    try testing.expectEqual(@as(?Struct, null), iter.next());
+}
+
+test "SafeMultiList(T) iterRange over empty range yields null and count 0" {
+    const gpa = testing.allocator;
+
+    const Struct = struct { num: u32, char: u8 };
+    const StructMultiList = SafeMultiList(Struct);
+
+    var multilist = try StructMultiList.initCapacity(gpa, 4);
+    defer multilist.deinit(gpa);
+
+    _ = try multilist.appendSlice(gpa, &[_]Struct{
+        .{ .num = 100, .char = 'a' },
+        .{ .num = 200, .char = 'b' },
+        .{ .num = 300, .char = 'c' },
+        .{ .num = 400, .char = 'd' },
+    });
+
+    // Empty range in the middle of the populated list.
+    const range = StructMultiList.Range{ .start = @enumFromInt(2), .count = 0 };
+    var iter = multilist.iterRange(range);
+
+    try testing.expectEqual(@as(u32, 0), iter.count());
+    try testing.expectEqual(@as(?Struct, null), iter.next());
+    // Still null after exhaustion, and count stays 0.
+    try testing.expectEqual(@as(?Struct, null), iter.next());
+    try testing.expectEqual(@as(u32, 0), iter.count());
+}
+
+test "SafeMultiList(T) iterRange count decreases as next consumes" {
+    const gpa = testing.allocator;
+
+    const Struct = struct { num: u32, char: u8 };
+    const StructMultiList = SafeMultiList(Struct);
+
+    var multilist = try StructMultiList.initCapacity(gpa, 5);
+    defer multilist.deinit(gpa);
+
+    _ = try multilist.appendSlice(gpa, &[_]Struct{
+        .{ .num = 100, .char = 'a' },
+        .{ .num = 200, .char = 'b' },
+        .{ .num = 300, .char = 'c' },
+        .{ .num = 400, .char = 'd' },
+        .{ .num = 500, .char = 'e' },
+    });
+
+    // Span [1, 4): 3 elements remaining up front.
+    const range = StructMultiList.Range{ .start = @enumFromInt(1), .count = 3 };
+    var iter = multilist.iterRange(range);
+
+    try testing.expectEqual(@as(u32, 3), iter.count());
+    _ = iter.next();
+    try testing.expectEqual(@as(u32, 2), iter.count());
+    _ = iter.next();
+    try testing.expectEqual(@as(u32, 1), iter.count());
+    _ = iter.next();
+    try testing.expectEqual(@as(u32, 0), iter.count());
+    // Draining past the end keeps count at 0.
+    try testing.expectEqual(@as(?Struct, null), iter.next());
+    try testing.expectEqual(@as(u32, 0), iter.count());
+}
+
+test "SafeMultiList(T) iterRangeIndices yields span indices matching get" {
+    const gpa = testing.allocator;
+
+    const Struct = struct { num: u32, char: u8 };
+    const StructMultiList = SafeMultiList(Struct);
+
+    var multilist = try StructMultiList.initCapacity(gpa, 6);
+    defer multilist.deinit(gpa);
+
+    _ = try multilist.appendSlice(gpa, &[_]Struct{
+        .{ .num = 100, .char = 'a' },
+        .{ .num = 200, .char = 'b' },
+        .{ .num = 300, .char = 'c' },
+        .{ .num = 400, .char = 'd' },
+        .{ .num = 500, .char = 'e' },
+        .{ .num = 600, .char = 'f' },
+    });
+
+    // Mid-list span [2, 5): indices 2, 3, 4.
+    const range = StructMultiList.Range{ .start = @enumFromInt(2), .count = 3 };
+    var idx_iter = multilist.iterRangeIndices(range);
+
+    const idx_a = idx_iter.next().?;
+    try testing.expectEqual(@as(u32, 2), @intFromEnum(idx_a));
+    try testing.expectEqual(@as(u32, 300), multilist.get(idx_a).num);
+
+    const idx_b = idx_iter.next().?;
+    try testing.expectEqual(@as(u32, 3), @intFromEnum(idx_b));
+    try testing.expectEqual(@as(u32, 400), multilist.get(idx_b).num);
+
+    const idx_c = idx_iter.next().?;
+    try testing.expectEqual(@as(u32, 4), @intFromEnum(idx_c));
+    try testing.expectEqual(@as(u32, 500), multilist.get(idx_c).num);
+
+    try testing.expectEqual(@as(?StructMultiList.Idx, null), idx_iter.next());
+}
+
+test "SafeMultiList(T) iterRange from index zero vs mid-list (len = start + count encoding)" {
+    const gpa = testing.allocator;
+
+    const Struct = struct { num: u32, char: u8 };
+    const StructMultiList = SafeMultiList(Struct);
+
+    var multilist = try StructMultiList.initCapacity(gpa, 5);
+    defer multilist.deinit(gpa);
+
+    const appended = try multilist.appendSlice(gpa, &[_]Struct{
+        .{ .num = 100, .char = 'a' },
+        .{ .num = 200, .char = 'b' },
+        .{ .num = 300, .char = 'c' },
+        .{ .num = 400, .char = 'd' },
+        .{ .num = 500, .char = 'e' },
+    });
+
+    // Range starting at the appended slice's first index (0): len encodes as
+    // start(0) + count(2) = 2.
+    var iter_zero = multilist.iterRange(.{ .start = appended.start, .count = 2 });
+    try testing.expectEqual(@as(u32, 2), iter_zero.count());
+    try testing.expectEqual(@as(u32, 100), iter_zero.next().?.num);
+    try testing.expectEqual(@as(u32, 200), iter_zero.next().?.num);
+    try testing.expectEqual(@as(?Struct, null), iter_zero.next());
+
+    // Range starting mid-list: len encodes as start(3) + count(2) = 5, so the
+    // window is [3, 5) rather than [0, 2). This pins the `start + count`
+    // encoding: the same count starting at a different offset must not read
+    // from the front of the list.
+    var iter_mid = multilist.iterRange(.{ .start = @enumFromInt(3), .count = 2 });
+    try testing.expectEqual(@as(u32, 2), iter_mid.count());
+    try testing.expectEqual(@as(u32, 400), iter_mid.next().?.num);
+    try testing.expectEqual(@as(u32, 500), iter_mid.next().?.num);
+    try testing.expectEqual(@as(?Struct, null), iter_mid.next());
 }

@@ -25,17 +25,15 @@ main! = |_| {}
 # EXPECTED
 UNUSED VARIABLE - type_var_namespace.md:7:5:7:9
 # PROBLEMS
+── ● unused variable ───────────────────────────────── type_var_namespace.md:7:5
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `item` is defined here and then never used. ────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  item = 42                                                                 │
- │  ‾‾‾‾                                                                      │
- └───────────────────────────────────────────────── type_var_namespace.md:7:5 ┘
+Variable item is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like `_item`
-    to suppress this warning.
+item = 42
+^^^^
+
+If you don't need this variable, prefix it with an underscore like _item to
+suppress this warning.
 
 # TOKENS
 ~~~zig
@@ -136,9 +134,9 @@ main! = |_| {}
 					(e-num (value "42")))
 				(s-let
 					(p-assign (ident "result"))
-					(e-dispatch-call (method "ok_or") (constraint-fn-var 251)
+					(e-dispatch-call (method "ok_or") (constraint-fn-var 261)
 						(receiver
-							(e-call (constraint-fn-var 250)
+							(e-call (constraint-fn-var 260)
 								(e-lookup-external
 									(builtin))
 								(e-lookup-local

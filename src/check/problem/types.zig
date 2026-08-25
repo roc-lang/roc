@@ -49,9 +49,12 @@ pub const Problem = union(enum) {
     effectful_expect: EffectfulExpect,
     effectful_function_name: EffectfulFunctionName,
     annotation_only_value: AnnotationOnlyValue,
+    annotation_only_value_use: AnnotationOnlyValueUse,
+    unsupported_generated_method: UnsupportedGeneratedMethod,
     associated_item_not_found: AssociatedItemNotFound,
     hosted_unboxed_function: HostedUnboxedFunction,
     host_boundary_open_row: HostBoundaryOpenRow,
+    host_boundary_optional_field: HostBoundaryOptionalField,
     platform_def_not_found: PlatformDefNotFound,
     platform_hosted_section: PlatformHostedSection,
     platform_alias_not_found: PlatformAliasNotFound,
@@ -63,6 +66,11 @@ pub const Problem = union(enum) {
     invalid_numeric_literal: InvalidNumericLiteral,
     tuple_access_needs_annotation: TupleAccessNeedsAnnotation,
     invalid_tuple_access: InvalidTupleAccess,
+    optional_access_of_required_field: OptionalAccessOfRequiredField,
+    effectful_default_value: EffectfulDefaultValue,
+    non_concrete_default_value: NonConcreteDefaultValue,
+    recursive_default_value: RecursiveDefaultValue,
+    circular_value_definition: CircularValueDefinition,
     literal_defaulted: LiteralDefaulted,
     non_exhaustive_match: NonExhaustiveMatch,
     non_exhaustive_destructure: NonExhaustiveDestructure,
@@ -129,8 +137,25 @@ pub const HostBoundaryOpenRow = struct {
     region: base.Region,
 };
 
+/// Host-bound types must not contain runtime-optional (`?:`) record fields.
+pub const HostBoundaryOptionalField = struct {
+    region: base.Region,
+};
+
 /// A standalone type annotation without an implementation cannot be used as a runtime value.
 pub const AnnotationOnlyValue = struct {
+    region: base.Region,
+};
+
+/// A lookup resolved to a declaration that names no value, so this site has
+/// nothing to evaluate.
+pub const AnnotationOnlyValueUse = struct {
+    region: base.Region,
+};
+
+/// A bare underscore requested compiler generation for an unsupported associated method.
+pub const UnsupportedGeneratedMethod = struct {
+    method_name: Ident.Idx,
     region: base.Region,
 };
 
@@ -254,6 +279,47 @@ pub const InvalidNumericLiteral = struct {
 pub const TupleAccessNeedsAnnotation = struct {
     region: base.Region,
     elem_index: u32,
+};
+
+/// Optional access (`.?`) of a field whose presence resolved to the concrete
+/// `present` fact: the field can never be missing, so the optional access is
+/// almost certainly not what the user intended (design.md "Existential
+/// Presence", definitely-present optional access).
+pub const OptionalAccessOfRequiredField = struct {
+    region: base.Region,
+    field_name: Ident.Idx,
+};
+
+/// A record field default (`a : U8 ?? expr`) whose expression is effectful.
+/// A default is materialized by the compiler at construction sites, so it
+/// must be pure (design.md "Defaulted Fields").
+pub const EffectfulDefaultValue = struct {
+    region: base.Region,
+    field_name: Ident.Idx,
+};
+
+/// A record field default (`a : T ?? expr`) whose type is not concrete
+/// (contains type variables). A default is evaluated once at compile time
+/// and materialized at construction sites, so it must have exactly one
+/// runtime representation (design.md "Defaulted Fields").
+pub const NonConcreteDefaultValue = struct {
+    region: base.Region,
+    field_name: Ident.Idx,
+};
+
+/// A record field default whose literal construction transitively omits the
+/// same default again. Materializing such a default cannot terminate
+/// (design.md "Defaulted Fields").
+pub const RecursiveDefaultValue = struct {
+    region: base.Region,
+    field_name: Ident.Idx,
+};
+
+/// A top-level non-function value in a strict dependency cycle discovered
+/// after type-directed dispatch targets have resolved.
+pub const CircularValueDefinition = struct {
+    ident: Ident.Idx,
+    region: base.Region,
 };
 
 /// Tuple access on a value whose resolved type proves the access is invalid.
@@ -472,11 +538,15 @@ pub const TypeDoesNotSupportMap = struct {
 };
 
 /// Error when satisfying a static-dispatch constraint immediately requires the
-/// same static-dispatch constraint again on the same dispatcher type.
+/// same static-dispatch constraint again on the same dispatcher type, or on a
+/// dispatcher that strictly structurally contains an earlier dispatcher on the
+/// same derivation chain. `grown_from_snapshot` is that earlier, strictly
+/// smaller dispatcher in the growing-receiver case.
 pub const RecursiveDispatch = struct {
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
     method_name: Ident.Idx,
+    grown_from_snapshot: ?SnapshotContentIdx = null,
 };
 
 // nominal type errors //

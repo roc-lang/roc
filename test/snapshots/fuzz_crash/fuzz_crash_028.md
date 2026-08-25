@@ -262,1672 +262,1424 @@ MISSING METHOD - fuzz_crash_028.md:70:3:70:8
 TYPE MISMATCH - fuzz_crash_028.md:64:2:64:2
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:95:1:95:34
 TOO FEW ARGS - fuzz_crash_028.md:104:2:106:3
-TYPE MISMATCH - fuzz_crash_028.md:115:3:115:3
+REFERENCE HAS NO VALUE - fuzz_crash_028.md:115:3:115:10
 TYPE MISMATCH - fuzz_crash_028.md:133:5:133:12
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:141:1:141:7
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:144:1:144:13
 MISSING METHOD - fuzz_crash_028.md:133:5:133:12
 MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 # PROBLEMS
-
-ASCII CONTROL CHARACTER
-
-ASCII control characters are not allowed in Roc source code.
-
-
-
-ASCII CONTROL CHARACTER
+── ✗ ascii control character ───────────────────────────────────────────────────
 
 ASCII control characters are not allowed in Roc source code.
 
+── ✗ ascii control character ───────────────────────────────────────────────────
 
+ASCII control characters are not allowed in Roc source code.
 
-LEADING ZERO
+── ✗ leading zero ──────────────────────────────────────────────────────────────
 
 Numbers cannot have leading zeros.
 
+── ✗ unclosed string ─────────────────────────────────── fuzz_crash_028.md:111:8
 
+This string is missing a closing quote.
 
-┌─────────────────┐
-│ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  crash "Unrnt                                                              │
- │        ‾‾‾‾‾‾                                                              │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:111:8 ┘
+crash "Unrnt
+      ^^^^^^
 
+── ✗ incomplete import ────────────────────────────────── fuzz_crash_028.md:10:1
 
+I was parsing an import, and the mod path is incomplete.
 
-┌───────────────────┐
-│ INCOMPLETE IMPORT ├─ I was parsing an import, and the mod path is ───────┐
-└┬──────────────────┘  incomplete.                                            │
- │                                                                            │
- │  import p                                                                 │
- │  ‾‾‾‾‾‾                                                                    │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:10:1 ┘
+import p
+^^^^^^
 
-    Imports must name a mod, optionally with a qualifier and exposing list.
+Imports must name a mod, optionally with a qualifier and exposing list.
 
-    For example:
-        import Json/Decode exposing [decode]
+For example:
+    import Json/Decode exposing [decode]
 
-    I found `import` here.
-    That word is reserved by Roc, so it cannot be used as a name in this
-    position.
+I found import here.
+That word is reserved by Roc, so it cannot be used as a name in this position.
 
+── ✗ type application needs parentheses ──────────────── fuzz_crash_028.md:12:12
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  import Bae as Gooe                                                        │
- │             ‾‾                                                             │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:12:12 ┘
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+import Bae as Gooe
+           ^^
 
-    For example:
-        List(U8)
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
-    I found `as` here.
-    That word is reserved by Roc, so it cannot be used as a name in this
-    position.
+For example:
+    List(U8)
 
+I found as here.
+That word is reserved by Roc, so it cannot be used as a name in this position.
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  import                                                                    │
- │  ‾‾‾‾‾‾                                                                    │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:13:1 ┘
+── ✗ type application needs parentheses ───────────────── fuzz_crash_028.md:13:1
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    For example:
-        List(U8)
+import
+^^^^^^
 
-    I found `import` here.
-    That word is reserved by Roc, so it cannot be used as a name in this
-    position.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
+For example:
+    List(U8)
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
- │  ‾‾‾                                                                       │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:15:1 ┘
+I found import here.
+That word is reserved by Roc, so it cannot be used as a name in this position.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+── ✗ type application needs parentheses ───────────────── fuzz_crash_028.md:15:1
 
-    For example:
-        List(U8)
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    I found `Map` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+Map(a, b) : List(a), (a -> b) -> List(b)
+^^^
 
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
- │     ‾                                                                      │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:15:4 ┘
+For example:
+    List(U8)
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found Map here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:15:4
 
-    I found `(` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+Map(a, b) : List(a), (a -> b) -> List(b)
+   ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
- │      ‾                                                                     │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:15:5 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found ( here.
 
-    I found `a` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:15:5
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
- │       ‾                                                                    │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:15:6 ┘
+Map(a, b) : List(a), (a -> b) -> List(b)
+    ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+I found a here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:15:6
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
- │         ‾                                                                  │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:15:8 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Map(a, b) : List(a), (a -> b) -> List(b)
+     ^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `b` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+For example:
+    answer = 42
 
+I found , here.
+A comma separates items, but there must be a valid item on both sides of it.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
- │          ‾                                                                 │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:15:9 ┘
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:15:8
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+Map(a, b) : List(a), (a -> b) -> List(b)
+       ^
 
-    I found `)` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
- │            ‾                                                               │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:15:11 ┘
+I found b here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:15:9
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `:` here.
+Map(a, b) : List(a), (a -> b) -> List(b)
+        ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
- │                     ‾                                                      │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:15:20 ┘
+For example:
+    answer = 42
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+I found ) here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    For example:
-        List(U8)
+── ✗ unexpected statement ────────────────────────────── fuzz_crash_028.md:15:11
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+I was parsing a statement, and this token cannot start a statement here.
 
+Map(a, b) : List(a), (a -> b) -> List(b)
+          ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
- │                       ‾                                                    │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:15:22 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found : here.
 
-    I found `(` here.
+── ✗ type application needs parentheses ──────────────── fuzz_crash_028.md:15:20
 
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
- │                        ‾                                                   │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:15:23 ┘
+Map(a, b) : List(a), (a -> b) -> List(b)
+                   ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
-    For example:
-        answer = 42
+For example:
+    List(U8)
 
-    I found `a` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I found , here.
+A comma separates items, but there must be a valid item on both sides of it.
 
+── ✗ unexpected statement ────────────────────────────── fuzz_crash_028.md:15:22
 
-┌─────────────────────────┐
-│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
-└┬────────────────────────┘  arrows need parentheses.                         │
- │                                                                            │
- │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
- │                          ‾‾                                                │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:15:25 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Use parentheses to say whether the function returns another function or
-    takes a function as an argument.
+Map(a, b) : List(a), (a -> b) -> List(b)
+                     ^
 
-    For example:
-        a -> (b -> c)
-        (a -> b) -> c
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
- │                             ‾                                              │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:15:28 ┘
+I found ( here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ────────────────────────────── fuzz_crash_028.md:15:23
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `b` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+Map(a, b) : List(a), (a -> b) -> List(b)
+                      ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
- │                              ‾                                             │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:15:29 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found a here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    For example:
-        answer = 42
+── ✗ ambiguous function type ─────────────────────────── fuzz_crash_028.md:15:25
 
-    I found `)` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I was parsing a function type, and multiple arrows need parentheses.
 
+Map(a, b) : List(a), (a -> b) -> List(b)
+                        ^^
 
-┌─────────────────────────┐
-│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
-└┬────────────────────────┘  arrows need parentheses.                         │
- │                                                                            │
- │  Map(a, b) : List(a), (a -> b) -> List(b)                                  │
- │                                ‾‾                                          │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:15:31 ┘
+Use parentheses to say whether the function returns another function or takes a
+function as an argument.
 
-    Use parentheses to say whether the function returns another function or
-    takes a function as an argument.
+For example:
+    a -> (b -> c)
+    (a -> b) -> c
 
-    For example:
-        a -> (b -> c)
-        (a -> b) -> c
+── ✗ unexpected statement ────────────────────────────── fuzz_crash_028.md:15:28
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  MapML( # Cere                                                             │
- │  ‾‾‾‾‾                                                                     │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:16:1 ┘
+Map(a, b) : List(a), (a -> b) -> List(b)
+                           ^
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        List(U8)
+For example:
+    answer = 42
 
-    I found `MapML` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+I found b here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
+── ✗ unexpected statement ────────────────────────────── fuzz_crash_028.md:15:29
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  MapML( # Cere                                                             │
- │       ‾                                                                    │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:16:6 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Map(a, b) : List(a), (a -> b) -> List(b)
+                            ^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `(` here.
+For example:
+    answer = 42
 
+I found ) here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  a, # Anre                                                                 │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:17:2 ┘
+── ✗ ambiguous function type ─────────────────────────── fuzz_crash_028.md:15:31
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a function type, and multiple arrows need parentheses.
 
-    For example:
-        answer = 42
+Map(a, b) : List(a), (a -> b) -> List(b)
+                              ^^
 
-    I found `a` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+Use parentheses to say whether the function returns another function or takes a
+function as an argument.
 
+For example:
+    a -> (b -> c)
+    (a -> b) -> c
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  a, # Anre                                                                 │
- │   ‾                                                                        │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:17:3 ┘
+── ✗ type application needs parentheses ───────────────── fuzz_crash_028.md:16:1
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    For example:
-        answer = 42
+MapML( # Cere
+^^^^^
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
+For example:
+    List(U8)
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  b,                                                                        │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:18:2 ┘
+I found MapML here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:16:6
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `b` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+MapML( # Cere
+     ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  b,                                                                        │
- │   ‾                                                                        │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:18:3 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found ( here.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:17:2
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+I was parsing a statement, and this token cannot start a statement here.
 
+a, # Anre
+^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  ) # Ag                                                                    │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:19:1 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found a here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    I found `)` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:17:3
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  : # Aon                                                                   │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:20:2 ┘
+a, # Anre
+ ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `:` here.
+I found , here.
+A comma separates items, but there must be a valid item on both sides of it.
 
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:18:2
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  ),                                                                        │
- │   ‾                                                                        │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:22:4 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+b,
+^
 
-    For example:
-        List(U8)
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+For example:
+    answer = 42
 
+I found b here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  (a -> b) -> # row                                                         │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:23:3 ┘
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:18:3
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+b,
+ ^
 
-    I found `(` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  (a -> b) -> # row                                                         │
- │   ‾                                                                        │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:23:4 ┘
+I found , here.
+A comma separates items, but there must be a valid item on both sides of it.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:19:1
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `a` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+) # Ag
+^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌─────────────────────────┐
-│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
-└┬────────────────────────┘  arrows need parentheses.                         │
- │                                                                            │
- │  (a -> b) -> # row                                                         │
- │     ‾‾                                                                     │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:23:6 ┘
+For example:
+    answer = 42
 
-    Use parentheses to say whether the function returns another function or
-    takes a function as an argument.
+I found ) here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    For example:
-        a -> (b -> c)
-        (a -> b) -> c
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:20:2
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  (a -> b) -> # row                                                         │
- │        ‾                                                                   │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:23:9 ┘
+: # Aon
+^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `b` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I found : here.
 
+── ✗ type application needs parentheses ───────────────── fuzz_crash_028.md:22:4
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  (a -> b) -> # row                                                         │
- │         ‾                                                                  │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:23:10 ┘
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+),
+ ^
 
-    For example:
-        answer = 42
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
-    I found `)` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+For example:
+    List(U8)
 
+I found , here.
+A comma separates items, but there must be a valid item on both sides of it.
 
-┌─────────────────────────┐
-│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
-└┬────────────────────────┘  arrows need parentheses.                         │
- │                                                                            │
- │  (a -> b) -> # row                                                         │
- │           ‾‾                                                               │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:23:12 ┘
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:23:3
 
-    Use parentheses to say whether the function returns another function or
-    takes a function as an argument.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        a -> (b -> c)
-        (a -> b) -> c
+(a -> b) -> # row
+^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  Foo : (Bar, Baz)                                                          │
- │  ‾‾‾                                                                       │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:26:1 ┘
+For example:
+    answer = 42
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+I found ( here.
 
-    For example:
-        List(U8)
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:23:4
 
-    I found `Foo` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+I was parsing a statement, and this token cannot start a statement here.
 
+(a -> b) -> # row
+ ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  Foo : (Bar, Baz)                                                          │
- │      ‾                                                                     │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:26:5 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found a here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    I found `:` here.
+── ✗ ambiguous function type ──────────────────────────── fuzz_crash_028.md:23:6
 
+I was parsing a function type, and multiple arrows need parentheses.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  Foo : (Bar, Baz)                                                          │
- │        ‾                                                                   │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:26:7 ┘
+(a -> b) -> # row
+   ^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Use parentheses to say whether the function returns another function or takes a
+function as an argument.
 
-    For example:
-        answer = 42
+For example:
+    a -> (b -> c)
+    (a -> b) -> c
 
-    I found `(` here.
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:23:9
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  Foo : (Bar, Baz)                                                          │
- │            ‾                                                               │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:26:11 ┘
+(a -> b) -> # row
+      ^
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        List(U8)
+For example:
+    answer = 42
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+I found b here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
+── ✗ unexpected statement ────────────────────────────── fuzz_crash_028.md:23:10
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  Foo : (Bar, Baz)                                                          │
- │                 ‾                                                          │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:26:16 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+(a -> b) -> # row
+       ^
 
-    For example:
-        List(U8)
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `)` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+For example:
+    answer = 42
 
+I found ) here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  Maya) : [ #                                                               │
- │      ‾                                                                     │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:40:5 ┘
+── ✗ ambiguous function type ─────────────────────────── fuzz_crash_028.md:23:12
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+I was parsing a function type, and multiple arrows need parentheses.
 
-    For example:
-        List(U8)
+(a -> b) -> # row
+         ^^
 
-    I found `)` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+Use parentheses to say whether the function returns another function or takes a
+function as an argument.
 
+For example:
+    a -> (b -> c)
+    (a -> b) -> c
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  Maya) : [ #                                                               │
- │        ‾                                                                   │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:40:7 ┘
+── ✗ type application needs parentheses ───────────────── fuzz_crash_028.md:26:1
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    For example:
-        answer = 42
+Foo : (Bar, Baz)
+^^^
 
-    I found `:` here.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
+For example:
+    List(U8)
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  Maya) : [ #                                                               │
- │          ‾                                                                 │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:40:9 ┘
+I found Foo here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:26:5
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `[` here.
+Foo : (Bar, Baz)
+    ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  ] #se                                                                     │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:41:1 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found : here.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:26:7
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I was parsing a statement, and this token cannot start a statement here.
 
+Foo : (Bar, Baz)
+      ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  add_ne = |num| {                                                         │
- │  ‾‾‾‾                                                                      │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:48:1 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found ( here.
 
-    I found `add_` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+── ✗ type application needs parentheses ──────────────── fuzz_crash_028.md:26:11
 
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  ...                                                                       │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:103:2 ┘
+Foo : (Bar, Baz)
+          ^
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
-    For example:
-        person.name
-        pair.0
+For example:
+    List(U8)
 
-    I found `...` here.
+I found , here.
+A comma separates items, but there must be a valid item on both sides of it.
 
+── ✗ type application needs parentheses ──────────────── fuzz_crash_028.md:26:16
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ The mod `Stdot` was not found in this Roc project. ──┐
-└┬─────────────────┘                                                          │
- │                                                                            │
- │  import Stdot                                                              │
- │          exposing [ #tem                                                   │
- │          ] # Cose                                                          │
- │                                                                            │
- └───────────────────────────────────────────────────── fuzz_crash_028.md:6:1 ┘
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
+Foo : (Bar, Baz)
+               ^
 
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Bar` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Bar, #                                                                    │
- │  ‾‾‾                                                                       │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:29:2 ┘
+For example:
+    List(U8)
 
+I found ) here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
+── ✗ type application needs parentheses ───────────────── fuzz_crash_028.md:40:5
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Baz` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Baz, #m                                                                   │
- │  ‾‾‾                                                                       │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:30:2 ┘
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
+Maya) : [ #
+    ^
 
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Ok` is not declared in this scope. ────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Some(a) : { foo : Ok(a), bar : g }                                        │
- │                    ‾‾                                                      │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:32:19 ┘
+For example:
+    List(U8)
 
+I found ) here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:40:7
 
-┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable `g` is not declared in this ──┐
-└┬─────────────────────────┘  scope.                                          │
- │                                                                            │
- │  Some(a) : { foo : Ok(a), bar : g }                                        │
- │                                 ‾                                          │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:32:32 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Type variables must be introduced in a type annotation before they can be
-    used.
+Maya) : [ #
+      ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Som` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  bar : Som# Afld                                                           │
- │        ‾‾‾                                                                 │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:34:8 ┘
+For example:
+    answer = 42
 
+I found : here.
 
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:40:9
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Som` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  bar : Som                                                                 │
- │        ‾‾‾                                                                 │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:38:8 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
+Maya) : [ #
+        ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Maybe` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Func(a) : Maybe(a), a -> Maybe(a)                                         │
- │            ‾‾‾‾‾                                                           │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:43:11 ┘
+For example:
+    answer = 42
 
+I found [ here.
 
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:41:1
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Maybe` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Func(a) : Maybe(a), a -> Maybe(a)                                         │
- │                           ‾‾‾‾‾                                            │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:43:26 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
+] #se
+^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌─────────────────────────┐
-│ EMPTY TUPLE NOT ALLOWED ├─ I am part way through parsing this tuple, but ───┐
-└┬────────────────────────┘  it is empty.                                     │
- │                                                                            │
- │  () #r                                                                     │
- │  ‾‾                                                                        │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:52:1 ┘
+For example:
+    answer = 42
 
-    If you want to represent nothing, try using an empty record: `{}`.
+I found ] here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:48:1
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `x` in this scope. ───────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  x x                                                                       │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:65:4 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Is it misspelled, or is there an import missing?
+add_ne = |num| {
+^^^^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `x` in this scope. ───────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  x x                                                                       │
- │    ‾                                                                       │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:65:6 ┘
+For example:
+    answer = 42
 
-    Is it misspelled, or is there an import missing?
+I found add_ here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
+── ✗ expected record accessor ────────────────────────── fuzz_crash_028.md:103:2
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `ment` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  => ment                                                                   │
- │     ‾‾‾‾                                                                   │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:71:7 ┘
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    Is it misspelled, or is there an import missing?
+...
+^^^
 
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  # Thnt!                                                                   │
- │  ‾                                                                         │
- └───────────────────────────────────────────────────── fuzz_crash_028.md:1:1 ┘
+For example:
+    person.name
+    maybe_person.?name
+    pair.0
 
-    If you don't need this variable, prefix it with an underscore like `_rest`
-    to suppress this warning.
+I found ... here.
 
+── ✗ mod not found ──────────────────────────────────── fuzz_crash_028.md:6:1
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
-└┬────────────────┘  pattern outside match expression.                        │
- │                                                                            │
- │  [1, 2 | 5, 3, .. as rest] => 123                                          │
- │      ‾‾‾‾‾                                                                 │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:72:7 ┘
+The mod Stdot was not found in this Roc project.
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+import Stdot
+        exposing [ #tem
+        ] # Cose
 
+── ✗ undeclared type ──────────────────────────────────── fuzz_crash_028.md:29:2
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  # Thnt!                                                                   │
- │  ‾                                                                         │
- └───────────────────────────────────────────────────── fuzz_crash_028.md:1:1 ┘
+The type Bar is not declared in this scope.
 
-    If you don't need this variable, prefix it with an underscore like `_rest`
-    to suppress this warning.
+Bar, #
+^^^
 
+── ✗ undeclared type ──────────────────────────────────── fuzz_crash_028.md:30:2
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
-└┬────────────────┘  pattern outside match expression.                        │
- │                                                                            │
- │  (1, 2 | 5, 3) => 123                                                      │
- │      ‾‾‾‾‾                                                                 │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:77:7 ┘
+The type Baz is not declared in this scope.
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+Baz, #m
+^^^
 
+── ✗ undeclared type ─────────────────────────────────── fuzz_crash_028.md:32:19
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `add` in this scope. ─────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  { foo: 1, bar: 2, ..rest } => 12->add(34)                                 │
- │                                    ‾‾‾                                     │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:78:37 ┘
+The type Ok is not declared in this scope.
 
-    Is it misspelled, or is there an import missing?
+Some(a) : { foo : Ok(a), bar : g }
+                  ^^
 
+── ✗ undeclared type variable ────────────────────────── fuzz_crash_028.md:32:32
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  { foo: 1, bar: 2, ..rest } => 12->add(34)                                 │
- │                    ‾‾‾‾‾‾                                                  │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:78:21 ┘
+The type variable g is not declared in this scope.
 
-    If you don't need this variable, prefix it with an underscore like `_rest`
-    to suppress this warning.
+Some(a) : { foo : Ok(a), bar : g }
+                               ^
 
+Type variables must be introduced in a type annotation before they can be used.
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
-└┬────────────────┘  pattern outside match expression.                        │
- │                                                                            │
- │  { foo: 1, bar: 2 | 7 } => 12                                              │
- │                 ‾‾‾‾‾                                                      │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:85:18 ┘
+── ✗ undeclared type ──────────────────────────────────── fuzz_crash_028.md:34:8
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+The type Som is not declared in this scope.
 
+bar : Som# Afld
+      ^^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `b` is defined here and then never used. ───────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  b,                                                                        │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:62:2 ┘
+── ✗ undeclared type ──────────────────────────────────── fuzz_crash_028.md:38:8
 
-    If you don't need this variable, prefix it with an underscore like `_b` to
-    suppress this warning.
+The type Som is not declared in this scope.
 
+bar : Som
+      ^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `blah` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  blah == 1 # nt                                                            │
- │  ‾‾‾‾                                                                      │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:93:2 ┘
+── ✗ undeclared type ─────────────────────────────────── fuzz_crash_028.md:43:11
 
-    Is it misspelled, or is there an import missing?
+The type Maybe is not declared in this scope.
 
+Func(a) : Maybe(a), a -> Maybe(a)
+          ^^^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `String` is not declared in this scope. ────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  main! : (String) -> Result({}, _)                                         │
- │           ‾‾‾‾‾‾                                                           │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:95:10 ┘
+── ✗ undeclared type ─────────────────────────────────── fuzz_crash_028.md:43:26
 
+The type Maybe is not declared in this scope.
 
+Func(a) : Maybe(a), a -> Maybe(a)
+                         ^^^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Result` is not declared in this scope. ────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  main! : (String) -> Result({}, _)                                         │
- │                      ‾‾‾‾‾‾                                                │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:95:21 ┘
+── ✗ empty tuple not allowed ──────────────────────────── fuzz_crash_028.md:52:1
 
+I am part way through parsing this tuple, but it is empty.
 
+() #r
+^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `blah` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  expect blah == 1                                                          │
- │         ‾‾‾‾                                                               │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:99:9 ┘
+If you want to represent nothing, try using an empty record: {}.
 
-    Is it misspelled, or is there an import missing?
+── ✗ name not in scope ────────────────────────────────── fuzz_crash_028.md:65:4
 
+Nothing is named x in this scope.
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  ...                                                                       │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:103:2 ┘
+x x
+^
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+Is it misspelled, or is there an import missing?
 
+── ✗ name not in scope ────────────────────────────────── fuzz_crash_028.md:65:6
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `nc` in this scope. ──────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  nc(                                                                       │
- │  ‾‾                                                                        │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:107:1 ┘
+Nothing is named x in this scope.
 
-    Is it misspelled, or is there an import missing?
+x x
+  ^
 
+Is it misspelled, or is there an import missing?
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `er` in this scope. ──────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  er, # afarg                                                               │
- │  ‾‾                                                                        │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:116:1 ┘
+── ✗ name not in scope ────────────────────────────────── fuzz_crash_028.md:71:7
 
-    Is it misspelled, or is there an import missing?
+Nothing is named ment in this scope.
 
+=> ment
+   ^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `list` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  for n in list {                                                           │
- │           ‾‾‾‾                                                             │
- └────────────────────────────────────────────────── fuzz_crash_028.md:119:11 ┘
+Is it misspelled, or is there an import missing?
 
-    Is it misspelled, or is there an import missing?
+── ● unused variable ───────────────────────────────────── fuzz_crash_028.md:1:1
 
+Variable rest is defined here and then never used:
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  line!("Ag ${n} to ${er}")                                                 │
- │  ‾‾‾‾‾                                                                     │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:120:2 ┘
+# Thnt!
+^
 
-    Is it misspelled, or is there an import missing?
+If you don't need this variable, prefix it with an underscore like _rest to
+suppress this warning.
 
+── ✗ not implemented ──────────────────────────────────── fuzz_crash_028.md:72:7
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `er` in this scope. ──────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  line!("Ag ${n} to ${er}")                                                 │
- │                      ‾‾                                                    │
- └────────────────────────────────────────────────── fuzz_crash_028.md:120:22 ┘
+This feature is not yet implemented: alternatives pattern outside match
+expression.
 
-    Is it misspelled, or is there an import missing?
+[1, 2 | 5, 3, .. as rest] => 123
+    ^^^^^
 
+This error doesn't have a proper diagnostic report yet. Let us know if you want
+to help improve Roc's error messages!
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `ned` in this scope. ─────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
- │                                                      ‾‾‾                   │
- └────────────────────────────────────────────────── fuzz_crash_028.md:123:54 ┘
+── ● unused variable ───────────────────────────────────── fuzz_crash_028.md:1:1
 
-    Is it misspelled, or is there an import missing?
+Variable rest is defined here and then never used:
 
+# Thnt!
+^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `nd` in this scope. ──────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  tuple = (123, "World", tag, Ok(world), (nd, tuple), [1, 2, 3])            │
- │                                          ‾‾                                │
- └────────────────────────────────────────────────── fuzz_crash_028.md:124:42 ┘
+If you don't need this variable, prefix it with an underscore like _rest to
+suppress this warning.
 
-    Is it misspelled, or is there an import missing?
+── ✗ not implemented ──────────────────────────────────── fuzz_crash_028.md:77:7
 
+This feature is not yet implemented: alternatives pattern outside match
+expression.
 
-┌──────────────────────────────┐
-│ INVALID ASSIGNMENT TO ITSELF ├─ The value `tuple` is assigned to itself, ───┐
-└┬─────────────────────────────┘  which would cause an infinite loop at       │
- │                                runtime.                                    │
- │                                                                            │
- │  tuple = (123, "World", tag, Ok(world), (nd, tuple), [1, 2, 3])            │
- │                                              ‾‾‾‾‾                         │
- └────────────────────────────────────────────────── fuzz_crash_028.md:124:46 ┘
+(1, 2 | 5, 3) => 123
+    ^^^^^
 
-    Only functions can reference themselves (for recursion). For non-function
-    values, the right-hand side must be fully computable without referring to
-    the value being assigned.
+This error doesn't have a proper diagnostic report yet. Let us know if you want
+to help improve Roc's error messages!
 
+── ✗ name not in scope ───────────────────────────────── fuzz_crash_028.md:78:37
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `ag1` in this scope. ─────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  "World",ag1,                                                              │
- │          ‾‾‾                                                               │
- └────────────────────────────────────────────────── fuzz_crash_028.md:127:11 ┘
+Nothing is named add in this scope.
 
-    Is it misspelled, or is there an import missing?
+{ foo: 1, bar: 2, ..rest } => 12->add(34)
+                                  ^^^
 
+Is it misspelled, or is there an import missing?
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `foo` in this scope. ─────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  b = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5  │
- │          ‾‾‾                                                               │
- └────────────────────────────────────────────────── fuzz_crash_028.md:132:10 ┘
+── ● unused variable ─────────────────────────────────── fuzz_crash_028.md:78:21
 
-    Is it misspelled, or is there an import missing?
+Variable rest is defined here and then never used:
 
+{ foo: 1, bar: 2, ..rest } => 12->add(34)
+                  ^^^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `arg1` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  le =(arg1)?.od()?.ned()?.recd?                                            │
- │       ‾‾‾‾                                                                 │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:133:6 ┘
+If you don't need this variable, prefix it with an underscore like _rest to
+suppress this warning.
 
-    Is it misspelled, or is there an import missing?
+── ✗ not implemented ─────────────────────────────────── fuzz_crash_028.md:85:18
 
+This feature is not yet implemented: alternatives pattern outside match
+expression.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  line!(                                                                    │
- │  ‾‾‾‾‾                                                                     │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:134:2 ┘
+{ foo: 1, bar: 2 | 7 } => 12
+               ^^^^^
 
-    Is it misspelled, or is there an import missing?
+This error doesn't have a proper diagnostic report yet. Let us know if you want
+to help improve Roc's error messages!
 
+── ● unused variable ──────────────────────────────────── fuzz_crash_028.md:62:2
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `r` in this scope. ───────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  r(number) # xpr                                                           │
- │  ‾                                                                         │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:136:4 ┘
+Variable b is defined here and then never used:
 
-    Is it misspelled, or is there an import missing?
+b,
+^
 
+If you don't need this variable, prefix it with an underscore like _b to
+suppress this warning.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `tag_` is defined here and then never used. ────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  tag_ = Ok(number)                                                         │
- │  ‾‾‾‾                                                                      │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:112:2 ┘
+── ✗ name not in scope ────────────────────────────────── fuzz_crash_028.md:93:2
 
-    If you don't need this variable, prefix it with an underscore like `_tag_`
-    to suppress this warning.
+Nothing is named blah in this scope.
 
+blah == 1 # nt
+^^^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `i` is defined here and then never used. ───────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  i= "H, ${world}"                                                          │
- │  ‾                                                                         │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:113:2 ┘
+Is it misspelled, or is there an import missing?
 
-    If you don't need this variable, prefix it with an underscore like `_i` to
-    suppress this warning.
+── ✗ undeclared type ─────────────────────────────────── fuzz_crash_028.md:95:10
 
+The type String is not declared in this scope.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `t` is defined here and then never used. ───────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  t = [                                                                     │
- │  ‾                                                                         │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:114:1 ┘
+main! : (String) -> Result({}, _)
+         ^^^^^^
 
-    If you don't need this variable, prefix it with an underscore like `_t` to
-    suppress this warning.
+── ✗ undeclared type ─────────────────────────────────── fuzz_crash_028.md:95:21
 
+The type Result is not declared in this scope.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `rd` is defined here and then never used. ──────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
- │  ‾‾                                                                        │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:123:2 ┘
+main! : (String) -> Result({}, _)
+                    ^^^^^^
 
-    If you don't need this variable, prefix it with an underscore like `_rd` to
-    suppress this warning.
+── ✗ name not in scope ────────────────────────────────── fuzz_crash_028.md:99:9
 
+Nothing is named blah in this scope.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `mle` is defined here and then never used. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  mle = (                                                                   │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:125:2 ┘
+expect blah == 1
+       ^^^^
 
-    If you don't need this variable, prefix it with an underscore like `_mle`
-    to suppress this warning.
+Is it misspelled, or is there an import missing?
 
+── ✗ unrecognized syntax ─────────────────────────────── fuzz_crash_028.md:103:2
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `b` is defined here and then never used. ───────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  b = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5  │
- │  ‾                                                                         │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:132:2 ┘
+I don't recognize this syntax.
 
-    If you don't need this variable, prefix it with an underscore like `_b` to
-    suppress this warning.
+...
+^^^
 
+This might be a syntax error, an unsupported language feature, or a typo.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `le` is defined here and then never used. ──────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  le =(arg1)?.od()?.ned()?.recd?                                            │
- │  ‾‾                                                                        │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:133:1 ┘
+── ✗ name not in scope ───────────────────────────────── fuzz_crash_028.md:107:1
 
-    If you don't need this variable, prefix it with an underscore like `_le` to
-    suppress this warning.
+Nothing is named nc in this scope.
 
+nc(
+^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `V` is not declared in this scope. ─────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  t : V((a,c))                                                              │
- │      ‾                                                                     │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:144:5 ┘
+Is it misspelled, or is there an import missing?
 
+── ✗ name not in scope ───────────────────────────────── fuzz_crash_028.md:116:1
 
+Nothing is named er in this scope.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `h` in this scope. ───────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  h == foo                                                                  │
- │  ‾                                                                         │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:148:1 ┘
+er, # afarg
+^^
 
-    Is it misspelled, or is there an import missing?
+Is it misspelled, or is there an import missing?
 
+── ✗ name not in scope ──────────────────────────────── fuzz_crash_028.md:119:11
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `foo` in this scope. ─────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  h == foo                                                                  │
- │       ‾‾‾                                                                  │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:148:6 ┘
+Nothing is named list in this scope.
 
-    Is it misspelled, or is there an import missing?
+for n in list {
+         ^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `f` is defined here and then never used. ───────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  f= 1                                                                      │
- │  ‾                                                                         │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:147:2 ┘
+── ✗ name not in scope ───────────────────────────────── fuzz_crash_028.md:120:2
 
-    If you don't need this variable, prefix it with an underscore like `_f` to
-    suppress this warning.
+Nothing is named line! in this scope.
 
+line!("Ag ${n} to ${er}")
+^^^^^
 
-┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `main!` is ──────────┐
-└┬────────────────────────┘  exposed, but it is not defined anywhere in       │
- │                           this mod.                                     │
- │                                                                            │
- │  app [main!] { pf: platform "c" }                                          │
- │       ‾‾‾‾‾                                                                │
- └───────────────────────────────────────────────────── fuzz_crash_028.md:2:6 ┘
+Is it misspelled, or is there an import missing?
 
-    You can fix this by either defining `main!` in this mod, or by removing
-    it from the list of exposed values.
+── ✗ name not in scope ──────────────────────────────── fuzz_crash_028.md:120:22
 
+Nothing is named er in this scope.
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  line : ( # Cpen                                                           │
- │      Bar, #                                                                │
- │      Baz, #m                                                               │
- │  ) # Co                                                                    │
- │                                                                            │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:28:1 ┘
+line!("Ag ${n} to ${er}")
+                    ^^
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+Is it misspelled, or is there an import missing?
 
+── ✗ name not in scope ──────────────────────────────── fuzz_crash_028.md:123:54
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  add_one : U64 -> U64                                                      │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:47:1 ┘
+Nothing is named ned in this scope.
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
+                                                    ^^^
 
+Is it misspelled, or is there an import missing?
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The `lue` binding in the second pattern of the first ──────┐
-└┬──────────────┘  branch of this `match` does not match the same binding     │
- │                 in the first pattern.                                      │
- │                                                                            │
- │      match a {lue | Red => {                                               │
- │              x x                                                           │
- │          }                                                                 │
- │          Blue  => 1                                                        │
- │          "foo" => # ent                                                    │
- │  00                                                                        │
- │          "foo" | "bar" => 20[1, 2, 3, .. as rest] # t                      │
- │              => ment                                                       │
- │          [1, 2 | 5, 3, .. as rest] => 123                                  │
- │          [                                                                 │
- │          ] => 1 3.14 => 314                                                │
- │          3.14 | 6.28 => 314                                                │
- │          (1, 2, 3) => 123                                                  │
- │          (1, 2 | 5, 3) => 123                                              │
- │          { foo: 1, bar: 2, ..rest } => 12->add(34)                         │
- │          { # Afpen                                                         │
- │  oo #                                                                      │
- │                  : #ue                                                     │
- │      1, #eld                                                               │
- │  ar: 2,                                                                    │
- │              ..} => 12                                                     │
- │          { foo: 1, bar: 2 | 7 } => 12                                      │
- │          {                                                                 │
- │      o: 1,                                                                 │
- │              } =>212                                                       │
- │          Ok(123) => 12                                                     │
- │      }                                                                     │
- │                                                                            │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:64:17 ┘
+── ✗ name not in scope ──────────────────────────────── fuzz_crash_028.md:124:42
 
-    In the second pattern, `lue` is:
+Nothing is named nd in this scope.
 
-        [Red, ..]
+tuple = (123, "World", tag, Ok(world), (nd, tuple), [1, 2, 3])
+                                        ^^
 
-    But in the first pattern, `lue` is:
+Is it misspelled, or is there an import missing?
 
-        [Red, ..]
+── ✗ invalid assignment to itself ───────────────────── fuzz_crash_028.md:124:46
 
-    A name shared across `|` patterns in the same `match` branch must have one
-    compatible type.
+The value tuple is assigned to itself, which would cause an infinite loop at
+runtime.
 
+tuple = (123, "World", tag, Ok(world), (nd, tuple), [1, 2, 3])
+                                            ^^^^^
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  "foo" => # ent                                                            │
- │  ‾‾‾‾‾                                                                     │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:68:3 ┘
+Only functions can reference themselves (for recursion). For non-function
+values, the right-hand side must be fully computable without referring to the
+value being assigned.
 
-    The value's type, which does not have a method named `from_quote`, is:
+── ✗ name not in scope ──────────────────────────────── fuzz_crash_028.md:127:11
 
-        [Blue, Red, ..]
+Nothing is named ag1 in this scope.
 
+"World",ag1,
+        ^^^
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  "foo" | "bar" => 20[1, 2, 3, .. as rest] # t                              │
- │  ‾‾‾‾‾                                                                     │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:70:3 ┘
+Is it misspelled, or is there an import missing?
 
-    The value's type, which does not have a method named `from_quote`, is:
+── ✗ name not in scope ──────────────────────────────── fuzz_crash_028.md:132:10
 
-        [Blue, Red, ..]
+Nothing is named foo in this scope.
 
+b = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+        ^^^
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The fifth branch of this `match` does not match the ───────┐
-└┬──────────────┘  previous ones.                                             │
- │                                                                            │
- │      match a {lue | Red => {                                               │
- │              x x                                                           │
- │          }                                                                 │
- │          Blue  => 1                                                        │
- │          "foo" => # ent                                                    │
- │  00                                                                        │
- │          "foo" | "bar" => 20[1, 2, 3, .. as rest] # t                      │
- │              => ment                                                       │
- │          [1, 2 | 5, 3, .. as rest] => 123                                  │
- │          [                                                                 │
- │          ] => 1 3.14 => 314                                                │
- │          3.14 | 6.28 => 314                                                │
- │          (1, 2, 3) => 123                                                  │
- │          (1, 2 | 5, 3) => 123                                              │
- │          { foo: 1, bar: 2, ..rest } => 12->add(34)                         │
- │          { # Afpen                                                         │
- │  oo #                                                                      │
- │                  : #ue                                                     │
- │      1, #eld                                                               │
- │  ar: 2,                                                                    │
- │              ..} => 12                                                     │
- │          { foo: 1, bar: 2 | 7 } => 12                                      │
- │          {                                                                 │
- │      o: 1,                                                                 │
- │              } =>212                                                       │
- │          Ok(123) => 12                                                     │
- │      }                                                                     │
- │                                                                            │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:64:22 ┘
+Is it misspelled, or is there an import missing?
 
-    This fifth branch is trying to match:
+── ✗ name not in scope ───────────────────────────────── fuzz_crash_028.md:133:6
 
-        List(d)
-          where [
-            d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-            d.is_eq : d, d -> Bool,
-          ]
+Nothing is named arg1 in this scope.
 
-    But the expression between the `match` parenthesis has the type:
+le =(arg1)?.od()?.ned()?.recd?
+     ^^^^
 
-        [Blue, Red, ..]
+Is it misspelled, or is there an import missing?
 
-    These can never match! Either the pattern or expression has a problem.
+── ✗ name not in scope ───────────────────────────────── fuzz_crash_028.md:134:2
 
+Nothing is named line! in this scope.
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  main! : (String) -> Result({}, _)                                         │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
- └──────────────────────────────────────────────────── fuzz_crash_028.md:95:1 ┘
+line!(
+^^^^^
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+Is it misspelled, or is there an import missing?
 
+── ✗ name not in scope ───────────────────────────────── fuzz_crash_028.md:136:4
 
-┌──────────────┐
-│ TOO FEW ARGS ├─ The `match_time` function expects 2 arguments, but it got ──┐
-└┬─────────────┘  1 instead.                                                  │
- │                                                                            │
- │  match_time(                                                               │
- │      ...                                                                   │
- │  )                                                                         │
- │                                                                            │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:104:2 ┘
+Nothing is named r in this scope.
 
-    The `match_time` function has the type:
+r(number) # xpr
+^
 
-        [Blue, Red, ..], _arg -> Error
+Is it misspelled, or is there an import missing?
 
-    Are there any missing commas?
+── ● unused variable ─────────────────────────────────── fuzz_crash_028.md:112:2
 
+Variable tag_ is defined here and then never used:
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The first argument being passed to this function has the ──┐
-└┬──────────────┘  wrong type.                                                │
- │                                                                            │
- │          add_one(dbg # Afist                                               │
- │  er, # afarg                                                               │
- │          ), 456, # ee                                                      │
- │                                                                            │
- └────────────────────────────────────────────────── fuzz_crash_028.md:115:11 ┘
+tag_ = Ok(number)
+^^^^
 
-    This argument has the type:
+If you don't need this variable, prefix it with an underscore like _tag_ to
+suppress this warning.
 
-        {}
+── ● unused variable ─────────────────────────────────── fuzz_crash_028.md:113:2
 
-    But `add_one` needs the first argument to be:
+Variable i is defined here and then never used:
 
-        U64
+i= "H, ${world}"
+^
 
+If you don't need this variable, prefix it with an underscore like _i to
+suppress this warning.
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This `?` may return early with a type that doesn't match ──┐
-└┬──────────────┘  the function body.                                         │
- │                                                                            │
- │  le =(arg1)?.od()?.ned()?.recd?                                            │
- │      ‾‾‾‾‾‾‾                                                               │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:133:5 ┘
+── ● unused variable ─────────────────────────────────── fuzz_crash_028.md:114:1
 
-    On error, this would return:
+Variable t is defined here and then never used:
 
-        Try(ok, err)
+t = [
+^
 
-    But the function body evaluates to:
+If you don't need this variable, prefix it with an underscore like _t to
+suppress this warning.
 
-        [Blue, ..]
+── ● unused variable ─────────────────────────────────── fuzz_crash_028.md:123:2
 
-    Hint: The error types from all `?` operators and the function body must be
-    compatible since any of them could be the actual return value.
+Variable rd is defined here and then never used:
 
+rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
+^^
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  y : {}                                                                    │
- │  ‾‾‾‾‾‾                                                                    │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:141:1 ┘
+If you don't need this variable, prefix it with an underscore like _rd to
+suppress this warning.
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+── ● unused variable ─────────────────────────────────── fuzz_crash_028.md:125:2
 
+Variable mle is defined here and then never used:
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  t : V((a,c))                                                              │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:144:1 ┘
+mle = (
+^^^
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+If you don't need this variable, prefix it with an underscore like _mle to
+suppress this warning.
 
+── ● unused variable ─────────────────────────────────── fuzz_crash_028.md:132:2
 
-┌────────────────┐
-│ MISSING METHOD ├─ This is trying to dispatch a method named `od` on an ─────┐
-└┬───────────────┘  unresolved type variable, but unresolved type variables   │
- │                  have no methods.                                          │
- │                                                                            │
- │  le =(arg1)?.od()?.ned()?.recd?                                            │
- │      ‾‾‾‾‾‾‾                                                               │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:133:5 ┘
+Variable b is defined here and then never used:
 
-    Hint: You can replace this static dispatch call with an ordinary function
-    call, or force the type variable to become more concrete—for example, by
-    adding a type annotation that narrows its type to something that actually
-    has methods.
+b = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+^
 
+If you don't need this variable, prefix it with an underscore like _b to
+suppress this warning.
 
-┌────────────────┐
-│ MISSING METHOD ├─ This is trying to dispatch a method named `ned` on an ────┐
-└┬───────────────┘  unresolved type variable, but unresolved type variables   │
- │                  have no methods.                                          │
- │                                                                            │
- │  le =(arg1)?.od()?.ned()?.recd?                                            │
- │      ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
- └─────────────────────────────────────────────────── fuzz_crash_028.md:133:5 ┘
+── ● unused variable ─────────────────────────────────── fuzz_crash_028.md:133:1
 
-    Hint: You can replace this static dispatch call with an ordinary function
-    call, or force the type variable to become more concrete—for example, by
-    adding a type annotation that narrows its type to something that actually
-    has methods.
+Variable le is defined here and then never used:
+
+le =(arg1)?.od()?.ned()?.recd?
+^^
+
+If you don't need this variable, prefix it with an underscore like _le to
+suppress this warning.
+
+── ✗ undeclared type ─────────────────────────────────── fuzz_crash_028.md:144:5
+
+The type V is not declared in this scope.
+
+t : V((a,c))
+    ^
+
+── ✗ name not in scope ───────────────────────────────── fuzz_crash_028.md:148:1
+
+Nothing is named h in this scope.
+
+h == foo
+^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ name not in scope ───────────────────────────────── fuzz_crash_028.md:148:6
+
+Nothing is named foo in this scope.
+
+h == foo
+     ^^^
+
+Is it misspelled, or is there an import missing?
+
+── ● unused variable ─────────────────────────────────── fuzz_crash_028.md:147:2
+
+Variable f is defined here and then never used:
+
+f= 1
+^
+
+If you don't need this variable, prefix it with an underscore like _f to
+suppress this warning.
+
+── ✗ exposed but not defined ───────────────────────────── fuzz_crash_028.md:2:6
+
+The mod header says that main! is exposed, but it is not defined anywhere in
+this mod.
+
+app [main!] { pf: platform "c" }
+     ^^^^^
+
+You can fix this by either defining main! in this mod, or by removing it
+from the list of exposed values.
+
+── ● declaration has no value ─────────────────────────── fuzz_crash_028.md:28:1
+
+This declaration has a type annotation but no implementation.
+
+line : ( # Cpen
+    Bar, #
+    Baz, #m
+) # Co
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+── ● declaration has no value ─────────────────────────── fuzz_crash_028.md:47:1
+
+This declaration has a type annotation but no implementation.
+
+add_one : U64 -> U64
+^^^^^^^^^^^^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+── ✗ type mismatch ───────────────────────────────────── fuzz_crash_028.md:64:17
+
+The lue binding in the second pattern of the first branch of this match does
+not match the same binding in the first pattern.
+
+    match a {lue | Red => {
+            x x
+        }
+        Blue  => 1
+        "foo" => # ent
+00
+        "foo" | "bar" => 20[1, 2, 3, .. as rest] # t
+            => ment
+        [1, 2 | 5, 3, .. as rest] => 123
+        [
+        ] => 1 3.14 => 314
+        3.14 | 6.28 => 314
+        (1, 2, 3) => 123
+        (1, 2 | 5, 3) => 123
+        { foo: 1, bar: 2, ..rest } => 12->add(34)
+        { # Afpen
+oo #
+                : #ue
+    1, #eld
+ar: 2,
+            ..} => 12
+        { foo: 1, bar: 2 | 7 } => 12
+        {
+    o: 1,
+            } =>212
+        Ok(123) => 12
+    }
+
+In the second pattern, lue is:
+
+    [Red, ..]
+
+But in the first pattern, lue is:
+
+    [Red, ..]
+
+A name shared across | patterns in the same match branch must have one
+compatible type.
+
+── ✗ missing method ───────────────────────────────────── fuzz_crash_028.md:68:3
+
+This from_quote method is being called on a value whose type doesn't have that
+method.
+
+"foo" => # ent
+^^^^^
+
+The value's type, which does not have a method named from_quote, is:
+
+    [Blue, Red, ..]
+
+── ✗ missing method ───────────────────────────────────── fuzz_crash_028.md:70:3
+
+This from_quote method is being called on a value whose type doesn't have that
+method.
+
+"foo" | "bar" => 20[1, 2, 3, .. as rest] # t
+^^^^^
+
+The value's type, which does not have a method named from_quote, is:
+
+    [Blue, Red, ..]
+
+── ✗ type mismatch ───────────────────────────────────── fuzz_crash_028.md:64:22
+
+The fifth branch of this match does not match the previous ones.
+
+    match a {lue | Red => {
+            x x
+        }
+        Blue  => 1
+        "foo" => # ent
+00
+        "foo" | "bar" => 20[1, 2, 3, .. as rest] # t
+            => ment
+        [1, 2 | 5, 3, .. as rest] => 123
+        [
+        ] => 1 3.14 => 314
+        3.14 | 6.28 => 314
+        (1, 2, 3) => 123
+        (1, 2 | 5, 3) => 123
+        { foo: 1, bar: 2, ..rest } => 12->add(34)
+        { # Afpen
+oo #
+                : #ue
+    1, #eld
+ar: 2,
+            ..} => 12
+        { foo: 1, bar: 2 | 7 } => 12
+        {
+    o: 1,
+            } =>212
+        Ok(123) => 12
+    }
+
+This fifth branch is trying to match:
+
+    List(d)
+      where [
+        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+        d.is_eq : d, d -> Bool,
+      ]
+
+But the expression between the match parenthesis has the type:
+
+    [Blue, Red, ..]
+
+These can never match! Either the pattern or expression has a problem.
+
+── ● declaration has no value ─────────────────────────── fuzz_crash_028.md:95:1
+
+This declaration has a type annotation but no implementation.
+
+main! : (String) -> Result({}, _)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+── ✗ too few args ────────────────────────────────────── fuzz_crash_028.md:104:2
+
+The match_time function expects 2 arguments, but it got 1 instead.
+
+match_time(
+    ...
+)
+
+The match_time function has the type:
+
+    [Blue, Red, ..], _arg -> Error
+
+Are there any missing commas?
+
+── ✗ reference has no value ──────────────────────────── fuzz_crash_028.md:115:3
+
+This refers to a declaration that has a type annotation but no implementation,
+so there is no value here to use.
+
+add_one(dbg # Afist
+^^^^^^^
+
+Give that declaration a value body, or stop referring to it here.
+
+── ✗ type mismatch ───────────────────────────────────── fuzz_crash_028.md:133:5
+
+This ? may return early with a type that doesn't match the function body.
+
+le =(arg1)?.od()?.ned()?.recd?
+    ^^^^^^^
+
+On error, this would return:
+
+    Try(ok, err)
+
+But the function body evaluates to:
+
+    [Blue, ..]
+
+Hint: The error types from all ? operators and the function body must be
+compatible since any of them could be the actual return value.
+
+── ● declaration has no value ────────────────────────── fuzz_crash_028.md:141:1
+
+This declaration has a type annotation but no implementation.
+
+y : {}
+^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+── ● declaration has no value ────────────────────────── fuzz_crash_028.md:144:1
+
+This declaration has a type annotation but no implementation.
+
+t : V((a,c))
+^^^^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+── ✗ missing method ──────────────────────────────────── fuzz_crash_028.md:133:5
+
+This is trying to dispatch a method named od on an unresolved type variable,
+but unresolved type variables have no methods.
+
+le =(arg1)?.od()?.ned()?.recd?
+    ^^^^^^^
+
+Hint: You can replace this static dispatch call with an ordinary function call,
+or force the type variable to become more concrete—for example, by adding a
+type annotation that narrows its type to something that actually has methods.
+
+── ✗ missing method ──────────────────────────────────── fuzz_crash_028.md:133:5
+
+This is trying to dispatch a method named ned on an unresolved type variable,
+but unresolved type variables have no methods.
+
+le =(arg1)?.od()?.ned()?.recd?
+    ^^^^^^^^^^^^^
+
+Hint: You can replace this static dispatch call with an ordinary function call,
+or force the type variable to become more concrete—for example, by adding a
+type annotation that narrows its type to something that actually has methods.
 
 # TOKENS
 ~~~zig
@@ -2475,18 +2227,19 @@ EndOfFile,
 							(p-ident (raw "le"))
 							(e-question-suffix
 								(e-field-access
-									(e-question-suffix
-										(e-method-call (method ".ned")
-											(receiver
-												(e-question-suffix
-													(e-method-call (method ".od")
-														(receiver
-															(e-question-suffix
-																(e-tuple
-																	(e-ident (raw "arg1")))))
-														(args))))
-											(args)))
-									(e-ident (raw "recd")))))
+									(receiver
+										(e-question-suffix
+											(e-method-call (method ".ned")
+												(receiver
+													(e-question-suffix
+														(e-method-call (method ".od")
+															(receiver
+																(e-question-suffix
+																	(e-tuple
+																		(e-ident (raw "arg1")))))
+															(args))))
+												(args))))
+									(segment (mode "required") (field "recd")))))
 						(e-apply
 							(e-ident (raw "line!"))
 							(e-string
@@ -2674,7 +2427,7 @@ expect {
 (can-ir
 	(d-let
 		(p-assign (ident "line"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-tuple
 				(ty-malformed)
@@ -2728,7 +2481,7 @@ expect {
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-parens
@@ -2747,7 +2500,7 @@ expect {
 		(e-empty_record))
 	(d-let
 		(p-assign (ident "t"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(s-import (mod "pf.Stdout")
@@ -2788,21 +2541,9 @@ expect {
 			(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 			(ty-malformed)))
 	(s-expect
-		(e-method-eq (negated "false")
-			(lhs
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(rhs
-				(e-num (value "1")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-expect
-		(e-block
-			(s-let
-				(p-assign (ident "f"))
-				(e-num (value "1")))
-			(e-method-eq (negated "false")
-				(lhs
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(rhs
-					(e-runtime-error (tag "ident_not_in_scope")))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

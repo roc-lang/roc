@@ -16,76 +16,59 @@ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - fuzz_crash_105.md:2:28:2:44
 UNDECLARED TYPE VARIABLE - fuzz_crash_105.md:2:46:2:47
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_105.md:2:55:2:57
 # PROBLEMS
+── ✗ undeclared type variable ──────────────────────────── fuzz_crash_105.md:2:3
 
-┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable `a` is not declared in this ──┐
-└┬─────────────────────────┘  scope.                                          │
- │                                                                            │
- │  A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}                │
- │    ‾                                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_105.md:2:3 ┘
+The type variable a is not declared in this scope.
 
-    Type variables must be introduced in a type annotation before they can be
-    used.
+A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
+  ^
 
+Type variables must be introduced in a type annotation before they can be used.
 
-┌──────────────────────────────────────────────┐
-│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a ────────┐
-└┬─────────────────────────────────────────────┘  `where` clause inside a     │
- │                                                type declaration.           │
- │                                                                            │
- │  A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}                │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
- └───────────────────────────────────────────────────── fuzz_crash_105.md:2:1 ┘
+── ✗ where clause not allowed in type declaration ──────── fuzz_crash_105.md:2:1
 
-    You're attempting do this here:
+You cannot define a where clause inside a type declaration.
 
+A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable `b` is not declared in this ──┐
-└┬─────────────────────────┘  scope.                                          │
- │                                                                            │
- │  A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}                │
- │                               ‾                                            │
- └──────────────────────────────────────────────────── fuzz_crash_105.md:2:30 ┘
+Hint: where clauses can only go on function type annotations.
 
-    Type variables must be introduced in a type annotation before they can be
-    used.
+── ✗ undeclared type variable ─────────────────────────── fuzz_crash_105.md:2:30
 
+The type variable b is not declared in this scope.
 
-┌──────────────────────────────────────────────┐
-│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a ────────┐
-└┬─────────────────────────────────────────────┘  `where` clause inside a     │
- │                                                type declaration.           │
- │                                                                            │
- │  A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}                │
- │                             ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                               │
- └──────────────────────────────────────────────────── fuzz_crash_105.md:2:28 ┘
+A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
+                             ^
 
-    You're attempting do this here:
+Type variables must be introduced in a type annotation before they can be used.
 
+── ✗ where clause not allowed in type declaration ─────── fuzz_crash_105.md:2:28
 
-┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable `e` is not declared in this ──┐
-└┬─────────────────────────┘  scope.                                          │
- │                                                                            │
- │  A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}                │
- │                                               ‾                            │
- └──────────────────────────────────────────────────── fuzz_crash_105.md:2:46 ┘
+You cannot define a where clause inside a type declaration.
 
-    Type variables must be introduced in a type annotation before they can be
-    used.
+A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
+                           ^^^^^^^^^^^^^^^^
 
+Hint: where clauses can only go on function type annotations.
 
-┌─────────────────────────┐
-│ EMPTY TUPLE NOT ALLOWED ├─ I am part way through parsing this tuple, but ───┐
-└┬────────────────────────┘  it is empty.                                     │
- │                                                                            │
- │  A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}                │
- │                                                        ‾‾                  │
- └──────────────────────────────────────────────────── fuzz_crash_105.md:2:55 ┘
+── ✗ undeclared type variable ─────────────────────────── fuzz_crash_105.md:2:46
 
-    If you want to represent nothing, try using an empty record: `{}`.
+The type variable e is not declared in this scope.
+
+A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
+                                             ^
+
+Type variables must be introduced in a type annotation before they can be used.
+
+── ✗ empty tuple not allowed ──────────────────────────── fuzz_crash_105.md:2:55
+
+I am part way through parsing this tuple, but it is empty.
+
+A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
+                                                      ^^
+
+If you want to represent nothing, try using an empty record: {}.
 
 # TOKENS
 ~~~zig

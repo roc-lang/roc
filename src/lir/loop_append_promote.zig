@@ -165,7 +165,7 @@ const Pass = struct {
                     const value: Abstract = switch (assign.value) {
                         .i64_literal => |lit| if (lit.value >= 0) .{ .literal = @intCast(lit.value) } else Abstract.other,
                         .i128_literal => |lit| if (lit.value >= 0 and lit.value <= std.math.maxInt(u64)) .{ .literal = @intCast(lit.value) } else Abstract.other,
-                        .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => .other,
+                        .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => .other,
                     };
                     try env.put(assign.target, value);
                     current = assign.next;
@@ -215,6 +215,18 @@ const Pass = struct {
                 .join,
                 .jump,
                 .crash,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
                 => return null,
             }
         }
@@ -561,6 +573,66 @@ const Pass = struct {
                     try stack.append(allocator, s.next);
                 },
                 .expect_err => |s| try noteUse(scan, s.message, false),
+                .assign_boxy_desc_ref => |s| {
+                    try bumpUse(&scan.assigned_targets, s.target);
+                    try stack.append(allocator, s.next);
+                },
+                .assign_boxy_dict_ref => |s| {
+                    try bumpUse(&scan.assigned_targets, s.target);
+                    try stack.append(allocator, s.next);
+                },
+                .assign_boxy_box => |s| {
+                    try bumpUse(&scan.assigned_targets, s.target);
+                    try noteUse(scan, s.payload, false);
+                    try stack.append(allocator, s.next);
+                },
+                .assign_boxy_reuse_box => |s| {
+                    try bumpUse(&scan.assigned_targets, s.target);
+                    try noteUse(scan, s.source, false);
+                    try stack.append(allocator, s.next);
+                },
+                .assign_boxy_unbox => |s| {
+                    try bumpUse(&scan.assigned_targets, s.target);
+                    try noteUse(scan, s.source, false);
+                    try stack.append(allocator, s.next);
+                },
+                .assign_boxy_adapt => |s| {
+                    try bumpUse(&scan.assigned_targets, s.target);
+                    try noteUse(scan, s.source, false);
+                    try stack.append(allocator, s.next);
+                },
+                .assign_boxy_inspect => |s| {
+                    try bumpUse(&scan.assigned_targets, s.target);
+                    try noteUse(scan, s.source, false);
+                    try stack.append(allocator, s.next);
+                },
+                .assign_boxy_eq => |s| {
+                    try bumpUse(&scan.assigned_targets, s.target);
+                    try noteUse(scan, s.lhs, false);
+                    try noteUse(scan, s.rhs, false);
+                    try stack.append(allocator, s.next);
+                },
+                .assign_boxy_tag => |s| {
+                    try bumpUse(&scan.assigned_targets, s.target);
+                    if (s.payload) |payload| try noteUse(scan, payload, false);
+                    try stack.append(allocator, s.next);
+                },
+                .assign_boxy_tag_payload => |s| {
+                    try bumpUse(&scan.assigned_targets, s.target);
+                    try noteUse(scan, s.source, false);
+                    try stack.append(allocator, s.next);
+                },
+                .assign_call_dict => |s| {
+                    try bumpUse(&scan.assigned_targets, s.target);
+                    const args = self.store.getLocalSpan(s.args);
+                    for (0..GuardedList.borrowLen(args)) |i| try noteUse(scan, GuardedList.at(args, i), false);
+                    try stack.append(allocator, s.next);
+                },
+                .boxy_tag_match => |s| {
+                    try noteUse(scan, s.source, false);
+                    try stack.append(allocator, s.on_match);
+                    try stack.append(allocator, s.on_miss);
+                },
                 .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
             }
         }
@@ -610,7 +682,11 @@ const Pass = struct {
                     for (0..GuardedList.borrowLen(arms)) |i| try stack.append(allocator, GuardedList.at(arms, i).on_match);
                     try stack.append(allocator, s.on_miss);
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                .boxy_tag_match => |s| {
+                    try stack.append(allocator, s.on_match);
+                    try stack.append(allocator, s.on_miss);
+                },
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict => |s| {
                     try stack.append(allocator, s.next);
                 },
                 .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -830,8 +906,8 @@ const Pass = struct {
         const len = try self.freshLocal(.u64, new_locals);
         const add = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = limit_target,
-            .op = .num_plus,
-            .rc_effect = LowLevelOp.num_plus.rcEffect(),
+            .op = .num_int_add_wrap,
+            .rc_effect = LowLevelOp.num_int_add_wrap.rcEffect(),
             .args = try self.store.addLocalSpan(&.{ len, spare }),
             .next = next,
         } });
@@ -1398,8 +1474,8 @@ const Pass = struct {
         } });
         const subtract_slop = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = adjusted,
-            .op = .num_minus,
-            .rc_effect = LowLevelOp.num_minus.rcEffect(),
+            .op = .num_int_sub_wrap,
+            .rc_effect = LowLevelOp.num_int_sub_wrap.rcEffect(),
             .args = try self.store.addLocalSpan(&.{ spare, slop }),
             .next = compare_count,
         } });
@@ -1414,8 +1490,8 @@ const Pass = struct {
         // difference cannot wrap.
         const measure_spare = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = spare,
-            .op = .num_minus,
-            .rc_effect = LowLevelOp.num_minus.rcEffect(),
+            .op = .num_int_sub_wrap,
+            .rc_effect = LowLevelOp.num_int_sub_wrap.rcEffect(),
             .args = try self.store.addLocalSpan(&.{ slack_in, cur_len }),
             .next = compare_slop,
         } });
@@ -1602,7 +1678,7 @@ test "promote threads slack through an append-only loop" {
     const entry_len = store.getCFStmt(entry_measure.next).assign_low_level;
     try testing.expectEqual(LowLevelOp.list_len, entry_len.op);
     const entry_sum = store.getCFStmt(entry_len.next).assign_low_level;
-    try testing.expectEqual(LowLevelOp.num_plus, entry_sum.op);
+    try testing.expectEqual(LowLevelOp.num_int_add_wrap, entry_sum.op);
     const entry_limit_write = store.getCFStmt(entry_sum.next).set_local;
     try testing.expectEqual(slack_param, entry_limit_write.target);
     try testing.expectEqual(entry_sum.target, entry_limit_write.value);
@@ -1696,6 +1772,18 @@ test "promote threads slack through an append-only loop" {
                         .join,
                         .ret,
                         .crash,
+                        .assign_boxy_desc_ref,
+                        .assign_boxy_dict_ref,
+                        .assign_boxy_box,
+                        .assign_boxy_reuse_box,
+                        .assign_boxy_unbox,
+                        .assign_boxy_adapt,
+                        .assign_boxy_inspect,
+                        .assign_boxy_eq,
+                        .assign_boxy_tag,
+                        .assign_boxy_tag_payload,
+                        .boxy_tag_match,
+                        .assign_call_dict,
                         => return error.TestUnexpectedResult,
                     }
                 }
@@ -1733,6 +1821,18 @@ test "promote threads slack through an append-only loop" {
             .jump,
             .ret,
             .crash,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
             => return error.TestUnexpectedResult,
         }
     }

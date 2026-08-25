@@ -29,9 +29,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const shim_io = @import("shim_io");
 const builtin = @import("builtin");
-const base = @import("base");
 const builtins = @import("builtins");
 const host_alloc = @import("host_alloc");
+const host_crash_handlers = @import("host_crash_handlers");
 const build_options = @import("build_options");
 const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
 
@@ -66,103 +66,6 @@ fn panicImpl(msg: []const u8, addr: ?usize) noreturn {
     std.process.abort();
 }
 
-/// Error message to display on stack overflow in a Roc program
-const STACK_OVERFLOW_MESSAGE = "\nThis Roc application overflowed its stack memory and crashed.\n\n";
-
-/// Callback for stack overflow in a Roc program
-fn handleRocStackOverflow() noreturn {
-    if (comptime builtin.os.tag == .windows) {
-        const DWORD = u32;
-        const HANDLE = ?*anyopaque;
-        const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
-
-        const kernel32 = struct {
-            extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
-            extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) i32;
-            extern "kernel32" fn TerminateProcess(hProcess: HANDLE, uExitCode: c_uint) callconv(.winapi) i32;
-            extern "kernel32" fn GetCurrentProcess() callconv(.winapi) HANDLE;
-        };
-
-        const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
-        var bytes_written: DWORD = 0;
-        _ = kernel32.WriteFile(stderr_handle, STACK_OVERFLOW_MESSAGE.ptr, STACK_OVERFLOW_MESSAGE.len, &bytes_written, null);
-        // Use TerminateProcess instead of ExitProcess: after a stack overflow the
-        // stack is blown and ExitProcess's DLL cleanup can trigger a secondary crash.
-        _ = kernel32.TerminateProcess(kernel32.GetCurrentProcess(), 134);
-        @trap();
-    } else if (comptime builtin.os.tag != .wasi) {
-        std.debug.print("{s}", .{STACK_OVERFLOW_MESSAGE});
-        std.process.exit(134);
-    } else {
-        std.process.exit(134);
-    }
-}
-
-/// Callback for access violation in a Roc program
-fn handleRocAccessViolation(fault_addr: usize, _: base.signal_handler.AccessViolationContext) noreturn {
-    if (comptime builtin.os.tag == .windows) {
-        const DWORD = u32;
-        const HANDLE = ?*anyopaque;
-        const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
-
-        const kernel32 = struct {
-            extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
-            extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) i32;
-            extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(.winapi) noreturn;
-        };
-
-        var addr_buf: [18]u8 = undefined;
-        const addr_str = base.signal_handler.formatHex(fault_addr, &addr_buf);
-
-        const msg1 = "\nSegmentation fault (SIGSEGV) in this Roc program.\nFault address: ";
-        const msg2 = "\n\n";
-        const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
-        var bytes_written: DWORD = 0;
-        _ = kernel32.WriteFile(stderr_handle, msg1.ptr, msg1.len, &bytes_written, null);
-        _ = kernel32.WriteFile(stderr_handle, addr_str.ptr, @intCast(addr_str.len), &bytes_written, null);
-        _ = kernel32.WriteFile(stderr_handle, msg2.ptr, msg2.len, &bytes_written, null);
-        kernel32.ExitProcess(139);
-    } else {
-        // POSIX (and WASI fallback)
-        const msg = "\nSegmentation fault (SIGSEGV) in this Roc program.\nFault address: ";
-        std.debug.print("{s}", .{msg});
-
-        var addr_buf: [18]u8 = undefined;
-        const addr_str = base.signal_handler.formatHex(fault_addr, &addr_buf);
-        std.debug.print("{s}", .{addr_str});
-        std.debug.print("{s}", .{"\n\n"});
-        std.process.exit(139);
-    }
-}
-
-/// Error message to display on division by zero in a Roc program
-const DIVISION_BY_ZERO_MESSAGE = "\nThis Roc application divided by zero and crashed.\n\n";
-
-/// Callback for arithmetic errors (division by zero) in a Roc program
-fn handleRocArithmeticError() noreturn {
-    if (comptime builtin.os.tag == .windows) {
-        const DWORD = u32;
-        const HANDLE = ?*anyopaque;
-        const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
-
-        const kernel32 = struct {
-            extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
-            extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) i32;
-            extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(.winapi) noreturn;
-        };
-
-        const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
-        var bytes_written: DWORD = 0;
-        _ = kernel32.WriteFile(stderr_handle, DIVISION_BY_ZERO_MESSAGE.ptr, DIVISION_BY_ZERO_MESSAGE.len, &bytes_written, null);
-        kernel32.ExitProcess(136);
-    } else if (comptime builtin.os.tag != .wasi) {
-        std.debug.print("{s}", .{DIVISION_BY_ZERO_MESSAGE});
-        std.process.exit(136); // 128 + 8 (SIGFPE)
-    } else {
-        std.process.exit(136);
-    }
-}
-
 const HostSelfTest = enum {
     none,
     stack_overflow,
@@ -170,11 +73,7 @@ const HostSelfTest = enum {
 };
 
 fn installRuntimeSignalHandlers() void {
-    _ = base.signal_handler.installForCurrentThread(.{
-        .stack_overflow = handleRocStackOverflow,
-        .access_violation = handleRocAccessViolation,
-        .arithmetic_error = handleRocArithmeticError,
-    });
+    host_crash_handlers.installForCurrentThread();
 }
 
 fn triggerSelfTest(mode: HostSelfTest) noreturn {
@@ -554,6 +453,7 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 
 // Use the actual RocStr from builtins instead of defining our own
 const RocStr = builtins.str.RocStr;
+const RocList = builtins.list.RocList;
 
 /// Hosted function: Stderr.line! (index 0 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
@@ -969,12 +869,14 @@ fn callBoxedI64ToI64(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8, arg0: i64) i
     const payload = builtins.erased_callable.payloadPtr(payload_ptr);
     var call_args = I64ToI64Args{ .arg0 = arg0 };
     var result: i64 = undefined;
+    var ret_desc: ?*const anyopaque = null;
     payload.callable_fn_ptr(
         ops,
         @ptrCast(&result),
         @ptrCast(&call_args),
         builtins.erased_callable.capturePtr(payload_ptr),
         null,
+        &ret_desc,
     );
     return result;
 }
@@ -990,12 +892,14 @@ fn consumeBoxedI64ToI64(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8, arg0: i64
     const payload = builtins.erased_callable.payloadPtr(payload_ptr);
     var call_args = I64ToI64Args{ .arg0 = arg0 };
     var result: i64 = undefined;
+    var ret_desc: ?*const anyopaque = null;
     payload.callable_fn_ptr(
         ops,
         @ptrCast(&result),
         @ptrCast(&call_args),
         builtins.erased_callable.capturePtr(payload_ptr),
         payload_ptr,
+        &ret_desc,
     );
     return result;
 }
@@ -1009,12 +913,14 @@ fn callBoxedTransitionWithoutReuse(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8
 
     const outer_payload = builtins.erased_callable.payloadPtr(outer_ptr);
     var inner: ?[*]u8 = null;
+    var inner_desc: ?*const anyopaque = null;
     outer_payload.callable_fn_ptr(
         ops,
         @ptrCast(&inner),
         null,
         builtins.erased_callable.capturePtr(outer_ptr),
         null,
+        &inner_desc,
     );
 
     const inner_ptr = inner orelse {
@@ -1024,19 +930,22 @@ fn callBoxedTransitionWithoutReuse(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8
     defer builtins.erased_callable.decref(inner_ptr, ops);
     const inner_payload = builtins.erased_callable.payloadPtr(inner_ptr);
     var result: i64 = undefined;
+    var result_desc: ?*const anyopaque = null;
     inner_payload.callable_fn_ptr(
         ops,
         @ptrCast(&result),
         null,
         builtins.erased_callable.capturePtr(inner_ptr),
         null,
+        &result_desc,
     );
     return result;
 }
 
-fn hostAddCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8) callconv(.c) void {
+fn hostAddCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8, ret_desc: *?*const anyopaque) callconv(.c) void {
     const capture = capturePtrAs(AddCapture, capture_ptr);
     writeI64Result(ret, readI64ToI64Arg(args) + capture.amount);
+    ret_desc.* = null;
 }
 
 fn hostAddCaptureOnDrop(_: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
@@ -1057,10 +966,11 @@ fn hostedHostBoxedAdd(amount: i64) callconv(.c) ?[*]u8 {
     return ret;
 }
 
-fn hostNestedRecordCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8) callconv(.c) void {
+fn hostNestedRecordCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8, ret_desc: *?*const anyopaque) callconv(.c) void {
     const capture = capturePtrAs(NestedRecordCapture, capture_ptr);
     const x = readI64ToI64Arg(args);
     writeI64Result(ret, x + capture.inner.base + capture.adjustment + @as(i64, @intCast(capture.inner.label.asSlice().len)));
+    ret_desc.* = null;
 }
 
 fn hostNestedRecordCaptureOnDrop(capture_ptr: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
@@ -1161,9 +1071,10 @@ fn hostTreeSum(tree: *const HostTree) i64 {
     };
 }
 
-fn hostTreeCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8) callconv(.c) void {
+fn hostTreeCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8, ret_desc: *?*const anyopaque) callconv(.c) void {
     const capture = capturePtrAs(TreeCapture, capture_ptr);
     writeI64Result(ret, readI64ToI64Arg(args) + hostTreeSum(&capture.tree));
+    ret_desc.* = null;
 }
 
 fn hostTreeCaptureOnDrop(capture_ptr: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
@@ -1189,10 +1100,11 @@ fn hostedHostBoxedRecursiveTree(tree: HostTree) callconv(.c) ?[*]u8 {
     return ret;
 }
 
-fn hostBoxedCaptureCallable(ops: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8) callconv(.c) void {
+fn hostBoxedCaptureCallable(ops: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8, ret_desc: *?*const anyopaque) callconv(.c) void {
     const capture = capturePtrAs(BoxedCallableCapture, capture_ptr);
     const x = readI64ToI64Arg(args);
     writeI64Result(ret, callBoxedI64ToI64(ops, capture.inner, x) + capture.bonus);
+    ret_desc.* = null;
 }
 
 fn hostBoxedCaptureOnDrop(capture_ptr: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
@@ -1300,6 +1212,33 @@ fn hostedHostRoundtripBoxed(boxed: ?[*]u8) callconv(.c) ?[*]u8 {
     return boxed;
 }
 
+/// The one boxed Roc value `store_seed!` is holding for `take_seed!`.
+/// Ownership moves in on the store and back out on the take, so the host never
+/// needs to know the value's type to keep its refcount balanced.
+var stored_seed: ?[*]u8 = null;
+
+fn hostedHostStoreSeed(boxed: ?[*]u8) callconv(.c) void {
+    const ops = g_roc_ops.?;
+    if (stored_seed != null) {
+        ops.crash("host was given a second seed while still holding one");
+        unreachable;
+    }
+    stored_seed = boxed orelse {
+        ops.crash("host was given a null seed");
+        unreachable;
+    };
+}
+
+fn hostedHostTakeSeed() callconv(.c) ?[*]u8 {
+    const ops = g_roc_ops.?;
+    const seed = stored_seed orelse {
+        ops.crash("host was asked for a seed it was never given");
+        unreachable;
+    };
+    stored_seed = null;
+    return seed;
+}
+
 fn hostedHostStoreBoxed(boxed: ?[*]u8) callconv(.c) void {
     const ops = g_roc_ops.?;
     if (stored_boxed_callable) |prev| {
@@ -1350,6 +1289,35 @@ fn hostedHostResetBoxedDropReport() callconv(.c) void {
     boxed_host_drop_counts = .{};
 }
 
+/// Hosted function: Host.sum_str_bytes! (): List(Str) => U64.
+///
+/// Coverage for a hosted argument that is a container whose elements are
+/// refcounted. The argument is owned, so the host releases exactly one
+/// ownership unit of the whole value before returning. For a `List(Str)` that
+/// release is `roc_builtins_list_decref_str`: it drops the element strings
+/// only when the list's own count reaches zero, which is the same operation
+/// compiled Roc code performs when it drops a `List(Str)` it owns.
+fn hostedHostSumStrBytes(list: RocList) callconv(.c) u64 {
+    const ops = g_roc_ops.?;
+
+    var total: u64 = 0;
+    if (list.bytes) |bytes| {
+        const elements: [*]const RocStr = @ptrCast(@alignCast(bytes));
+        for (elements[0..list.length]) |element| {
+            total += element.len();
+        }
+    }
+
+    builtins.dev_wrappers.roc_builtins_list_decref_str(
+        list.bytes,
+        list.length,
+        list.capacity_or_alloc_ptr,
+        ops,
+    );
+
+    return total;
+}
+
 // The platform's hosted functions, exported under their header symbols, plus
 // the fixed runtime symbols every symbol-ABI host defines.
 comptime {
@@ -1367,7 +1335,10 @@ comptime {
     @export(&hostedHostRoundtripBoxed, .{ .name = "roc_host_roundtrip_boxed", .visibility = .hidden });
     @export(&hostedHostBoxedTransition, .{ .name = "roc_host_boxed_transition", .visibility = .hidden });
     @export(&hostedHostStoreBoxed, .{ .name = "roc_host_store_boxed", .visibility = .hidden });
+    @export(&hostedHostStoreSeed, .{ .name = "roc_host_store_seed", .visibility = .hidden });
+    @export(&hostedHostTakeSeed, .{ .name = "roc_host_take_seed", .visibility = .hidden });
     @export(&hostedHostStoredBoxedCall, .{ .name = "roc_host_stored_boxed_call", .visibility = .hidden });
+    @export(&hostedHostSumStrBytes, .{ .name = "roc_host_sum_str_bytes", .visibility = .hidden });
     @export(&hostedPaddedCheck, .{ .name = "roc_padded_check", .visibility = .hidden });
     @export(&hostedStderrLine, .{ .name = "roc_stderr_line", .visibility = .hidden });
     @export(&hostedStdinLine, .{ .name = "roc_stdin_line", .visibility = .hidden });

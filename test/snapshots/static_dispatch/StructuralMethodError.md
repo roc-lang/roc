@@ -21,18 +21,17 @@ main = {
 # EXPECTED
 MISSING METHOD - StructuralMethodError.md:11:7:11:12
 # PROBLEMS
+── ✗ missing method ────────────────────────────── StructuralMethodError.md:11:7
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `greet` method is being called on a value whose ─────┐
-└┬───────────────┘  type doesn't have that method.                            │
- │                                                                            │
- │  x.greet()                                                                 │
- │    ‾‾‾‾‾                                                                   │
- └───────────────────────────────────────────── StructuralMethodError.md:11:7 ┘
+This greet method is being called on a value whose type doesn't have that
+method.
 
-    The value's type, which does not have a method named `greet`, is:
+x.greet()
+  ^^^^^
 
-        {}
+The value's type, which does not have a method named greet, is:
+
+    {}
 
 # TOKENS
 ~~~zig

@@ -84,8 +84,9 @@ EndOfFile,
 			(e-apply
 				(e-tuple
 					(e-field-access
-						(e-ident (raw "thing"))
-						(e-ident (raw "f"))))
+						(receiver
+							(e-ident (raw "thing")))
+						(segment (mode "required") (field "f"))))
 				(e-int (raw "10"))))
 		(s-type-anno (name "from_method")
 			(ty (name "I64")))
@@ -122,7 +123,7 @@ from_method = thing.f(10)
 			(args
 				(p-underscore)
 				(p-assign (ident "value")))
-			(e-dispatch-call (method "minus") (constraint-fn-var 259)
+			(e-dispatch-call (method "minus") (constraint-fn-var 270)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "value"))))
@@ -141,7 +142,7 @@ from_method = thing.f(10)
 					(e-lambda
 						(args
 							(p-assign (ident "value")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 275)
+						(e-dispatch-call (method "plus") (constraint-fn-var 286)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "value"))))
@@ -151,17 +152,19 @@ from_method = thing.f(10)
 			(ty-lookup (name "Thing") (local))))
 	(d-let
 		(p-assign (ident "from_field"))
-		(e-call (constraint-fn-var 310)
-			(e-field-access (field "f")
+		(e-call (constraint-fn-var 326)
+			(e-field-access
 				(receiver
 					(e-lookup-local
-						(p-assign (ident "thing")))))
+						(p-assign (ident "thing"))))
+				(segments
+					(segment (name "f") (mode "required"))))
 			(e-num (value "10")))
 		(annotation
 			(ty-lookup (name "I64") (builtin))))
 	(d-let
 		(p-assign (ident "from_method"))
-		(e-dispatch-call (method "f") (constraint-fn-var 320)
+		(e-dispatch-call (method "f") (constraint-fn-var 336)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "thing"))))

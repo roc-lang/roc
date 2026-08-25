@@ -11,35 +11,32 @@ x = 0.()
 EXPECTED RECORD ACCESSOR - fuzz_crash_081.md:1:6:1:7
 UNRECOGNIZED SYNTAX - fuzz_crash_081.md:1:5:1:9
 # PROBLEMS
+── ✗ expected record accessor ──────────────────────────── fuzz_crash_081.md:1:6
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  x = 0.()                                                                  │
- │       ‾                                                                    │
- └───────────────────────────────────────────────────── fuzz_crash_081.md:1:6 ┘
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+x = 0.()
+     ^
 
-    For example:
-        person.name
-        pair.0
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
-    I found `.` here.
+For example:
+    person.name
+    maybe_person.?name
+    pair.0
 
+I found . here.
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  x = 0.()                                                                  │
- │      ‾‾‾‾                                                                  │
- └───────────────────────────────────────────────────── fuzz_crash_081.md:1:5 ┘
+── ✗ unrecognized syntax ───────────────────────────────── fuzz_crash_081.md:1:5
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+I don't recognize this syntax.
+
+x = 0.()
+    ^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig

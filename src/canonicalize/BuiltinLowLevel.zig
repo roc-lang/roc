@@ -17,6 +17,17 @@ pub fn isBuiltinModule(env: *const ModuleEnv) bool {
     return env.module_role == .builtin;
 }
 
+/// Numeric builtin type names without the IEEE floats. These are the types
+/// that register `is_eq` (float equality is only the explicit `is_float_eq`)
+/// and the `to`/`until` bounded ranges (which need `minus_try`).
+pub const non_float_numeric_type_names = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec" };
+
+/// The IEEE float builtin type names.
+pub const float_numeric_type_names = [_][]const u8{ "F32", "F64" };
+
+/// Every numeric builtin type name.
+pub const numeric_type_names = non_float_numeric_type_names ++ float_numeric_type_names;
+
 /// Stable compiler-owned identity for each annotation-only Builtin intrinsic.
 pub const IntrinsicId = enum(u8) {
     str_inspect,
@@ -412,11 +423,11 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
             try low_level_map.put(ident, primitive.op);
         }
     }
-    const numeric_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
+    const numeric_types = numeric_type_names;
     const signed_types = [_][]const u8{ "I8", "I16", "I32", "I64", "I128", "Dec", "F32", "F64" };
     // Numeric equality operations.
     // Float `is_eq` is deliberately not public; `is_float_eq` is the explicit IEEE 754 comparison.
-    const eq_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec" };
+    const eq_types = non_float_numeric_type_names;
     for (eq_types) |num_type| {
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.is_eq", .{num_type}, .num_is_eq);
     }
@@ -526,9 +537,12 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     const integer_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128" };
     for (integer_types) |num_type| {
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.mod_by", .{num_type}, .num_mod_by);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.plus_wrap", .{num_type}, .num_plus_wrap);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.minus_wrap", .{num_type}, .num_minus_wrap);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times_wrap", .{num_type}, .num_times_wrap);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.plus_wrap", .{num_type}, .num_int_add_wrap);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.minus_wrap", .{num_type}, .num_int_sub_wrap);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times_wrap", .{num_type}, .num_int_mul_wrap);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.plus_overflows", .{num_type}, .num_int_add_overflows);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.minus_overflows", .{num_type}, .num_int_sub_overflows);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times_overflows", .{num_type}, .num_int_mul_overflows);
     }
 
     const simd_types = [_][]const u8{ "U8x16", "I8x16", "U16x8", "I16x8", "U32x4", "I32x4", "U64x2", "I64x2" };
@@ -1502,11 +1516,8 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("dec_to_i64_try_unsafe")) |ident| {
         try low_level_map.put(ident, .dec_to_i64_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.Dec.to_i128_wrap")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_i128")) |ident| {
         try low_level_map.put(ident, .dec_to_i128_trunc);
-    }
-    if (env.common.findIdent("dec_to_i128_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .dec_to_i128_try_unsafe);
     }
     if (env.common.findIdent("Builtin.Num.Dec.to_u8_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_u8_trunc);

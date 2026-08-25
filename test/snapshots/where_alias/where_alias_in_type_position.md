@@ -13,17 +13,15 @@ describe = |value| value.to_str()
 # EXPECTED
 WHERE ALIAS USED AS A TYPE - where_alias_in_type_position.md:3:12:3:22
 # PROBLEMS
+── ✗ where alias used as a type ─────────── where_alias_in_type_position.md:3:12
 
-┌────────────────────────────┐
-│ WHERE ALIAS USED AS A TYPE ├─ Stringable is a where alias, not a type. ─────┐
-└┬───────────────────────────┘                                                │
- │                                                                            │
- │  describe : Stringable -> Str                                              │
- │             ‾‾‾‾‾‾‾‾‾‾                                                     │
- └────────────────────────────────────── where_alias_in_type_position.md:3:12 ┘
+Stringable is a where alias, not a type.
 
-    A where alias names a set of method constraints, so it constrains a type
-    variable in a `where` clause rather than standing in for a type of its own.
+describe : Stringable -> Str
+           ^^^^^^^^^^
+
+A where alias names a set of method constraints, so it constrains a type
+variable in a where clause rather than standing in for a type of its own.
 
 # TOKENS
 ~~~zig
@@ -72,10 +70,7 @@ describe = |value| value.to_str()
 (can-ir
 	(d-let
 		(p-assign (ident "describe"))
-		(e-lambda
-			(args
-				(p-assign (ident "value")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Stringable") (local))

@@ -23,20 +23,17 @@ outerFunc = |_| {
 # EXPECTED
 DUPLICATE DEFINITION - can_basic_scoping.md:7:5:7:6
 # PROBLEMS
+── ● duplicate definition ───────────────────────────── can_basic_scoping.md:7:5
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `x` is being redeclared here. ─────────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  x = 20  # Should shadow top-level x                                       │
- │  ‾                                                                         │
- └────────────────────────────────────────────────── can_basic_scoping.md:7:5 ┘
+The name x is being redeclared here:
 
-    In this scope, `x` was already defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    2 │  x = 5                                                                │
-      │  ‾                                                                    │
-      └───────────────────────────────────────────── can_basic_scoping.md:2:1 ┘
+x = 20  # Should shadow top-level x
+^
+
+In this scope, x was already defined in can_basic_scoping.md:2:1:
+
+x = 5
+^
 
 # TOKENS
 ~~~zig
@@ -128,14 +125,14 @@ outerFunc = |_| {
 					(e-block
 						(s-let
 							(p-assign (ident "z"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 238)
+							(e-dispatch-call (method "plus") (constraint-fn-var 248)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "x"))))
 								(args
 									(e-lookup-local
 										(p-assign (ident "y"))))))
-						(e-dispatch-call (method "plus") (constraint-fn-var 247)
+						(e-dispatch-call (method "plus") (constraint-fn-var 257)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "z"))))

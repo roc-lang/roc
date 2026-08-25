@@ -123,7 +123,35 @@ pub const Constants = struct {
     ///     instead of reconstructing them from normalized module identities.
     /// 49: Associated lookups retain exact alias-resolution targets in CIR.
     /// 50: Interned literal entries record maximum runtime backing alignment.
-    pub const CACHE_VERSION = 50;
+    /// 51: Checked dispatch evidence and Boxy runtime metadata changed serialized compiler state.
+    /// 52: Optional + defaulted record fields: canonical record annotations
+    ///     carry field presence and default expressions, field-access paths
+    ///     keep source-ordered required/optional segments, type-store fields
+    ///     carry the static kind axis (required/optional/defaulted with a
+    ///     default identity; no `absent` state, `present` renamed
+    ///     `required`), and checked layouts include field kinds and archived
+    ///     defaults (design.md "Field Kinds", "Defaulted Fields").
+    /// 53: Generalized checked record fields retain presence-variable identity,
+    ///     and const record evidence retains optional source-value types.
+    /// 54: Compile-time root requests retain exact checked-root identity.
+    /// 55: Record constructors retain exact checker-selected omitted defaults.
+    /// 56: Record field presence uses an explicit sentinel representation.
+    /// 57: Field-default roots can own their literal-conversion evaluation.
+    /// 58: Checked iterator procedure identity includes List.iter_rev, the
+    ///     numeric to/until ranges, and the F32/F64 range helpers, with
+    ///     to/until carrying producer-specific representations distinct from
+    ///     the range helpers they do not delegate to.
+    /// 59: Range syntax produces Builtin.Num.Range values, range dispatch uses
+    ///     `_to` methods, and stored ranges mint iterator representations while
+    ///     numeric range hooks explicitly delegate to that representation.
+    /// 60: Checked modules retain explicit rank-1 binding-scheme identities.
+    /// 61: Static dispatch constraints no longer serialize checker-local expect regions.
+    /// 62: For-loop dispatch plans retain explicit iterator and step type variables.
+    /// 63: ModuleEnv retains canonicalization-selected top-level and value-binding definitions.
+    /// 64: Compile-time root selection rejects values containing callables.
+    /// 65: A hosted entry written without a module resolves to the platform
+    ///     module's own declaration.
+    pub const CACHE_VERSION = 65;
 };
 
 /// Configuration for the Roc cache system.
@@ -239,6 +267,14 @@ pub const CacheConfig = struct {
         defer allocator.free(version_dir);
 
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "test" });
+    }
+
+    /// Get the prepared Wasm host cache directory.
+    pub fn getWasmHostCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
+        const version_dir = try self.getVersionCacheDir(allocator);
+        defer allocator.free(version_dir);
+
+        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "wasm-host" });
     }
 
     /// Get the cache entries directory (alias for module cache dir).

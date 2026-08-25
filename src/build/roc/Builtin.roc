@@ -3045,99 +3045,6 @@ Builtin :: [].{
 					},
 			)
 
-		## Iterator over `num` values from `start` up to but not including `end`.
-		## Returns an empty iterator if `start >= end`. Generic sugar for the
-		## `range_exclusive` method that `start..<end` dispatches on the bound type.
-		range_exclusive : num, num -> Iter(num)
-			where [num.range_exclusive : num, num -> Iter(num)]
-		range_exclusive = |start, end| start.range_exclusive(end)
-
-		## Iterator over `num` values from `start` up to and including `end`.
-		## Returns an empty iterator if `start > end`. Generic sugar for the
-		## `range_inclusive` method that `start..=end` dispatches on the bound type.
-		range_inclusive : num, num -> Iter(num)
-			where [num.range_inclusive : num, num -> Iter(num)]
-		range_inclusive = |start, end| start.range_inclusive(end)
-
-		# Flat step loop behind the numeric types' `range_exclusive` methods. The
-		# self-recursive `rest` builds the same monomorphic range iterator (never
-		# a distinct chain component), so an adapter wrapping a range carries its
-		# state by value. `len_if_known`, when `Known`, is the exact remaining
-		# yield count: each step decrements it and the final `range_done()` is
-		# `Known(0)`, which `Iter.take_last`/`drop_last` rely on.
-		exclusive_range : num, num, [Known(U64), Unknown] -> Iter(num)
-			where [
-				num.is_lt : num, num -> Bool,
-				num.plus_try : num, num -> Try(num, [Overflow]),
-				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
-			]
-		exclusive_range = |start, end, len_if_known|
-			iter_from_step(
-				len_if_known,
-				||
-					if start < end {
-						One({
-							item: start,
-							rest: match start.plus_try(1) {
-								Ok(next) => if next < end {
-									Iter.exclusive_range(
-										next,
-										end,
-										match len_if_known {
-											Known(l) => Known(l - 1)
-											Unknown => Unknown
-										},
-									)
-								} else {
-									range_done()
-								}
-								Err(Overflow) => range_done()
-							},
-						})
-					} else {
-						Done
-					},
-			)
-
-		# Flat step loop behind the numeric types' `range_inclusive` methods; same
-		# `len_if_known` contract as `exclusive_range`. Each step yields `start`
-		# and continues from `start + 1`; the final value is yielded before `Done`,
-		# including when stepping past it would overflow (that step reaches
-		# `range_done()` after the yield rather than before it).
-		inclusive_range : num, num, [Known(U64), Unknown] -> Iter(num)
-			where [
-				num.is_lte : num, num -> Bool,
-				num.plus_try : num, num -> Try(num, [Overflow]),
-				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
-			]
-		inclusive_range = |start, end, len_if_known|
-			iter_from_step(
-				len_if_known,
-				||
-					if start <= end {
-						One({
-							item: start,
-							rest: match start.plus_try(1) {
-								Ok(next) => if next <= end {
-									Iter.inclusive_range(
-										next,
-										end,
-										match len_if_known {
-											Known(l) => Known(l - 1)
-											Unknown => Unknown
-										},
-									)
-								} else {
-									range_done()
-								}
-								Err(Overflow) => range_done()
-							},
-						})
-					} else {
-						Done
-					},
-			)
-
 		iter : Iter(item) -> Iter(item)
 		iter = |self| self
 
@@ -3333,7 +3240,7 @@ Builtin :: [].{
 		## the rest, so a single-item iterator returns that item without calling
 		## either method, and `default` does not need to be an identity value for `plus`.
 		## ```roc
-		## expect (1..=4).sum() == 10
+		## expect (1..=4).iter().sum() == 10
 		##
 		## expect [42.I64].iter().sum() == 42
 		##
@@ -3358,7 +3265,7 @@ Builtin :: [].{
 		## not for `times`, so there is no value it could return for an empty iterator
 		## that would keep `product` consistent with multiplication.
 		## ```roc
-		## expect (1..=4).product() == Ok(24)
+		## expect (1..=4).iter().product() == Ok(24)
 		##
 		## expect [42.I64].iter().product() == Ok(42)
 		##
@@ -3500,54 +3407,6 @@ Builtin :: [].{
 					)
 				}
 
-		## Returns an iterator that yields the last `n` items of this iterator.
-		## If the source has fewer than `n` items, all of them are yielded.
-		##
-		## When the source iterator's length is unknown, this materializes the
-		## source into a list to find where the last `n` items begin. Avoid
-		## calling this on iterators whose length is unknown and might be huge.
-		## ```roc
-		## expect Iter.fold(Iter.take_last(List.iter([1, 2, 3, 4, 5]), 3), [], |acc, item| acc.append(item)) == [3, 4, 5]
-		##
-		## expect Iter.fold(Iter.take_last(List.iter([1, 2]), 5), [], |acc, item| acc.append(item)) == [1, 2]
-		## ```
-		take_last : Iter(item), U64 -> Iter(item)
-		take_last = |iterator, n|
-			match iterator.len_if_known {
-				Known(len) =>
-					if len <= n {
-						iterator
-					} else {
-						Iter.drop_first(iterator, len - n)
-					}
-				Unknown =>
-					List.iter(List.take_last(Iter.fold(iterator, [], |acc, item| acc.append(item)), n))
-				}
-
-		## Returns an iterator that yields all items except the last `n`.
-		## If the source has `n` or fewer items, the result is empty.
-		##
-		## When the source iterator's length is unknown, this materializes the
-		## source into a list to find where the last `n` items begin. Avoid
-		## calling this on iterators whose length is unknown and might be huge.
-		## ```roc
-		## expect Iter.fold(Iter.drop_last(List.iter([1, 2, 3, 4, 5]), 2), [], |acc, item| acc.append(item)) == [1, 2, 3]
-		##
-		## expect Iter.fold(Iter.drop_last(List.iter([1, 2, 3]), 10), [], |acc, item| acc.append(item)) == []
-		## ```
-		drop_last : Iter(item), U64 -> Iter(item)
-		drop_last = |iterator, n|
-			match iterator.len_if_known {
-				Known(len) =>
-					if len <= n {
-						range_done()
-					} else {
-						Iter.take_first(iterator, len - n)
-					}
-				Unknown =>
-					List.iter(List.drop_last(Iter.fold(iterator, [], |acc, item| acc.append(item)), n))
-				}
-
 		## Returns an iterator that yields the first item and then every `n`th item
 		## after it, skipping the `n - 1` items in between. A step of `0` yields an
 		## empty iterator.
@@ -3591,21 +3450,6 @@ Builtin :: [].{
 							},
 					)
 				}
-
-		## Returns an iterator that yields this iterator's items in reverse order.
-		##
-		## Because an [Iter] only moves forward, this materializes the source into a
-		## list to reverse it. The result always has a known length, so collecting it
-		## is efficient. Avoid calling this on iterators whose length is unknown and
-		## might be huge.
-		## ```roc
-		## expect Iter.fold(Iter.rev(List.iter([1, 2, 3])), [], |acc, item| acc.append(item)) == [3, 2, 1]
-		##
-		## expect Iter.fold(Iter.rev(List.iter([])), [], |acc, item| acc.append(item)) == []
-		## ```
-		rev : Iter(item) -> Iter(item)
-		rev = |iterator|
-			List.iter(List.rev(Iter.fold(iterator, [], |acc, item| acc.append(item))))
 	}
 
 	## An effectful iterator: identical to [Iter] except that its `step!` thunk is
@@ -3749,6 +3593,33 @@ Builtin :: [].{
 			make(0)
 		}
 
+		## Iterate over the list from last to first.
+		##
+		## This walks the list backwards in place; it does not build a reversed
+		## copy the way [List.rev] does.
+		## ```roc
+		## expect Iter.fold([1, 2, 3].iter_rev(), [], |acc, item| acc.append(item)) == [3, 2, 1]
+		##
+		## expect Iter.fold([].iter_rev(), [], |acc, item| acc.append(item)) == []
+		## ```
+		iter_rev : List(item) -> Iter(item)
+		iter_rev = |list| {
+			# `remaining` is both the number of items still to yield and the index
+			# just past the next one, so the length stays exact as it counts down.
+			make = |remaining|
+				iter_from_step(
+					Known(remaining),
+					||
+						if remaining == 0 {
+							Done
+						} else {
+							One({ item: list_get_unsafe(list, remaining - 1), rest: make(remaining - 1) })
+						},
+				)
+
+			make(List.len(list))
+		}
+
 		## Build a list from a pure [Iter], pre-sizing the allocation from the
 		## iterator's `len_if_known` when it is known up front. This is the `from_iter`
 		## that [Iter.collect] dispatches to.
@@ -3865,10 +3736,105 @@ Builtin :: [].{
 			}
 		}
 
-		## Create a list with space for at least capacity items
+		## Returns a list of the specified capacity without any items.
+		##
+		## This is like calling [List.reserve] on an empty list. It's intended for
+		## building up a list incrementally, for example by calling [List.append] on it:
+		##
+		## ```roc
+		## expect {
+		##     var $squares = List.with_capacity(5)
+		##     for n in 1..=5 {
+		##         $squares = $squares.append(n * n)
+		##     }
+		##     $squares == [1, 4, 9, 16, 25]
+		## }
+		## ```
+		##
+		## When the final length is known up front, [List.with_capacity] guarantees that
+		## the appends which follow will not need to reallocate. Whether this is faster
+		## than starting from `[]` is often marginal: [List.append] grows capacity
+		## geometrically on its own, so the reallocations it performs are few and
+		## amortized. The benefit is most pronounced when reallocation would otherwise
+		## force a full copy of the list.
+		##
+		## If you don't know the exact capacity, passing a value larger than necessary
+		## still avoids reallocation, at the cost of using more memory than is needed.
+		##
+		## For more details, see [List.reserve].
 		with_capacity : U64 -> List(item)
 
-		## Ensure this list has room for at least spare additional items.
+		## Increase a list's capacity by at least the given number of additional items.
+		##
+		## When you already know how many items you are about to append, one
+		## [List.reserve] up front replaces every reallocation those appends would
+		## otherwise perform along the way:
+		##
+		## ```roc
+		## expect {
+		##     ids = [1.U64, 2, 3]
+		##
+		##     # 1000 more items are coming, so make room for them all at once
+		##     var $all = ids.reserve(1000)
+		##     for id in 4..=1003 {
+		##         $all = $all.append(id)
+		##     }
+		##
+		##     $all.len() == 1003
+		## }
+		## ```
+		##
+		## `reserve(spare)` aims for a capacity of `List.len(list) + spare` items; it
+		## trusts the request rather than rounding it up. If the list is not shared and
+		## already has room for `spare` more items, it does nothing. Otherwise it asks
+		## the allocator to grow the list to that size. The one exception is reserving
+		## a single item beyond the current capacity: that is indistinguishable from an
+		## ordinary [List.append] outgrowing the list, so the capacity grows
+		## geometrically instead of by one.
+		##
+		## Note that the reserve above sits before the loop. Because [List.reserve] aims
+		## for the exact size requested, it is a poor fit for use inside one: a reserve
+		## that then gets filled completely leaves no room for the next one, so every
+		## iteration goes back to the allocator, and the loop risks taking quadratic time
+		## in the final length:
+		##
+		## ```roc
+		## expect {
+		##     # The two appends fill the list back up to its exact capacity, so the
+		##     # next `reserve(2)` has to grow it again: one reallocation per iteration.
+		##     var $xs = []
+		##     while $xs.len() < 10 {
+		##         $xs = $xs.reserve(2)
+		##         $xs = $xs.append(0)
+		##         $xs = $xs.append(0)
+		##     }
+		##     $xs.len() == 10
+		## }
+		## ```
+		##
+		## Reserve the whole amount once before the loop instead, or start from
+		## [List.with_capacity]. A loop of plain [List.append] calls needs no help at
+		## all: when an append has to grow the list, it grows the capacity
+		## geometrically, which keeps such a loop linear in the number of items
+		## appended.
+		##
+		## Whether reserving is actually faster depends on the system allocator: many
+		## allocators can extend an existing allocation in place, in which case the
+		## reallocations that appends do on their own are cheap and [List.reserve] makes
+		## little observable difference. The benefit is most pronounced when reallocation
+		## would otherwise force a full copy of the list.
+		##
+		## [List.reserve] is not free—when more capacity is needed, it calls into the
+		## allocator, which may or may not have to move the existing items. Only use it
+		## when you actually expect to make use of the extra capacity.
+		##
+		## When you don't know exactly how many items you'll need, choosing a value
+		## somewhat higher than necessary is usually safe; a value that's too low may
+		## force later reallocation, while a value much higher than necessary just wastes
+		## memory.
+		##
+		## If you plan to use [List.reserve] on an empty list, use [List.with_capacity]
+		## instead.
 		reserve : List(item), U64 -> List(item)
 		reserve = |list, spare| list_reserve(list, spare)
 
@@ -4939,7 +4905,7 @@ Builtin :: [].{
 		## ```
 		find_last : List(a), (a -> Bool) -> Try(a, [NotFound, ..])
 		find_last = |list, predicate| {
-			for item in list.rev() if predicate(item) {
+			for item in list.iter_rev() if predicate(item) {
 				return Ok(item)
 			}
 			return Err(NotFound)
@@ -5683,6 +5649,15 @@ Builtin :: [].{
 			}
 		}
 
+		## Returns a human-readable representation of a [Dict], with keys and values
+		## rendered using [Str.inspect].
+		## ```roc
+		## expect Str.inspect(Dict.from_list([("one", 1.I64), ("two", 2)])) ==
+		## 	"Dict.from_list([(\"one\", 1), (\"two\", 2)])"
+		## ```
+		to_inspect : Dict(k, v) -> Str
+		to_inspect = |dict| "Dict.from_list(${Str.inspect(dict.to_list())})"
+
 		## Returns an empty `Dict`.
 		## ```roc
 		## empty_dict = Dict.empty()
@@ -5709,6 +5684,10 @@ Builtin :: [].{
 		}
 
 		## Ensure this dictionary has room for at least this many additional entries.
+		##
+		## Like [List.reserve], this aims for the exact size requested rather than
+		## rounding up, so call it once with the total number of entries you expect to
+		## add rather than repeatedly inside a loop.
 		reserve : Dict(k, v), U64 -> Dict(k, v)
 			where [k.to_hash : k, Hasher -> Hasher]
 		reserve = |dict, additional| match dict {
@@ -5795,6 +5774,23 @@ Builtin :: [].{
 			}
 		}
 
+		## Alias for [Dict.get], enabling the future `dict[key]` subscript operator.
+		## Returns the value for a given key.
+		##
+		## Returns `Err KeyNotFound` if the dictionary has no value for the key.
+		## ```roc
+		## expect Dict.empty()
+		##            .insert("Apples", 12.U64)
+		##            .subscript("Apples") == Ok(12)
+		##
+		## expect Dict.empty()
+		##            .insert("Apples", 12.U64)
+		##            .subscript("Oranges") == Err(KeyNotFound)
+		## ```
+		subscript : Dict(k, v), k -> Try(v, [KeyNotFound, ..])
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+		subscript = |dict, key| Dict.get(dict, key)
+
 		## Check if the dictionary has a value for a specified key.
 		## ```roc
 		## expect Dict.empty().insert(1234, "5678").contains(1234)
@@ -5831,7 +5827,9 @@ Builtin :: [].{
 			}
 		}
 
-		## Remove a value from the dictionary for a specified key.
+		## Remove a value from the dictionary for a specified key. Removal may
+		## change the iteration order of the remaining key-value pairs because
+		## the last pair can be moved into the removed pair's position.
 		## ```roc
 		## expect Dict.empty()
 		##            .insert("Some", "Value")
@@ -5858,6 +5856,30 @@ Builtin :: [].{
 			HashMap(data) => data.entries
 		}
 
+		## Iterate over the dictionary's key-value pairs in their current internal
+		## order. This matches insertion order until an entry is removed;
+		## [Dict.remove] may reorder the remaining pairs.
+		## ```roc
+		## expect Iter.fold(Dict.single(1, "One").insert(2, "Two").iter(), [], |acc, pair| acc.append(pair)) == [(1, "One"), (2, "Two")]
+		## ```
+		iter : Dict(k, v) -> Iter((k, v))
+		iter = |dict| match dict {
+			HashMap(data) => List.iter(data.entries)
+		}
+
+		## Iterate over the dictionary's key-value pairs in reverse current
+		## internal order. This is reverse insertion order until an entry is
+		## removed; [Dict.remove] may reorder the remaining pairs. Like
+		## [List.iter_rev], this reads the entries in place rather than building a
+		## reversed copy.
+		## ```roc
+		## expect Iter.fold(Dict.single(1, "One").insert(2, "Two").iter_rev(), [], |acc, pair| acc.append(pair)) == [(2, "Two"), (1, "One")]
+		## ```
+		iter_rev : Dict(k, v) -> Iter((k, v))
+		iter_rev = |dict| match dict {
+			HashMap(data) => List.iter_rev(data.entries)
+		}
+
 		## Create a `Dict` from a `List` of key-value pairs. If the list
 		## contains duplicate keys, later values overwrite earlier ones.
 		## ```roc
@@ -5868,6 +5890,37 @@ Builtin :: [].{
 			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 		from_list = |list|
 			List.fold(list, Dict.with_capacity(List.len(list)), |dict, (k, v)| Dict.insert(dict, k, v))
+
+		## Create a `Dict` from an [Iter] of key-value pairs. If the iterator
+		## yields duplicate keys, later values overwrite earlier ones.
+		## ```roc
+		## expect Dict.from_iter([(1, "One"), (2, "Two")].iter()) ==
+		## 	Dict.single(1, "One").insert(2, "Two")
+		## ```
+		from_iter : Iter((k, v)) -> Dict(k, v)
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+		from_iter = |iterator| {
+			var $dict = match iterator.len_if_known {
+				Known(n) => Dict.with_capacity(n)
+				Unknown => Dict.empty()
+			}
+			var $rest = iterator
+			while Bool.True {
+				match Iter.next($rest) {
+					Done => {
+						break
+					}
+					Skip({ rest }) => {
+						$rest = rest
+					}
+					One({ item: (key, value), rest }) => {
+						$dict = Dict.insert($dict, key, value)
+						$rest = rest
+					}
+				}
+			}
+			$dict
+		}
 
 		## Returns the keys of a dictionary as a `List`.
 		## ```roc
@@ -5919,6 +5972,36 @@ Builtin :: [].{
 				var $state = init
 				for (key, value) in data.entries {
 					$state = step($state, key, value)
+				}
+				$state
+			}
+		}
+
+		## Same as [Dict.fold], except you can stop folding early.
+		## ```roc
+		## expect Dict.empty()
+		##            .insert("Apples", 12.U64)
+		##            .insert("Oranges", 24)
+		##            .fold_until(0, |count, _key, qty| if count + qty >= 30 {
+		##                Break(count + qty)
+		##            } else {
+		##                Continue(count + qty)
+		##            }) == 36
+		## ```
+		fold_until : Dict(k, v), state, (state, k, v -> [Continue(state), Break(state)]) -> state
+		fold_until = |dict, init, step| match dict {
+			HashMap(data) => {
+				var $state = init
+				for (key, value) in data.entries {
+					match step($state, key, value) {
+						Continue(new_state) => {
+							$state = new_state
+						}
+						Break(final_state) => {
+							$state = final_state
+							break
+						}
+					}
 				}
 				$state
 			}
@@ -6168,6 +6251,14 @@ Builtin :: [].{
 			}
 		}
 
+		## Returns a human-readable representation of a [Set], with items rendered
+		## using [Str.inspect].
+		## ```roc
+		## expect Str.inspect(Set.from_list([1.I64, 2, 3])) == "Set.from_list([1, 2, 3])"
+		## ```
+		to_inspect : Set(a) -> Str
+		to_inspect = |set| "Set.from_list(${Str.inspect(set.to_list())})"
+
 		## Creates a new empty `Set`.
 		empty : () -> Set(_item)
 		empty = || Items([])
@@ -6224,6 +6315,44 @@ Builtin :: [].{
 		to_list : Set(a) -> List(a)
 		to_list = |set| match set {
 			Items(list) => list
+		}
+
+		## Build a value by folding through each value in the set. Starting with
+		## a given `state` value, this runs the given `step` function on each
+		## value, using its return value as the new `state`. It returns the final
+		## `state` at the end.
+		## ```roc
+		## expect Set.from_list([1, 2, 3.U64]).fold(0, |sum, item| sum + item) == 6
+		##
+		## expect Set.empty().fold(0, |sum, item| sum + item) == 0.U64
+		## ```
+		fold : Set(a), state, (state, a -> state) -> state
+		fold = |set, init, step| match set {
+			Items(list) => List.fold(list, init, step)
+		}
+
+		## Iterate over the set's values in their current backing order.
+		## [Set.from_list] keeps the first insertion order, but inserting a value
+		## that is already present removes and re-appends it, which changes that
+		## value's position.
+		## ```roc
+		## expect Iter.fold(Set.from_list([1, 2, 3.U64]).iter(), [], |acc, item| acc.append(item)) == [1, 2, 3]
+		## ```
+		iter : Set(a) -> Iter(a)
+		iter = |set| match set {
+			Items(list) => List.iter(list)
+		}
+
+		## Iterate over the set's values in reverse current backing order. Like
+		## [List.iter_rev], this reads the values in place rather than building a
+		## reversed copy. Inserting an already-present value can change this order,
+		## as described by [Set.iter].
+		## ```roc
+		## expect Iter.fold(Set.from_list([1, 2, 3.U64]).iter_rev(), [], |acc, item| acc.append(item)) == [3, 2, 1]
+		## ```
+		iter_rev : Set(a) -> Iter(a)
+		iter_rev = |set| match set {
+			Items(list) => List.iter_rev(list)
 		}
 
 		## Create a `Set` from a `List` of values.
@@ -6367,6 +6496,91 @@ Builtin :: [].{
 	}
 
 	Num :: {}.{
+
+		## A reusable numeric range description. Range syntax constructs one of these
+		## values; call [Range.iter] to iterate it, or use it directly in a `for` loop.
+		##
+		## `lower` anchors the range's members even when `direction` is `From`. The
+		## `upper_bound` therefore always applies to `upper`, and [Range.step_by]
+		## replaces `step` rather than composing it with the previous step.
+		Range(num) :: {
+			lower : num,
+			upper : num,
+			step : num,
+			upper_bound : [Exclusive, Inclusive],
+			direction : [To, From],
+			len_if_known : [Known(U64), Unknown],
+		}.{
+
+			## Construct a range description for a builtin or third-party numeric type.
+			## A `Known` length must be the exact number of values the range will yield.
+			custom : {
+				lower : num,
+				upper : num,
+				step : num,
+				upper_bound : [Exclusive, Inclusive],
+				direction : [To, From],
+				len_if_known : [Known(U64), Unknown],
+			} -> Range(num)
+			custom = |config|
+				Range.{
+					lower: config.lower,
+					upper: config.upper,
+					step: config.step,
+					upper_bound: config.upper_bound,
+					direction: config.direction,
+					len_if_known: config.len_if_known,
+				}
+
+			## Return the exact range length when it fits in a [U64].
+			size_hint : Range(num) -> [Known(U64), Unknown]
+			size_hint = |Range.{ len_if_known, .. }| len_if_known
+
+			## Replace this range's absolute step. The new step is expressed in the
+			## range's numeric type so third-party numbers need no [U64] conversion.
+			step_by : Range(num), num -> Range(num)
+				where [num.range_len_if_known : num, num, num, [Exclusive, Inclusive] -> [Known(U64), Unknown]]
+			step_by = |Range.{ lower, upper, upper_bound, direction, .. }, new_step|
+				Range.{
+					lower,
+					upper,
+					step: new_step,
+					upper_bound,
+					direction,
+					len_if_known: lower.range_len_if_known(upper, new_step, upper_bound),
+				}
+
+			## Iterate this range in its stored direction.
+			iter : Range(num) -> Iter(num)
+				where [num.range_iter : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(num)]
+			iter = |Range.{ lower, upper, step, upper_bound, direction, len_if_known }|
+				lower.range_iter(upper, step, upper_bound, direction, len_if_known)
+
+			## Iterate this range in the opposite direction. Reversal reconstructs the
+			## corresponding range through the numeric type's `_to`/`_from` methods,
+			## which means a type can support forward ranges without claiming that its
+			## ranges are exactly reversible.
+			iter_rev : Range(num) -> Iter(num)
+				where [
+					num.range_exclusive_to : num, num -> Range(num),
+					num.range_inclusive_to : num, num -> Range(num),
+					num.range_exclusive_from : num, num -> Range(num),
+					num.range_inclusive_from : num, num -> Range(num),
+					num.range_len_if_known : num, num, num, [Exclusive, Inclusive] -> [Known(U64), Unknown],
+					num.range_iter : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(num),
+				]
+			iter_rev = |Range.{ lower, upper, step, upper_bound, direction, .. }| {
+				reversed = match (direction, upper_bound) {
+					(To, Exclusive) => upper.range_exclusive_from(lower)
+					(To, Inclusive) => upper.range_inclusive_from(lower)
+					(From, Exclusive) => lower.range_exclusive_to(upper)
+					(From, Inclusive) => lower.range_inclusive_to(upper)
+				}
+
+				Range.iter(Range.step_by(reversed, step))
+			}
+		}
+
 		Numeral :: [
 			Literal(
 				{ # TODO get rid of this wrapper once we have nominal records"
@@ -6572,36 +6786,36 @@ Builtin :: [].{
 			## ```
 			plus_wrap : U8, U8 -> U8
 
+			## Return `Bool.True` if adding these values would overflow a [U8].
+			plus_overflows : U8, U8 -> Bool
+
 			## Add two [U8] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U8].
 			plus_try : U8, U8 -> Try(U8, [Overflow, ..])
-			plus_try = |a, b| unsigned_plus_try(U8.highest, a, b)
+			plus_try = |a, b| unsigned_plus_try(a, b)
 
-			## Iterator over [U8] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [U8] values.
-			range_exclusive : U8, U8 -> Iter(U8)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end).to_u64())
-				else
+			range_len_if_known : U8, U8, U8, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step == 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper).to_u64(), step.to_u64(), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : U8, U8, U8, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(U8)
+			range_iter = range_iter_standard
 
-			## Iterator over [U8] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [U8] values.
-			range_inclusive : U8, U8 -> Iter(U8)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					Known(start.abs_diff(end).to_u64() + 1)
-				else
-					Known(0)
+			range_exclusive_to : U8, U8 -> Range(U8)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : U8, U8 -> Range(U8)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : U8, U8 -> Range(U8)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : U8, U8 -> Range(U8)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [U8] values, saturating at [U8.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -6611,10 +6825,10 @@ Builtin :: [].{
 			## ```
 			plus_saturated : U8, U8 -> U8
 			plus_saturated = |a, b|
-				if b > highest - a
+				if a.plus_overflows(b)
 					highest
 				else
-					a + b
+					a.plus_wrap(b)
 
 			## Subtract the second [U8] from the first.
 			## ```roc
@@ -6627,6 +6841,9 @@ Builtin :: [].{
 			## expect U8.minus_wrap(0, 1) == U8.highest
 			## ```
 			minus_wrap : U8, U8 -> U8
+
+			## Return `Bool.True` if subtracting these values would overflow a [U8].
+			minus_overflows : U8, U8 -> Bool
 
 			## Subtract the second [U8] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in a [U8].
@@ -6654,10 +6871,13 @@ Builtin :: [].{
 			## ```
 			times_wrap : U8, U8 -> U8
 
+			## Return `Bool.True` if multiplying these values would overflow a [U8].
+			times_overflows : U8, U8 -> Bool
+
 			## Multiply two [U8] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in a [U8].
 			times_try : U8, U8 -> Try(U8, [Overflow, ..])
-			times_try = |a, b| unsigned_times_try(U8.highest, 0, a, b)
+			times_try = |a, b| unsigned_times_try(a, b)
 
 			## Multiply two [U8] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -6666,7 +6886,7 @@ Builtin :: [].{
 			## expect U8.times_saturated(4, 3) == 12
 			## ```
 			times_saturated : U8, U8 -> U8
-			times_saturated = |a, b| unsigned_times_saturated(U8.highest, 0, a, b)
+			times_saturated = |a, b| unsigned_times_saturated(U8.highest, a, b)
 
 			## Raise the first [U8] value to the power of the second.
 			## Crashes if the exact result does not fit in [U8].
@@ -7256,36 +7476,36 @@ Builtin :: [].{
 			## ```
 			plus_wrap : I8, I8 -> I8
 
+			## Return `Bool.True` if adding these values would overflow an [I8].
+			plus_overflows : I8, I8 -> Bool
+
 			## Add two [I8] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I8].
 			plus_try : I8, I8 -> Try(I8, [Overflow, ..])
-			plus_try = |a, b| signed_plus_try(I8.lowest, I8.highest, 0, a, b)
+			plus_try = |a, b| signed_plus_try(a, b)
 
-			## Iterator over [I8] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [I8] values.
-			range_exclusive : I8, I8 -> Iter(I8)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end).to_u64())
-				else
+			range_len_if_known : I8, I8, I8, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper).to_u64(), step.abs_diff(0).to_u64(), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : I8, I8, I8, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I8)
+			range_iter = range_iter_standard
 
-			## Iterator over [I8] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [I8] values.
-			range_inclusive : I8, I8 -> Iter(I8)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					Known(start.abs_diff(end).to_u64() + 1)
-				else
-					Known(0)
+			range_exclusive_to : I8, I8 -> Range(I8)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : I8, I8 -> Range(I8)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : I8, I8 -> Range(I8)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : I8, I8 -> Range(I8)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [I8] values, saturating at [I8.highest] or [I8.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -7297,12 +7517,13 @@ Builtin :: [].{
 			## ```
 			plus_saturated : I8, I8 -> I8
 			plus_saturated = |a, b|
-				if b > 0 and a > highest - b
-					highest
-				else if b < 0 and a < lowest - b
-					lowest
+				if a.plus_overflows(b)
+					if b > 0
+						highest
+					else
+						lowest
 				else
-					a + b
+					a.plus_wrap(b)
 
 			## Subtract the second [I8] from the first.
 			## ```roc
@@ -7316,10 +7537,13 @@ Builtin :: [].{
 			## ```
 			minus_wrap : I8, I8 -> I8
 
+			## Return `Bool.True` if subtracting these values would overflow an [I8].
+			minus_overflows : I8, I8 -> Bool
+
 			## Subtract the second [I8] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in an [I8].
 			minus_try : I8, I8 -> Try(I8, [Overflow, ..])
-			minus_try = |a, b| signed_minus_try(I8.lowest, I8.highest, 0, a, b)
+			minus_try = |a, b| signed_minus_try(a, b)
 
 			## Subtract the second [I8] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -7344,10 +7568,13 @@ Builtin :: [].{
 			## ```
 			times_wrap : I8, I8 -> I8
 
+			## Return `Bool.True` if multiplying these values would overflow an [I8].
+			times_overflows : I8, I8 -> Bool
+
 			## Multiply two [I8] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in an [I8].
 			times_try : I8, I8 -> Try(I8, [Overflow, ..])
-			times_try = |a, b| signed_times_try(I8.lowest, I8.highest, 0, -1, a, b)
+			times_try = |a, b| signed_times_try(a, b)
 
 			## Multiply two [I8] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -7358,7 +7585,7 @@ Builtin :: [].{
 			## expect I8.times_saturated(4, 3) == 12
 			## ```
 			times_saturated : I8, I8 -> I8
-			times_saturated = |a, b| signed_times_saturated(I8.lowest, I8.highest, 0, -1, a, b)
+			times_saturated = |a, b| signed_times_saturated(I8.lowest, I8.highest, 0, a, b)
 
 			## Raise the first [I8] value to the power of the second.
 			## Crashes if the exact result does not fit in [I8].
@@ -7439,7 +7666,7 @@ Builtin :: [].{
 			## expect I8.div_ceil_try(I8.lowest, -1) == Err(Overflow)
 			## ```
 			div_ceil_try : I8, I8 -> Try(I8, [DivByZero, Overflow, ..])
-			div_ceil_try = |a, b| signed_div_ceil_try(I8.lowest, I8.highest, 0, 1, -1, a, b)
+			div_ceil_try = |a, b| signed_div_ceil_try(I8.lowest, 0, 1, -1, a, b)
 
 			## Divide the first [I8] by the second, rounding the result toward negative infinity.
 			## ```roc
@@ -8012,36 +8239,36 @@ Builtin :: [].{
 			## ```
 			plus_wrap : U16, U16 -> U16
 
+			## Return `Bool.True` if adding these values would overflow a [U16].
+			plus_overflows : U16, U16 -> Bool
+
 			## Add two [U16] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U16].
 			plus_try : U16, U16 -> Try(U16, [Overflow, ..])
-			plus_try = |a, b| unsigned_plus_try(U16.highest, a, b)
+			plus_try = |a, b| unsigned_plus_try(a, b)
 
-			## Iterator over [U16] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [U16] values.
-			range_exclusive : U16, U16 -> Iter(U16)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end).to_u64())
-				else
+			range_len_if_known : U16, U16, U16, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step == 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper).to_u64(), step.to_u64(), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : U16, U16, U16, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(U16)
+			range_iter = range_iter_standard
 
-			## Iterator over [U16] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [U16] values.
-			range_inclusive : U16, U16 -> Iter(U16)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					Known(start.abs_diff(end).to_u64() + 1)
-				else
-					Known(0)
+			range_exclusive_to : U16, U16 -> Range(U16)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : U16, U16 -> Range(U16)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : U16, U16 -> Range(U16)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : U16, U16 -> Range(U16)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [U16] values, saturating at [U16.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -8051,10 +8278,10 @@ Builtin :: [].{
 			## ```
 			plus_saturated : U16, U16 -> U16
 			plus_saturated = |a, b|
-				if b > highest - a
+				if a.plus_overflows(b)
 					highest
 				else
-					a + b
+					a.plus_wrap(b)
 
 			## Subtract the second [U16] from the first.
 			## ```roc
@@ -8067,6 +8294,9 @@ Builtin :: [].{
 			## expect U16.minus_wrap(0, 1) == U16.highest
 			## ```
 			minus_wrap : U16, U16 -> U16
+
+			## Return `Bool.True` if subtracting these values would overflow a [U16].
+			minus_overflows : U16, U16 -> Bool
 
 			## Subtract the second [U16] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in a [U16].
@@ -8094,10 +8324,13 @@ Builtin :: [].{
 			## ```
 			times_wrap : U16, U16 -> U16
 
+			## Return `Bool.True` if multiplying these values would overflow a [U16].
+			times_overflows : U16, U16 -> Bool
+
 			## Multiply two [U16] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in a [U16].
 			times_try : U16, U16 -> Try(U16, [Overflow, ..])
-			times_try = |a, b| unsigned_times_try(U16.highest, 0, a, b)
+			times_try = |a, b| unsigned_times_try(a, b)
 
 			## Multiply two [U16] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -8106,7 +8339,7 @@ Builtin :: [].{
 			## expect U16.times_saturated(4, 3) == 12
 			## ```
 			times_saturated : U16, U16 -> U16
-			times_saturated = |a, b| unsigned_times_saturated(U16.highest, 0, a, b)
+			times_saturated = |a, b| unsigned_times_saturated(U16.highest, a, b)
 
 			## Raise the first [U16] value to the power of the second.
 			## Crashes if the exact result does not fit in [U16].
@@ -8755,36 +8988,36 @@ Builtin :: [].{
 			## ```
 			plus_wrap : I16, I16 -> I16
 
+			## Return `Bool.True` if adding these values would overflow an [I16].
+			plus_overflows : I16, I16 -> Bool
+
 			## Add two [I16] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I16].
 			plus_try : I16, I16 -> Try(I16, [Overflow, ..])
-			plus_try = |a, b| signed_plus_try(I16.lowest, I16.highest, 0, a, b)
+			plus_try = |a, b| signed_plus_try(a, b)
 
-			## Iterator over [I16] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [I16] values.
-			range_exclusive : I16, I16 -> Iter(I16)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end).to_u64())
-				else
+			range_len_if_known : I16, I16, I16, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper).to_u64(), step.abs_diff(0).to_u64(), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : I16, I16, I16, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I16)
+			range_iter = range_iter_standard
 
-			## Iterator over [I16] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [I16] values.
-			range_inclusive : I16, I16 -> Iter(I16)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					Known(start.abs_diff(end).to_u64() + 1)
-				else
-					Known(0)
+			range_exclusive_to : I16, I16 -> Range(I16)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : I16, I16 -> Range(I16)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : I16, I16 -> Range(I16)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : I16, I16 -> Range(I16)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [I16] values, saturating at [I16.highest] or [I16.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -8796,12 +9029,13 @@ Builtin :: [].{
 			## ```
 			plus_saturated : I16, I16 -> I16
 			plus_saturated = |a, b|
-				if b > 0 and a > highest - b
-					highest
-				else if b < 0 and a < lowest - b
-					lowest
+				if a.plus_overflows(b)
+					if b > 0
+						highest
+					else
+						lowest
 				else
-					a + b
+					a.plus_wrap(b)
 
 			## Subtract the second [I16] from the first.
 			## ```roc
@@ -8815,10 +9049,13 @@ Builtin :: [].{
 			## ```
 			minus_wrap : I16, I16 -> I16
 
+			## Return `Bool.True` if subtracting these values would overflow an [I16].
+			minus_overflows : I16, I16 -> Bool
+
 			## Subtract the second [I16] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in an [I16].
 			minus_try : I16, I16 -> Try(I16, [Overflow, ..])
-			minus_try = |a, b| signed_minus_try(I16.lowest, I16.highest, 0, a, b)
+			minus_try = |a, b| signed_minus_try(a, b)
 
 			## Subtract the second [I16] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -8843,10 +9080,13 @@ Builtin :: [].{
 			## ```
 			times_wrap : I16, I16 -> I16
 
+			## Return `Bool.True` if multiplying these values would overflow an [I16].
+			times_overflows : I16, I16 -> Bool
+
 			## Multiply two [I16] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in an [I16].
 			times_try : I16, I16 -> Try(I16, [Overflow, ..])
-			times_try = |a, b| signed_times_try(I16.lowest, I16.highest, 0, -1, a, b)
+			times_try = |a, b| signed_times_try(a, b)
 
 			## Multiply two [I16] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -8857,7 +9097,7 @@ Builtin :: [].{
 			## expect I16.times_saturated(4, 3) == 12
 			## ```
 			times_saturated : I16, I16 -> I16
-			times_saturated = |a, b| signed_times_saturated(I16.lowest, I16.highest, 0, -1, a, b)
+			times_saturated = |a, b| signed_times_saturated(I16.lowest, I16.highest, 0, a, b)
 
 			## Raise the first [I16] value to the power of the second.
 			## Crashes if the exact result does not fit in [I16].
@@ -8938,7 +9178,7 @@ Builtin :: [].{
 			## expect I16.div_ceil_try(I16.lowest, -1) == Err(Overflow)
 			## ```
 			div_ceil_try : I16, I16 -> Try(I16, [DivByZero, Overflow, ..])
-			div_ceil_try = |a, b| signed_div_ceil_try(I16.lowest, I16.highest, 0, 1, -1, a, b)
+			div_ceil_try = |a, b| signed_div_ceil_try(I16.lowest, 0, 1, -1, a, b)
 
 			## Divide the first [I16] by the second, rounding the result toward negative infinity.
 			## ```roc
@@ -9552,36 +9792,36 @@ Builtin :: [].{
 			## ```
 			plus_wrap : U32, U32 -> U32
 
+			## Return `Bool.True` if adding these values would overflow a [U32].
+			plus_overflows : U32, U32 -> Bool
+
 			## Add two [U32] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U32].
 			plus_try : U32, U32 -> Try(U32, [Overflow, ..])
-			plus_try = |a, b| unsigned_plus_try(U32.highest, a, b)
+			plus_try = |a, b| unsigned_plus_try(a, b)
 
-			## Iterator over [U32] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [U32] values.
-			range_exclusive : U32, U32 -> Iter(U32)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end).to_u64())
-				else
+			range_len_if_known : U32, U32, U32, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step == 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper).to_u64(), step.to_u64(), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : U32, U32, U32, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(U32)
+			range_iter = range_iter_standard
 
-			## Iterator over [U32] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [U32] values.
-			range_inclusive : U32, U32 -> Iter(U32)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					Known(start.abs_diff(end).to_u64() + 1)
-				else
-					Known(0)
+			range_exclusive_to : U32, U32 -> Range(U32)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : U32, U32 -> Range(U32)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : U32, U32 -> Range(U32)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : U32, U32 -> Range(U32)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [U32] values, saturating at [U32.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -9591,10 +9831,10 @@ Builtin :: [].{
 			## ```
 			plus_saturated : U32, U32 -> U32
 			plus_saturated = |a, b|
-				if b > highest - a
+				if a.plus_overflows(b)
 					highest
 				else
-					a + b
+					a.plus_wrap(b)
 
 			## Subtract the second [U32] from the first.
 			## ```roc
@@ -9607,6 +9847,9 @@ Builtin :: [].{
 			## expect U32.minus_wrap(0, 1) == U32.highest
 			## ```
 			minus_wrap : U32, U32 -> U32
+
+			## Return `Bool.True` if subtracting these values would overflow a [U32].
+			minus_overflows : U32, U32 -> Bool
 
 			## Subtract the second [U32] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in a [U32].
@@ -9634,10 +9877,13 @@ Builtin :: [].{
 			## ```
 			times_wrap : U32, U32 -> U32
 
+			## Return `Bool.True` if multiplying these values would overflow a [U32].
+			times_overflows : U32, U32 -> Bool
+
 			## Multiply two [U32] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in a [U32].
 			times_try : U32, U32 -> Try(U32, [Overflow, ..])
-			times_try = |a, b| unsigned_times_try(U32.highest, 0, a, b)
+			times_try = |a, b| unsigned_times_try(a, b)
 
 			## Multiply two [U32] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -9646,7 +9892,7 @@ Builtin :: [].{
 			## expect U32.times_saturated(4, 3) == 12
 			## ```
 			times_saturated : U32, U32 -> U32
-			times_saturated = |a, b| unsigned_times_saturated(U32.highest, 0, a, b)
+			times_saturated = |a, b| unsigned_times_saturated(U32.highest, a, b)
 
 			## Raise the first [U32] value to the power of the second.
 			## Crashes if the exact result does not fit in [U32].
@@ -10327,36 +10573,36 @@ Builtin :: [].{
 			## ```
 			plus_wrap : I32, I32 -> I32
 
+			## Return `Bool.True` if adding these values would overflow an [I32].
+			plus_overflows : I32, I32 -> Bool
+
 			## Add two [I32] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I32].
 			plus_try : I32, I32 -> Try(I32, [Overflow, ..])
-			plus_try = |a, b| signed_plus_try(I32.lowest, I32.highest, 0, a, b)
+			plus_try = |a, b| signed_plus_try(a, b)
 
-			## Iterator over [I32] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [I32] values.
-			range_exclusive : I32, I32 -> Iter(I32)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end).to_u64())
-				else
+			range_len_if_known : I32, I32, I32, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper).to_u64(), step.abs_diff(0).to_u64(), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : I32, I32, I32, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I32)
+			range_iter = range_iter_standard
 
-			## Iterator over [I32] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [I32] values.
-			range_inclusive : I32, I32 -> Iter(I32)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					Known(start.abs_diff(end).to_u64() + 1)
-				else
-					Known(0)
+			range_exclusive_to : I32, I32 -> Range(I32)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : I32, I32 -> Range(I32)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : I32, I32 -> Range(I32)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : I32, I32 -> Range(I32)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [I32] values, saturating at [I32.highest] or [I32.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -10368,12 +10614,13 @@ Builtin :: [].{
 			## ```
 			plus_saturated : I32, I32 -> I32
 			plus_saturated = |a, b|
-				if b > 0 and a > highest - b
-					highest
-				else if b < 0 and a < lowest - b
-					lowest
+				if a.plus_overflows(b)
+					if b > 0
+						highest
+					else
+						lowest
 				else
-					a + b
+					a.plus_wrap(b)
 
 			## Subtract the second [I32] from the first.
 			## ```roc
@@ -10387,10 +10634,13 @@ Builtin :: [].{
 			## ```
 			minus_wrap : I32, I32 -> I32
 
+			## Return `Bool.True` if subtracting these values would overflow an [I32].
+			minus_overflows : I32, I32 -> Bool
+
 			## Subtract the second [I32] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in an [I32].
 			minus_try : I32, I32 -> Try(I32, [Overflow, ..])
-			minus_try = |a, b| signed_minus_try(I32.lowest, I32.highest, 0, a, b)
+			minus_try = |a, b| signed_minus_try(a, b)
 
 			## Subtract the second [I32] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -10415,10 +10665,13 @@ Builtin :: [].{
 			## ```
 			times_wrap : I32, I32 -> I32
 
+			## Return `Bool.True` if multiplying these values would overflow an [I32].
+			times_overflows : I32, I32 -> Bool
+
 			## Multiply two [I32] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in an [I32].
 			times_try : I32, I32 -> Try(I32, [Overflow, ..])
-			times_try = |a, b| signed_times_try(I32.lowest, I32.highest, 0, -1, a, b)
+			times_try = |a, b| signed_times_try(a, b)
 
 			## Multiply two [I32] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -10429,7 +10682,7 @@ Builtin :: [].{
 			## expect I32.times_saturated(4, 3) == 12
 			## ```
 			times_saturated : I32, I32 -> I32
-			times_saturated = |a, b| signed_times_saturated(I32.lowest, I32.highest, 0, -1, a, b)
+			times_saturated = |a, b| signed_times_saturated(I32.lowest, I32.highest, 0, a, b)
 
 			## Raise the first [I32] value to the power of the second.
 			## Crashes if the exact result does not fit in [I32].
@@ -10510,7 +10763,7 @@ Builtin :: [].{
 			## expect I32.div_ceil_try(I32.lowest, -1) == Err(Overflow)
 			## ```
 			div_ceil_try : I32, I32 -> Try(I32, [DivByZero, Overflow, ..])
-			div_ceil_try = |a, b| signed_div_ceil_try(I32.lowest, I32.highest, 0, 1, -1, a, b)
+			div_ceil_try = |a, b| signed_div_ceil_try(I32.lowest, 0, 1, -1, a, b)
 
 			## Divide the first [I32] by the second, rounding the result toward negative infinity.
 			## ```roc
@@ -11141,39 +11394,36 @@ Builtin :: [].{
 			## ```
 			plus_wrap : U64, U64 -> U64
 
+			## Return `Bool.True` if adding these values would overflow a [U64].
+			plus_overflows : U64, U64 -> Bool
+
 			## Add two [U64] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U64].
 			plus_try : U64, U64 -> Try(U64, [Overflow, ..])
-			plus_try = |a, b| unsigned_plus_try(U64.highest, a, b)
+			plus_try = |a, b| unsigned_plus_try(a, b)
 
-			## Iterator over [U64] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [U64] values.
-			range_exclusive : U64, U64 -> Iter(U64)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end))
-				else
+			range_len_if_known : U64, U64, U64, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step == 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper), step, upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : U64, U64, U64, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(U64)
+			range_iter = range_iter_standard
 
-			## Iterator over [U64] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [U64] values.
-			range_inclusive : U64, U64 -> Iter(U64)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					match start.abs_diff(end).plus_try(1) {
-						Ok(len) => Known(len)
-						Err(Overflow) => Unknown
-					}
-				else
-					Known(0)
+			range_exclusive_to : U64, U64 -> Range(U64)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : U64, U64 -> Range(U64)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : U64, U64 -> Range(U64)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : U64, U64 -> Range(U64)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [U64] values, saturating at [U64.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -11183,10 +11433,10 @@ Builtin :: [].{
 			## ```
 			plus_saturated : U64, U64 -> U64
 			plus_saturated = |a, b|
-				if b > highest - a
+				if a.plus_overflows(b)
 					highest
 				else
-					a + b
+					a.plus_wrap(b)
 
 			## Subtract the second [U64] from the first.
 			## ```roc
@@ -11199,6 +11449,9 @@ Builtin :: [].{
 			## expect U64.minus_wrap(0, 1) == U64.highest
 			## ```
 			minus_wrap : U64, U64 -> U64
+
+			## Return `Bool.True` if subtracting these values would overflow a [U64].
+			minus_overflows : U64, U64 -> Bool
 
 			## Subtract the second [U64] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in a [U64].
@@ -11226,10 +11479,13 @@ Builtin :: [].{
 			## ```
 			times_wrap : U64, U64 -> U64
 
+			## Return `Bool.True` if multiplying these values would overflow a [U64].
+			times_overflows : U64, U64 -> Bool
+
 			## Multiply two [U64] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in a [U64].
 			times_try : U64, U64 -> Try(U64, [Overflow, ..])
-			times_try = |a, b| unsigned_times_try(U64.highest, 0, a, b)
+			times_try = |a, b| unsigned_times_try(a, b)
 
 			## Multiply two [U64] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -11238,7 +11494,7 @@ Builtin :: [].{
 			## expect U64.times_saturated(4, 3) == 12
 			## ```
 			times_saturated : U64, U64 -> U64
-			times_saturated = |a, b| unsigned_times_saturated(U64.highest, 0, a, b)
+			times_saturated = |a, b| unsigned_times_saturated(U64.highest, a, b)
 
 			## Raise the first [U64] value to the power of the second.
 			## Crashes if the exact result does not fit in [U64].
@@ -11982,39 +12238,36 @@ Builtin :: [].{
 			## ```
 			plus_wrap : I64, I64 -> I64
 
+			## Return `Bool.True` if adding these values would overflow an [I64].
+			plus_overflows : I64, I64 -> Bool
+
 			## Add two [I64] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I64].
 			plus_try : I64, I64 -> Try(I64, [Overflow, ..])
-			plus_try = |a, b| signed_plus_try(I64.lowest, I64.highest, 0, a, b)
+			plus_try = |a, b| signed_plus_try(a, b)
 
-			## Iterator over [I64] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [I64] values.
-			range_exclusive : I64, I64 -> Iter(I64)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end))
-				else
+			range_len_if_known : I64, I64, I64, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper), step.abs_diff(0), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : I64, I64, I64, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I64)
+			range_iter = range_iter_standard
 
-			## Iterator over [I64] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [I64] values.
-			range_inclusive : I64, I64 -> Iter(I64)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					match start.abs_diff(end).plus_try(1) {
-						Ok(len) => Known(len)
-						Err(Overflow) => Unknown
-					}
-				else
-					Known(0)
+			range_exclusive_to : I64, I64 -> Range(I64)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : I64, I64 -> Range(I64)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : I64, I64 -> Range(I64)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : I64, I64 -> Range(I64)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [I64] values, saturating at [I64.highest] or [I64.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -12026,12 +12279,13 @@ Builtin :: [].{
 			## ```
 			plus_saturated : I64, I64 -> I64
 			plus_saturated = |a, b|
-				if b > 0 and a > highest - b
-					highest
-				else if b < 0 and a < lowest - b
-					lowest
+				if a.plus_overflows(b)
+					if b > 0
+						highest
+					else
+						lowest
 				else
-					a + b
+					a.plus_wrap(b)
 
 			## Subtract the second [I64] from the first.
 			## ```roc
@@ -12045,10 +12299,13 @@ Builtin :: [].{
 			## ```
 			minus_wrap : I64, I64 -> I64
 
+			## Return `Bool.True` if subtracting these values would overflow an [I64].
+			minus_overflows : I64, I64 -> Bool
+
 			## Subtract the second [I64] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in an [I64].
 			minus_try : I64, I64 -> Try(I64, [Overflow, ..])
-			minus_try = |a, b| signed_minus_try(I64.lowest, I64.highest, 0, a, b)
+			minus_try = |a, b| signed_minus_try(a, b)
 
 			## Subtract the second [I64] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -12073,10 +12330,13 @@ Builtin :: [].{
 			## ```
 			times_wrap : I64, I64 -> I64
 
+			## Return `Bool.True` if multiplying these values would overflow an [I64].
+			times_overflows : I64, I64 -> Bool
+
 			## Multiply two [I64] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in an [I64].
 			times_try : I64, I64 -> Try(I64, [Overflow, ..])
-			times_try = |a, b| signed_times_try(I64.lowest, I64.highest, 0, -1, a, b)
+			times_try = |a, b| signed_times_try(a, b)
 
 			## Multiply two [I64] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -12087,7 +12347,7 @@ Builtin :: [].{
 			## expect I64.times_saturated(4, 3) == 12
 			## ```
 			times_saturated : I64, I64 -> I64
-			times_saturated = |a, b| signed_times_saturated(I64.lowest, I64.highest, 0, -1, a, b)
+			times_saturated = |a, b| signed_times_saturated(I64.lowest, I64.highest, 0, a, b)
 
 			## Raise the first [I64] value to the power of the second.
 			## Crashes if the exact result does not fit in [I64].
@@ -12168,7 +12428,7 @@ Builtin :: [].{
 			## expect I64.div_ceil_try(I64.lowest, -1) == Err(Overflow)
 			## ```
 			div_ceil_try : I64, I64 -> Try(I64, [DivByZero, Overflow, ..])
-			div_ceil_try = |a, b| signed_div_ceil_try(I64.lowest, I64.highest, 0, 1, -1, a, b)
+			div_ceil_try = |a, b| signed_div_ceil_try(I64.lowest, 0, 1, -1, a, b)
 
 			## Divide the first [I64] by the second, rounding the result toward negative infinity.
 			## ```roc
@@ -12821,45 +13081,36 @@ Builtin :: [].{
 			## ```
 			plus_wrap : U128, U128 -> U128
 
+			## Return `Bool.True` if adding these values would overflow a [U128].
+			plus_overflows : U128, U128 -> Bool
+
 			## Add two [U128] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U128].
 			plus_try : U128, U128 -> Try(U128, [Overflow, ..])
-			plus_try = |a, b| unsigned_plus_try(U128.highest, a, b)
+			plus_try = |a, b| unsigned_plus_try(a, b)
 
-			## Iterator over [U128] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [U128] values.
-			range_exclusive : U128, U128 -> Iter(U128)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					match start.abs_diff(end).to_u64_try() {
-						Ok(steps) => Known(steps)
-						Err(OutOfRange) => Unknown
-					}
-				else
+			range_len_if_known : U128, U128, U128, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step == 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u128(lower.abs_diff(upper), step, upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : U128, U128, U128, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(U128)
+			range_iter = range_iter_standard
 
-			## Iterator over [U128] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [U128] values.
-			range_inclusive : U128, U128 -> Iter(U128)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					match start.abs_diff(end).to_u64_try() {
-						Ok(steps) => match steps.plus_try(1) {
-							Ok(len) => Known(len)
-							Err(Overflow) => Unknown
-						}
-						Err(OutOfRange) => Unknown
-					}
-				else
-					Known(0)
+			range_exclusive_to : U128, U128 -> Range(U128)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : U128, U128 -> Range(U128)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : U128, U128 -> Range(U128)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : U128, U128 -> Range(U128)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [U128] values, saturating at [U128.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -12869,10 +13120,10 @@ Builtin :: [].{
 			## ```
 			plus_saturated : U128, U128 -> U128
 			plus_saturated = |a, b|
-				if b > highest - a
+				if a.plus_overflows(b)
 					highest
 				else
-					a + b
+					a.plus_wrap(b)
 
 			## Subtract the second [U128] from the first.
 			## ```roc
@@ -12885,6 +13136,9 @@ Builtin :: [].{
 			## expect U128.minus_wrap(0, 1) == U128.highest
 			## ```
 			minus_wrap : U128, U128 -> U128
+
+			## Return `Bool.True` if subtracting these values would overflow a [U128].
+			minus_overflows : U128, U128 -> Bool
 
 			## Subtract the second [U128] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in a [U128].
@@ -12912,10 +13166,13 @@ Builtin :: [].{
 			## ```
 			times_wrap : U128, U128 -> U128
 
+			## Return `Bool.True` if multiplying these values would overflow a [U128].
+			times_overflows : U128, U128 -> Bool
+
 			## Multiply two [U128] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in a [U128].
 			times_try : U128, U128 -> Try(U128, [Overflow, ..])
-			times_try = |a, b| unsigned_times_try(U128.highest, 0, a, b)
+			times_try = |a, b| unsigned_times_try(a, b)
 
 			## Multiply two [U128] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -12924,7 +13181,7 @@ Builtin :: [].{
 			## expect U128.times_saturated(4, 3) == 12
 			## ```
 			times_saturated : U128, U128 -> U128
-			times_saturated = |a, b| unsigned_times_saturated(U128.highest, 0, a, b)
+			times_saturated = |a, b| unsigned_times_saturated(U128.highest, a, b)
 
 			## Raise the first [U128] value to the power of the second.
 			## Crashes if the exact result does not fit in [U128].
@@ -13682,45 +13939,36 @@ Builtin :: [].{
 			## ```
 			plus_wrap : I128, I128 -> I128
 
+			## Return `Bool.True` if adding these values would overflow an [I128].
+			plus_overflows : I128, I128 -> Bool
+
 			## Add two [I128] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I128].
 			plus_try : I128, I128 -> Try(I128, [Overflow, ..])
-			plus_try = |a, b| signed_plus_try(I128.lowest, I128.highest, 0, a, b)
+			plus_try = |a, b| signed_plus_try(a, b)
 
-			## Iterator over [I128] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [I128] values.
-			range_exclusive : I128, I128 -> Iter(I128)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					match start.abs_diff(end).to_u64_try() {
-						Ok(steps) => Known(steps)
-						Err(OutOfRange) => Unknown
-					}
-				else
+			range_len_if_known : I128, I128, I128, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u128(lower.abs_diff(upper), step.abs_diff(0), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : I128, I128, I128, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I128)
+			range_iter = range_iter_standard
 
-			## Iterator over [I128] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [I128] values.
-			range_inclusive : I128, I128 -> Iter(I128)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					match start.abs_diff(end).to_u64_try() {
-						Ok(steps) => match steps.plus_try(1) {
-							Ok(len) => Known(len)
-							Err(Overflow) => Unknown
-						}
-						Err(OutOfRange) => Unknown
-					}
-				else
-					Known(0)
+			range_exclusive_to : I128, I128 -> Range(I128)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : I128, I128 -> Range(I128)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : I128, I128 -> Range(I128)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : I128, I128 -> Range(I128)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [I128] values, saturating at [I128.highest] or [I128.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -13732,12 +13980,13 @@ Builtin :: [].{
 			## ```
 			plus_saturated : I128, I128 -> I128
 			plus_saturated = |a, b|
-				if b > 0 and a > highest - b
-					highest
-				else if b < 0 and a < lowest - b
-					lowest
+				if a.plus_overflows(b)
+					if b > 0
+						highest
+					else
+						lowest
 				else
-					a + b
+					a.plus_wrap(b)
 
 			## Subtract the second [I128] from the first.
 			## ```roc
@@ -13751,10 +14000,13 @@ Builtin :: [].{
 			## ```
 			minus_wrap : I128, I128 -> I128
 
+			## Return `Bool.True` if subtracting these values would overflow an [I128].
+			minus_overflows : I128, I128 -> Bool
+
 			## Subtract the second [I128] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in an [I128].
 			minus_try : I128, I128 -> Try(I128, [Overflow, ..])
-			minus_try = |a, b| signed_minus_try(I128.lowest, I128.highest, 0, a, b)
+			minus_try = |a, b| signed_minus_try(a, b)
 
 			## Subtract the second [I128] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -13779,10 +14031,13 @@ Builtin :: [].{
 			## ```
 			times_wrap : I128, I128 -> I128
 
+			## Return `Bool.True` if multiplying these values would overflow an [I128].
+			times_overflows : I128, I128 -> Bool
+
 			## Multiply two [I128] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in an [I128].
 			times_try : I128, I128 -> Try(I128, [Overflow, ..])
-			times_try = |a, b| signed_times_try(I128.lowest, I128.highest, 0, -1, a, b)
+			times_try = |a, b| signed_times_try(a, b)
 
 			## Multiply two [I128] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -13793,7 +14048,7 @@ Builtin :: [].{
 			## expect I128.times_saturated(4, 3) == 12
 			## ```
 			times_saturated : I128, I128 -> I128
-			times_saturated = |a, b| signed_times_saturated(I128.lowest, I128.highest, 0, -1, a, b)
+			times_saturated = |a, b| signed_times_saturated(I128.lowest, I128.highest, 0, a, b)
 
 			## Raise the first [I128] value to the power of the second.
 			## Crashes if the exact result does not fit in [I128].
@@ -13874,7 +14129,7 @@ Builtin :: [].{
 			## expect I128.div_ceil_try(I128.lowest, -1) == Err(Overflow)
 			## ```
 			div_ceil_try : I128, I128 -> Try(I128, [DivByZero, Overflow, ..])
-			div_ceil_try = |a, b| signed_div_ceil_try(I128.lowest, I128.highest, 0, 1, -1, a, b)
+			div_ceil_try = |a, b| signed_div_ceil_try(I128.lowest, 0, 1, -1, a, b)
 
 			## Divide the first [I128] by the second, rounding the result toward negative infinity.
 			## ```roc
@@ -14602,30 +14857,34 @@ Builtin :: [].{
 			## Add two [Dec] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result is outside [Dec.lowest] through [Dec.highest].
 			plus_try : Dec, Dec -> Try(Dec, [Overflow, ..])
-			plus_try = |a, b| signed_plus_try(Dec.lowest, Dec.highest, 0.0, a, b)
+			plus_try = |a, b| {
+				a_attos = Dec.to_attos(a)
+				b_attos = Dec.to_attos(b)
 
-			## Conservative placeholder: always returns `Unknown`. Counting the steps
-			## in a fractional `[start, end)` range advancing by `1` would require
-			## `ceil(end - start)`; until that is implemented, `Unknown` is always a
-			## correct (if imprecise) length hint.
-			## Iterator over [Dec] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [Dec] values.
-			range_exclusive : Dec, Dec -> Iter(Dec)
-			range_exclusive = |start, end| range_exclusive_with_len(start, end, Unknown)
-
-			## Iterator over [Dec] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [Dec] values.
-			range_inclusive : Dec, Dec -> Iter(Dec)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					Unknown
-				else
-					Known(0)
-
-				range_inclusive_with_len(start, end, len_if_known)
+				if a_attos.plus_overflows(b_attos) {
+					Err(Overflow)
+				} else {
+					Ok(Dec.from_attos(a_attos.plus_wrap(b_attos)))
+				}
 			}
+
+			range_len_if_known : Dec, Dec, Dec, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = range_len_dec
+
+			range_iter : Dec, Dec, Dec, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(Dec)
+			range_iter = range_iter_standard
+
+			range_exclusive_to : Dec, Dec -> Range(Dec)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
+
+			range_inclusive_to : Dec, Dec -> Range(Dec)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : Dec, Dec -> Range(Dec)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : Dec, Dec -> Range(Dec)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [Dec] values, saturating at [Dec.highest] or [Dec.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -14636,13 +14895,20 @@ Builtin :: [].{
 			## expect Dec.plus_saturated(1.5, 2.5) == 4.0
 			## ```
 			plus_saturated : Dec, Dec -> Dec
-			plus_saturated = |a, b|
-				if b > 0 and a > highest - b
-					highest
-				else if b < 0 and a < lowest - b
-					lowest
-				else
-					a + b
+			plus_saturated = |a, b| {
+				a_attos = Dec.to_attos(a)
+				b_attos = Dec.to_attos(b)
+
+				if a_attos.plus_overflows(b_attos) {
+					if b_attos > 0 {
+						Dec.highest
+					} else {
+						Dec.lowest
+					}
+				} else {
+					Dec.from_attos(a_attos.plus_wrap(b_attos))
+				}
+			}
 
 			## Subtract the second [Dec] from the first.
 			## ```roc
@@ -14654,7 +14920,16 @@ Builtin :: [].{
 			## `Err(Overflow)` instead of crashing or wrapping if the result is outside
 			## [Dec.lowest] through [Dec.highest].
 			minus_try : Dec, Dec -> Try(Dec, [Overflow, ..])
-			minus_try = |a, b| signed_minus_try(Dec.lowest, Dec.highest, 0.0, a, b)
+			minus_try = |a, b| {
+				a_attos = Dec.to_attos(a)
+				b_attos = Dec.to_attos(b)
+
+				if a_attos.minus_overflows(b_attos) {
+					Err(Overflow)
+				} else {
+					Ok(Dec.from_attos(a_attos.minus_wrap(b_attos)))
+				}
+			}
 
 			## Subtract the second [Dec] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -14665,7 +14940,20 @@ Builtin :: [].{
 			## expect Dec.minus_saturated(5.0, 3.5) == 1.5
 			## ```
 			minus_saturated : Dec, Dec -> Dec
-			minus_saturated = |a, b| signed_minus_saturated(Dec.lowest, Dec.highest, 0.0, a, b)
+			minus_saturated = |a, b| {
+				a_attos = Dec.to_attos(a)
+				b_attos = Dec.to_attos(b)
+
+				if a_attos.minus_overflows(b_attos) {
+					if b_attos > 0 {
+						Dec.lowest
+					} else {
+						Dec.highest
+					}
+				} else {
+					Dec.from_attos(a_attos.minus_wrap(b_attos))
+				}
+			}
 
 			## Multiply two [Dec] values. The result is limited to [Dec]'s fixed
 			## 18 fractional decimal places and crashes if it overflows.
@@ -14683,7 +14971,7 @@ Builtin :: [].{
 			## expect Dec.times_saturated(2.5, 4.0) == 10.0
 			## ```
 			times_saturated : Dec, Dec -> Dec
-			times_saturated = |a, b| signed_times_saturated(Dec.lowest, Dec.highest, 0.0, -1.0, a, b)
+			times_saturated = |a, b| signed_times_saturated_rescaled(Dec.lowest, Dec.highest, 0.0, -1.0, a, b)
 
 			## Raise a [Dec] to a [Dec] power. Results are limited to [Dec]'s
 			## fixed 18 fractional decimal places. Fractional exponents require a
@@ -14818,12 +15106,12 @@ Builtin :: [].{
 			round_to_i64_try : Dec -> Try(I64, [OutOfRange, ..])
 			round_to_i64_try = |self| I128.to_i64_try(dec_round_to_i128(self))
 
-			## Round a [Dec] to the nearest [I128]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
+			## Round a [Dec] to the nearest [I128]. Halfway values round away from zero. Every [Dec] rounds to a value an [I128] can hold, so this never fails.
 			## ```roc
-			## expect Dec.round_to_i128_try(7.2) == Ok(7)
+			## expect Dec.round_to_i128(7.2) == 7
 			## ```
-			round_to_i128_try : Dec -> Try(I128, [OutOfRange, ..])
-			round_to_i128_try = |self| Ok(dec_round_to_i128(self))
+			round_to_i128 : Dec -> I128
+			round_to_i128 = |self| dec_round_to_i128(self)
 
 			## Round a [Dec] to the nearest [U8]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
@@ -14888,12 +15176,12 @@ Builtin :: [].{
 			floor_to_i64_try : Dec -> Try(I64, [OutOfRange, ..])
 			floor_to_i64_try = |self| I128.to_i64_try(dec_floor_to_i128(self))
 
-			## Round a [Dec] down to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
+			## Round a [Dec] down to an [I128]. Every [Dec] rounds down to a value an [I128] can hold, so this never fails.
 			## ```roc
-			## expect Dec.floor_to_i128_try(3.8) == Ok(3)
+			## expect Dec.floor_to_i128(3.8) == 3
 			## ```
-			floor_to_i128_try : Dec -> Try(I128, [OutOfRange, ..])
-			floor_to_i128_try = |self| Ok(dec_floor_to_i128(self))
+			floor_to_i128 : Dec -> I128
+			floor_to_i128 = |self| dec_floor_to_i128(self)
 
 			## Round a [Dec] down to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
@@ -14958,12 +15246,12 @@ Builtin :: [].{
 			ceiling_to_i64_try : Dec -> Try(I64, [OutOfRange, ..])
 			ceiling_to_i64_try = |self| I128.to_i64_try(dec_ceiling_to_i128(self))
 
-			## Round a [Dec] up to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
+			## Round a [Dec] up to an [I128]. Every [Dec] rounds up to a value an [I128] can hold, so this never fails.
 			## ```roc
-			## expect Dec.ceiling_to_i128_try(3.2) == Ok(4)
+			## expect Dec.ceiling_to_i128(3.2) == 4
 			## ```
-			ceiling_to_i128_try : Dec -> Try(I128, [OutOfRange, ..])
-			ceiling_to_i128_try = |self| Ok(dec_ceiling_to_i128(self))
+			ceiling_to_i128 : Dec -> I128
+			ceiling_to_i128 = |self| dec_ceiling_to_i128(self)
 
 			## Round a [Dec] up to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
@@ -15137,22 +15425,12 @@ Builtin :: [].{
 
 			## Convert a [Dec] to an [I128]. The fractional part is truncated
 			## toward zero. The entire integer part of any [Dec] fits in an
-			## [I128], so no wrapping occurs in practice. See [Dec.to_attos] to get
-			## the exact value (scaled by 10^18) instead.
+			## [I128], so this never fails. See [Dec.to_attos] to get the exact
+			## value (scaled by 10^18) instead.
 			## ```roc
-			## expect Dec.to_i128_wrap(42.5) == 42
+			## expect Dec.to_i128(42.5) == 42
 			## ```
-			to_i128_wrap : Dec -> I128
-
-			## Convert a [Dec] to an [I128], returning `Err(OutOfRange)` if the
-			## integer part does not fit. The fractional part is truncated toward
-			## zero. See [Dec.to_attos] to get the exact value (scaled by 10^18)
-			## instead.
-			## ```roc
-			## expect Dec.to_i128_try(42.5) == Ok(42)
-			## ```
-			to_i128_try : Dec -> Try(I128, [OutOfRange, ..])
-			to_i128_try = |num| out_of_range_try(dec_to_i128_try_unsafe(num))
+			to_i128 : Dec -> I128
 
 			# Conversions to unsigned integers (all lossy - truncates fractional part)
 
@@ -16034,49 +16312,18 @@ Builtin :: [].{
 			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| f32_from_str(str))
 
-			## Iterator over [F32] values from `start` up to but not including `end`,
-			## incrementing by 1. Returns an empty iterator if `start >= end`.
-			## This is what `start..<end` desugars to when the bounds are [F32] values.
-			##
-			## Once the values are large enough that adding 1 can no longer produce a
-			## bigger float, the iterator yields that value once and then ends.
-			range_exclusive : F32, F32 -> Iter(F32)
-			range_exclusive = |start, end|
-				Iter.custom(
-					(start, False),
-					Unknown,
-					|(cur, done)|
-						if done or cur >= end {
-							Err(NoMore)
-						} else {
-							next = cur + 1
-							if next > cur Ok((cur, (next, False))) else Ok((cur, (cur, True)))
-						},
-				)
+			range_len_if_known : F32, F32, F32, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) Known(0) else Unknown
 
-			## Iterator over [F32] values from `start` up to and including `end`,
-			## incrementing by 1. Returns an empty iterator if `start > end`.
-			## This is what `start..=end` desugars to when the bounds are [F32] values.
-			##
-			## Once the values are large enough that adding 1 can no longer produce a
-			## bigger float, the iterator yields that value once and then ends.
-			range_inclusive : F32, F32 -> Iter(F32)
-			range_inclusive = |start, end|
-				Iter.custom(
-					(start, False),
-					Unknown,
-					|(cur, done)|
-						if done {
-							Err(NoMore)
-						} else if cur < end {
-							next = cur + 1
-							if next > cur Ok((cur, (next, False))) else Ok((cur, (cur, True)))
-						} else if cur == end {
-							Ok((cur, (cur, True)))
-						} else {
-							Err(NoMore)
-						},
-				)
+			range_iter : F32, F32, F32, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(F32)
+			range_iter = range_iter_float
+
+			range_exclusive_to : F32, F32 -> Range(F32)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
+
+			range_inclusive_to : F32, F32 -> Range(F32)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
 
 			## Parse an [F32] from a [Str]. Returns `Err(BadNumStr)` if the
 			## string is not a valid decimal number, or if the parsed value does
@@ -16981,49 +17228,18 @@ Builtin :: [].{
 			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| f64_from_str(str))
 
-			## Iterator over [F64] values from `start` up to but not including `end`,
-			## incrementing by 1. Returns an empty iterator if `start >= end`.
-			## This is what `start..<end` desugars to when the bounds are [F64] values.
-			##
-			## Once the values are large enough that adding 1 can no longer produce a
-			## bigger float, the iterator yields that value once and then ends.
-			range_exclusive : F64, F64 -> Iter(F64)
-			range_exclusive = |start, end|
-				Iter.custom(
-					(start, False),
-					Unknown,
-					|(cur, done)|
-						if done or cur >= end {
-							Err(NoMore)
-						} else {
-							next = cur + 1
-							if next > cur Ok((cur, (next, False))) else Ok((cur, (cur, True)))
-						},
-				)
+			range_len_if_known : F64, F64, F64, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) Known(0) else Unknown
 
-			## Iterator over [F64] values from `start` up to and including `end`,
-			## incrementing by 1. Returns an empty iterator if `start > end`.
-			## This is what `start..=end` desugars to when the bounds are [F64] values.
-			##
-			## Once the values are large enough that adding 1 can no longer produce a
-			## bigger float, the iterator yields that value once and then ends.
-			range_inclusive : F64, F64 -> Iter(F64)
-			range_inclusive = |start, end|
-				Iter.custom(
-					(start, False),
-					Unknown,
-					|(cur, done)|
-						if done {
-							Err(NoMore)
-						} else if cur < end {
-							next = cur + 1
-							if next > cur Ok((cur, (next, False))) else Ok((cur, (cur, True)))
-						} else if cur == end {
-							Ok((cur, (cur, True)))
-						} else {
-							Err(NoMore)
-						},
-				)
+			range_iter : F64, F64, F64, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(F64)
+			range_iter = range_iter_float
+
+			range_exclusive_to : F64, F64 -> Range(F64)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
+
+			range_inclusive_to : F64, F64 -> Range(F64)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
 
 			## Parse an [F64] from a [Str]. Returns `Err(BadNumStr)` if the
 			## string is not a valid decimal number, or if the parsed value does
@@ -21930,33 +22146,31 @@ bytes_to_str = |bytes|
 		Err(_) => Err(OutOfRange)
 	}
 
-unsigned_plus_try : item, item, item -> Try(item, [Overflow, ..])
-	where [item.is_gt : item, item -> Bool, item.minus : item, item -> item, item.plus : item, item -> item]
-unsigned_plus_try = |highest, a, b|
-	if a > highest - b {
+unsigned_plus_try : item, item -> Try(item, [Overflow, ..])
+	where [item.plus_overflows : item, item -> Bool, item.plus_wrap : item, item -> item]
+unsigned_plus_try = |a, b|
+	if a.plus_overflows(b) {
 		Err(Overflow)
 	} else {
-		Ok(a + b)
+		Ok(a.plus_wrap(b))
 	}
 
 unsigned_minus_try : item, item -> Try(item, [Overflow, ..])
-	where [item.is_lt : item, item -> Bool, item.minus : item, item -> item]
+	where [item.minus_overflows : item, item -> Bool, item.minus_wrap : item, item -> item]
 unsigned_minus_try = |a, b|
-	if a < b {
+	if a.minus_overflows(b) {
 		Err(Overflow)
 	} else {
-		Ok(a - b)
+		Ok(a.minus_wrap(b))
 	}
 
-unsigned_times_try : item, item, item, item -> Try(item, [Overflow, ..])
-	where [item.is_eq : item, item -> Bool, item.is_gt : item, item -> Bool, item.div_by : item, item -> item, item.times : item, item -> item]
-unsigned_times_try = |highest, zero, a, b|
-	if b == zero {
-		Ok(zero)
-	} else if a > highest / b {
+unsigned_times_try : item, item -> Try(item, [Overflow, ..])
+	where [item.times_overflows : item, item -> Bool, item.times_wrap : item, item -> item]
+unsigned_times_try = |a, b|
+	if a.times_overflows(b) {
 		Err(Overflow)
 	} else {
-		Ok(a * b)
+		Ok(a.times_wrap(b))
 	}
 
 unsigned_div_try : item, item, item -> Try(item, [DivByZero, ..])
@@ -21968,45 +22182,34 @@ unsigned_div_try = |zero, a, b|
 		Ok(a / b)
 	}
 
-signed_plus_try : item, item, item, item, item -> Try(item, [Overflow, ..])
-	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
-signed_plus_try = |lowest, highest, zero, a, b|
-	if b > zero {
-		if a > highest - b {
-			Err(Overflow)
-		} else {
-			Ok(a + b)
-		}
-	} else if b < zero {
-		if a < lowest - b {
-			Err(Overflow)
-		} else {
-			Ok(a + b)
-		}
+signed_plus_try : item, item -> Try(item, [Overflow, ..])
+	where [item.plus_overflows : item, item -> Bool, item.plus_wrap : item, item -> item]
+signed_plus_try = |a, b|
+	if a.plus_overflows(b) {
+		Err(Overflow)
 	} else {
-		Ok(a)
+		Ok(a.plus_wrap(b))
 	}
 
-signed_minus_try : item, item, item, item, item -> Try(item, [Overflow, ..])
-	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
-signed_minus_try = |lowest, highest, zero, a, b|
-	if b > zero {
-		if a < lowest + b {
-			Err(Overflow)
-		} else {
-			Ok(a - b)
-		}
-	} else if b < zero {
-		if a > highest + b {
-			Err(Overflow)
-		} else {
-			Ok(a - b)
-		}
+signed_minus_try : item, item -> Try(item, [Overflow, ..])
+	where [item.minus_overflows : item, item -> Bool, item.minus_wrap : item, item -> item]
+signed_minus_try = |a, b|
+	if a.minus_overflows(b) {
+		Err(Overflow)
 	} else {
-		Ok(a)
+		Ok(a.minus_wrap(b))
 	}
 
-signed_times_try : item, item, item, item, item, item -> Try(item, [Overflow, ..])
+signed_times_try : item, item -> Try(item, [Overflow, ..])
+	where [item.times_overflows : item, item -> Bool, item.times_wrap : item, item -> item]
+signed_times_try = |a, b|
+	if a.times_overflows(b) {
+		Err(Overflow)
+	} else {
+		Ok(a.times_wrap(b))
+	}
+
+signed_times_try_rescaled : item, item, item, item, item, item -> Try(item, [Overflow, ..])
 	where [
 		item.is_gt : item, item -> Bool,
 		item.is_lt : item, item -> Bool,
@@ -22015,7 +22218,7 @@ signed_times_try : item, item, item, item, item, item -> Try(item, [Overflow, ..
 		item.times : item, item -> item,
 		item.div_trunc_by : item, item -> item,
 	]
-signed_times_try = |lowest, highest, zero, neg_one, a, b|
+signed_times_try_rescaled = |lowest, highest, zero, neg_one, a, b|
 	if a == zero {
 		Ok(zero)
 	} else if b == zero {
@@ -22078,6 +22281,8 @@ unsigned_pow_try : item, item, item, item, item, item -> Try(item, [Overflow, ..
 		item.div_by : item, item -> item,
 		item.rem_by : item, item -> item,
 		item.times : item, item -> item,
+		item.times_overflows : item, item -> Bool,
+		item.times_wrap : item, item -> item,
 	]
 unsigned_pow_try = |highest, zero, one, two, base, exponent|
 	unsigned_pow_try_step(highest, zero, one, two, one, base, exponent)
@@ -22089,6 +22294,8 @@ unsigned_pow_try_step : item, item, item, item, item, item, item -> Try(item, [O
 		item.div_by : item, item -> item,
 		item.rem_by : item, item -> item,
 		item.times : item, item -> item,
+		item.times_overflows : item, item -> Bool,
+		item.times_wrap : item, item -> item,
 	]
 unsigned_pow_try_step = |highest, zero, one, two, acc, base, exponent|
 	if exponent == zero {
@@ -22097,7 +22304,7 @@ unsigned_pow_try_step = |highest, zero, one, two, acc, base, exponent|
 		next_acc = if exponent.rem_by(two) == zero {
 			Ok(acc)
 		} else {
-			unsigned_times_try(highest, zero, acc, base)
+			unsigned_times_try(acc, base)
 		}
 
 		match next_acc {
@@ -22107,7 +22314,7 @@ unsigned_pow_try_step = |highest, zero, one, two, acc, base, exponent|
 				if next_exponent == zero {
 					Ok(updated_acc)
 				} else {
-					match unsigned_times_try(highest, zero, base, base) {
+					match unsigned_times_try(base, base) {
 						Err(Overflow) => Err(Overflow)
 						Ok(updated_base) => unsigned_pow_try_step(highest, zero, one, two, updated_acc, updated_base, next_exponent)
 					}
@@ -22126,6 +22333,8 @@ signed_pow_try : item, item, item, item, item, item, item, item -> Try(item, [Ov
 		item.rem_by : item, item -> item,
 		item.minus : item, item -> item,
 		item.times : item, item -> item,
+		item.times_overflows : item, item -> Bool,
+		item.times_wrap : item, item -> item,
 	]
 signed_pow_try = |lowest, highest, zero, one, two, neg_one, base, exponent|
 	if exponent < zero {
@@ -22154,6 +22363,8 @@ signed_pow_try_step : item, item, item, item, item, item, item, item, item -> Tr
 		item.rem_by : item, item -> item,
 		item.minus : item, item -> item,
 		item.times : item, item -> item,
+		item.times_overflows : item, item -> Bool,
+		item.times_wrap : item, item -> item,
 	]
 signed_pow_try_step = |lowest, highest, zero, one, two, neg_one, acc, base, exponent|
 	if exponent == zero {
@@ -22162,7 +22373,7 @@ signed_pow_try_step = |lowest, highest, zero, one, two, neg_one, acc, base, expo
 		next_acc = if exponent.rem_by(two) == zero {
 			Ok(acc)
 		} else {
-			match signed_times_try(lowest, highest, zero, neg_one, acc, base) {
+			match signed_times_try(acc, base) {
 				Ok(result) => Ok(result)
 				Err(Overflow) => Err(Overflow)
 			}
@@ -22176,7 +22387,7 @@ signed_pow_try_step = |lowest, highest, zero, one, two, neg_one, acc, base, expo
 				if next_exponent == zero {
 					Ok(updated_acc)
 				} else {
-					match signed_times_try(lowest, highest, zero, neg_one, base, base) {
+					match signed_times_try(base, base) {
 						Err(Overflow) => Err(Overflow)
 						Ok(updated_base) => signed_pow_try_step(lowest, highest, zero, one, two, neg_one, updated_acc, updated_base, next_exponent)
 					}
@@ -22203,17 +22414,17 @@ unsigned_div_ceil_try = |zero, one, a, b|
 			}
 		}
 
-signed_div_ceil_try : item, item, item, item, item, item, item -> Try(item, [DivByZero, Overflow, ..])
+signed_div_ceil_try : item, item, item, item, item, item -> Try(item, [DivByZero, Overflow, ..])
 	where [
 		item.is_eq : item, item -> Bool,
 		item.is_gt : item, item -> Bool,
 		item.is_lt : item, item -> Bool,
-		item.plus : item, item -> item,
-		item.minus : item, item -> item,
+		item.plus_overflows : item, item -> Bool,
+		item.plus_wrap : item, item -> item,
 		item.div_by : item, item -> item,
 		item.rem_by : item, item -> item,
 	]
-signed_div_ceil_try = |lowest, highest, zero, one, neg_one, a, b|
+signed_div_ceil_try = |lowest, zero, one, neg_one, a, b|
 	match signed_div_try(lowest, zero, neg_one, a, b) {
 		Err(DivByZero) => Err(DivByZero)
 		Err(Overflow) => Err(Overflow)
@@ -22222,7 +22433,7 @@ signed_div_ceil_try = |lowest, highest, zero, one, neg_one, a, b|
 				Ok(quotient)
 			} else if a > zero {
 				if b > zero {
-					match signed_plus_try(lowest, highest, zero, quotient, one) {
+					match signed_plus_try(quotient, one) {
 						Ok(result) => Ok(result)
 						Err(Overflow) => Err(Overflow)
 					}
@@ -22231,7 +22442,7 @@ signed_div_ceil_try = |lowest, highest, zero, one, neg_one, a, b|
 				}
 			} else if a < zero {
 				if b < zero {
-					match signed_plus_try(lowest, highest, zero, quotient, one) {
+					match signed_plus_try(quotient, one) {
 						Ok(result) => Ok(result)
 						Err(Overflow) => Err(Overflow)
 					}
@@ -22258,36 +22469,54 @@ list_prepend_if_ok = |list, maybe_item|
 	}
 
 unsigned_minus_saturated : item, item, item -> item
-	where [item.is_lt : item, item -> Bool, item.minus : item, item -> item]
+	where [item.minus_overflows : item, item -> Bool, item.minus_wrap : item, item -> item]
 unsigned_minus_saturated = |zero, a, b|
-	if a < b {
+	if a.minus_overflows(b) {
 		zero
 	} else {
-		a - b
+		a.minus_wrap(b)
 	}
 
 signed_minus_saturated : item, item, item, item, item -> item
-	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
+	where [item.is_gt : item, item -> Bool, item.minus_overflows : item, item -> Bool, item.minus_wrap : item, item -> item]
 signed_minus_saturated = |lowest, highest, zero, a, b|
-	match signed_minus_try(lowest, highest, zero, a, b) {
-		Ok(result) => result
-		Err(Overflow) =>
-			if b > zero {
-				lowest
-			} else {
-				highest
-			}
+	if a.minus_overflows(b) {
+		if b > zero {
+			lowest
+		} else {
+			highest
 		}
-
-unsigned_times_saturated : item, item, item, item -> item
-	where [item.is_eq : item, item -> Bool, item.is_gt : item, item -> Bool, item.div_by : item, item -> item, item.times : item, item -> item]
-unsigned_times_saturated = |highest, zero, a, b|
-	match unsigned_times_try(highest, zero, a, b) {
-		Ok(result) => result
-		Err(Overflow) => highest
+	} else {
+		a.minus_wrap(b)
 	}
 
-signed_times_saturated : item, item, item, item, item, item -> item
+unsigned_times_saturated : item, item, item -> item
+	where [item.times_overflows : item, item -> Bool, item.times_wrap : item, item -> item]
+unsigned_times_saturated = |highest, a, b|
+	if a.times_overflows(b) {
+		highest
+	} else {
+		a.times_wrap(b)
+	}
+
+signed_times_saturated : item, item, item, item, item -> item
+	where [
+		item.is_lt : item, item -> Bool,
+		item.times_overflows : item, item -> Bool,
+		item.times_wrap : item, item -> item,
+	]
+signed_times_saturated = |lowest, highest, zero, a, b|
+	if a.times_overflows(b) {
+		if (a < zero) == (b < zero) {
+			highest
+		} else {
+			lowest
+		}
+	} else {
+		a.times_wrap(b)
+	}
+
+signed_times_saturated_rescaled : item, item, item, item, item, item -> item
 	where [
 		item.is_gt : item, item -> Bool,
 		item.is_lt : item, item -> Bool,
@@ -22296,8 +22525,8 @@ signed_times_saturated : item, item, item, item, item, item -> item
 		item.times : item, item -> item,
 		item.div_trunc_by : item, item -> item,
 	]
-signed_times_saturated = |lowest, highest, zero, neg_one, a, b|
-	match signed_times_try(lowest, highest, zero, neg_one, a, b) {
+signed_times_saturated_rescaled = |lowest, highest, zero, neg_one, a, b|
+	match signed_times_try_rescaled(lowest, highest, zero, neg_one, a, b) {
 		Ok(result) => result
 		Err(Overflow) =>
 			if a < zero {
@@ -22343,6 +22572,257 @@ signed_is_multiple_of = |zero, neg_one, value, divisor|
 
 numeric_compare : item, item -> [LT, EQ, GT]
 
+range_with_step : num, num, num, [Exclusive, Inclusive], [To, From] -> Num.Range(num)
+	where [num.range_len_if_known : num, num, num, [Exclusive, Inclusive] -> [Known(U64), Unknown]]
+range_with_step = |lower, upper, step, upper_bound, direction|
+	Num.Range.custom({
+		lower,
+		upper,
+		step,
+		upper_bound,
+		direction,
+		len_if_known: lower.range_len_if_known(upper, step, upper_bound),
+	})
+
+range_len_u64 : U64, U64, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+range_len_u64 = |distance, step, upper_bound|
+	if step == 0 {
+		Known(0)
+	} else {
+		match upper_bound {
+			Exclusive => Known((distance - 1) / step + 1)
+			Inclusive => match (distance / step).plus_try(1) {
+				Ok(len) => Known(len)
+				Err(Overflow) => Unknown
+			}
+		}
+	}
+
+range_len_u128 : U128, U128, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+range_len_u128 = |distance, step, upper_bound|
+	if step == 0 {
+		Known(0)
+	} else {
+		base = match upper_bound {
+			Exclusive => (distance - 1) / step
+			Inclusive => distance / step
+		}
+		match base.plus_try(1) {
+			Err(Overflow) => Unknown
+			Ok(len_u128) => match len_u128.to_u64_try() {
+				Ok(len) => Known(len)
+				Err(OutOfRange) => Unknown
+			}
+		}
+	}
+
+range_len_dec : Dec, Dec, Dec, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+range_len_dec = |lower, upper, step, upper_bound| {
+	has_members = step > 0 and match upper_bound {
+		Exclusive => lower < upper
+		Inclusive => lower <= upper
+	}
+	if !has_members {
+		Known(0)
+	} else {
+		match upper.minus_try(lower) {
+			Err(Overflow) => Unknown
+			Ok(distance) => {
+				count_try = match upper_bound {
+					Exclusive => (distance / step).ceiling_to_u64_try()
+					Inclusive => match (distance / step).floor_to_u64_try() {
+						Err(OutOfRange) => Err(OutOfRange)
+						Ok(base) => base.plus_try(1)
+					}
+				}
+				match count_try {
+					Ok(len) => Known(len)
+					Err(_) => Unknown
+				}
+			}
+		}
+	}
+}
+
+# Return `value mod step` normalized into `[0, step)`. The explicit checked
+# arithmetic is shared by signed integers and Dec; unsigned remainders simply
+# take the nonnegative branch.
+range_nonnegative_rem : num, num -> Try(num, [NoMore])
+	where [
+		num.is_lt : num, num -> Bool,
+		num.plus_try : num, num -> Try(num, [Overflow]),
+		num.rem_by : num, num -> num,
+		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+	]
+range_nonnegative_rem = |value, step| {
+	raw = value.rem_by(step)
+	if raw < 0 {
+		match raw.plus_try(step) {
+			Ok(normalized) => Ok(normalized)
+			Err(Overflow) => Err(NoMore)
+		}
+	} else {
+		Ok(raw)
+	}
+}
+
+# Find the greatest member of the lower-anchored progression which satisfies
+# the upper bound. Computing the distance modulo `step` from endpoint
+# remainders avoids ever materializing `upper - lower`, which can overflow for
+# a full-width signed range even though the aligned final member is valid.
+range_standard_last : num, num, num, [Exclusive, Inclusive] -> Try(num, [NoMore])
+	where [
+		num.is_eq : num, num -> Bool,
+		num.is_lt : num, num -> Bool,
+		num.is_lte : num, num -> Bool,
+		num.is_gt : num, num -> Bool,
+		num.is_gte : num, num -> Bool,
+		num.minus : num, num -> num,
+		num.minus_try : num, num -> Try(num, [Overflow]),
+		num.plus_try : num, num -> Try(num, [Overflow]),
+		num.rem_by : num, num -> num,
+		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+	]
+range_standard_last = |lower, upper, step, upper_bound| {
+	has_members = step > 0 and match upper_bound {
+		Exclusive => lower < upper
+		Inclusive => lower <= upper
+	}
+
+	if !has_members {
+		Err(NoMore)
+	} else {
+		lower_rem = range_nonnegative_rem(lower, step)?
+		upper_rem = range_nonnegative_rem(upper, step)?
+		distance_rem = if upper_rem >= lower_rem {
+			upper_rem - lower_rem
+		} else {
+			step - (lower_rem - upper_rem)
+		}
+
+		amount_below_upper = match upper_bound {
+			Inclusive => distance_rem
+			Exclusive => if distance_rem == 0 step else distance_rem
+		}
+
+		match upper.minus_try(amount_below_upper) {
+			Ok(last) => if last >= lower Ok(last) else Err(NoMore)
+			Err(Overflow) => Err(NoMore)
+		}
+	}
+}
+
+# Shared range iterator for integers and Dec. Concrete numeric `range_iter`
+# methods call this helper after static dispatch has selected their arithmetic.
+# Both directions use one tagged seed shape, so the public Range source owns a
+# single flat iterator representation even when `direction` is only known at
+# runtime.
+range_iter_standard : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(num)
+	where [
+		num.is_eq : num, num -> Bool,
+		num.is_lt : num, num -> Bool,
+		num.is_lte : num, num -> Bool,
+		num.is_gt : num, num -> Bool,
+		num.is_gte : num, num -> Bool,
+		num.minus : num, num -> num,
+		num.minus_try : num, num -> Try(num, [Overflow]),
+		num.plus_try : num, num -> Try(num, [Overflow]),
+		num.rem_by : num, num -> num,
+		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+	]
+range_iter_standard = |lower, upper, step, upper_bound, direction, len_if_known| {
+	initial = match direction {
+		To => if step > 0 {
+			RangeAt(lower)
+		} else {
+			RangeDone
+		}
+		From => match range_standard_last(lower, upper, step, upper_bound) {
+			Ok(last) => RangeAt(last)
+			Err(NoMore) => RangeDone
+		}
+	}
+
+	Iter.custom(
+		initial,
+		len_if_known,
+		|state|
+			match state {
+				RangeDone => Err(NoMore)
+				RangeAt(current) => match direction {
+					To => {
+						within_upper = match upper_bound {
+							Exclusive => current < upper
+							Inclusive => current <= upper
+						}
+						if step > 0 and within_upper {
+							next_state = match current.plus_try(step) {
+								Ok(next) => if next > current RangeAt(next) else RangeDone
+								Err(Overflow) => RangeDone
+							}
+							Ok((current, next_state))
+						} else {
+							Err(NoMore)
+						}
+					}
+					From => if step > 0 and current >= lower {
+						next_state = if current == lower {
+							RangeDone
+						} else {
+							match current.minus_try(step) {
+								Ok(next) => if next < current and next >= lower RangeAt(next) else RangeDone
+								Err(Overflow) => RangeDone
+							}
+						}
+						Ok((current, next_state))
+					} else {
+						Err(NoMore)
+					}
+				}
+			},
+	)
+}
+
+# IEEE floats deliberately support only `_to` constructors. This helper keeps
+# their existing repeated-addition/stall semantics; a manually-constructed
+# `From` float range is empty because floats do not claim exact reversibility.
+range_iter_float : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(num)
+	where [
+		num.is_lt : num, num -> Bool,
+		num.is_lte : num, num -> Bool,
+		num.is_gt : num, num -> Bool,
+		num.plus : num, num -> num,
+		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+	]
+range_iter_float = |current, upper, step, upper_bound, direction, len_if_known| {
+	initial = match direction {
+		From => RangeDone
+		To => if step > 0 RangeAt(current) else RangeDone
+	}
+	Iter.custom(
+		initial,
+		len_if_known,
+		|state|
+			match state {
+				RangeDone => Err(NoMore)
+				RangeAt(item) => {
+					within_upper = match upper_bound {
+						Exclusive => item < upper
+						Inclusive => item <= upper
+					}
+
+					if step > 0 and within_upper {
+						next = item + step
+						next_state = if next > item RangeAt(next) else RangeDone
+						Ok((item, next_state))
+					} else {
+						Err(NoMore)
+					}
+				}
+			},
+	)
+}
+
 iter_from_step : [Known(U64), Unknown], (() -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]) -> Iter(item)
 iter_from_step = |len_if_known, step| {
 	len_if_known,
@@ -22354,44 +22834,6 @@ range_done = || iter_from_step(
 	Known(0),
 	|| Done,
 )
-
-# Shared state machine behind the numeric types' `range_exclusive` methods.
-# Each caller supplies `len_if_known` computed from its own representation;
-# when it is `Known`, it must be the exact yield count
-# (`Iter.take_last`/`drop_last` rely on that).
-range_exclusive_with_len : num, num, [Known(U64), Unknown] -> Iter(num)
-	where [
-		num.is_lt : num, num -> Bool,
-		num.plus_try : num, num -> Try(num, [Overflow]),
-		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
-	]
-range_exclusive_with_len = |start, end, len_if_known|
-	Iter.custom(
-		start,
-		len_if_known,
-		|current|
-			if current < end {
-				match current.plus_try(1) {
-					Ok(next) => Ok((current, next))
-					Err(Overflow) => Ok((current, end))
-				}
-			} else {
-				Err(NoMore)
-			},
-	)
-
-# Shared step loop behind the numeric types' `range_inclusive` methods; same
-# `len_if_known` contract as `range_exclusive_with_len`. The construction is
-# `Iter.inclusive_range`, whose flat self-recursive shape keeps a range's state
-# unboxed when an adapter wraps it.
-range_inclusive_with_len : num, num, [Known(U64), Unknown] -> Iter(num)
-	where [
-		num.is_lte : num, num -> Bool,
-		num.plus_try : num, num -> Try(num, [Overflow]),
-		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
-	]
-range_inclusive_with_len = |start, end, len_if_known|
-	Iter.inclusive_range(start, end, len_if_known)
 
 ## The result of scanning a JSON string body; all fields are zero-copy slices.
 ## `after` is the text following the closing quote. The body is:
@@ -22762,8 +23204,6 @@ dec_to_i16_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I16 }
 dec_to_i32_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I32 }
 
 dec_to_i64_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I64 }
-
-dec_to_i128_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I128 }
 
 dec_to_u8_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : U8 }
 

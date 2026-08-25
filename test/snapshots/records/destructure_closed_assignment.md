@@ -14,30 +14,31 @@ compute = {
 # EXPECTED
 TYPE MISMATCH - destructure_closed_assignment.md:3:16:3:36
 # PROBLEMS
+── ✗ type mismatch ─────────────────────── destructure_closed_assignment.md:3:16
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  { x, y } = { x: 1, y: 2, z: 3 }                                           │
- │             ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
- └───────────────────────────────────── destructure_closed_assignment.md:3:16 ┘
+This expression is used in an unexpected way.
 
-    It has the type:
+{ x, y } = { x: 1, y: 2, z: 3 }
+           ^^^^^^^^^^^^^^^^^^^^
 
-        { x: a, y: b, z: c }
-          where [
-            a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-            b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-            c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
-          ]
+It has the type:
 
-    But you are trying to use it as:
+    { x: a, y: b, z: c }
+      where [
+        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+        c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+      ]
 
-        { x: _field, y: a }
-          where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
-    Hint: This pattern doesn't bind the `z` field. Match it explicitly with `z:
-    _`, or add `..` to match all the remaining fields.
+But you are trying to use it as:
+
+    { x: a, y: b }
+      where [
+        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+      ]
+Hint: This pattern doesn't bind the z field. Match it explicitly with z: _, or
+add .. to match all the remaining fields.
 
 # TOKENS
 ~~~zig
@@ -105,7 +106,7 @@ compute = {
 							(e-num (value "2")))
 						(field (name "z")
 							(e-num (value "3"))))))
-			(e-dispatch-call (method "plus") (constraint-fn-var 240)
+			(e-dispatch-call (method "plus") (constraint-fn-var 257)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))

@@ -13,15 +13,12 @@ encode_once = |value| value.encode("")
 # EXPECTED
 TOO FEW ARGS - where_alias_arity_mismatch.md:3:31:3:42
 # PROBLEMS
+── ✗ too few args ─────────────────────────── where_alias_arity_mismatch.md:3:31
 
-┌──────────────┐
-│ TOO FEW ARGS ├─ The type Encodable expects 1 argument, but got 0 instead. ──┐
-└┬─────────────┘                                                              │
- │                                                                            │
- │  encode_once : a -> Str where [a.Encodable]                                │
- │                                ‾‾‾‾‾‾‾‾‾‾‾                                 │
- └──────────────────────────────────────── where_alias_arity_mismatch.md:3:31 ┘
+The type Encodable expects 1 argument, but got 0 instead.
 
+encode_once : a -> Str where [a.Encodable]
+                              ^^^^^^^^^^^
 
 # TOKENS
 ~~~zig
@@ -76,10 +73,7 @@ encode_once = |value| value.encode("")
 (can-ir
 	(d-let
 		(p-assign (ident "encode_once"))
-		(e-lambda
-			(args
-				(p-assign (ident "value")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))

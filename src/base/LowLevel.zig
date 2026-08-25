@@ -57,6 +57,7 @@ pub const LowLevel = enum(u16) {
 
     // List operations
     list_len,
+    list_capacity,
     list_get_unsafe,
     list_append_unsafe,
     list_concat,
@@ -138,14 +139,24 @@ pub const LowLevel = enum(u16) {
     num_abs,
     num_abs_diff,
     num_plus,
-    num_plus_wrap,
-    num_plus_checked,
     num_minus,
-    num_minus_wrap,
-    num_minus_checked,
     num_times,
-    num_times_wrap,
-    num_times_checked,
+    num_int_add_wrap,
+    num_int_add_crash_on_overflow,
+    num_int_add_overflows,
+    num_int_add_proven_cannot_overflow,
+    num_int_sub_wrap,
+    num_int_sub_crash_on_overflow,
+    num_int_sub_overflows,
+    num_int_sub_proven_cannot_overflow,
+    num_int_mul_wrap,
+    num_int_mul_crash_on_overflow,
+    num_int_mul_overflows,
+    num_int_mul_proven_cannot_overflow,
+    num_float_add,
+    num_float_sub,
+    num_float_mul,
+    dec_mul,
     num_div_by,
     num_div_by_checked,
     num_div_trunc_by,
@@ -529,7 +540,6 @@ pub const LowLevel = enum(u16) {
     dec_to_i64_trunc,
     dec_to_i64_try_unsafe,
     dec_to_i128_trunc,
-    dec_to_i128_try_unsafe,
     dec_to_u8_trunc,
     dec_to_u8_try_unsafe,
     dec_to_u16_trunc,
@@ -547,6 +557,8 @@ pub const LowLevel = enum(u16) {
     // Box operations
     box_box,
     box_unbox,
+    /// ARC-only borrowing variant of box_unbox.
+    box_unbox_borrowed,
     /// Box(T) -> Box(T): consume a box and return a unique box containing the
     /// same payload. Reuses the allocation when uniqueness is known or the
     /// runtime check succeeds; otherwise copies the payload into a fresh box,
@@ -962,7 +974,13 @@ pub const LowLevel = enum(u16) {
 
             .box_box => RcEffect.allocatesRetainingArgs(argMask(&.{0})),
 
-            .box_unbox => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
+            .box_unbox => .{
+                .may_retain_or_release = true,
+                .consume_args = argMask(&.{0}),
+                .result_shares_args = argMask(&.{0}),
+            },
+
+            .box_unbox_borrowed => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
 
             .box_prepare_update => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
@@ -993,6 +1011,7 @@ pub const LowLevel = enum(u16) {
             .str_count_utf8_bytes,
             .str_get_utf8_byte_unsafe,
             .list_len,
+            .list_capacity,
             .list_slack_unique,
             .list_owned_unique,
             .bool_not,
@@ -1025,14 +1044,24 @@ pub const LowLevel = enum(u16) {
             .num_abs_checked,
             .num_abs_diff,
             .num_plus,
-            .num_plus_wrap,
-            .num_plus_checked,
             .num_minus,
-            .num_minus_wrap,
-            .num_minus_checked,
             .num_times,
-            .num_times_wrap,
-            .num_times_checked,
+            .num_int_add_wrap,
+            .num_int_add_crash_on_overflow,
+            .num_int_add_overflows,
+            .num_int_add_proven_cannot_overflow,
+            .num_int_sub_wrap,
+            .num_int_sub_crash_on_overflow,
+            .num_int_sub_overflows,
+            .num_int_sub_proven_cannot_overflow,
+            .num_int_mul_wrap,
+            .num_int_mul_crash_on_overflow,
+            .num_int_mul_overflows,
+            .num_int_mul_proven_cannot_overflow,
+            .num_float_add,
+            .num_float_sub,
+            .num_float_mul,
+            .dec_mul,
             .num_div_by,
             .num_div_by_checked,
             .num_div_trunc_by,
@@ -1368,7 +1397,6 @@ pub const LowLevel = enum(u16) {
             .dec_to_i64_trunc,
             .dec_to_i64_try_unsafe,
             .dec_to_i128_trunc,
-            .dec_to_i128_try_unsafe,
             .dec_to_u8_trunc,
             .dec_to_u8_try_unsafe,
             .dec_to_u16_trunc,
@@ -1392,13 +1420,20 @@ pub const LowLevel = enum(u16) {
     /// Neutral LIR keeps the source operation; ARC uses this explicit mapping
     /// while solving and materializes exactly one of the two operations.
     pub fn arcBorrowedResultVariant(self: LowLevel) ?LowLevel {
-        return if (self == .list_sublist) .list_sublist_borrowed else null;
+        if (self == .list_sublist) return .list_sublist_borrowed;
+        if (self == .box_unbox) return .box_unbox_borrowed;
+        return null;
     }
 
     /// Ownership signature ARC solves for this neutral low-level statement.
     /// Operations without an ARC-only borrowed variant retain their declared
     /// statement effect, including synthetic effects used by focused tests.
     pub fn arcInferenceRcEffect(self: LowLevel, declared: RcEffect) RcEffect {
+        // Box.unbox must establish an independent payload ownership place in
+        // the solved graph. Emission may still select the borrowing variant
+        // when the box lender survives, but an owned variant must not leave
+        // the payload's unit keyed to the consumed box allocation.
+        if (self == .box_unbox) return declared;
         const borrowed = self.arcBorrowedResultVariant() orelse return declared;
         return borrowed.rcEffect();
     }

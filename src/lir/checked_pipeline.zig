@@ -22,6 +22,7 @@ const TagReachability = @import("tag_reachability.zig");
 const ReachableProcs = @import("reachable_procs.zig");
 const DebugPrint = @import("debug_print.zig");
 const LIR = core.LIR;
+const CheckedArithmetic = core.CheckedArithmetic;
 const LirImage = @import("lir_image.zig");
 const LirProgram = core.Program;
 const postcheck = @import("postcheck");
@@ -29,10 +30,19 @@ const postcheck = @import("postcheck");
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
 
-/// Resource failure while lowering checked modules to LIR.
-pub const LowerResourceError = Allocator.Error;
+/// Resource failure while lowering checked modules to LIR, plus the one
+/// checked input this entrance rejects outright: see
+/// `requireHostedProceduresBound`.
+pub const LowerResourceError = Allocator.Error || HostedBindingError;
+
+/// A hosted declaration the platform header's hosted section never named. The
+/// compile that produced it already carries checking's report of the missing
+/// entry, so callers stop rather than adding a message of their own.
+pub const HostedBindingError = error{HostedFunctionNotBound};
 /// An explicit checked constant requested for target static-data materialization.
 pub const StaticDataRequest = postcheck.Common.StaticDataRequest;
+
+pub const SpecializationStrategy = base.SpecializationStrategy;
 
 /// Root checked module plus the checked imports visible to post-check lowering.
 pub const CheckedModuleSet = struct {
@@ -59,9 +69,12 @@ pub const RootRequestSet = struct {
 /// Target settings and checked module state for the checked-to-LIR pipeline.
 pub const TargetConfig = struct {
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
+    specialization_strategy: SpecializationStrategy = .lss,
     checked_module_state: CheckedModuleState = .complete,
     inline_mode: InlineMode = .none,
     inline_expects: InlineExpectMode = .run,
+    /// Whether ARC may consume a dead Box lender while unboxing.
+    consume_dead_boxes: bool = false,
     /// Allow `List.map` to reuse a unique input list's allocation when the
     /// input and output element layouts are interchangeable. Optimized builds
     /// enable this; dev builds and compile-time evaluation leave it off so
@@ -467,6 +480,7 @@ pub fn lowerCheckedModulesToLir(
     target: TargetConfig,
 ) LowerResourceError!LoweredProgram {
     try verifyCheckedBoundary(modules, target);
+    try requireHostedProceduresBound(modules, target);
 
     const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_provided_data_exports);
     defer allocator.free(layout_requests);
@@ -480,6 +494,18 @@ pub fn lowerCheckedModulesToLir(
         .checking_finalization => try allocator.dupe(postcheck.Common.StaticDataRequest, roots.static_data_requests),
     };
     defer allocator.free(static_data_requests);
+
+    switch (target.specialization_strategy) {
+        .lss => {},
+        .boxy => return lowerBoxyCheckedModulesToLir(
+            allocator,
+            modules,
+            roots,
+            target,
+            layout_requests,
+            static_data_requests,
+        ),
+    }
 
     const monotype_started_ns = if (target.timing) |timing| timing.start() else 0;
     var monotype_timing: ?postcheck.Monotype.Lower.Timing = if (target.timing) |timing|
@@ -578,6 +604,16 @@ pub fn lowerCheckedModulesToLir(
     if (target.timing) |timing| timing.finish(lir_gen_started_ns, .lir_gen);
     errdefer lowered.deinit();
 
+    return finishLoweredOutput(allocator, roots, target, &lowered);
+}
+
+fn finishLoweredOutput(
+    allocator: Allocator,
+    roots: RootRequestSet,
+    target: TargetConfig,
+    lowered: anytype,
+) LowerResourceError!LoweredProgram {
+    verifyArithmeticBoundary(&lowered.lir_result.store, false);
     const lir_passes_started_ns = if (target.timing) |timing| timing.start() else 0;
 
     // TRMC/TCE must rewrite recursive procs before ARC insertion: it deletes
@@ -588,6 +624,7 @@ pub fn lowerCheckedModulesToLir(
     if (target.promote_loop_appends) {
         try LoopAppendPromote.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     }
+    verifyArithmeticBoundary(&lowered.lir_result.store, true);
     if (target.prove_ranges) {
         try RangeProve.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     }
@@ -604,6 +641,7 @@ pub fn lowerCheckedModulesToLir(
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = lowered.lir_result.root_procs.items,
         .specialize = target.inline_mode != .none,
+        .consume_dead_boxes = target.consume_dead_boxes,
     });
     if (target.timing) |timing| timing.finish(arc_started_ns, .arc);
 
@@ -632,12 +670,135 @@ pub fn lowerCheckedModulesToLir(
     };
 }
 
+fn lowerBoxyCheckedModulesToLir(
+    allocator: Allocator,
+    modules: CheckedModuleSet,
+    roots: RootRequestSet,
+    target: TargetConfig,
+    layout_requests: []const checked.CheckedTypeId,
+    static_data_requests: []const postcheck.Common.StaticDataRequest,
+) LowerResourceError!LoweredProgram {
+    var boxy_layout_requests = std.ArrayList(checked.CheckedTypeId).empty;
+    defer boxy_layout_requests.deinit(allocator);
+    try boxy_layout_requests.appendSlice(allocator, layout_requests);
+
+    var plan = try postcheck.Boxy.Plan.analyzeProgram(allocator, .{
+        .root_module = modules.root,
+        .imports = modules.imports,
+        .roots = roots.requests,
+        .layout_requests = boxy_layout_requests.items,
+        .static_data_requests = static_data_requests,
+    }, .{});
+    defer plan.deinit();
+
+    var lowered = try postcheck.Boxy.Lower.run(
+        allocator,
+        checkedModules(modules),
+        rootRequests(roots, layout_requests, static_data_requests),
+        &plan,
+        .{
+            .target_usize = target.target_usize,
+            .list_in_place_map = target.list_in_place_map,
+            .proc_debug_names = target.proc_debug_names,
+        },
+    );
+    errdefer lowered.deinit();
+
+    return finishLoweredOutput(allocator, roots, target, &lowered);
+}
+
+fn verifyArithmeticBoundary(store: *const core.LirStore, before_prover: bool) void {
+    if (builtin.mode != .Debug) return;
+    for (store.getCFStmts()) |stmt| {
+        if (stmt != .assign_low_level) continue;
+        const op = stmt.assign_low_level.op;
+        if (CheckedArithmetic.isSourcePolicyOp(op)) {
+            checkedPipelineInvariant("source-policy arithmetic operation reached LIR");
+        }
+        if (before_prover) {
+            if (CheckedArithmetic.classify(op)) |entry| {
+                if (entry.mode == .proven_cannot_overflow) {
+                    checkedPipelineInvariant("proven integer arithmetic existed before range proving");
+                }
+            }
+        }
+    }
+}
+
 fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Allocator.Error!void {
     if (builtin.mode != .Debug) return;
     switch (target.checked_module_state) {
         .complete => try modules.root.module.verifyComplete(),
         .checking_finalization => modules.root.module.verifyReadyForCompileTimeLowering(),
     }
+}
+
+/// Reject a checked program whose platform header left one of its hosted
+/// declarations out of the hosted section.
+///
+/// The section is the complete list of functions the host supplies, and it is
+/// what gives each one its external symbol and its host dispatch slot. A
+/// declaration the section never names has neither, so a call to it has no
+/// symbol to reach and lowering has nothing to emit. Checking reports that
+/// declaration against the section it is missing from, so the compile has
+/// already failed by the time lowering starts; this stops it there instead of
+/// lowering a call that names no host function.
+///
+/// A platform module publishes its bindings when its checked artifact is
+/// published, so a module still being checked has none to bind against and
+/// this reads nothing into their absence.
+fn requireHostedProceduresBound(
+    modules: CheckedModuleSet,
+    target: TargetConfig,
+) HostedBindingError!void {
+    switch (target.checked_module_state) {
+        .complete => {},
+        .checking_finalization => return,
+    }
+
+    const root_view = checked.importedView(modules.root.module);
+    const bindings = platformHostedBindings(root_view, modules) orelse return;
+
+    if (!hostedProceduresBound(root_view, bindings)) return error.HostedFunctionNotBound;
+    for (modules.imports) |imported| {
+        if (!hostedProceduresBound(imported, bindings)) return error.HostedFunctionNotBound;
+    }
+    for (modules.root.relation_modules) |relation| {
+        if (!hostedProceduresBound(relation, bindings)) return error.HostedFunctionNotBound;
+    }
+}
+
+/// The hosted bindings of the one platform module visible to this lowering, or
+/// null when no platform module is in scope and so no section binds anything.
+fn platformHostedBindings(
+    root_view: checked.ImportedModuleView,
+    modules: CheckedModuleSet,
+) ?[]const checked.HostedBinding {
+    if (root_view.module_identity.kind == .platform) return root_view.hosted_bindings.bindings;
+    for (modules.imports) |imported| {
+        if (imported.module_identity.kind == .platform) return imported.hosted_bindings.bindings;
+    }
+    for (modules.root.relation_modules) |relation| {
+        if (relation.module_identity.kind == .platform) return relation.hosted_bindings.bindings;
+    }
+    return null;
+}
+
+fn hostedProceduresBound(
+    view: checked.ImportedModuleView,
+    bindings: []const checked.HostedBinding,
+) bool {
+    for (view.hosted_procs.procs) |proc| {
+        var bound = false;
+        for (bindings) |binding| {
+            if (!std.mem.eql(u8, &binding.target_checked_module.bytes, &view.key.bytes)) continue;
+            if (binding.target_def != proc.def_idx) continue;
+            bound = true;
+            break;
+        }
+        if (!bound) return false;
+    }
+    return true;
 }
 
 fn checkedModules(modules: CheckedModuleSet) postcheck.Common.CheckedModules {

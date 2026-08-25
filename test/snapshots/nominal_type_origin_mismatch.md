@@ -18,27 +18,22 @@ main =
 UNDECLARED TYPE - nominal_type_origin_mismatch.md:3:17:3:23
 UNUSED VARIABLE - nominal_type_origin_mismatch.md:4:18:4:19
 # PROBLEMS
+── ✗ undeclared type ────────────────────── nominal_type_origin_mismatch.md:3:17
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Person` is not declared in this scope. ────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  expectsPerson : Person -> Str                                             │
- │                  ‾‾‾‾‾‾                                                    │
- └────────────────────────────────────── nominal_type_origin_mismatch.md:3:17 ┘
+The type Person is not declared in this scope.
 
+expectsPerson : Person -> Str
+                ^^^^^^
 
+── ● unused variable ────────────────────── nominal_type_origin_mismatch.md:4:18
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `p` is defined here and then never used. ───────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  expectsPerson = |p| "Got a person"                                        │
- │                   ‾                                                        │
- └────────────────────────────────────── nominal_type_origin_mismatch.md:4:18 ┘
+Variable p is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like `_p` to
-    suppress this warning.
+expectsPerson = |p| "Got a person"
+                 ^
+
+If you don't need this variable, prefix it with an underscore like _p to
+suppress this warning.
 
 # TOKENS
 ~~~zig
@@ -91,18 +86,14 @@ main =
 (can-ir
 	(d-let
 		(p-assign (ident "expectsPerson"))
-		(e-lambda
-			(args
-				(p-assign (ident "p")))
-			(e-string
-				(e-literal (string "Got a person"))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 238)
+		(e-call (constraint-fn-var 249)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-string
 				(e-literal (string "not a person")))))

@@ -15,58 +15,45 @@ TYPE PARAMETER CONFLICT - fuzz_crash_083.md:2:6:2:7
 UNDECLARED TYPE VARIABLE - fuzz_crash_083.md:2:12:2:13
 TOO MANY ARGS - fuzz_crash_083.md:3:11:3:18
 # PROBLEMS
+── ✗ where clause not allowed in type declaration ──────── fuzz_crash_083.md:1:1
 
-┌──────────────────────────────────────────────┐
-│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a ────────┐
-└┬─────────────────────────────────────────────┘  `where` clause inside a     │
- │                                                type declaration.           │
- │                                                                            │
- │  A(a) : a where [a.a1 : (a, a) -> Str]                                     │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
- └───────────────────────────────────────────────────── fuzz_crash_083.md:1:1 ┘
+You cannot define a where clause inside a type declaration.
 
-    You're attempting do this here:
+A(a) : a where [a.a1 : (a, a) -> Str]
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Hint: where clauses can only go on function type annotations.
 
-┌─────────────────────────┐
-│ TYPE PARAMETER CONFLICT ├─ The type parameter `b` in type `C` conflicts ────┐
-└┬────────────────────────┘  with another declaration.                        │
- │                                                                            │
- │  C(b, b) : (a, b)                                                          │
- │       ‾                                                                    │
- └───────────────────────────────────────────────────── fuzz_crash_083.md:2:6 ┘
+── ✗ type parameter conflict ───────────────────────────── fuzz_crash_083.md:2:6
 
-    Type parameters must have unique names within their scope.
+The type parameter b in type C conflicts with another declaration.
 
-    The conflicting parameter is here:
+C(b, b) : (a, b)
+     ^
 
-    But `b` was already declared here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    2 │  C(b, b) : (a, b)                                                     │
-      │    ‾                                                                  │
-      └──────────────────────────────────────────────── fuzz_crash_083.md:2:3 ┘
+Type parameters must have unique names within their scope.
 
 
-┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable `a` is not declared in this ──┐
-└┬─────────────────────────┘  scope.                                          │
- │                                                                            │
- │  C(b, b) : (a, b)                                                          │
- │             ‾                                                              │
- └──────────────────────────────────────────────────── fuzz_crash_083.md:2:12 ┘
+But b was already declared in fuzz_crash_083.md:2:3:
 
-    Type variables must be introduced in a type annotation before they can be
-    used.
+C(b, b) : (a, b)
+  ^
 
+── ✗ undeclared type variable ─────────────────────────── fuzz_crash_083.md:2:12
 
-┌───────────────┐
-│ TOO MANY ARGS ├─ The type C expects 1 argument, but got 2 instead. ─────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  D(a, b) : C(a, b)                                                         │
- │            ‾‾‾‾‾‾‾                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_083.md:3:11 ┘
+The type variable a is not declared in this scope.
 
+C(b, b) : (a, b)
+           ^
+
+Type variables must be introduced in a type annotation before they can be used.
+
+── ✗ too many args ────────────────────────────────────── fuzz_crash_083.md:3:11
+
+The type C expects 1 argument, but got 2 instead.
+
+D(a, b) : C(a, b)
+          ^^^^^^^
 
 # TOKENS
 ~~~zig

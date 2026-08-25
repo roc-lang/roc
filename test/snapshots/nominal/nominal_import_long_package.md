@@ -13,15 +13,12 @@ red = ... # not implemented
 # EXPECTED
 MOD NOT FOUND - nominal_import_long_package.md:3:7:3:9
 # PROBLEMS
+── ✗ mod not found ─────────────────────── nominal_import_long_package.md:3:7
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `CE` type is declared to be in `design.Styles`, ───┐
-└┬─────────────────┘  which does not exist.                                   │
- │                                                                            │
- │  red : CE                                                                  │
- │        ‾‾                                                                  │
- └──────────────────────────────────────── nominal_import_long_package.md:3:7 ┘
+This CE type is declared to be in design.Styles, which does not exist.
 
+red : CE
+      ^^
 
 # TOKENS
 ~~~zig
@@ -53,7 +50,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "red"))
-		(e-not-implemented)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(s-import (mod "design.Styles")

@@ -43,316 +43,277 @@ UNEXPECTED STATEMENT - fuzz_crash_029.md:17:3:17:4
 MALFORMED TYPE - fuzz_crash_029.md:13:6:13:7
 DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 # PROBLEMS
+── ✗ expected opening brace ───────────────────────────── fuzz_crash_029.md:11:3
 
-┌────────────────────────┐
-│ EXPECTED OPENING BRACE ├─ I was parsing a `packages` section, and I ────────┐
-└┬───────────────────────┘  expected an opening `{`.                          │
- │                                                                            │
- │  vides # Cd                                                                │
- │  ‾‾‾‾‾                                                                     │
- └──────────────────────────────────────────────────── fuzz_crash_029.md:11:3 ┘
+I was parsing a `packages` section, and I expected an opening `{`.
 
-    Package dependencies are written as record fields inside braces.
+vides # Cd
+^^^^^
 
-    For example:
-        packages { base: "../base/main.roc" }
+Package dependencies are written as record fields inside braces.
 
-    I found `vides` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+For example:
+    packages { base: "../base/main.roc" }
 
+I found vides here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-┌───────────────────┐
-│ EXPECTED PROVIDES ├─ I was parsing a platform header, and I expected the ───┐
-└┬──────────────────┘  `provides` section.                                    │
- │                                                                            │
- │  { # pen                                                                   │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_029.md:12:3 ┘
+── ✗ expected provides ────────────────────────────────── fuzz_crash_029.md:12:3
 
-    A platform header must map host symbols to Roc functions in a `provides`
-    record.
+I was parsing a platform header, and I expected the `provides` section.
 
-    For example:
-        provides { "roc_main": main }
+{ # pen
+^
 
-    I found `{` here.
+A platform header must map host symbols to Roc functions in a provides record.
 
+For example:
+    provides { "roc_main": main }
 
-┌────────────────────────┐
-│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
-└┬───────────────────────┘  cannot start a type here.                         │
- │                                                                            │
- │  pkg: "..l", mmen  } # Cose                                                │
- │       ‾                                                                    │
- └──────────────────────────────────────────────────── fuzz_crash_029.md:13:6 ┘
+I found { here.
 
-    Types can be type variables, uppercase type names, function types, tuples,
-    records, or tag unions.
+── ✗ unexpected type syntax ───────────────────────────── fuzz_crash_029.md:13:6
 
-    For example:
-        List(U64)
+I was parsing a type annotation, and this token cannot start a type here.
 
-    I found `"` here.
+pkg: "..l", mmen  } # Cose
+     ^
 
+Types can be type variables, uppercase type names, function types, tuples,
+records, or tag unions.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  pkg: "..l", mmen  } # Cose                                                │
- │        ‾‾‾                                                                 │
- └──────────────────────────────────────────────────── fuzz_crash_029.md:13:7 ┘
+For example:
+    List(U64)
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found " here.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_029.md:13:7
 
-    I found `..l` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+pkg: "..l", mmen  } # Cose
+      ^^^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  pkg: "..l", mmen  } # Cose                                                │
- │           ‾                                                                │
- └─────────────────────────────────────────────────── fuzz_crash_029.md:13:10 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found ..l here.
 
-    I found `"` here.
+── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:13:10
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  pkg: "..l", mmen  } # Cose                                                │
- │            ‾                                                               │
- └─────────────────────────────────────────────────── fuzz_crash_029.md:13:11 ┘
+pkg: "..l", mmen  } # Cose
+         ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+I found " here.
 
+── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:13:11
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  pkg: "..l", mmen  } # Cose                                                │
- │              ‾‾‾‾                                                          │
- └─────────────────────────────────────────────────── fuzz_crash_029.md:13:13 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+pkg: "..l", mmen  } # Cose
+          ^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `mmen` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+For example:
+    answer = 42
 
+I found , here.
+A comma separates items, but there must be a valid item on both sides of it.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  pkg: "..l", mmen  } # Cose                                                │
- │                    ‾                                                       │
- └─────────────────────────────────────────────────── fuzz_crash_029.md:13:19 ┘
+── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:13:13
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+pkg: "..l", mmen  } # Cose
+            ^^^^
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  provides # Cd                                                             │
- │  ‾‾‾‾‾‾‾‾                                                                  │
- └──────────────────────────────────────────────────── fuzz_crash_029.md:14:2 ┘
+I found mmen here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:13:19
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `provides` here.
-    That word is reserved by Roc, so it cannot be used as a name in this
-    position.
+pkg: "..l", mmen  } # Cose
+                  ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  [ Ok(world), (n # pen                                                     │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_029.md:15:3 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found } here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_029.md:14:2
 
-    I found `[` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+provides # Cd
+^^^^^^^^
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  [ Ok(world), (n # pen                                                     │
- │             ‾                                                              │
- └─────────────────────────────────────────────────── fuzz_crash_029.md:15:14 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+For example:
+    answer = 42
 
-    For example:
-        List(U8)
+I found provides here.
+That word is reserved by Roc, so it cannot be used as a name in this position.
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_029.md:15:3
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  [ Ok(world), (n # pen                                                     │
- │               ‾                                                            │
- └─────────────────────────────────────────────────── fuzz_crash_029.md:15:16 ┘
+[ Ok(world), (n # pen
+^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `(` here.
+I found [ here.
 
+── ✗ type application needs parentheses ──────────────── fuzz_crash_029.md:15:14
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  [ Ok(world), (n # pen                                                     │
- │                ‾                                                           │
- └─────────────────────────────────────────────────── fuzz_crash_029.md:15:17 ┘
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+[ Ok(world), (n # pen
+           ^
 
-    For example:
-        answer = 42
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
-    I found `n` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+For example:
+    List(U8)
 
+I found , here.
+A comma separates items, but there must be a valid item on both sides of it.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  ar,                                                                       │
- │  ‾‾                                                                        │
- └──────────────────────────────────────────────────── fuzz_crash_029.md:16:1 ┘
+── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:15:16
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+[ Ok(world), (n # pen
+             ^
 
-    I found `ar` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  ar,                                                                       │
- │    ‾                                                                       │
- └──────────────────────────────────────────────────── fuzz_crash_029.md:16:3 ┘
+I found ( here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:15:17
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+[ Ok(world), (n # pen
+              ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  ]                                                                         │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_029.md:17:3 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found n here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_029.md:16:1
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I was parsing a statement, and this token cannot start a statement here.
 
+ar,
+^^
 
-┌────────────────┐
-│ MALFORMED TYPE ├─ This type annotation is malformed or contains invalid ────┐
-└┬───────────────┘  syntax.                                                   │
- │                                                                            │
- │  pkg: "..l", mmen  } # Cose                                                │
- │       ‾                                                                    │
- └──────────────────────────────────────────────────── fuzz_crash_029.md:13:6 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
+I found ar here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  pkg: "..l", mmen  } # Cose                                                │
- │  ‾‾‾‾‾‾                                                                    │
- └──────────────────────────────────────────────────── fuzz_crash_029.md:13:1 ┘
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_029.md:16:3
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+I was parsing a statement, and this token cannot start a statement here.
+
+ar,
+  ^
+
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found , here.
+A comma separates items, but there must be a valid item on both sides of it.
+
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_029.md:17:3
+
+I was parsing a statement, and this token cannot start a statement here.
+
+]
+^
+
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found ] here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
+
+── ✗ malformed type ───────────────────────────────────── fuzz_crash_029.md:13:6
+
+This type annotation is malformed or contains invalid syntax.
+
+pkg: "..l", mmen  } # Cose
+     ^
+
+── ● declaration has no value ─────────────────────────── fuzz_crash_029.md:13:1
+
+This declaration has a type annotation but no implementation.
+
+pkg: "..l", mmen  } # Cose
+^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 
 # TOKENS
 ~~~zig
@@ -410,7 +371,7 @@ pkg :
 (can-ir
 	(d-let
 		(p-assign (ident "pkg"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed))))
 ~~~

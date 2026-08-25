@@ -15,15 +15,12 @@ main! = |_| processNested([])
 # EXPECTED
 UNDECLARED TYPE - type_app_nested.md:3:31:3:34
 # PROBLEMS
+── ✗ undeclared type ─────────────────────────────────── type_app_nested.md:3:31
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Err` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  processNested : List(Try(Str, Err)) -> List(Str)                          │
- │                                ‾‾‾                                         │
- └─────────────────────────────────────────────────── type_app_nested.md:3:31 ┘
+The type Err is not declared in this scope.
 
+processNested : List(Try(Str, Err)) -> List(Str)
+                              ^^^
 
 # TOKENS
 ~~~zig
@@ -92,15 +89,7 @@ main! = |_| processNested([])
 (can-ir
 	(d-let
 		(p-assign (ident "processNested"))
-		(e-lambda
-			(args
-				(p-assign (ident "_list")))
-			(e-list
-				(elems
-					(e-string
-						(e-literal (string "one")))
-					(e-string
-						(e-literal (string "two"))))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
@@ -114,7 +103,7 @@ main! = |_| processNested([])
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 264)
+			(e-call (constraint-fn-var 277)
 				(e-runtime-error (tag "erroneous_value_expr"))
 				(e-empty_list)))))
 ~~~

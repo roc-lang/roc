@@ -1,6 +1,6 @@
 //! Bytebox-driven integration test for echo.wasm.
 //!
-//! Loads zig-out/lib/echo.wasm via bytebox, supplies js_echo + js_stderr host
+//! Loads zig-out/lib/echo/echo.wasm via bytebox, supplies js_echo + js_stderr host
 //! functions that capture output into in-process buffers, and drives the
 //! exported API (init / allocateBuffer / addFile / compileAndRun) the same
 //! way `www/app.js` does. Validates that the tutorial example produces
@@ -113,10 +113,10 @@ pub fn main(init: std.process.Init) anyerror!void {
     defer capture_ctx.stderr.deinit(gpa);
 
     // Locate echo.wasm relative to repo root (cwd when run via `zig build`).
-    const wasm_path = "zig-out/lib/echo.wasm";
+    const wasm_path = "zig-out/lib/echo/echo.wasm";
     const wasm_bytes = std.Io.Dir.cwd().readFileAlloc(io, wasm_path, arena, .unlimited) catch |err| {
         std.debug.print("FAIL: could not read {s}: {s}\n", .{ wasm_path, @errorName(err) });
-        std.debug.print("(Did you run `zig build build-playground` first?)\n", .{});
+        std.debug.print("(Did you run `zig build build-echo-wasm` first?)\n", .{});
         std.process.exit(2);
     };
 
@@ -241,7 +241,7 @@ pub fn main(init: std.process.Init) anyerror!void {
         std.process.exit(1);
     }
 
-    requireContains(bad_stderr, "TYPE MISMATCH", "diagnostic stderr");
+    requireContains(bad_stderr, "type mismatch", "diagnostic stderr");
     requireContains(bad_stderr, "\xE2\x94", "diagnostic stderr");
     requireContains(bad_stderr, "main.roc", "diagnostic stderr");
     requireNotContains(bad_stderr, "/app/main.roc", "diagnostic stderr");
@@ -267,7 +267,7 @@ pub fn main(init: std.process.Init) anyerror!void {
         std.process.exit(1);
     }
 
-    requireContains(malformed_stderr, "SYNTAX", "syntax diagnostic stderr");
+    requireContains(malformed_stderr, "syntax", "syntax diagnostic stderr");
     requireContains(malformed_stderr, "main.roc", "syntax diagnostic stderr");
     requireNotContains(malformed_stderr, "echo: step", "syntax diagnostic stderr");
 

@@ -125,8 +125,22 @@ pub fn renderTypeAnno(
                 if (i > 0) try buf.appendSlice(gpa, ", ");
                 const field = module_env.store.getAnnoRecordField(field_idx);
                 try buf.appendSlice(gpa, module_env.getIdentText(field.name));
-                try buf.appendSlice(gpa, " : ");
+                // `name ?: Type` marks an optional field; a defaulted field
+                // (`name : Type ?? default`) writes its default as a suffix.
+                try buf.appendSlice(gpa, if (field.is_optional) " ?: " else " : ");
                 try renderTypeAnno(buf, gpa, module_env, field.ty, false);
+                if (field.default_value) |default_idx| {
+                    try buf.appendSlice(gpa, " ?? ");
+                    const source = module_env.getSourceAll();
+                    const region = module_env.store.getExprRegion(default_idx);
+                    const start: usize = @min(region.start.offset, source.len);
+                    const end: usize = @min(region.end.offset, source.len);
+                    const snippet = if (start < end)
+                        std.mem.trim(u8, source[start..end], &std.ascii.whitespace)
+                    else
+                        "";
+                    try buf.appendSlice(gpa, if (snippet.len > 0) snippet else "…");
+                }
             }
             try buf.appendSlice(gpa, " }");
             if (r.ext) |ext_idx| {

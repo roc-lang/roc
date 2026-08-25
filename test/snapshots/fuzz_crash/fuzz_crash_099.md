@@ -17,81 +17,68 @@ UNUSED VARIABLE - fuzz_crash_099.md:3:37:3:39
 UNUSED VARIABLE - fuzz_crash_099.md:3:5:3:8
 NON EXHAUSTIVE DESTRUCTURE - fuzz_crash_099.md:3:20:3:37
 # PROBLEMS
+── ✗ duplicate record field ───────────────────────────── fuzz_crash_099.md:3:28
 
-┌────────────────────────┐
-│ DUPLICATE RECORD FIELD ├─ The record field `a` appears more than once in ───┐
-└┬───────────────────────┘  this record.                                      │
- │                                                                            │
- │  fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})                    │
- │                         ‾                                                  │
- └──────────────────────────────────────────────────── fuzz_crash_099.md:3:28 ┘
+The record field a appears more than once in this record.
 
-    This field is duplicated here:
+fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
+                       ^
 
-    The field `a` was first defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    3 │      fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})           │
-      │                       ‾                                               │
-      └─────────────────────────────────────────────── fuzz_crash_099.md:3:22 ┘
-    Record fields must have unique names. Consider renaming one of these fields
-    or removing the duplicate.
+The field a was first defined in fuzz_crash_099.md:3:22:
 
+fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
+                 ^
+Record fields must have unique names. Consider renaming one of these fields or
+removing the duplicate.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `insert` is defined here and then never used. ──┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})                    │
- │           ‾‾‾‾‾‾                                                           │
- └──────────────────────────────────────────────────── fuzz_crash_099.md:3:14 ┘
+── ● unused variable ──────────────────────────────────── fuzz_crash_099.md:3:14
 
-    If you don't need this variable, prefix it with an underscore like
-    `_insert` to suppress this warning.
+Variable insert is defined here and then never used:
 
+fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
+         ^^^^^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `nt` is defined here and then never used. ──────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})                    │
- │                                  ‾‾                                        │
- └──────────────────────────────────────────────────── fuzz_crash_099.md:3:37 ┘
+If you don't need this variable, prefix it with an underscore like _insert to
+suppress this warning.
 
-    If you don't need this variable, prefix it with an underscore like `_nt` to
-    suppress this warning.
+── ● unused variable ──────────────────────────────────── fuzz_crash_099.md:3:37
 
+Variable nt is defined here and then never used:
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `fn1` is defined here and then never used. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})                    │
- │  ‾‾‾                                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_099.md:3:5 ┘
+fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
+                                ^^
 
-    If you don't need this variable, prefix it with an underscore like `_fn1`
-    to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _nt to
+suppress this warning.
 
+── ● unused variable ───────────────────────────────────── fuzz_crash_099.md:3:5
 
-┌────────────────────────────┐
-│ NON EXHAUSTIVE DESTRUCTURE ├─ This destructuring pattern doesn't cover ─────┐
-└┬───────────────────────────┘  all possible cases.                           │
- │                                                                            │
- │  fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})                    │
- │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
- └──────────────────────────────────────────────────── fuzz_crash_099.md:3:20 ┘
+Variable fn1 is defined here and then never used:
 
-    The value being destructured has type:
-            ({ a: c }, d)
-      where [
-        c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
-        c.is_eq : c, c -> Bool,
-        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-        d.is_eq : d, d -> Bool,
-      ]
+fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
+^^^
 
-    Missing patterns:
-            ({ a: _ }, _)
+If you don't need this variable, prefix it with an underscore like _fn1 to
+suppress this warning.
+
+── ✗ non exhaustive destructure ───────────────────────── fuzz_crash_099.md:3:20
+
+This destructuring pattern doesn't cover all possible cases.
+
+fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
+               ^^^^^^^^^^^^^^^^^
+
+The value being destructured has type:
+        ({ a: c }, d)
+  where [
+    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+    c.is_eq : c, c -> Bool,
+    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+    d.is_eq : d, d -> Bool,
+  ]
+
+Missing patterns:
+        ({ a: _ }, _)
 
 # TOKENS
 ~~~zig
@@ -178,9 +165,9 @@ main! = |_args| {
 				(p-assign (ident "_args")))
 			(e-block
 				(s-dbg
-					(e-dispatch-call (method "insert") (constraint-fn-var 288)
+					(e-dispatch-call (method "insert") (constraint-fn-var 300)
 						(receiver
-							(e-call (constraint-fn-var 265)
+							(e-call (constraint-fn-var 275)
 								(e-lookup-external
 									(builtin))))
 						(args
@@ -219,7 +206,7 @@ main! = |_args| {
 										(capture (ident "b")))
 									(e-lambda
 										(args)
-										(e-dispatch-call (method "plus") (constraint-fn-var 332)
+										(e-dispatch-call (method "plus") (constraint-fn-var 346)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "a"))))

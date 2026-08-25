@@ -153,7 +153,7 @@ RBMut(k) := [
 									(p-nominal
 										(p-applied-tag))))
 							(value
-								(e-call (constraint-fn-var 283)
+								(e-call (constraint-fn-var 294)
 									(e-lookup-local
 										(p-assign (ident "RBMut.delB")))
 									(e-lookup-local
@@ -187,7 +187,7 @@ RBMut(k) := [
 									(p-nominal
 										(p-applied-tag))))
 							(value
-								(e-call (constraint-fn-var 316)
+								(e-call (constraint-fn-var 328)
 									(e-lookup-local
 										(p-assign (ident "RBMut.delA")))
 									(e-lookup-local

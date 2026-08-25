@@ -51,123 +51,101 @@ NAME NOT IN SCOPE - can_import_comprehensive.md:17:15:17:18
 NAME NOT IN SCOPE - can_import_comprehensive.md:18:15:18:19
 NAME NOT IN SCOPE - can_import_comprehensive.md:21:16:21:26
 # PROBLEMS
+── ● duplicate definition ────────────────────── can_import_comprehensive.md:1:1
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  import json.Json                                                          │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
- └─────────────────────────────────────────── can_import_comprehensive.md:1:1 ┘
+The name Json is being redeclared here:
 
-    In this scope, `Json` was already defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    1 │  import json.Json                                                     │
-      │  ‾                                                                    │
-      └────────────────────────────────────── can_import_comprehensive.md:1:1 ┘
+import json.Json
+^^^^^^^^^^^^^^^^
 
+In this scope, Json was already defined in can_import_comprehensive.md:1:1:
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `Str` is being redeclared here. ───────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  import utils.String as Str                                                │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
- └─────────────────────────────────────────── can_import_comprehensive.md:3:1 ┘
+import json.Json
+^
 
-    In this scope, `Str` was already defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    1 │  import json.Json                                                     │
-      │  ‾                                                                    │
-      └────────────────────────────────────── can_import_comprehensive.md:1:1 ┘
+── ● duplicate definition ────────────────────── can_import_comprehensive.md:3:1
 
+The name Str is being redeclared here:
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `get` in this scope. ─────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  client = Http.get                                                         │
- │           ‾‾‾‾‾‾‾‾                                                         │
- └────────────────────────────────────────── can_import_comprehensive.md:6:14 ┘
+import utils.String as Str
+^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    Is it misspelled, or is there an import missing?
+In this scope, Str was already defined in can_import_comprehensive.md:1:1:
 
+import json.Json
+^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `utf8` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  parser = Json.utf8                                                        │
- │           ‾‾‾‾‾‾‾‾‾                                                        │
- └────────────────────────────────────────── can_import_comprehensive.md:7:14 ┘
+── ✗ name not in scope ──────────────────────── can_import_comprehensive.md:6:14
 
-    Is it misspelled, or is there an import missing?
+Nothing is named get in this scope.
 
+client = Http.get
+         ^^^^^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `trim` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  helper = Str.trim                                                         │
- │           ‾‾‾‾‾‾‾‾                                                         │
- └────────────────────────────────────────── can_import_comprehensive.md:8:14 ┘
+Is it misspelled, or is there an import missing?
 
-    Is it misspelled, or is there an import missing?
+── ✗ name not in scope ──────────────────────── can_import_comprehensive.md:7:14
 
+Nothing is named utf8 in this scope.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `parse` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  result1 = Json.parse                                                      │
- │            ‾‾‾‾‾‾‾‾‾‾                                                      │
- └───────────────────────────────────────── can_import_comprehensive.md:11:15 ┘
+parser = Json.utf8
+         ^^^^^^^^^
 
-    Is it misspelled, or is there an import missing?
+Is it misspelled, or is there an import missing?
 
+── ✗ name not in scope ──────────────────────── can_import_comprehensive.md:8:14
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `post` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  result2 = Http.post                                                       │
- │            ‾‾‾‾‾‾‾‾‾                                                       │
- └───────────────────────────────────────── can_import_comprehensive.md:14:15 ┘
+Nothing is named trim in this scope.
 
-    Is it misspelled, or is there an import missing?
+helper = Str.trim
+         ^^^^^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `get` in this scope. ─────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  result3 = get                                                             │
- │            ‾‾‾                                                             │
- └───────────────────────────────────────── can_import_comprehensive.md:17:15 ┘
+── ✗ name not in scope ─────────────────────── can_import_comprehensive.md:11:15
 
-    Is it misspelled, or is there an import missing?
+Nothing is named parse in this scope.
 
+result1 = Json.parse
+          ^^^^^^^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `post` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  result4 = post                                                            │
- │            ‾‾‾‾                                                            │
- └───────────────────────────────────────── can_import_comprehensive.md:18:15 ┘
+Is it misspelled, or is there an import missing?
 
-    Is it misspelled, or is there an import missing?
+── ✗ name not in scope ─────────────────────── can_import_comprehensive.md:14:15
 
+Nothing is named post in this scope.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `concat` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  combined = Str.concat                                                     │
- │             ‾‾‾‾‾‾‾‾‾‾                                                     │
- └───────────────────────────────────────── can_import_comprehensive.md:21:16 ┘
+result2 = Http.post
+          ^^^^^^^^^
 
-    Is it misspelled, or is there an import missing?
+Is it misspelled, or is there an import missing?
+
+── ✗ name not in scope ─────────────────────── can_import_comprehensive.md:17:15
+
+Nothing is named get in this scope.
+
+result3 = get
+          ^^^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ name not in scope ─────────────────────── can_import_comprehensive.md:18:15
+
+Nothing is named post in this scope.
+
+result4 = post
+          ^^^^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ name not in scope ─────────────────────── can_import_comprehensive.md:21:16
+
+Nothing is named concat in this scope.
+
+combined = Str.concat
+           ^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

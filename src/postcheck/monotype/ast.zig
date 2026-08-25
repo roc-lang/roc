@@ -250,8 +250,9 @@ pub fn fnTemplateIdentityEql(lhs: FnTemplate, rhs: FnTemplate) bool {
         lhs.mono_fn_ty == rhs.mono_fn_ty;
 }
 
-/// Compute a digest for a Monotype function template.
-pub fn fnTemplateDigest(template: FnTemplate, types: *const Type.Store, name_store: *const names.NameStore) names.TypeDigest {
+/// Compute a digest for a Monotype function template. Takes the type store
+/// mutable because type digests are computed through the store's cache.
+pub fn fnTemplateDigest(template: FnTemplate, types: *Type.Store, name_store: *const names.NameStore) names.TypeDigest {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     writeFnDef(&hasher, template.fn_def);
     writeBytes(&hasher, &template.source_fn_key.bytes);
@@ -458,6 +459,10 @@ pub const FieldExpr = struct {
 pub const RecordUpdate = struct {
     base: ExprId,
     fields: Span(FieldExpr),
+};
+/// One source-ordered segment in a flattened record-field access path.
+pub const FieldAccessSegment = struct {
+    field: names.RecordFieldNameId,
 };
 
 /// Tag expression entry.
@@ -728,7 +733,7 @@ pub const ExprData = union(enum(u8)) {
     low_level: LowLevelCall,
     field_access: struct {
         receiver: ExprId,
-        field: names.RecordFieldNameId,
+        segments: Span(FieldAccessSegment),
     },
     tuple_access: struct {
         tuple: ExprId,
@@ -1043,6 +1048,7 @@ pub const ProgramView = struct {
     typed_locals: []const TypedLocal,
     stmt_ids: []const StmtId,
     field_exprs: []const FieldExpr,
+    field_access_segments: []const FieldAccessSegment,
     fn_def_captures: []const FnDefCapture,
     capture_operands: []const CaptureOperand,
     record_destructs: []const RecordDestruct,
@@ -1086,6 +1092,15 @@ pub const ProgramView = struct {
 
     pub fn procDebugName(self: ProgramView, symbol: Common.Symbol) ?names.ExportNameId {
         return procDebugNameInSlice(self.proc_debug_names, symbol);
+    }
+
+    pub fn fieldAccessSegmentSpan(self: ProgramView, span_: Span(FieldAccessSegment)) []const FieldAccessSegment {
+        return self.field_access_segments[span_.start..][0..span_.len];
+    }
+
+    pub fn fieldAccessSegmentAt(self: ProgramView, span_: Span(FieldAccessSegment), index: usize) FieldAccessSegment {
+        if (index >= span_.len) Common.invariant("field access segment index was outside span");
+        return self.field_access_segments[span_.start + index];
     }
 
     /// Verify that a completed program view refers only to durable type-store
@@ -1213,6 +1228,7 @@ pub const ProgramBuilder = struct {
     typed_locals: ProgramList(TypedLocal, "typed_locals"),
     stmt_ids: ProgramList(StmtId, "stmt_ids"),
     field_exprs: ProgramList(FieldExpr, "field_exprs"),
+    field_access_segments: ProgramList(FieldAccessSegment, "field_access_segments"),
     fn_def_captures: ProgramList(FnDefCapture, "fn_def_captures"),
     /// Backing pool for `Span(CaptureOperand)` direct-call operands. Pre-lift
     /// Monotype stores producer-authored local-proc operands here; closure
@@ -1272,6 +1288,7 @@ pub const ProgramBuilder = struct {
             .typed_locals = .empty,
             .stmt_ids = .empty,
             .field_exprs = .empty,
+            .field_access_segments = .empty,
             .fn_def_captures = .empty,
             .capture_operands = .empty,
             .record_destructs = .empty,
@@ -1324,6 +1341,7 @@ pub const ProgramBuilder = struct {
         self.record_destructs.deinit(self.allocator);
         self.fn_def_captures.deinit(self.allocator);
         self.capture_operands.deinit(self.allocator);
+        self.field_access_segments.deinit(self.allocator);
         self.field_exprs.deinit(self.allocator);
         self.stmt_ids.deinit(self.allocator);
         self.typed_locals.deinit(self.allocator);
@@ -1494,6 +1512,7 @@ pub const ProgramBuilder = struct {
             .typed_locals = self.typed_locals.unsafeRawItemsForView(),
             .stmt_ids = self.stmt_ids.unsafeRawItemsForView(),
             .field_exprs = self.field_exprs.unsafeRawItemsForView(),
+            .field_access_segments = self.field_access_segments.unsafeRawItemsForView(),
             .fn_def_captures = self.fn_def_captures.unsafeRawItemsForView(),
             .capture_operands = self.capture_operands.unsafeRawItemsForView(),
             .record_destructs = self.record_destructs.unsafeRawItemsForView(),
@@ -1810,6 +1829,10 @@ pub const ProgramBuilder = struct {
         return self.field_exprs.len();
     }
 
+    pub fn fieldAccessSegmentCount(self: *const ProgramBuilder) usize {
+        return self.field_access_segments.len();
+    }
+
     pub fn recordDestructCount(self: *const ProgramBuilder) usize {
         return self.record_destructs.len();
     }
@@ -1844,6 +1867,10 @@ pub const ProgramBuilder = struct {
 
     pub fn getFieldExprAt(self: *const ProgramBuilder, index: usize) FieldExpr {
         return self.field_exprs.get(index);
+    }
+
+    pub fn getFieldAccessSegmentAt(self: *const ProgramBuilder, index: usize) FieldAccessSegment {
+        return self.field_access_segments.get(index);
     }
 
     pub fn getRecordDestructAt(self: *const ProgramBuilder, index: usize) RecordDestruct {
@@ -1887,6 +1914,13 @@ pub const ProgramBuilder = struct {
     pub fn addFieldExprSpan(self: *ProgramBuilder, values: []const FieldExpr) std.mem.Allocator.Error!Span(FieldExpr) {
         const start: u32 = @intCast(self.field_exprs.len());
         try self.field_exprs.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addFieldAccessSegmentSpan(self: *ProgramBuilder, values: []const FieldAccessSegment) std.mem.Allocator.Error!Span(FieldAccessSegment) {
+        if (values.len == 0) Common.invariant("field access segment span must be nonempty");
+        const start: u32 = @intCast(self.field_access_segments.len());
+        try self.field_access_segments.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
@@ -1944,6 +1978,15 @@ pub const ProgramBuilder = struct {
 
     pub fn fieldExprSpan(self: *const ProgramBuilder, span_: Span(FieldExpr)) ProgramSpanBorrow(FieldExpr, "field_exprs") {
         return self.field_exprs.borrowSpan(span_.start, span_.len);
+    }
+
+    pub fn fieldAccessSegmentSpan(self: *const ProgramBuilder, span_: Span(FieldAccessSegment)) ProgramSpanBorrow(FieldAccessSegment, "field_access_segments") {
+        return self.field_access_segments.borrowSpan(span_.start, span_.len);
+    }
+
+    pub fn fieldAccessSegmentAt(self: *const ProgramBuilder, span_: Span(FieldAccessSegment), index: usize) FieldAccessSegment {
+        if (index >= span_.len) Common.invariant("field access segment index was outside span");
+        return self.field_access_segments.get(span_.start + index);
     }
 
     pub fn fnDefCaptureSpan(self: *const ProgramBuilder, span_: Span(FnDefCapture)) ProgramSpanBorrow(FnDefCapture, "fn_def_captures") {

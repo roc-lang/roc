@@ -4,6 +4,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const base = @import("base");
 const types = @import("types");
+const Var = types.Var;
 const parse = @import("parse");
 const CIR = @import("can").CIR;
 const Can = @import("can").Can;
@@ -252,7 +253,6 @@ pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, 
             .builtin_indices = builtin_indices,
         },
         .imported_modules = &module_envs,
-        .explicit_root_names = explicit_root_names,
     });
     errdefer can.deinit();
 
@@ -443,6 +443,34 @@ pub fn assertDefType(self: *TestEnv, target_def_name: []const u8, expected: []co
     return self.assertDefTypeOptions(target_def_name, expected, .{ .allow_type_errors = false });
 }
 
+/// Allocate the rendered inferred type of a named top-level definition.
+/// Dynamic invariant generators use this to compare two independently checked
+/// modules without baking one generated program's type strings into the test.
+pub fn allocDefType(self: *TestEnv, allocator: Allocator, target_def_name: []const u8) TestEnvError![]u8 {
+    const def_var = try self.findDefVar(target_def_name);
+    try self.type_writer.write(def_var, .wrap);
+    return allocator.dupe(u8, self.type_writer.get());
+}
+
+/// Count compilation-blocking type problems, excluding warning reports.
+/// Generated rejection tests use this instead of the raw problem-list length
+/// so a `LITERAL DEFAULTED` warning cannot masquerade as the expected error.
+pub fn typeProblemCount(self: *TestEnv) TestEnvError!usize {
+    var report_builder = try self.initReportBuilder();
+    defer report_builder.deinit();
+
+    var count: usize = 0;
+    for (self.checker.problems.problems.items) |problem| {
+        var report = try report_builder.build(problem);
+        defer report.deinit();
+        switch (report.severity) {
+            .runtime_error, .fatal => count += 1,
+            .warning => {},
+        }
+    }
+    return count;
+}
+
 /// Get the inferred type of the last declaration and compare it to the provided
 /// expected type string.
 ///
@@ -454,22 +482,43 @@ pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expecte
         try self.assertNoTypeProblems();
     }
 
-    try testing.expect(self.module_env.all_defs.span.len > 0);
+    if (self.module_env.all_defs.span.len == 0) {
+        std.debug.print("Expected module to have at least one top-level def, but it has none\n", .{});
+        return error.TestUnexpectedResult;
+    }
 
+    const def_var = try self.findDefVar(target_def_name);
+    try self.type_writer.write(def_var, .wrap);
+    try testing.expectEqualStrings(expected, self.type_writer.get());
+}
+
+fn findDefVar(self: *const TestEnv, target_def_name: []const u8) TestEnvError!Var {
     const idents = self.module_env.getIdentStoreConst();
     const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
     for (defs_slice) |def_idx| {
         const def = self.module_env.store.getDef(def_idx);
         const ptrn = self.module_env.store.getPattern(def.pattern);
-
-        if (ptrn != .assign) return error.TestUnexpectedResult;
+        if (ptrn != .assign) {
+            std.debug.print(
+                "Found a top-level def whose pattern is '{s}', not a plain assign, while looking up def '{s}'\n",
+                .{ @tagName(ptrn), target_def_name },
+            );
+            return error.TestUnexpectedResult;
+        }
         const def_name = idents.getText(ptrn.assign.ident);
         if (std.mem.eql(u8, target_def_name, def_name)) {
-            try self.type_writer.write(ModuleEnv.varFrom(def_idx), .wrap);
-            try testing.expectEqualStrings(expected, self.type_writer.get());
-            return;
+            return ModuleEnv.varFrom(def_idx);
         }
     }
+
+    // Not found: list the module's def names so typos are obvious.
+    std.debug.print("No top-level def named '{s}'. This module's defs are:", .{target_def_name});
+    for (defs_slice) |def_idx| {
+        const def = self.module_env.store.getDef(def_idx);
+        const ptrn = self.module_env.store.getPattern(def.pattern);
+        if (ptrn == .assign) std.debug.print(" '{s}'", .{idents.getText(ptrn.assign.ident)});
+    }
+    std.debug.print("\n", .{});
     return error.TestUnexpectedResult;
 }
 
@@ -625,6 +674,13 @@ pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) TestEnvError!voi
     try testing.expectEqualStrings(expected, report.title);
 }
 
+/// Assert that checking produced exactly one warning with the expected title.
+pub fn assertOneTypeWarning(self: *TestEnv, expected: []const u8) TestEnvError!void {
+    try self.assertNoParseProblems();
+    try self.assertNoCanProblems();
+    try self.assertOnlyTypeWarnings(&.{expected});
+}
+
 /// Assert that there was a single type error when checking the input. Assert
 /// that the title of the type error matches the expected title.
 pub fn assertOneTypeErrorMsg(self: *TestEnv, expected: []const u8) TestEnvError!void {
@@ -685,6 +741,23 @@ pub fn assertOneCanError(self: *TestEnv, expected: []const u8) TestEnvError!void
     defer report.deinit();
 
     try testing.expectEqualStrings(expected, report.title);
+}
+
+/// Assert that canonicalization produced exactly the expected diagnostics, in
+/// order, each matching its expected title.
+pub fn assertCanErrors(self: *TestEnv, expected: []const []const u8) TestEnvError!void {
+    try self.assertNoParseProblems();
+
+    const diagnostics = try self.module_env.getDiagnostics();
+    defer self.gpa.free(diagnostics);
+
+    try testing.expectEqual(expected.len, diagnostics.len);
+    for (expected, diagnostics) |expected_title, diagnostic| {
+        var report = try self.module_env.diagnosticToReport(diagnostic, self.gpa, self.module_env.module_name);
+        defer report.deinit();
+
+        try testing.expectEqualStrings(expected_title, report.title);
+    }
 }
 
 /// Assert that canonicalization produced exactly one diagnostic with the expected rendered message.

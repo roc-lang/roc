@@ -248,6 +248,7 @@ const listSublist = list.listSublist;
 const listSublistBorrowed = list.listSublistBorrowed;
 const listDropAt = list.listDropAt;
 const listReplace = list.listReplace;
+const listSet = list.listSet;
 const listSwap = list.listSwap;
 const listReserve = list.listReserve;
 const listReleaseExcessCapacity = list.listReleaseExcessCapacity;
@@ -956,6 +957,25 @@ pub fn roc_builtins_list_replace(out: *RocList, list_bytes: ?[*]u8, list_len: us
     }
 }
 
+/// Wrapper for list_set. The displaced element is released because it is not
+/// returned to Roc code.
+pub fn roc_builtins_list_set(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, index: u64, element: ?[*]u8, element_width: usize, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, update_mode: utils.UpdateMode, roc_ops: *RocOps) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    if (elements_refcounted) {
+        var inc_ctx = CallbackElementIncrefContext{
+            .callback = element_incref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        var dec_ctx = CallbackElementDecrefContext{
+            .callback = element_decref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        out.* = listSet(l, alignment, index, element, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, &copy_fallback, roc_ops);
+    } else {
+        out.* = listSet(l, alignment, index, element, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, &copy_fallback, roc_ops);
+    }
+}
+
 /// Wrapper: listSwap for list_swap. The update mode is forwarded to the
 /// builtin's uniqueness check; `.InPlace` skips it.
 pub fn roc_builtins_list_swap(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, index_1: u64, index_2: u64, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, update_mode: utils.UpdateMode, roc_ops: *RocOps) callconv(.c) void {
@@ -1347,6 +1367,100 @@ pub fn roc_builtins_box_prepare_update(
     return fresh;
 }
 
+/// Consume one box reference and move its payload into `out`.
+pub fn roc_builtins_box_unbox_owned(
+    out: ?[*]u8,
+    payload_ptr: ?[*]u8,
+    payload_size: usize,
+    payload_alignment: u32,
+    payload_has_refcounted_children: bool,
+    payload_incref: ?RcIncFn,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    if (payload_size == 0 or payload_ptr == null) return;
+    @memcpy(out.?[0..payload_size], payload_ptr.?[0..payload_size]);
+    if (utils.isUnique(payload_ptr, roc_ops)) {
+        utils.freeDataPtrC(payload_ptr, payload_alignment, payload_has_refcounted_children, roc_ops);
+    } else {
+        if (payload_has_refcounted_children) {
+            (payload_incref orelse unreachable)(out, 1, roc_ops);
+        }
+        utils.decrefDataPtrC(payload_ptr, payload_alignment, payload_has_refcounted_children, roc_ops);
+    }
+}
+
+const TestBoxPayload = extern struct { list: RocList };
+
+fn testBoxPayloadIncref(payload: ?[*]u8, count: isize, roc_ops: *RocOps) callconv(.c) void {
+    const value: *TestBoxPayload = @ptrCast(@alignCast(payload.?));
+    utils.increfDataPtrC(value.list.bytes, count, roc_ops);
+}
+
+fn testBoxPayloadDecref(payload: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
+    const value: *TestBoxPayload = @ptrCast(@alignCast(payload.?));
+    utils.decrefDataPtrC(value.list.bytes, @alignOf(u8), false, roc_ops);
+}
+
+test "owned Box.unbox frees flat and refcounted outer headers" {
+    var env = utils.TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const ops = env.getOps();
+
+    const flat = utils.allocateWithRefcountC(@sizeOf(u64), @alignOf(u64), false, ops);
+    @as(*u64, @ptrCast(@alignCast(flat))).* = 42;
+    var flat_out: u64 = 0;
+    roc_builtins_box_unbox_owned(@ptrCast(&flat_out), flat, @sizeOf(u64), @alignOf(u64), false, null, ops);
+    try std.testing.expectEqual(@as(u64, 42), flat_out);
+    try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
+
+    const child = RocList.fromSlice(u8, &.{ 1, 2, 3 }, false, ops);
+    const outer = utils.allocateWithRefcountC(@sizeOf(TestBoxPayload), @alignOf(TestBoxPayload), true, ops);
+    @as(*TestBoxPayload, @ptrCast(@alignCast(outer))).* = .{ .list = child };
+    var out: TestBoxPayload = undefined;
+    roc_builtins_box_unbox_owned(@ptrCast(&out), outer, @sizeOf(TestBoxPayload), @alignOf(TestBoxPayload), true, testBoxPayloadIncref, ops);
+    try std.testing.expectEqual(@as(usize, 1), env.getAllocationCount());
+    try std.testing.expect(utils.isUnique(out.list.bytes, ops));
+    utils.decrefDataPtrC(out.list.bytes, @alignOf(u8), false, ops);
+}
+
+test "owned Box.unbox preserves shared box and shared payload ownership" {
+    var env = utils.TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const ops = env.getOps();
+
+    const child = RocList.fromSlice(u8, &.{ 7, 8 }, false, ops);
+    const outer = utils.allocateWithRefcountC(@sizeOf(TestBoxPayload), @alignOf(TestBoxPayload), true, ops);
+    @as(*TestBoxPayload, @ptrCast(@alignCast(outer))).* = .{ .list = child };
+    utils.increfDataPtrC(outer, 1, ops);
+
+    var out: TestBoxPayload = undefined;
+    roc_builtins_box_unbox_owned(@ptrCast(&out), outer, @sizeOf(TestBoxPayload), @alignOf(TestBoxPayload), true, testBoxPayloadIncref, ops);
+    try std.testing.expect(!utils.isUnique(out.list.bytes, ops));
+    const replacement: u8 = 9;
+    var updated: RocList = undefined;
+    roc_builtins_list_set(&updated, out.list.bytes, out.list.length, out.list.capacity_or_alloc_ptr, @alignOf(u8), 0, @ptrCast(@constCast(&replacement)), @sizeOf(u8), false, null, null, .Immutable, ops);
+    try std.testing.expectEqual(@as(u8, 7), @as(*TestBoxPayload, @ptrCast(@alignCast(outer))).list.elements(u8).?[0]);
+    try std.testing.expectEqual(@as(u8, 9), updated.elements(u8).?[0]);
+    utils.decrefDataPtrC(updated.bytes, @alignOf(u8), false, ops);
+    roc_builtins_box_decref_with(outer, @alignOf(TestBoxPayload), testBoxPayloadDecref, ops);
+
+    const separately_shared = RocList.fromSlice(u8, &.{9}, false, ops);
+    utils.increfDataPtrC(separately_shared.bytes, 1, ops);
+    const unique_outer = utils.allocateWithRefcountC(@sizeOf(TestBoxPayload), @alignOf(TestBoxPayload), true, ops);
+    @as(*TestBoxPayload, @ptrCast(@alignCast(unique_outer))).* = .{ .list = separately_shared };
+    roc_builtins_box_unbox_owned(@ptrCast(&out), unique_outer, @sizeOf(TestBoxPayload), @alignOf(TestBoxPayload), true, testBoxPayloadIncref, ops);
+    try std.testing.expect(!utils.isUnique(out.list.bytes, ops));
+    utils.decrefDataPtrC(out.list.bytes, @alignOf(u8), false, ops);
+    utils.decrefDataPtrC(separately_shared.bytes, @alignOf(u8), false, ops);
+}
+
+test "owned Box.unbox accepts a null ZST box" {
+    var env = utils.TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    roc_builtins_box_unbox_owned(null, null, 0, 1, false, null, env.getOps());
+    try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
+}
+
 /// Decref a boxed payload and optionally run payload teardown when unique.
 pub fn roc_builtins_box_decref_with(
     payload_ptr: ?[*]u8,
@@ -1355,7 +1469,6 @@ pub fn roc_builtins_box_decref_with(
     roc_ops: *RocOps,
 ) callconv(.c) void {
     const payload_has_refcounted_children = payload_decref != null;
-
     if (payload_decref) |callback| {
         if (utils.isUnique(payload_ptr, roc_ops)) {
             callback(payload_ptr, roc_ops);
@@ -1493,10 +1606,22 @@ pub fn roc_builtins_hot_reload_retain_current(_: *RocOps) callconv(.c) ?*anyopaq
 /// hot-reload capture prefix.
 pub fn roc_builtins_hot_reload_erased_callable_drop(capture_ptr: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
     const header = erased_callable.hotReloadCaptureHeader(capture_ptr) orelse return;
+    const root = @import("root");
+    const previous_runtime = if (comptime @hasDecl(root, "roc_hot_reload_activate_retained"))
+        root.roc_hot_reload_activate_retained(header.code_ref)
+    else
+        null;
     if (header.original_on_drop) |original_on_drop| {
         original_on_drop(erased_callable.hotReloadAdjustedCapturePtr(capture_ptr), roc_ops);
     }
-    roc_builtins_hot_reload_leave(header.code_ref);
+    if (comptime @hasDecl(root, "roc_hot_reload_deactivate_retained")) {
+        root.roc_hot_reload_deactivate_retained(previous_runtime);
+    }
+    if (comptime @hasDecl(root, "roc_hot_reload_release_retained")) {
+        root.roc_hot_reload_release_retained(header.code_ref);
+    } else {
+        roc_builtins_hot_reload_leave(header.code_ref);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1572,10 +1697,11 @@ pub fn roc_builtins_dec_to_str(out: *RocStr, value_low: u64, value_high: u64, ro
 
 // ── Numeric conversion wrappers ──
 
-/// Dec (i128) → i64 by truncating division
+/// Dec (i128) → i64 by truncating division. A Dec's whole part reaches ~1.7e20,
+/// past i64, so the excess wraps rather than trapping.
 pub fn roc_builtins_dec_to_i64_trunc(low: u64, high: u64) callconv(.c) i64 {
     const val: i128 = @bitCast(i128h.from_u64_pair(low, high));
-    return @intCast(i128h.divTrunc_i128(val, dec.RocDec.one_point_zero_i128));
+    return dec.toIntWrap(i64, .{ .num = val });
 }
 
 /// i64 → Dec (i128) via output pointers
@@ -1655,6 +1781,16 @@ fn i128InTargetRange(val: i128, target_bits: u32, target_signed: bool) bool {
 
 fn u128InTargetRange(val: u128, target_bits: u32, target_signed: bool) bool {
     return numeric_conversions.u128FitsTarget(val, target_bits, target_signed);
+}
+
+// The conversion wrappers below move results between widths assuming a value's
+// low-order bytes come first in memory: narrowing copies the value's first
+// bytes, and widening writes it into the first bytes of a larger slot. That
+// assumption holds only on a little-endian target.
+comptime {
+    if (@import("builtin").cpu.arch.endian() == .big) {
+        @compileError("the conversion wrappers assume a value's low-order bytes come first, which is false on big-endian targets");
+    }
 }
 
 /// i128 try convert

@@ -38,6 +38,15 @@ const HostEnv = struct {
 
 extern fn roc_make_boxed_callable(offset: u64) callconv(.c) ?[*]u8;
 extern fn roc_drop_boxed_callable(callable: ?[*]u8) callconv(.c) void;
+extern fn roc_make_aliased_boxed_callables() callconv(.c) ?[*]u8;
+extern fn roc_make_shared_boxed_callables() callconv(.c) ?[*]u8;
+extern fn roc_drop_aliased_boxed_callables(callables: ?[*]u8) callconv(.c) void;
+
+/// Host view of the app's `{ first : Box(U64 -> U64), second : Box(U64 -> U64) }`.
+const AliasedCallables = extern struct {
+    first: ?[*]u8,
+    second: ?[*]u8,
+};
 
 var g_roc_ops: ?*RocOps = null;
 
@@ -57,8 +66,13 @@ comptime {
 fn __main() callconv(.c) void {}
 
 fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
-    if (argc != 2 or !std.mem.eql(u8, std.mem.span(argv[1]), "--run-provided-boxed-callable-drop")) {
-        std.debug.print("usage: <app> --run-provided-boxed-callable-drop\n", .{});
+    const drop_mode = "--run-provided-boxed-callable-drop";
+    const identity_mode = "--run-provided-boxed-callable-identity";
+    const mode = if (argc == 2) std.mem.span(argv[1]) else "";
+    const run_drop = std.mem.eql(u8, mode, drop_mode);
+    const run_identity = std.mem.eql(u8, mode, identity_mode);
+    if (!run_drop and !run_identity) {
+        std.debug.print("usage: <app> {s}|{s}\n", .{ drop_mode, identity_mode });
         return 1;
     }
 
@@ -81,25 +95,66 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     };
     g_roc_ops = &roc_ops;
 
-    const callable = roc_make_boxed_callable(41) orelse {
-        std.debug.print("provided callable maker returned null\n", .{});
-        return 1;
-    };
-    if (host_env.alloc_count == 0) {
-        std.debug.print("provided callable maker did not allocate\n", .{});
-        return 1;
+    if (run_drop) {
+        const callable = roc_make_boxed_callable(41) orelse {
+            std.debug.print("provided callable maker returned null\n", .{});
+            return 1;
+        };
+        if (host_env.alloc_count == 0) {
+            std.debug.print("provided callable maker did not allocate\n", .{});
+            return 1;
+        }
+
+        roc_drop_boxed_callable(callable);
+        if (host_env.dealloc_count != host_env.alloc_count) {
+            std.debug.print("provided callable drop released {d} of {d} allocations\n", .{
+                host_env.dealloc_count,
+                host_env.alloc_count,
+            });
+            return 1;
+        }
+
+        std.debug.print("provided boxed callable drop ok\n", .{});
+        return 0;
     }
 
-    roc_drop_boxed_callable(callable);
+    // One boxed callable held by two record fields is one heap allocation, so
+    // both fields must reach the host as the same erased-callable pointer.
+    var failed = false;
+    const makers = [_]struct { name: []const u8, make: *const fn () callconv(.c) ?[*]u8 }{
+        .{ .name = "aliased", .make = &roc_make_aliased_boxed_callables },
+        .{ .name = "shared", .make = &roc_make_shared_boxed_callables },
+    };
+    for (makers) |maker| {
+        const before_allocs = host_env.alloc_count;
+        const aliased_ptr = maker.make() orelse {
+            std.debug.print("provided {s} callable maker returned null\n", .{maker.name});
+            return 1;
+        };
+        if (host_env.alloc_count == before_allocs) {
+            std.debug.print("provided {s} callable maker did not allocate\n", .{maker.name});
+            return 1;
+        }
+        const aliased: *const AliasedCallables = @ptrCast(@alignCast(aliased_ptr));
+        const first = aliased.first;
+        const second = aliased.second;
+        roc_drop_aliased_boxed_callables(aliased_ptr);
+
+        if (first != second) {
+            std.debug.print("provided {s} callables arrived as {?*} and {?*}\n", .{ maker.name, first, second });
+            failed = true;
+        }
+    }
     if (host_env.dealloc_count != host_env.alloc_count) {
-        std.debug.print("provided callable drop released {d} of {d} allocations\n", .{
+        std.debug.print("provided aliased callable drop released {d} of {d} allocations\n", .{
             host_env.dealloc_count,
             host_env.alloc_count,
         });
-        return 1;
+        failed = true;
     }
+    if (failed) return 1;
 
-    std.debug.print("provided boxed callable drop ok\n", .{});
+    std.debug.print("provided boxed callable identity ok\n", .{});
     return 0;
 }
 

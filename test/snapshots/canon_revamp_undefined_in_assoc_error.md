@@ -16,16 +16,14 @@ Foo := [Whatever].{
 # EXPECTED
 NAME NOT IN SCOPE - canon_revamp_undefined_in_assoc_error.md:3:18:3:27
 # PROBLEMS
+── ✗ name not in scope ─────────── canon_revamp_undefined_in_assoc_error.md:3:18
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `ghostName` in this scope. ───────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  callsGhost = ghostName                                                    │
- │               ‾‾‾‾‾‾‾‾‾                                                    │
- └───────────────────────────── canon_revamp_undefined_in_assoc_error.md:3:18 ┘
+Nothing is named ghostName in this scope.
 
-    Is it misspelled, or is there an import missing?
+callsGhost = ghostName
+             ^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

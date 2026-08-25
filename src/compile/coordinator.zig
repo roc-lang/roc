@@ -492,7 +492,8 @@ pub const ModuleState = struct {
     module_role: ModuleEnv.ModuleRole = .user,
     /// Top-level names that package metadata requires as compile-time roots.
     explicit_root_ident_names: []const []const u8 = &.{},
-    validate_as_explicit_roots: bool = false,
+    /// Post-canonicalization validation this module receives.
+    validation: can.Can.Validation = .checking,
     /// Owned semantic module payload. Earlier phases populate only `module_env`;
     /// type checking later fills in the checked artifact.
     semantic: ?OwnedSemanticModuleData = null,
@@ -704,6 +705,35 @@ pub const ModuleState = struct {
     }
 };
 
+/// Exact source selected by one public package module name.
+pub const PublicModuleTarget = struct {
+    /// Owned `logical_module` or `logical_module.nested_type` spelling.
+    /// Keeping both spellings in one allocation leaves room for the exact CIR
+    /// selector without making this structure larger than its old two-slice
+    /// representation.
+    source_target: []u8,
+    logical_module_len: usize,
+    selection: Selection,
+
+    pub const Selection = union(enum) {
+        whole_module,
+        unresolved_nested_type,
+        /// Stable exact declaration selected from the completed source CIR.
+        type_decl: CIR.Statement.Idx,
+    };
+
+    pub fn logicalModule(self: PublicModuleTarget) []const u8 {
+        return self.source_target[0..self.logical_module_len];
+    }
+
+    pub fn unresolvedNestedType(self: PublicModuleTarget) ?[]const u8 {
+        if (self.selection != .unresolved_nested_type) return null;
+        std.debug.assert(self.source_target.len > self.logical_module_len + 1);
+        std.debug.assert(self.source_target[self.logical_module_len] == '.');
+        return self.source_target[self.logical_module_len + 1 ..];
+    }
+};
+
 /// State of a package in the workspace
 pub const PackageState = struct {
     /// Package name (alias in workspace)
@@ -720,8 +750,11 @@ pub const PackageState = struct {
     modules: std.ArrayList(ModuleState),
     /// Module name -> module ID lookup
     module_names: std.StringHashMap(ModuleId),
-    /// Public package module name -> package-root-relative logical path.
-    public_module_targets: std.StringHashMap([]const u8),
+    /// Public package name -> exact source module and optional nested type.
+    public_module_targets: std.StringHashMap(PublicModuleTarget),
+    /// Pointers into the immutable map above, sorted by logical source module.
+    /// Built once when public-module registration closes.
+    public_module_targets_by_source: []*PublicModuleTarget,
     /// Whether the package header's complete public module map was registered.
     public_modules_ready: bool,
     /// Directory entries beneath the package root, cached with their exact spelling.
@@ -744,7 +777,8 @@ pub const PackageState = struct {
             .url = url,
             .modules = std.ArrayList(ModuleState).empty,
             .module_names = std.StringHashMap(ModuleId).init(thread_safe_allocator),
-            .public_module_targets = std.StringHashMap([]const u8).init(thread_safe_allocator),
+            .public_module_targets = std.StringHashMap(PublicModuleTarget).init(thread_safe_allocator),
+            .public_module_targets_by_source = &.{},
             .public_modules_ready = false,
             .source_entries = null,
             .physical_module_paths = std.StringHashMap([]const u8).init(thread_safe_allocator),
@@ -773,8 +807,9 @@ pub const PackageState = struct {
         var public_it = self.public_module_targets.iterator();
         while (public_it.next()) |entry| {
             gpa.free(entry.key_ptr.*);
-            gpa.free(entry.value_ptr.*);
+            gpa.free(entry.value_ptr.source_target);
         }
+        if (self.public_module_targets_by_source.len > 0) gpa.free(self.public_module_targets_by_source);
         self.public_module_targets.deinit();
 
         if (self.source_entries) |entries| {
@@ -846,20 +881,61 @@ pub const PackageState = struct {
 
     /// Resolve a package consumer's public name to its internal logical module.
     pub fn getPublicModuleId(self: *PackageState, name: []const u8) ?ModuleId {
-        const logical_name = self.public_module_targets.get(name) orelse return null;
-        return self.module_names.get(logical_name);
+        const target = self.public_module_targets.get(name) orelse return null;
+        return self.module_names.get(target.logicalModule());
     }
 
-    pub fn addPublicModule(self: *PackageState, gpa: Allocator, name: []const u8, target: []const u8) Allocator.Error!void {
+    pub fn getPublicModuleTarget(self: *const PackageState, name: []const u8) ?PublicModuleTarget {
+        return self.public_module_targets.get(name);
+    }
+
+    pub fn addPublicModule(
+        self: *PackageState,
+        gpa: Allocator,
+        name: []const u8,
+        target: []const u8,
+        nested_type: ?[]const u8,
+    ) Allocator.Error!void {
+        if (self.public_modules_ready) {
+            std.debug.panic("cannot add public module '{s}' after registration closed", .{name});
+        }
         if (self.public_module_targets.contains(name)) return;
         const owned_name = try gpa.dupe(u8, name);
         errdefer gpa.free(owned_name);
-        const owned_target = try gpa.dupe(u8, target);
-        errdefer gpa.free(owned_target);
-        try self.public_module_targets.put(owned_name, owned_target);
+        const owned_source_target = if (nested_type) |nested|
+            try std.fmt.allocPrint(gpa, "{s}.{s}", .{ target, nested })
+        else
+            try gpa.dupe(u8, target);
+        errdefer gpa.free(owned_source_target);
+        try self.public_module_targets.put(owned_name, .{
+            .source_target = owned_source_target,
+            .logical_module_len = target.len,
+            .selection = if (nested_type != null)
+                .unresolved_nested_type
+            else
+                .whole_module,
+        });
     }
 
-    pub fn finishPublicModules(self: *PackageState) void {
+    pub fn finishPublicModules(self: *PackageState, gpa: Allocator) Allocator.Error!void {
+        if (self.public_modules_ready) {
+            std.debug.panic("cannot close public module registration twice for package '{s}'", .{self.name});
+        }
+        const targets = try gpa.alloc(*PublicModuleTarget, self.public_module_targets.count());
+        errdefer gpa.free(targets);
+
+        var index: usize = 0;
+        var target_it = self.public_module_targets.iterator();
+        while (target_it.next()) |entry| : (index += 1) {
+            targets[index] = entry.value_ptr;
+        }
+        std.mem.sort(*PublicModuleTarget, targets, {}, struct {
+            fn lessThan(_: void, a: *PublicModuleTarget, b: *PublicModuleTarget) bool {
+                return std.mem.order(u8, a.logicalModule(), b.logicalModule()) == .lt;
+            }
+        }.lessThan);
+
+        self.public_module_targets_by_source = targets;
         self.public_modules_ready = true;
     }
 
@@ -1357,21 +1433,21 @@ pub const Coordinator = struct {
 
         const file = ast.store.getFile();
         const header = ast.store.getHeader(file.header);
-        const exposes = if (header == .package)
-            header.package.exposes
+        const exposes, const surface_kind: module_discovery.PublicSurfaceKind = if (header == .package)
+            .{ header.package.exposes, .package }
         else if (header == .platform)
-            header.platform.exposes
+            .{ header.platform.exposes, .platform }
         else
             return error.InvalidPackageHeader;
-        const public_modules = module_discovery.extractPublicModules(ast, exposes, self.gpa) catch |err| switch (err) {
+        var public_surface = module_discovery.extractPublicSurface(ast, exposes, surface_kind, self.gpa) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.ImportEscapesPackageRoot => return error.InvalidPackageHeader,
         };
-        defer module_discovery.freePublicModules(self.gpa, public_modules);
-        for (public_modules) |module| {
-            try pkg.addPublicModule(self.gpa, module.name, module.target);
+        defer public_surface.deinit(self.gpa);
+        for (public_surface.modules.items) |module| {
+            try pkg.addPublicModule(self.gpa, module.name, module.target, module.nested_type);
         }
-        pkg.finishPublicModules();
+        try pkg.finishPublicModules(self.gpa);
     }
 
     /// Read an app `.roc` file's header, register the app + platform +
@@ -2052,6 +2128,7 @@ pub const Coordinator = struct {
                 .imports = platform_import_artifacts,
                 .explicit_roots = explicit_roots,
                 .platform_app_relation = relation_key,
+                .validation = platform_root.mod.validation,
             },
         );
         if (self.tryLoadCachedRepublishedRoot(platform_root.pkg, platform_root.mod, republished_key)) {
@@ -2081,7 +2158,7 @@ pub const Coordinator = struct {
             for (pkg.modules.items) |*mod| {
                 for (mod.reports.items) |rep| {
                     switch (rep.severity) {
-                        .info, .warning => {},
+                        .warning => {},
                         .runtime_error, .fatal => return true,
                     }
                 }
@@ -2239,6 +2316,7 @@ pub const Coordinator = struct {
                 .explicit_roots = explicit_roots,
                 .platform_requirement_context = publication_with_state.platform_requirement_context,
                 .platform_app_relation = if (publication_with_state.platform_app_relation) |relation| relation.key else null,
+                .validation = mod.validation,
             })) |republished_key| {
                 if (self.tryLoadCachedRepublishedRoot(pkg, mod, republished_key)) {
                     self.releaseDeferredPublication(mod);
@@ -2389,12 +2467,18 @@ pub const Coordinator = struct {
         var count: usize = 0;
         for (artifact.compile_time_roots.roots) |root| {
             switch (root.kind) {
-                .hoisted_constant => count += 1,
+                .hoisted_constant,
+                .hoisted_validation,
+                => count += 1,
+                .callable_binding => switch (root.source) {
+                    .hoisted => count += 1,
+                    .def, .expr, .statement, .required_binding => {},
+                },
                 .constant,
-                .callable_binding,
                 .expect,
                 .numeral_conversion,
                 .quote_conversion,
+                .field_default,
                 => {},
             }
         }
@@ -2410,12 +2494,18 @@ pub const Coordinator = struct {
         var i: usize = 0;
         for (artifact.compile_time_roots.roots) |root| {
             switch (root.kind) {
-                .hoisted_constant => {},
+                .hoisted_constant,
+                .hoisted_validation,
+                => {},
+                .callable_binding => switch (root.source) {
+                    .hoisted => {},
+                    .def, .expr, .statement, .required_binding => continue,
+                },
                 .constant,
-                .callable_binding,
                 .expect,
                 .numeral_conversion,
                 .quote_conversion,
+                .field_default,
                 => continue,
             }
             const source_expr = switch (root.source) {
@@ -2424,14 +2514,25 @@ pub const Coordinator = struct {
                 .expr,
                 .statement,
                 .required_binding,
-                => coordinatorInvariant("hoisted constant root had non-expression source", .{}),
+                => coordinatorInvariant("selected hoisted root had non-expression source", .{}),
             };
             const body = root.hoisted_body orelse
-                coordinatorInvariant("hoisted constant root was missing selected-root body", .{});
+                coordinatorInvariant("selected hoisted root was missing its body", .{});
             roots[i] = .{
                 .expr = source_expr,
                 .pattern = root.source_pattern,
                 .body = try check.HoistRoots.cloneBody(allocator, body),
+                .value_kind = switch (root.kind) {
+                    .hoisted_constant => .data_constant,
+                    .hoisted_validation => .discarded,
+                    .callable_binding => .callable_binding,
+                    .constant,
+                    .expect,
+                    .numeral_conversion,
+                    .quote_conversion,
+                    .field_default,
+                    => unreachable,
+                },
             };
             initialized += 1;
             i += 1;
@@ -2601,7 +2702,6 @@ pub const Coordinator = struct {
             switch (task) {
                 .parse => |t| std.debug.print("[COORD] ENQUEUE parse: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
                 .canonicalize => |t| std.debug.print("[COORD] ENQUEUE canonicalize: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
-                .platform_requirements_check => |t| std.debug.print("[COORD] ENQUEUE platform_requirements_check: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
                 .type_check => |t| std.debug.print("[COORD] ENQUEUE type_check: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
             }
         }
@@ -2898,6 +2998,7 @@ pub const Coordinator = struct {
         imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
         platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey,
         explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
+        validation: can.Can.Validation,
     ) Allocator.Error!check.CheckedArtifact.CheckedModuleArtifactKey {
         var typed = try CheckedModules.initForRootModule(self.gpa, env, imported_envs);
         defer typed.modules.deinit();
@@ -2910,6 +3011,7 @@ pub const Coordinator = struct {
                 .imports = imported_artifacts,
                 .platform_requirement_context = platform_requirement_context,
                 .explicit_roots = explicit_roots,
+                .validation = validation,
             },
         );
     }
@@ -3003,7 +3105,7 @@ pub const Coordinator = struct {
 
         const current_env = mod.moduleEnv() orelse return false;
         if (!resolvedDirectImportsHaveCheckedOutput(current_env, imported_artifacts)) return false;
-        const cache_key = self.checkedModuleCacheKey(current_env, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots) catch {
+        const cache_key = self.checkedModuleCacheKey(current_env, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots, mod.validation) catch {
             manager.stats.recordMiss();
             return false;
         };
@@ -3260,6 +3362,8 @@ pub const Coordinator = struct {
             );
         }
 
+        try self.resolvePublicTargetsForModule(pkg, mod);
+
         mod.phase = .Done;
         mod.completion = .succeeded;
         mod.visit_color = .black;
@@ -3275,6 +3379,51 @@ pub const Coordinator = struct {
         }
         try self.wakeCrossPackageDependents(pkg.name, module_id);
         try self.wakeAppsWaitingOnPlatformRequirements();
+    }
+
+    /// Resolve nested public selections exactly once, before any dependent can
+    /// consume them. Declaration indices are stable within the completed CIR
+    /// environment and avoid reconstructing qualified names in every importer.
+    fn resolvePublicTargetsForModule(
+        self: *Coordinator,
+        pkg: *PackageState,
+        mod: *ModuleState,
+    ) Allocator.Error!void {
+        const env = mod.moduleEnv() orelse
+            coordinatorInvariant("successful module '{s}' had no module environment", .{mod.name});
+
+        const targets = pkg.public_module_targets_by_source;
+        var low: usize = 0;
+        var high = targets.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (std.mem.order(u8, targets[mid].logicalModule(), mod.name) == .lt)
+                low = mid + 1
+            else
+                high = mid;
+        }
+
+        for (targets[low..]) |target| {
+            if (!std.mem.eql(u8, target.logicalModule(), mod.name)) break;
+            switch (target.selection) {
+                .unresolved_nested_type => {
+                    const nested_type = target.unresolvedNestedType() orelse unreachable;
+                    const statement = compile_package.resolveSelectedType(env, target.source_target) orelse
+                        coordinatorInvariant(
+                            "public nested type '{s}.{s}' had no exposed declaration",
+                            .{ mod.name, nested_type },
+                        );
+                    target.source_target = try self.gpa.realloc(target.source_target, target.logical_module_len);
+                    target.selection = .{ .type_decl = statement };
+                },
+                .whole_module => {
+                    if (compile_package.resolveMainType(env)) |statement| {
+                        target.selection = .{ .type_decl = statement };
+                    }
+                },
+                .type_decl => {},
+            }
+        }
     }
 
     /// Complete modules with failure and propagate that explicit outcome through
@@ -3797,6 +3946,21 @@ pub const Coordinator = struct {
         return null;
     }
 
+    fn buildPlatformRequirementOwnerEnvs(
+        allocator: Allocator,
+        imported_envs: []const *ModuleEnv,
+        imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
+        available_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    ) Allocator.Error![]const *const ModuleEnv {
+        return compile_package.buildCheckOwnerEnvs(
+            allocator,
+            imported_envs,
+            imported_artifacts,
+            available_artifacts,
+            null,
+        );
+    }
+
     /// App roots wait for the registered platform's root module to finish
     /// checking successfully, so its requirement surface is final before the
     /// app is checked. Platform failure propagates to the app root instead of
@@ -3836,7 +4000,7 @@ pub const Coordinator = struct {
         module_id: ModuleId,
         mod: *ModuleState,
     ) Allocator.Error!void {
-        const platform_surface: ?messages.PlatformRequirementSurface = if (self.platformRequirementSurfaceForApp(mod)) |surface| surface.* else null;
+        var platform_surface: ?messages.PlatformRequirementSurface = if (self.platformRequirementSurfaceForApp(mod)) |surface| surface.* else null;
         const platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey = if (platform_surface) |surface| surface.context else null;
 
         const task_payload_alloc = self.getWorkerAllocator();
@@ -3849,21 +4013,33 @@ pub const Coordinator = struct {
         try mod.moduleEnv().?.ensureContentIdentity(imported_envs);
         const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod, task_payload_alloc);
         errdefer task_payload_alloc.free(imported_artifacts);
+
+        var platform_requirement_imported_envs: []const *ModuleEnv = &.{};
+        var platform_requirement_imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact = &.{};
+        defer {
+            if (platform_requirement_imported_envs.len > 0) task_payload_alloc.free(platform_requirement_imported_envs);
+            if (platform_requirement_imported_artifacts.len > 0) task_payload_alloc.free(platform_requirement_imported_artifacts);
+        }
+
         // Requirement unification copies platform-owned types into the app's
-        // store, so the app's published API can reference the platform's nominal
-        // types—including types that only appear in the platform's `requires`
-        // signatures (like `Host`), whose declaring modules are not part of the
-        // platform root's public-API type owners. Seed the availability walk with
-        // every checked module of the platform package so each such declaration
-        // is resolvable when the app publishes checked types.
+        // store, including types that only appear in `requires` signatures. The
+        // platform root's publication is deferred for app builds, so seed the
+        // availability walk with its direct imports and every published module
+        // in the platform package. This makes each requirement owner available
+        // to checking and publication, including owners from external packages.
         var platform_seed_list = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
         defer platform_seed_list.deinit(task_payload_alloc);
         if (platform_surface != null) {
-            if (self.platformRootCandidate()) |platform_root| {
-                for (platform_root.pkg.modules.items) |*platform_mod| {
-                    if (platform_mod.checkedArtifact()) |platform_artifact| {
-                        try platform_seed_list.append(task_payload_alloc, check.CheckedArtifact.importedView(platform_artifact));
-                    }
+            const platform_root = self.platformRootCandidate() orelse
+                coordinatorInvariant("platform requirement surface has no registered platform root", .{});
+            platform_requirement_imported_envs = try self.buildTypecheckImportedEnvs(platform_root.pkg, platform_root.mod, task_payload_alloc);
+            platform_requirement_imported_artifacts = try self.buildTypecheckImportedArtifacts(platform_root.pkg, platform_root.mod, task_payload_alloc);
+            for (platform_requirement_imported_artifacts) |platform_import| {
+                try platform_seed_list.append(task_payload_alloc, platform_import.view);
+            }
+            for (platform_root.pkg.modules.items) |*platform_mod| {
+                if (platform_mod.checkedArtifact()) |platform_artifact| {
+                    try platform_seed_list.append(task_payload_alloc, check.CheckedArtifact.importedView(platform_artifact));
                 }
             }
         }
@@ -3883,6 +4059,18 @@ pub const Coordinator = struct {
             return;
         }
 
+        const platform_requirement_owner_envs: []const *const ModuleEnv = if (platform_surface != null)
+            try buildPlatformRequirementOwnerEnvs(
+                task_payload_alloc,
+                platform_requirement_imported_envs,
+                platform_requirement_imported_artifacts,
+                available_artifacts,
+            )
+        else
+            &.{};
+        errdefer if (platform_requirement_owner_envs.len > 0) task_payload_alloc.free(platform_requirement_owner_envs);
+        if (platform_surface) |*surface| surface.owner_modules = platform_requirement_owner_envs;
+
         mod.phase = .TypeCheck;
         mod.visit_color = .black;
         try self.enqueueTask(.{
@@ -3897,6 +4085,7 @@ pub const Coordinator = struct {
                 .available_artifacts = available_artifacts,
                 .platform_requirements = platform_surface,
                 .explicit_roots = explicit_roots,
+                .validation = mod.validation,
                 .defer_publication = self.moduleDefersPublication(mod),
             },
         });
@@ -3927,7 +4116,7 @@ pub const Coordinator = struct {
 
     fn topLevelDefForIdentName(env: *const ModuleEnv, ident_name: []const u8) ?CIR.Def.Idx {
         const ident = env.common.findIdent(ident_name) orelse return null;
-        for (env.store.sliceDefs(env.global_value_defs)) |def_idx| {
+        for (env.store.sliceDefs(env.top_level_value_defs)) |def_idx| {
             const def = env.store.getDef(def_idx);
             if (defPatternIdent(&env.store, def.pattern)) |pattern_ident| {
                 if (pattern_ident.eql(ident)) return def_idx;
@@ -4233,9 +4422,19 @@ pub const Coordinator = struct {
                 .succeeded => {
                     const ext_env = self.getExternalEnv(pkg.name, ext_name) orelse
                         coordinatorInvariant("successful external import '{s}' had no module environment", .{ext_name});
+                    const public_target = self.getExternalPublicTarget(pkg.name, ext_name) orelse
+                        coordinatorInvariant("successful external import '{s}' had no public target", .{ext_name});
                     try imports.append(allocator, .{
                         .import_name = ext_name,
                         .module_env = ext_env,
+                        .selected_type_decl = switch (public_target.selection) {
+                            .type_decl => |statement| statement,
+                            .whole_module => null,
+                            .unresolved_nested_type => coordinatorInvariant(
+                                "successful external import '{s}' had an unresolved public nested type",
+                                .{ext_name},
+                            ),
+                        },
                     });
                 },
                 .waiting, .failed => |readiness| coordinatorInvariant(
@@ -4264,6 +4463,23 @@ pub const Coordinator = struct {
         return null;
     }
 
+    /// Index of `env` in the type-check environment list, appending it if this
+    /// is the first import that names it. Registering by environment keeps the
+    /// list one entry per source module, which is what `CheckedModules` keys on.
+    fn resolveImportedEnvIndex(
+        allocator: Allocator,
+        imported_envs: *std.ArrayList(*ModuleEnv),
+        env_indices: *std.AutoHashMapUnmanaged(*ModuleEnv, u32),
+        env: *ModuleEnv,
+    ) Allocator.Error!u32 {
+        const entry = try env_indices.getOrPut(allocator, env);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = @intCast(imported_envs.items.len);
+            try imported_envs.append(allocator, env);
+        }
+        return entry.value_ptr.*;
+    }
+
     fn buildTypecheckImportedEnvsForEnv(
         self: *Coordinator,
         pkg: *PackageState,
@@ -4274,10 +4490,19 @@ pub const Coordinator = struct {
         const expected_capacity = 1 + mod.imports.items.len + mod.external_imports.items.len;
         var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(allocator, expected_capacity);
         errdefer imported_envs.deinit(allocator);
-        var local_module_indices = collections.DenseMap(ModuleId, u32).init(allocator);
-        defer local_module_indices.deinit();
+
+        // `imported_envs` is the list of distinct source modules this module is
+        // checked against, so each environment appears exactly once and every
+        // import that names it resolves to that one index. Several import names
+        // can denote the same source module -- two nested types exposed from one
+        // module (`Container.Request`/`Container.Response`) are imported under
+        // separate names but share `Container`'s environment -- so identity here
+        // is the environment, not the import name.
+        var env_indices: std.AutoHashMapUnmanaged(*ModuleEnv, u32) = .empty;
+        defer env_indices.deinit(allocator);
 
         try imported_envs.append(allocator, self.builtin_modules.builtin_module.env);
+        try env_indices.put(allocator, self.builtin_modules.builtin_module.env, 0);
         module_env.imports.clearResolvedModules();
 
         const direct_imports = module_env.imports.imports.items.items;
@@ -4299,16 +4524,9 @@ pub const Coordinator = struct {
                         .{ mod.name, imp.name, @tagName(imp.phase), @tagName(imp.completion) },
                     );
                 }
-                const resolved_module_idx = if (local_module_indices.get(imp_id)) |existing_idx|
-                    existing_idx
-                else new_idx: {
-                    const env = imp.moduleEnv() orelse
-                        coordinatorInvariant("successful local import '{s}' had no module environment", .{imp.name});
-                    const new_idx: u32 = @intCast(imported_envs.items.len);
-                    try imported_envs.append(allocator, env);
-                    try local_module_indices.put(imp_id, new_idx);
-                    break :new_idx new_idx;
-                };
+                const env = imp.moduleEnv() orelse
+                    coordinatorInvariant("successful local import '{s}' had no module environment", .{imp.name});
+                const resolved_module_idx = try resolveImportedEnvIndex(allocator, &imported_envs, &env_indices, env);
                 module_env.imports.setResolvedModule(import_idx, resolved_module_idx);
                 continue;
             }
@@ -4318,8 +4536,7 @@ pub const Coordinator = struct {
                 .succeeded => {
                     const ext_env = self.getExternalEnv(pkg.name, import_name) orelse
                         coordinatorInvariant("successful external import '{s}' had no module environment", .{import_name});
-                    const resolved_module_idx: u32 = @intCast(imported_envs.items.len);
-                    try imported_envs.append(allocator, ext_env);
+                    const resolved_module_idx = try resolveImportedEnvIndex(allocator, &imported_envs, &env_indices, ext_env);
                     module_env.imports.setResolvedModule(import_idx, resolved_module_idx);
                 },
                 .waiting, .failed => |readiness| coordinatorInvariant(
@@ -4470,7 +4687,7 @@ pub const Coordinator = struct {
                     std.debug.panic("compile.coordinator.tryUnblock missing cached AST for {s}", .{mod.name}),
                 .depth = mod.depth,
                 .imported_modules = imported_modules,
-                .validate_as_explicit_roots = mod.validate_as_explicit_roots,
+                .validation = mod.validation,
             },
         });
     }
@@ -4509,7 +4726,8 @@ pub const Coordinator = struct {
         if (!target_pkg.public_modules_ready) {
             coordinatorInvariant("external import reached package '{s}' before its public module map was registered", .{target_pkg_name});
         }
-        const logical_module = target_pkg.public_module_targets.get(qualified.module) orelse return .not_public;
+        const public_target = target_pkg.getPublicModuleTarget(qualified.module) orelse return .not_public;
+        const logical_module = public_target.logicalModule();
         const path = try self.resolveModulePath(target_pkg.root_dir, logical_module);
         defer self.gpa.free(path);
 
@@ -4620,6 +4838,14 @@ pub const Coordinator = struct {
             semantic.env
         else
             null;
+    }
+
+    fn getExternalPublicTarget(self: *Coordinator, source_pkg: []const u8, import_name: []const u8) ?PublicModuleTarget {
+        const qualified = base.module_path.parseQualifiedImport(import_name) orelse return null;
+        const source = self.packages.get(source_pkg) orelse return null;
+        const target_pkg_name = source.shorthands.get(qualified.qualifier) orelse return null;
+        const target_pkg = self.packages.get(target_pkg_name) orelse return null;
+        return target_pkg.getPublicModuleTarget(qualified.module);
     }
 
     pub fn getExternalArtifact(self: *Coordinator, source_pkg: []const u8, import_name: []const u8) ?*const check.CheckedArtifact.CheckedModuleArtifact {
@@ -4885,7 +5111,7 @@ pub const Coordinator = struct {
             task.source_dir,
             known_modules.items,
             task.imported_modules,
-            task.validate_as_explicit_roots,
+            task.validation,
         );
 
         const canonicalize_ns = readStageTimer(self.roc_ctx.std_io, &canonicalize_timer);
@@ -4956,6 +5182,9 @@ pub const Coordinator = struct {
         defer task_allocs.result.free(task.imported_envs);
         defer task_allocs.result.free(task.imported_artifacts);
         defer task_allocs.result.free(task.available_artifacts);
+        defer if (task.platform_requirements) |surface| {
+            if (surface.owner_modules.len > 0) task_allocs.result.free(surface.owner_modules);
+        };
         defer task_allocs.result.free(task.explicit_roots);
 
         const result_alloc = task_allocs.result;
@@ -4977,6 +5206,7 @@ pub const Coordinator = struct {
             if (task.platform_requirements) |surface| surface.checkerInput() else null,
             if (task.platform_requirements) |surface| surface.context else null,
             task.explicit_roots,
+            task.validation,
             ctfe_options,
             task.defer_publication,
         );
@@ -5137,6 +5367,7 @@ const CheckedModuleCacheRunStats = struct {
     build: compile_build.BuildEnv.BuildStats,
     cache: CacheStats,
     hoisted_constants: usize,
+    hoisted_validations: usize,
     pattern_extraction_regions: PatternExtractionRegionStats,
     exhaustiveness_sites: ExhaustivenessSiteStats,
 };
@@ -5174,6 +5405,9 @@ const PatternExtractionRegionStatsError = error{
     PatternExtractionValueWasNotSyntheticLookup,
     PatternExtractionLookupPatternMismatch,
     PatternExtractionLookupWasNotResolved,
+    PatternExtractionResolvedRefMissing,
+    PatternExtractionCallableLookupWasNotLexical,
+    PatternExtractionConstantLookupWasNotHoisted,
 };
 
 var shared_test_builtins: ?eval.BuiltinModules = null;
@@ -5231,6 +5465,7 @@ fn compileAppWithCheckedModuleCache(
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
     const hoisted_constants = countHoistedConstants(root, imports, relations);
+    const hoisted_validations = countHoistedValidations(root, imports, relations);
     const pattern_extraction_regions = try collectPatternExtractionRegionStats(root, imports, relations);
     const exhaustiveness_sites = collectExhaustivenessSiteStats(root, imports, relations);
 
@@ -5238,6 +5473,7 @@ fn compileAppWithCheckedModuleCache(
         .build = coord.getBuildStats(),
         .cache = cache_manager.stats,
         .hoisted_constants = hoisted_constants,
+        .hoisted_validations = hoisted_validations,
         .pattern_extraction_regions = pattern_extraction_regions,
         .exhaustiveness_sites = exhaustiveness_sites,
     };
@@ -6106,11 +6342,27 @@ fn hashPatternExtractionRegionsForView(
     view: check.CheckedArtifact.ImportedModuleView,
 ) PatternExtractionRegionStatsError!void {
     for (view.compile_time_roots.roots) |root| {
-        if (root.kind != .hoisted_constant) continue;
+        const is_selected_root = switch (root.kind) {
+            .hoisted_constant,
+            .hoisted_validation,
+            => true,
+            .callable_binding => switch (root.source) {
+                .hoisted => true,
+                .def, .expr, .statement, .required_binding => false,
+            },
+            .constant,
+            .expect,
+            .numeral_conversion,
+            .quote_conversion,
+            .field_default,
+            => false,
+        };
+        if (!is_selected_root) continue;
         const body = root.hoisted_body orelse continue;
         const extraction = switch (body) {
             .expr => continue,
             .pattern_extraction => |payload| payload,
+            .pattern_validation => continue,
         };
         count.* += 1;
 
@@ -6150,6 +6402,20 @@ fn hashPatternExtractionRegionsForView(
         const lookup = synthetic_lookup.data.lookup_local;
         if (lookup.pattern != root_pattern) return error.PatternExtractionLookupPatternMismatch;
         if (lookup.resolved == null) return error.PatternExtractionLookupWasNotResolved;
+        const resolved_index = @intFromEnum(lookup.resolved.?);
+        if (resolved_index >= view.resolved_value_refs.records.len) return error.PatternExtractionResolvedRefMissing;
+        const resolved = view.resolved_value_refs.records[resolved_index].ref;
+        switch (root.kind) {
+            .callable_binding => if (resolved != .pattern_binder) return error.PatternExtractionCallableLookupWasNotLexical,
+            .hoisted_constant => if (resolved != .selected_hoisted_const) return error.PatternExtractionConstantLookupWasNotHoisted,
+            .hoisted_validation,
+            .constant,
+            .expect,
+            .numeral_conversion,
+            .quote_conversion,
+            .field_default,
+            => unreachable,
+        }
 
         hasher.update(&view.key.bytes);
         hashU32IntoSha256(hasher, @intFromEnum(root.id));
@@ -6286,6 +6552,29 @@ fn countHoistedConstants(
     var count = root.hoisted_constants.entries.len;
     for (imports) |view| count += view.hoisted_constants.entries.len;
     for (relations) |view| count += view.hoisted_constants.entries.len;
+    return count;
+}
+
+fn countHoistedValidations(
+    root: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    relations: []const check.CheckedArtifact.ImportedModuleView,
+) usize {
+    var count: usize = 0;
+    const root_view = check.CheckedArtifact.importedView(root);
+    for (root_view.compile_time_roots.roots) |entry| {
+        if (entry.kind == .hoisted_validation) count += 1;
+    }
+    for (imports) |view| {
+        for (view.compile_time_roots.roots) |entry| {
+            if (entry.kind == .hoisted_validation) count += 1;
+        }
+    }
+    for (relations) |view| {
+        for (view.compile_time_roots.roots) |entry| {
+            if (entry.kind == .hoisted_validation) count += 1;
+        }
+    }
     return count;
 }
 
@@ -6431,11 +6720,16 @@ test "Coordinator checked module cache preserves hoisted roots on hit" {
         \\    Ok(value) => value
         \\}
         \\
+        \\ops : { scale : I64 -> I64, other : I64 }
+        \\ops = { scale: |x| x + 2.I64, other: 0 }
+        \\{ scale, .. } = ops
+        \\
         \\main! = |args| {
         \\    pair = (top, 2.I64)
         \\    (left, right) = pair
         \\    Ok(tag_value) = Ok(45.I64)
-        \\    _ = left + right + tag_value + List.len(args).to_i64_wrap()
+        \\    _ = scale(left + right) + tag_value + List.len(args).to_i64_wrap()
+        \\    Ok(_) = (0xFF.U32).to_u8_try()
         \\    Echo.line!(message)
         \\    Ok({})
         \\}
@@ -6478,12 +6772,14 @@ test "Coordinator checked module cache preserves hoisted roots on hit" {
 
     const first = try compileAppWithCheckedModuleCache(allocator, cache_dir, app_path);
     try std.testing.expect(first.hoisted_constants >= 2);
-    try std.testing.expect(first.pattern_extraction_regions.count >= 3);
+    try std.testing.expect(first.hoisted_validations > 0);
+    try std.testing.expect(first.pattern_extraction_regions.count >= 4);
     try std.testing.expect(first.exhaustiveness_sites.count > 0);
 
     const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, app_path);
     try std.testing.expect(second.cache.hits > 0);
     try std.testing.expectEqual(first.hoisted_constants, second.hoisted_constants);
+    try std.testing.expectEqual(first.hoisted_validations, second.hoisted_validations);
     try std.testing.expectEqual(first.pattern_extraction_regions.count, second.pattern_extraction_regions.count);
     try std.testing.expectEqualSlices(
         u8,
@@ -7235,12 +7531,18 @@ test "PackageState keeps public names separate from logical module identity" {
 
     const private_id = try pkg.ensureModule(allocator, "Parser", "/pkg/Parser.roc");
     const public_target_id = try pkg.ensureModule(allocator, "Internal/Parser", "/pkg/Internal/Parser.roc");
-    try pkg.addPublicModule(allocator, "Parser", "Internal/Parser");
-    pkg.finishPublicModules();
+    try pkg.addPublicModule(allocator, "Parser", "Internal/Parser", null);
+    try pkg.addPublicModule(allocator, "Result", "Internal/Parser", "Result");
+    try pkg.finishPublicModules(allocator);
 
     try std.testing.expectEqual(private_id, pkg.getModuleId("Parser").?);
     try std.testing.expectEqual(public_target_id, pkg.getPublicModuleId("Parser").?);
+    try std.testing.expectEqual(public_target_id, pkg.getPublicModuleId("Result").?);
     try std.testing.expect(pkg.getPublicModuleId("Internal/Parser") == null);
+
+    const nested_target = pkg.getPublicModuleTarget("Result").?;
+    try std.testing.expectEqualStrings("Internal/Parser", nested_target.logicalModule());
+    try std.testing.expectEqualStrings("Result", nested_target.unresolvedNestedType().?);
 }
 
 test "exact path spelling preserves case and honors platform separators" {

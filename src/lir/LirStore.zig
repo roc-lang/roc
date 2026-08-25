@@ -429,6 +429,22 @@ pub fn getLocalPtr(self: *Self, id: LocalId) *Local {
     return self.locals.getPtrImmediate(@intFromEnum(id));
 }
 
+/// Records the boxy descriptor governing a local's runtime payload.
+pub fn setLocalBoxyDesc(self: *Self, id: LocalId, desc: lir_defs.BoxyDescRef) void {
+    const local = self.getLocalPtr(id);
+    if (local.boxy_desc) |existing| {
+        if (!std.meta.eql(existing, desc)) {
+            std.debug.panic(
+                "LIR store invariant violated: local {d} was assigned two different boxy descriptors: existing={any} new={any}",
+                .{ @intFromEnum(id), existing, desc },
+            );
+        }
+        return;
+    }
+    local.boxy_desc = desc;
+}
+
+/// Attaches descriptor metadata without mutating existing LIR statements.
 /// Stores local ids and returns the corresponding flat-storage span.
 pub fn addLocalSpan(self: *Self, ids: []const LocalId) Allocator.Error!LocalSpan {
     if (ids.len == 0) return LocalSpan.empty();
@@ -457,11 +473,17 @@ pub fn getU64Span(self: *const Self, span: U64Span) StoreSpanBorrow(u64, "u64s")
     return self.u64s.borrowSpan(span.start, span.len);
 }
 
-fn addU32Span(self: *Self, values: []const u32) Allocator.Error!U32Span {
+/// Stores u32 values and returns the corresponding flat-storage span.
+pub fn addU32Span(self: *Self, values: []const u32) Allocator.Error!U32Span {
     if (values.len == 0) return U32Span.empty();
     const start: u32 = @intCast(self.u32s.len());
     try self.u32s.appendSlice(self.allocator, values);
     return .{ .start = start, .len = @intCast(values.len) };
+}
+
+/// Resolves a u32 span to its stored slice.
+pub fn getU32Span(self: *const Self, span: U32Span) StoreSpanBorrow(u32, "u32s") {
+    return self.u32s.borrowSpan(span.start, span.len);
 }
 
 /// Intern the canonical erased-call argument layout for an ordered signature.
@@ -525,6 +547,18 @@ pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
         .assign_call,
         .assign_call_erased,
         .assign_packed_erased_fn,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_reuse_box,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .boxy_tag_match,
+        .assign_call_dict,
         .assign_low_level,
         .assign_list,
         .assign_struct,

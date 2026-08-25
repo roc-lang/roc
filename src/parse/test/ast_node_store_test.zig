@@ -63,9 +63,20 @@ test "NodeStore round trip - Headers" {
     try headers.append(gpa, AST.Header{
         .app = .{
             .packages = rand_idx(random, AST.Collection.Idx),
-            .platform_idx = rand_idx(random, AST.RecordField.Idx),
+            .platform_idx = @enumFromInt(11),
             .provides = rand_idx(random, AST.Collection.Idx),
             .roc_version = @enumFromInt(7),
+            .region = rand_region(random),
+        },
+    });
+
+    // An app header that names no platform round trips with a null platform.
+    try headers.append(gpa, AST.Header{
+        .app = .{
+            .packages = rand_idx(random, AST.Collection.Idx),
+            .platform_idx = null,
+            .provides = rand_idx(random, AST.Collection.Idx),
+            .roc_version = null,
             .region = rand_region(random),
         },
     });
@@ -789,9 +800,8 @@ test "NodeStore round trip - Expr" {
 
     try expressions.append(gpa, AST.Expr{
         .field_access = .{
-            .left = rand_idx(random, AST.Expr.Idx),
-            .right = rand_idx(random, AST.Expr.Idx),
-            .operator = rand_token_idx(random),
+            .receiver = rand_idx(random, AST.Expr.Idx),
+            .segments = .{ .span = rand_span(random) },
             .region = rand_region(random),
         },
     });
@@ -952,6 +962,43 @@ test "NodeStore round trip - Expr" {
     }
 }
 
+test "NodeStore preserves flat field-access paths" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.initCapacity(gpa, 3);
+    defer store.deinit();
+
+    const receiver = try store.addExpr(.{ .ident = .{
+        .token = 10,
+        .qualifiers = .{ .span = .{ .start = 0, .len = 0 } },
+        .region = .{ .start = 10, .end = 11 },
+    } });
+    const required = try store.addOrExtendFieldAccess(
+        receiver,
+        .{ .field_token = 11, .mode = .required },
+        .{ .start = 10, .end = 12 },
+    );
+    const mixed = try store.addOrExtendFieldAccess(
+        required,
+        .{ .field_token = 12, .mode = .optional },
+        .{ .start = 10, .end = 13 },
+    );
+
+    try testing.expectEqual(required, mixed);
+    const mixed_node = store.nodes.get(@enumFromInt(@intFromEnum(mixed)));
+    try testing.expectEqual(.field_access, mixed_node.tag);
+
+    const access = store.getExpr(mixed).field_access;
+    try testing.expectEqual(receiver, access.receiver);
+    try testing.expectEqual(AST.TokenizedRegion{ .start = 10, .end = 13 }, access.region);
+
+    const segments = store.fieldAccessSegmentSlice(access.segments);
+    try testing.expectEqual(@as(usize, 2), segments.len);
+    try testing.expectEqual(AST.FieldAccessSegment{ .field_token = 11, .mode = .required }, segments[0]);
+    try testing.expectEqual(AST.FieldAccessSegment{ .field_token = 12, .mode = .optional }, segments[1]);
+    try testing.expect(store.fieldAccessContainsOptional(mixed));
+    try testing.expect(!store.fieldAccessContainsOptional(receiver));
+}
+
 test "NodeStore round trip - Targets" {
     var prng = std.Random.DefaultPrng.init(0x54415247455453);
     const random = prng.random();
@@ -1091,6 +1138,51 @@ test "NodeStore rejects optional index sentinel overflow in release builds" {
         .guard = max_expr,
         .body = @enumFromInt(1),
         .region = .{ .start = 0, .end = 0 },
+    }));
+}
+
+test "NodeStore round trip - annotation record field optional marker" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.initCapacity(gpa, 4);
+    defer store.deinit();
+
+    const fields = [_]AST.AnnoRecordField{
+        .{
+            .name = 1,
+            .optional_mark = null,
+            .ty = @enumFromInt(2),
+            .region = .{ .start = 1, .end = 3 },
+        },
+        .{
+            .name = 4,
+            .optional_mark = 0,
+            .ty = @enumFromInt(5),
+            .region = .{ .start = 4, .end = 7 },
+        },
+        .{
+            .name = std.math.maxInt(u32),
+            .optional_mark = std.math.maxInt(u32) - 1,
+            .ty = @enumFromInt(std.math.maxInt(u32)),
+            .region = .{ .start = std.math.maxInt(u32) - 1, .end = std.math.maxInt(u32) },
+        },
+    };
+
+    for (fields) |field| {
+        const idx = try store.addAnnoRecordField(field);
+        try testing.expectEqualDeep(field, try store.getAnnoRecordField(idx));
+    }
+}
+
+test "NodeStore rejects optional annotation field marker sentinel overflow" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.initCapacity(gpa, 2);
+    defer store.deinit();
+
+    try testing.expectError(error.OutOfMemory, store.addAnnoRecordField(.{
+        .name = 1,
+        .optional_mark = std.math.maxInt(u32),
+        .ty = @enumFromInt(2),
+        .region = .{ .start = 0, .end = 1 },
     }));
 }
 

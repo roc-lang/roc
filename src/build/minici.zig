@@ -9,8 +9,8 @@ const raw_dir = out_dir ++ "/raw";
 const logs_dir = out_dir ++ "/logs";
 const heartbeat_env = "MINICI_HEARTBEAT_INTERVAL_MS";
 const default_heartbeat_interval_ms: u64 = 30_000;
-/// Override for the auto-detected CPU budget on memory-constrained hosts.
-/// See `applyMemoryAwareCpuLimit`. `MINICI_MAX_CPUS=0` or unset means auto.
+/// Override for the auto-detected `build-ci` job budget.
+/// See `memoryAwareBuildJobs`. `MINICI_MAX_CPUS=0` or unset means auto.
 const cpu_limit_env = "MINICI_MAX_CPUS";
 
 /// How many bytes from the start and end of a failing step's log to echo to
@@ -86,6 +86,7 @@ const jobs = [_]Job{
     .{ .name = "run-check-simd-codegen" },
     .{ .name = "run-check-baseline-codegen" },
     .{ .name = "run-check-match-extension-codegen" },
+    .{ .name = "run-check-str-eq-same-allocation" },
     .{ .name = "run-check-snapshots" },
     .{ .name = "run-check-test-asset-coverage" },
     .{ .name = "run-test-zig-module-collections" },
@@ -891,6 +892,7 @@ fn buildCommand(
     zig_exe: []const u8,
     build_args: []const []const u8,
     step: []const u8,
+    max_jobs: ?usize,
     stats_path: ?[]const u8,
     run_args: []const []const u8,
 ) ![]const []const u8 {
@@ -902,6 +904,9 @@ fn buildCommand(
     try argv.append(allocator, "all");
     try argv.append(allocator, "--color");
     try argv.append(allocator, "off");
+    if (max_jobs) |jobs_count| {
+        try argv.append(allocator, try std.fmt.allocPrint(allocator, "-j{d}", .{jobs_count}));
+    }
     for (build_args) |arg| {
         try argv.append(allocator, arg);
     }
@@ -1332,37 +1337,54 @@ fn onlineCpuCount() ?usize {
     return std.posix.CPU_COUNT(set);
 }
 
-/// Total physical RAM in bytes, or null if it cannot be determined.
-fn totalRamBytes() ?u64 {
-    var info: std.os.linux.Sysinfo = undefined;
-    if (@as(isize, @bitCast(std.os.linux.sysinfo(&info))) != 0) return null;
-    return @as(u64, info.totalram) * @as(u64, @max(1, info.mem_unit));
+/// Parses Linux's estimate of RAM that can be allocated without swapping.
+fn parseAvailableRamBytes(meminfo: []const u8) ?u64 {
+    var lines = std.mem.splitScalar(u8, meminfo, '\n');
+    while (lines.next()) |line| {
+        const prefix = "MemAvailable:";
+        if (!std.mem.startsWith(u8, line, prefix)) continue;
+        var fields = std.mem.tokenizeAny(u8, line[prefix.len..], " \t");
+        const kib = std.fmt.parseInt(u64, fields.next() orelse return null, 10) catch return null;
+        const unit = fields.next() orelse return null;
+        if (!std.mem.eql(u8, unit, "kB")) return null;
+        return std.math.mul(u64, kib, 1024) catch null;
+    }
+    return null;
 }
 
-/// How many heavy `zig build` compilations of the roc/LLVM sources fit in RAM at
-/// once. Each needs several GiB (observed peak RSS 3.5-4.9 GiB), so we reserve
-/// headroom for the OS/desktop and divide the rest. Never returns fewer than 1.
-fn cpuBudgetForRam(total_ram_bytes: u64, online_cpus: usize) usize {
-    const total_mib = total_ram_bytes / (1024 * 1024);
+/// Linux's current estimate of RAM available without swapping.
+fn availableRamBytes() ?u64 {
+    if (builtin.os.tag != .linux) return null;
+    const linux = std.os.linux;
+    const open_rc = linux.openat(linux.AT.FDCWD, "/proc/meminfo", .{}, 0);
+    if (linux.errno(open_rc) != .SUCCESS) return null;
+    const fd: i32 = @intCast(open_rc);
+    defer _ = linux.close(fd);
+    var meminfo: [64 * 1024]u8 = undefined;
+    var len: usize = 0;
+    while (len < meminfo.len) {
+        const read_rc = linux.read(fd, meminfo[len..].ptr, meminfo.len - len);
+        if (linux.errno(read_rc) != .SUCCESS) return null;
+        if (read_rc == 0) break;
+        len += read_rc;
+    }
+    return parseAvailableRamBytes(meminfo[0..len]);
+}
+
+/// How many concurrent heavy Roc/LLVM compilations fit in currently available
+/// RAM. A large compiler root has been observed at 6.8 GiB RSS, so reserve OS
+/// headroom and budget 6.5 GiB per slot. Never returns fewer than 1.
+fn cpuBudgetForAvailableRam(available_ram_bytes: u64, online_cpus: usize) usize {
+    const available_mib = available_ram_bytes / (1024 * 1024);
     const reserve_mib: u64 = 2048; // ~2 GiB for the OS/desktop + MiniCI itself
-    const per_compile_mib: u64 = 4096; // ~4 GiB budget per concurrent compile
-    if (total_mib <= reserve_mib + per_compile_mib) return 1;
-    const fits: u64 = (total_mib - reserve_mib) / per_compile_mib;
+    const per_compile_mib: u64 = 6656; // 6.5 GiB per concurrent compiler root
+    if (available_mib <= reserve_mib + per_compile_mib) return 1;
+    const fits: u64 = (available_mib - reserve_mib) / per_compile_mib;
     return @intCast(@min(@max(fits, 1), @as(u64, online_cpus)));
 }
 
-/// Whether we're running on Raspberry Pi hardware, per the firmware board name
-/// exposed in the device tree (e.g. "Raspberry Pi 5 Model B Rev 1.0"). The auto
-/// CPU limit is scoped to these boards: their limited RAM and slow SD-card swap
-/// turn an over-parallel build into an OOM that can hard-reboot the machine,
-/// whereas other hosts (including CI runners) have headroom and are left alone.
-fn isRaspberryPi(io: std.Io, allocator: std.mem.Allocator) bool {
-    const model = std.Io.Dir.cwd().readFileAlloc(io, "/sys/firmware/devicetree/base/model", allocator, .limited(256)) catch return false;
-    return std.mem.find(u8, model, "Raspberry Pi") != null;
-}
-
 /// Parses `MINICI_MAX_CPUS`. Null when unset/empty/invalid or `<1` (auto). An
-/// explicit value applies on any host, overriding the Raspberry Pi heuristic.
+/// explicit value applies on any host, overriding automatic RAM budgeting.
 fn envCpuOverride(env: *const std.process.Environ.Map) ?usize {
     const raw = env.get(cpu_limit_env) orelse return null;
     const trimmed = std.mem.trim(u8, raw, " \t");
@@ -1374,65 +1396,43 @@ fn envCpuOverride(env: *const std.process.Environ.Map) ?usize {
     return if (n >= 1) n else null;
 }
 
-/// Restricts this process (and thus the children it forks) to CPUs `[0, count)`.
-fn setCpuAffinity(count: usize) !void {
-    var set: std.os.linux.cpu_set_t = [_]usize{0} ** (std.os.linux.CPU_SETSIZE / @sizeOf(usize));
-    const word_bits = @bitSizeOf(usize);
-    var cpu: usize = 0;
-    while (cpu < count) : (cpu += 1) {
-        set[cpu / word_bits] |= @as(usize, 1) << @intCast(cpu % word_bits);
-    }
-    try std.os.linux.sched_setaffinity(0, &set);
-}
+/// Selects the `zig build build-ci` job count whose concurrent multi-GiB
+/// compiler roots fit in currently available RAM. Later MiniCI phases retain
+/// all CPUs because their already-built test runners do not create this build
+/// graph. `MINICI_MAX_CPUS=N` overrides automatic budgeting.
+fn memoryAwareBuildJobs(_: std.Io, _: std.mem.Allocator, env: *const std.process.Environ.Map) ?usize {
+    if (builtin.os.tag != .linux) return null;
 
-/// On a Raspberry Pi with little RAM, pin this process to a CPU subset so the
-/// `zig build` and test-worker children it spawns don't run one multi-GiB
-/// compile per core and exhaust RAM—which OOM-kills build jobs and, once swap
-/// starts thrashing, can hang the machine hard enough to reboot it.
-///
-/// Zig sizes compile parallelism (and the CLI test runner sizes its worker pool)
-/// to the visible CPU count, and children inherit our affinity: MiniCI forks
-/// every child from this (main) thread via an inline `std.process.run`, so
-/// restricting this thread restricts them all. `MINICI_MAX_CPUS=N` overrides the
-/// heuristic and applies on any host.
-fn applyMemoryAwareCpuLimit(io: std.Io, allocator: std.mem.Allocator, env: *const std.process.Environ.Map) void {
-    if (builtin.os.tag != .linux) return;
-
-    const online = onlineCpuCount() orelse return;
-    if (online <= 1) return;
+    const online = onlineCpuCount() orelse return null;
+    if (online <= 1) return null;
 
     const override = envCpuOverride(env);
+    const available_ram = availableRamBytes();
     const budget = if (override) |n|
         @min(n, online)
     else blk: {
-        // Auto-limiting only targets Raspberry Pi hardware.
-        if (!isRaspberryPi(io, allocator)) return;
-        break :blk cpuBudgetForRam(totalRamBytes() orelse return, online);
+        break :blk cpuBudgetForAvailableRam(available_ram orelse return null, online);
     };
-    if (budget >= online) return;
-
-    setCpuAffinity(budget) catch |err| {
-        std.debug.print("note: could not limit CPUs ({s}); continuing at full parallelism\n", .{@errorName(err)});
-        return;
-    };
+    if (budget >= online) return null;
 
     if (override != null) {
         std.debug.print(
-            "Limiting build to {d} of {d} CPUs ({s}).\n",
+            "Limiting build-ci to {d} parallel jobs across {d} CPUs ({s}); run phases retain all CPUs.\n",
             .{ budget, online, cpu_limit_env },
         );
     } else {
-        const total_mib = (totalRamBytes() orelse 0) / (1024 * 1024);
+        const available_mib = (available_ram orelse 0) / (1024 * 1024);
         std.debug.print(
-            "Raspberry Pi with {d} MiB RAM detected: limiting build to {d} of {d} CPUs to avoid OOM (set {s}=N to override).\n",
-            .{ total_mib, budget, online, cpu_limit_env },
+            "{d} MiB available RAM: limiting build-ci to {d} parallel jobs across {d} CPUs to avoid OOM; run phases retain all CPUs (set {s}=N to override).\n",
+            .{ available_mib, budget, online, cpu_limit_env },
         );
     }
+    return budget;
 }
 
 /// Entry point: build the CI artifacts, then run each `run-*` job in order,
-/// streaming heartbeats and a machine-readable report. Restricts CPU usage first
-/// on memory-constrained hosts (see `applyMemoryAwareCpuLimit`).
+/// streaming heartbeats and a machine-readable report. Limits only build graph
+/// parallelism on memory-constrained hosts (see `memoryAwareBuildJobs`).
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
     var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
@@ -1463,7 +1463,7 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().createDirPath(io, logs_dir);
 
     std.debug.print("=== MINICI ORCHESTRATOR ===\n", .{});
-    applyMemoryAwareCpuLimit(io, allocator, init.environ_map);
+    const build_jobs = memoryAwareBuildJobs(io, allocator, init.environ_map);
     const run_started_ns = nowNs(io);
     const run_started_unix_ms = unixMs(io);
     const total_phases = jobs.len + 1;
@@ -1474,7 +1474,7 @@ pub fn main(init: std.process.Init) !void {
         });
     }
 
-    const build_argv = try buildCommand(allocator, zig_exe, build_args, "build-ci", null, &.{});
+    const build_argv = try buildCommand(allocator, zig_exe, build_args, "build-ci", build_jobs, null, &.{});
     const build_log = logs_dir ++ "/build-ci.txt";
     const build_progress = Progress{ .current = 1, .total = total_phases };
     printBuildStart(build_progress);
@@ -1503,7 +1503,7 @@ pub fn main(init: std.process.Init) !void {
             try std.fmt.allocPrint(allocator, "{s}/{s}.json", .{ raw_dir, job.name })
         else
             null;
-        const argv = try buildCommand(allocator, zig_exe, build_args, job.name, stats_path, job.args);
+        const argv = try buildCommand(allocator, zig_exe, build_args, job.name, null, stats_path, job.args);
         const progress = Progress{ .current = job_index + 2, .total = total_phases };
         printRunStart(progress, job.name);
         const skip_reason: ?[]const u8 = if (selected_jobs.includes(job_index))
@@ -1555,6 +1555,26 @@ test "appendProgressPrefix aligns current phase to total width" {
     out.clearRetainingCapacity();
     try appendProgressPrefix(&out, std.testing.allocator, .{ .current = 7, .total = 123 });
     try std.testing.expectEqualStrings("MiniCI   7/123: ", out.items);
+}
+
+test "parseAvailableRamBytes reads Linux MemAvailable" {
+    const meminfo =
+        \\MemTotal:       32768000 kB
+        \\MemFree:         102400 kB
+        \\MemAvailable:  16384000 kB
+        \\Buffers:         204800 kB
+    ;
+    try std.testing.expectEqual(@as(?u64, 16_384_000 * 1024), parseAvailableRamBytes(meminfo));
+    try std.testing.expect(parseAvailableRamBytes("MemTotal: 1024 kB\n") == null);
+    try std.testing.expect(parseAvailableRamBytes("MemAvailable: unknown kB\n") == null);
+}
+
+test "cpuBudgetForAvailableRam preserves safe parallelism" {
+    const mib: u64 = 1024 * 1024;
+    try std.testing.expectEqual(@as(usize, 1), cpuBudgetForAvailableRam(8 * 1024 * mib, 16));
+    try std.testing.expectEqual(@as(usize, 2), cpuBudgetForAvailableRam(16 * 1024 * mib, 16));
+    try std.testing.expectEqual(@as(usize, 4), cpuBudgetForAvailableRam(32 * 1024 * mib, 16));
+    try std.testing.expectEqual(@as(usize, 2), cpuBudgetForAvailableRam(64 * 1024 * mib, 2));
 }
 
 test "parseMiniArgs keeps MiniCI selection out of forwarded build args" {

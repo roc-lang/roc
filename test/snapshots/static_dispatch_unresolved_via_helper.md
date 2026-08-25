@@ -16,25 +16,21 @@ ok = conv(5.U8)
 # EXPECTED
 MISSING METHOD - static_dispatch_unresolved_via_helper.md:5:13:5:25
 # PROBLEMS
+── ✗ missing method ────────────── static_dispatch_unresolved_via_helper.md:5:13
 
-┌────────────────┐
-│ MISSING METHOD ├─ This is trying to dispatch a method named `to_i128` on ───┐
-└┬───────────────┘  an unresolved type variable, but unresolved type          │
- │                  variables have no methods.                                │
- │                                                                            │
- │  ambiguous = conv(poly())                                                  │
- │              ‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
- └───────────────────────────── static_dispatch_unresolved_via_helper.md:5:13 ┘
+This is trying to dispatch a method named to_i128 on an unresolved type
+variable, but unresolved type variables have no methods.
 
-    The type was left undetermined by this call:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    5 │  ambiguous = conv(poly())                                             │
-      │                   ‾‾‾‾‾‾                                              │
-      └──────────────────────── static_dispatch_unresolved_via_helper.md:5:18 ┘
-    Hint: You can replace this static dispatch call with an ordinary function
-    call, or force the type variable to become more concrete—for example, by
-    adding a type annotation that narrows its type to something that actually
-    has methods.
+ambiguous = conv(poly())
+            ^^^^^^^^^^^^
+
+The type was left undetermined by this call:
+
+ambiguous = conv(poly())
+                 ^^^^^^
+Hint: You can replace this static dispatch call with an ordinary function call,
+or force the type variable to become more concrete—for example, by adding a
+type annotation that narrows its type to something that actually has methods.
 
 # TOKENS
 ~~~zig
@@ -99,7 +95,7 @@ ok = conv(5.U8)
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "to_i128") (constraint-fn-var 214)
+			(e-dispatch-call (method "to_i128") (constraint-fn-var 224)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -118,7 +114,7 @@ ok = conv(5.U8)
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "ok"))
-		(e-call (constraint-fn-var 244)
+		(e-call (constraint-fn-var 254)
 			(e-lookup-local
 				(p-assign (ident "conv")))
 			(e-typed-int (value "5") (type "U8")))))

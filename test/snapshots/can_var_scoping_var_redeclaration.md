@@ -18,20 +18,17 @@ result = redeclareTest({})
 # EXPECTED
 DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:4:2:4:13
 # PROBLEMS
+── ● duplicate definition ───────────── can_var_scoping_var_redeclaration.md:4:2
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `x_` is being redeclared here. ────────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  var x_ = 10 # Redeclare var - should warn but proceed                     │
- │  ‾‾‾‾‾‾‾‾‾‾‾                                                               │
- └────────────────────────────────── can_var_scoping_var_redeclaration.md:4:2 ┘
+The name x_ is being redeclared here:
 
-    In this scope, `x_` was already defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    3 │   var x_ = 5                                                          │
-      │   ‾‾‾‾‾‾‾‾‾‾                                                          │
-      └───────────────────────────── can_var_scoping_var_redeclaration.md:3:2 ┘
+var x_ = 10 # Redeclare var - should warn but proceed
+^^^^^^^^^^^
+
+In this scope, x_ was already defined in can_var_scoping_var_redeclaration.md:3:2:
+
+var x_ = 5
+^^^^^^^^^^
 
 # TOKENS
 ~~~zig
@@ -96,7 +93,7 @@ NO CHANGE
 					(p-assign (ident "x_"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 237)
+		(e-call (constraint-fn-var 251)
 			(e-lookup-local
 				(p-assign (ident "redeclareTest")))
 			(e-empty_record))))

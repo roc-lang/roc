@@ -10,24 +10,23 @@ person.@
 # EXPECTED
 EXPECTED RECORD ACCESSOR - error_bad_record_accessor.md:1:7:1:8
 # PROBLEMS
+── ✗ expected record accessor ───────────────── error_bad_record_accessor.md:1:7
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  person.@                                                                  │
- │        ‾                                                                   │
- └────────────────────────────────────────── error_bad_record_accessor.md:1:7 ┘
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+person.@
+      ^
 
-    For example:
-        person.name
-        pair.0
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
-    I found `.` here.
+For example:
+    person.name
+    maybe_person.?name
+    pair.0
+
+I found . here.
 
 # TOKENS
 ~~~zig

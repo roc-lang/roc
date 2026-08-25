@@ -30,41 +30,35 @@ UNUSED VARIABLE - rigid_var_instantiation.md:10:5:10:8
 UNUSED VARIABLE - rigid_var_instantiation.md:13:5:13:8
 UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
 # PROBLEMS
+── ● unused variable ─────────────────────────── rigid_var_instantiation.md:10:5
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `num` is defined here and then never used. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  num = identity(42)                                                        │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────────────── rigid_var_instantiation.md:10:5 ┘
+Variable num is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like `_num`
-    to suppress this warning.
+num = identity(42)
+^^^
 
+If you don't need this variable, prefix it with an underscore like _num to
+suppress this warning.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `str` is defined here and then never used. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  str = identity("hello")                                                   │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────────────── rigid_var_instantiation.md:13:5 ┘
+── ● unused variable ─────────────────────────── rigid_var_instantiation.md:13:5
 
-    If you don't need this variable, prefix it with an underscore like `_str`
-    to suppress this warning.
+Variable str is defined here and then never used:
 
+str = identity("hello")
+^^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `lst` is defined here and then never used. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  lst = identity([1, 2, 3])                                                 │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────────────── rigid_var_instantiation.md:16:5 ┘
+If you don't need this variable, prefix it with an underscore like _str to
+suppress this warning.
 
-    If you don't need this variable, prefix it with an underscore like `_lst`
-    to suppress this warning.
+── ● unused variable ─────────────────────────── rigid_var_instantiation.md:16:5
+
+Variable lst is defined here and then never used:
+
+lst = identity([1, 2, 3])
+^^^
+
+If you don't need this variable, prefix it with an underscore like _lst to
+suppress this warning.
 
 # TOKENS
 ~~~zig
@@ -176,20 +170,20 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "num"))
-					(e-call (constraint-fn-var 241)
+					(e-call (constraint-fn-var 251)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-num (value "42"))))
 				(s-let
 					(p-assign (ident "str"))
-					(e-call (constraint-fn-var 252)
+					(e-call (constraint-fn-var 262)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-string
 							(e-literal (string "hello")))))
 				(s-let
 					(p-assign (ident "lst"))
-					(e-call (constraint-fn-var 276)
+					(e-call (constraint-fn-var 286)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-list

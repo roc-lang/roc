@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
 const ansi_term = @import("ansi_term.zig");
+const unicode = @import("unicode.zig");
 const Unix = @import("Unix.zig");
 const Windows = @import("Windows.zig");
 const base = @import("base");
@@ -62,8 +63,10 @@ pub const NEW_LINE = switch (SUPPORTED_OS) {
 
 /// One unit of meaning produced by `InputParser` from a raw byte stream.
 pub const InputEvent = union(enum) {
-    /// A single byte to be processed normally (typed character, control key, etc.).
+    /// One ASCII byte to be processed normally (text, control key, etc.).
     byte: u8,
+    /// One complete, validated non-ASCII Unicode scalar value.
+    codepoint: u21,
     /// A 2-byte ESC sequence (ESC X)—typically Alt-key combinations.
     esc2: [2]u8,
     /// A 3-byte CSI sequence (ESC [ X)—typically arrow keys.
@@ -82,8 +85,8 @@ pub const InputEvent = union(enum) {
 /// and tracks whether we are currently inside a bracketed paste.
 pub const InputParser = struct {
     /// Scratch space for the tail of the previous chunk when it ended on an
-    /// incomplete escape sequence. The longest sequence we track is the
-    /// 6-byte `ESC[200~` / `ESC[201~` marker, so 5 trailing bytes suffice.
+    /// incomplete escape sequence or UTF-8 codepoint. The longest sequence we
+    /// track is the 6-byte `ESC[200~` / `ESC[201~` marker, so 5 bytes suffice.
     carry: [5]u8 = undefined,
     carry_len: usize = 0,
     in_paste: bool = false,
@@ -96,7 +99,7 @@ pub const InputParser = struct {
         chunk: []const u8,
         events: *std.ArrayList(InputEvent),
         gpa: Allocator,
-    ) Allocator.Error!void {
+    ) (Allocator.Error || error{InvalidUtf8})!void {
         // Working buffer holds carry + chunk. Its size is bounded by the
         // typical 256-byte read buffer in helper(); for tests we accept
         // arbitrarily large chunks via heap allocation.
@@ -179,7 +182,7 @@ pub const InputParser = struct {
 
                 try events.append(gpa, .{ .csi3 = .{ buf[i], buf[i + 1], buf[i + 2] } });
                 i += 3;
-            } else if (key == control_code.esc and i + 1 < total and buf[i + 1] != '[') {
+            } else if (key == control_code.esc and i + 1 < total and buf[i + 1] < 0x80 and buf[i + 1] != '[') {
                 // 2-byte ESC sequence (ESC X)
                 try events.append(gpa, .{ .esc2 = .{ buf[i], buf[i + 1] } });
                 i += 2;
@@ -188,9 +191,19 @@ pub const InputParser = struct {
                 // longer sequence whose tail is in the next chunk.
                 self.saveCarry(buf[i..total]);
                 return;
-            } else {
+            } else if (key < 0x80) {
                 try events.append(gpa, .{ .byte = key });
                 i += 1;
+            } else {
+                const sequence_len = std.unicode.utf8ByteSequenceLength(key) catch return error.InvalidUtf8;
+                if (total - i < sequence_len) {
+                    self.saveCarry(buf[i..total]);
+                    return;
+                }
+                const sequence = buf[i .. i + sequence_len];
+                const codepoint = std.unicode.utf8Decode(sequence) catch return error.InvalidUtf8;
+                try events.append(gpa, .{ .codepoint = codepoint });
+                i += sequence_len;
             }
         }
     }
@@ -242,7 +255,9 @@ const History = struct {
         self.entries.deinit(self.allocator);
     }
 
-    pub fn append(self: *History, input: []const u8) Allocator.Error!void {
+    pub fn append(self: *History, input: []const u8) (Allocator.Error || error{InvalidUtf8})!void {
+        if (!std.unicode.utf8ValidateSlice(input)) return error.InvalidUtf8;
+
         var it = std.mem.splitScalar(u8, input, '\n');
         while (it.next()) |raw_line| {
             const line = std.mem.trimEnd(u8, raw_line, "\r");
@@ -285,12 +300,12 @@ pub fn deinit(self: *ReplLine) void {
 }
 
 /// Add submitted input to this line editor's in-memory history.
-pub fn recordHistory(self: *ReplLine, input: []const u8) Allocator.Error!void {
+pub fn recordHistory(self: *ReplLine, input: []const u8) (Allocator.Error || error{InvalidUtf8})!void {
     try self.history.append(input);
 }
 
 const CommandError =
-    error{ DeleteEmptyLineBuffer, NewLine, ExitRepl } ||
+    error{ DeleteEmptyLineBuffer, NewLine, ExitRepl, InvalidUtf8 } ||
     Allocator.Error ||
     std.Io.File.ReadStreamingError ||
     std.Io.Writer.Error;
@@ -304,6 +319,8 @@ const LineState = struct {
     prompt_width: usize,
     out: *std.Io.Writer,
     in: std.Io.File,
+    /// UTF-8 byte offset of the cursor. This is always a grapheme boundary;
+    /// terminal-cell positioning is computed separately from the buffer prefix.
     col_offset: usize,
     line_buffer: std.ArrayList(u8),
     bytes_read: usize,
@@ -318,32 +335,84 @@ const LineState = struct {
     ctrl_c_armed: bool,
 };
 
-fn printChar(state: *LineState) CommandError!void {
-    // Reset history navigation on new input
-    state.history_index = null;
+fn cursorColumn(state: *const LineState) error{InvalidUtf8}!usize {
+    return state.prompt_width + try unicode.displayWidth(state.line_buffer.items[0..state.col_offset], state.prompt_width);
+}
 
-    // Insert at col_offset, not just append
-    try state.line_buffer.insert(state.temp, state.col_offset, state.in_buffer[0]);
-    state.col_offset += 1;
+fn setEditorCursor(state: *LineState) CommandError!void {
+    try ansi_term.setCursorColumn(state.out, try cursorColumn(state));
+}
 
-    // Redraw the line after the prompt
+fn redrawLine(state: *LineState) CommandError!void {
     try ansi_term.setCursorColumn(state.out, state.prompt_width);
     try state.out.writeAll(state.line_buffer.items);
     try ansi_term.clearFromCursorToLineEnd(state.out);
+    try setEditorCursor(state);
+}
 
-    // Move cursor to correct position
-    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+fn insertText(state: *LineState, text: []const u8) CommandError!void {
+    if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
+
+    // Reset history navigation on new input
+    state.history_index = null;
+    state.replay_index.* = null;
+
+    // Insert at col_offset, not just append
+    const inserted_end = state.col_offset + text.len;
+    try state.line_buffer.insertSlice(state.temp, state.col_offset, text);
+    state.col_offset = try unicode.graphemeBoundaryAtOrAfter(state.line_buffer.items, inserted_end);
+
+    try redrawLine(state);
+}
+
+fn printChar(state: *LineState) CommandError!void {
+    try insertText(state, state.in_buffer[0..1]);
+}
+
+fn printCodepoint(state: *LineState, codepoint: u21) CommandError!void {
+    var encoded: [4]u8 = undefined;
+    const len = std.unicode.utf8Encode(codepoint, &encoded) catch unreachable;
+    try insertText(state, encoded[0..len]);
+}
+
+/// Inserts one complete bracketed paste. Returns whether the paste contains a
+/// newline and should therefore be submitted immediately.
+fn insertPaste(state: *LineState, pasted: []const u8) CommandError!bool {
+    if (!std.unicode.utf8ValidateSlice(pasted)) return error.InvalidUtf8;
+
+    const inserted_end = state.col_offset + pasted.len;
+    try state.line_buffer.insertSlice(state.temp, state.col_offset, pasted);
+    state.col_offset = try unicode.graphemeBoundaryAtOrAfter(state.line_buffer.items, inserted_end);
+    state.history_index = null;
+    state.replay_index.* = null;
+
+    const has_newline = std.mem.findAny(u8, pasted, "\n\r") != null;
+    if (has_newline) {
+        // Embedded newlines are translated by the terminal (OPOST/ONLCR), so
+        // indent each continuation line to the prompt.
+        try ansi_term.setCursorColumn(state.out, state.prompt_width);
+        try writeAlignedToPrompt(state.out, state.line_buffer.items, state.prompt_width);
+        try ansi_term.clearFromCursorToLineEnd(state.out);
+    } else {
+        try redrawLine(state);
+    }
+    return has_newline;
 }
 
 fn deleteBefore(state: *LineState) CommandError!void {
     if (state.col_offset == 0) return;
     state.history_index = null;
-    state.col_offset -= 1;
-    _ = state.line_buffer.orderedRemove(state.col_offset);
-    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
-    try state.out.writeAll(state.line_buffer.items[state.col_offset..]);
-    try state.out.writeByte(' ');
-    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+
+    const previous = try unicode.previousGraphemeBoundary(state.line_buffer.items, state.col_offset);
+    const removed_len = state.col_offset - previous;
+    std.mem.copyForwards(
+        u8,
+        state.line_buffer.items[previous .. state.line_buffer.items.len - removed_len],
+        state.line_buffer.items[state.col_offset..],
+    );
+    state.line_buffer.shrinkRetainingCapacity(state.line_buffer.items.len - removed_len);
+    state.col_offset = try unicode.graphemeBoundaryAtOrAfter(state.line_buffer.items, previous);
+    try redrawLine(state);
 }
 
 fn doNothing(_: *LineState) Allocator.Error!void {}
@@ -383,17 +452,17 @@ fn clearScreen(state: *LineState) CommandError!void {
     try state.out.writeAll(state.line_buffer.items);
     try ansi_term.clearFromCursorToLineEnd(state.out);
 
-    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+    try setEditorCursor(state);
 }
 
 fn moveCursorRight(state: *LineState) CommandError!void {
-    state.col_offset = @min(state.col_offset + 1, state.line_buffer.items.len);
-    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+    state.col_offset = try unicode.nextGraphemeBoundary(state.line_buffer.items, state.col_offset);
+    try setEditorCursor(state);
 }
 
 fn moveCursorLeft(state: *LineState) CommandError!void {
-    state.col_offset -|= 1;
-    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+    state.col_offset = try unicode.previousGraphemeBoundary(state.line_buffer.items, state.col_offset);
+    try setEditorCursor(state);
 }
 
 fn moveCursorToStart(state: *LineState) CommandError!void {
@@ -403,7 +472,7 @@ fn moveCursorToStart(state: *LineState) CommandError!void {
 
 fn moveCursorToEnd(state: *LineState) CommandError!void {
     state.col_offset = state.line_buffer.items.len;
-    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+    try setEditorCursor(state);
 }
 
 fn replaceKillRing(state: *LineState, text: []const u8) Allocator.Error!void {
@@ -424,14 +493,25 @@ fn killLineToEnd(state: *LineState) CommandError!void {
     try ansi_term.clearFromCursorToLineEnd(state.out);
 }
 
-fn isWordChar(c: u8) bool {
-    return std.ascii.isAlphanumeric(c) or c == '_';
+fn isWordGrapheme(buf: []const u8, start: usize, end: usize) error{InvalidUtf8}!bool {
+    const sequence_len = std.unicode.utf8ByteSequenceLength(buf[start]) catch return error.InvalidUtf8;
+    if (start + sequence_len > end) return error.InvalidUtf8;
+    const codepoint = std.unicode.utf8Decode(buf[start .. start + sequence_len]) catch return error.InvalidUtf8;
+    return codepoint >= 0x80 or std.ascii.isAlphanumeric(@intCast(codepoint)) or codepoint == '_';
 }
 
-fn findWordStartBackward(buf: []const u8, start: usize) usize {
+fn findWordStartBackward(buf: []const u8, start: usize) error{InvalidUtf8}!usize {
     var i = start;
-    while (i > 0 and !isWordChar(buf[i - 1])) : (i -= 1) {}
-    while (i > 0 and isWordChar(buf[i - 1])) : (i -= 1) {}
+    while (i > 0) {
+        const previous = try unicode.previousGraphemeBoundary(buf, i);
+        if (try isWordGrapheme(buf, previous, i)) break;
+        i = previous;
+    }
+    while (i > 0) {
+        const previous = try unicode.previousGraphemeBoundary(buf, i);
+        if (!try isWordGrapheme(buf, previous, i)) break;
+        i = previous;
+    }
     return i;
 }
 
@@ -447,16 +527,13 @@ fn deleteToStart(state: *LineState) CommandError!void {
     state.line_buffer.shrinkRetainingCapacity(remaining_len);
     state.col_offset = 0;
 
-    try ansi_term.setCursorColumn(state.out, state.prompt_width);
-    try state.out.writeAll(state.line_buffer.items);
-    try ansi_term.clearFromCursorToLineEnd(state.out);
-    try ansi_term.setCursorColumn(state.out, state.prompt_width);
+    try redrawLine(state);
 }
 
 fn deleteWordBackward(state: *LineState) CommandError!void {
     if (state.col_offset == 0) return;
 
-    const word_start = findWordStartBackward(state.line_buffer.items, state.col_offset);
+    const word_start = try findWordStartBackward(state.line_buffer.items, state.col_offset);
     if (word_start == state.col_offset) return;
     state.history_index = null;
 
@@ -470,48 +547,52 @@ fn deleteWordBackward(state: *LineState) CommandError!void {
         state.line_buffer.items[state.col_offset..],
     );
     state.line_buffer.shrinkRetainingCapacity(remaining_len);
-    state.col_offset = word_start;
+    state.col_offset = try unicode.graphemeBoundaryAtOrAfter(state.line_buffer.items, word_start);
 
-    try ansi_term.setCursorColumn(state.out, state.prompt_width);
-    try state.out.writeAll(state.line_buffer.items);
-    try ansi_term.clearFromCursorToLineEnd(state.out);
-    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+    try redrawLine(state);
 }
 
 fn yank(state: *LineState) CommandError!void {
     const text = state.kill_ring.* orelse return;
     if (text.len == 0) return;
+    if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
     state.history_index = null;
 
+    const inserted_end = state.col_offset + text.len;
     try state.line_buffer.insertSlice(state.temp, state.col_offset, text);
-    state.col_offset += text.len;
+    state.col_offset = try unicode.graphemeBoundaryAtOrAfter(state.line_buffer.items, inserted_end);
 
-    try ansi_term.setCursorColumn(state.out, state.prompt_width);
-    try state.out.writeAll(state.line_buffer.items);
-    try ansi_term.clearFromCursorToLineEnd(state.out);
-    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+    try redrawLine(state);
 }
 
-fn findWordEndForward(buf: []const u8, start: usize) usize {
+fn findWordEndForward(buf: []const u8, start: usize) error{InvalidUtf8}!usize {
     var i = start;
     const len = buf.len;
-    while (i < len and !isWordChar(buf[i])) : (i += 1) {}
-    while (i < len and isWordChar(buf[i])) : (i += 1) {}
+    while (i < len) {
+        const next = try unicode.nextGraphemeBoundary(buf, i);
+        if (try isWordGrapheme(buf, i, next)) break;
+        i = next;
+    }
+    while (i < len) {
+        const next = try unicode.nextGraphemeBoundary(buf, i);
+        if (!try isWordGrapheme(buf, i, next)) break;
+        i = next;
+    }
     return i;
 }
 
 fn moveWordLeft(state: *LineState) CommandError!void {
-    state.col_offset = findWordStartBackward(state.line_buffer.items, state.col_offset);
-    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+    state.col_offset = try findWordStartBackward(state.line_buffer.items, state.col_offset);
+    try setEditorCursor(state);
 }
 
 fn moveWordRight(state: *LineState) CommandError!void {
-    state.col_offset = findWordEndForward(state.line_buffer.items, state.col_offset);
-    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+    state.col_offset = try findWordEndForward(state.line_buffer.items, state.col_offset);
+    try setEditorCursor(state);
 }
 
 fn killWordForward(state: *LineState) CommandError!void {
-    const word_end = findWordEndForward(state.line_buffer.items, state.col_offset);
+    const word_end = try findWordEndForward(state.line_buffer.items, state.col_offset);
     if (word_end == state.col_offset) return;
     state.history_index = null;
 
@@ -526,11 +607,9 @@ fn killWordForward(state: *LineState) CommandError!void {
         state.line_buffer.items[word_end..],
     );
     state.line_buffer.shrinkRetainingCapacity(remaining_len);
+    state.col_offset = try unicode.graphemeBoundaryAtOrAfter(state.line_buffer.items, state.col_offset);
 
-    try ansi_term.setCursorColumn(state.out, state.prompt_width);
-    try state.out.writeAll(state.line_buffer.items);
-    try ansi_term.clearFromCursorToLineEnd(state.out);
-    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+    try redrawLine(state);
 }
 
 fn historyBackward(state: *LineState) CommandError!void {
@@ -551,10 +630,7 @@ fn historyBackward(state: *LineState) CommandError!void {
     try state.line_buffer.appendSlice(state.temp, entry);
     state.col_offset = entry.len;
 
-    try ansi_term.setCursorColumn(state.out, state.prompt_width);
-    try state.out.writeAll(state.line_buffer.items);
-    try ansi_term.clearFromCursorToLineEnd(state.out); // Clear any ghost text
-    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+    try redrawLine(state);
 }
 
 fn historyForward(state: *LineState) CommandError!void {
@@ -594,10 +670,7 @@ fn historyForward(state: *LineState) CommandError!void {
         return;
     }
 
-    try ansi_term.setCursorColumn(state.out, state.prompt_width);
-    try state.out.writeAll(state.line_buffer.items);
-    try ansi_term.clearFromCursorToLineEnd(state.out); // Clear any ghost text
-    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+    try redrawLine(state);
 }
 
 fn findCommandFn(state: *LineState) CommandFn {
@@ -802,6 +875,10 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
                     state.in_buffer[0] = b;
                     state.bytes_read = 1;
                 },
+                .codepoint => |codepoint| {
+                    try printCodepoint(&state, codepoint);
+                    continue;
+                },
                 .esc2 => |seq| {
                     state.in_buffer[0] = seq[0];
                     state.in_buffer[1] = seq[1];
@@ -822,23 +899,8 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
                     continue;
                 },
                 .paste_end => {
-                    // Insert pasted content at the current cursor position.
-                    try state.line_buffer.insertSlice(state.temp, state.col_offset, paste_buffer.items);
-                    state.col_offset += paste_buffer.items.len;
-                    state.history_index = null;
-                    state.replay_index.* = null;
-
-                    const has_newline = std.mem.findAny(u8, paste_buffer.items, "\n\r") != null;
+                    const has_newline = try insertPaste(&state, paste_buffer.items);
                     paste_buffer.clearRetainingCapacity();
-
-                    // Redraw so the user sees the pasted text. For a multi-line
-                    // paste the embedded newlines are translated by the terminal
-                    // (OPOST/ONLCR) so each pasted line lands on its own row;
-                    // indent each continuation line by `prompt_width` so it
-                    // aligns under the first character past the prompt.
-                    try ansi_term.setCursorColumn(state.out, state.prompt_width);
-                    try writeAlignedToPrompt(state.out, state.line_buffer.items, state.prompt_width);
-                    try ansi_term.clearFromCursorToLineEnd(state.out);
 
                     if (has_newline) {
                         // A multi-line paste is treated as a complete
@@ -847,8 +909,6 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
                         break;
                     }
 
-                    // Single-line paste: position the cursor for further editing.
-                    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
                     continue;
                 },
             }
@@ -872,6 +932,7 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
                     error.DeleteEmptyLineBuffer,
                     error.EndOfStream,
                     error.InputOutput,
+                    error.InvalidUtf8,
                     error.IsDir,
                     error.LockViolation,
                     error.NotOpenForReading,
@@ -896,7 +957,7 @@ const testing = std.testing;
 
 /// Run `parser.feed` for each chunk in `chunks` against a fresh event list and
 /// return the accumulated events. Caller owns the returned ArrayList.
-fn collectEvents(parser: *InputParser, chunks: []const []const u8) Allocator.Error!std.ArrayList(InputEvent) {
+fn collectEvents(parser: *InputParser, chunks: []const []const u8) (Allocator.Error || error{InvalidUtf8})!std.ArrayList(InputEvent) {
     var events = std.ArrayList(InputEvent).empty;
     errdefer events.deinit(testing.allocator);
     for (chunks) |chunk| {
@@ -925,6 +986,26 @@ test "InputParser: plain bytes pass through" {
     }, events.items);
     try testing.expectEqual(@as(usize, 0), parser.carry_len);
     try testing.expect(!parser.in_paste);
+}
+
+test "InputParser: UTF-8 is emitted as complete codepoints across reads" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{ "caf\xc3", "\xa9" });
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .{ .byte = 'c' },
+        .{ .byte = 'a' },
+        .{ .byte = 'f' },
+        .{ .codepoint = 'é' },
+    }, events.items);
+    try testing.expectEqual(@as(usize, 0), parser.carry_len);
+}
+
+test "InputParser: invalid UTF-8 is rejected" {
+    var parser = InputParser{};
+    var events = std.ArrayList(InputEvent).empty;
+    defer events.deinit(testing.allocator);
+    try testing.expectError(error.InvalidUtf8, parser.feed("\xc3x", &events, testing.allocator));
 }
 
 test "InputParser: 3-byte CSI arrow key in one chunk" {
@@ -1367,6 +1448,176 @@ test "Keyboard commands: advanced bindings" {
     try testing.expectEqual(@as(usize, 6), state.col_offset);
 }
 
+/// Minimal `LineState` for exercising the keypress path in tests.
+fn testLineState(out: *std.Io.Writer, kill_ring: *?[]const u8, replay_index: *?usize) LineState {
+    return .{
+        .outlive = testing.allocator,
+        .temp = testing.allocator,
+        .prompt = "» ",
+        .prompt_width = 2,
+        .out = out,
+        .in = undefined,
+        .col_offset = 0,
+        .line_buffer = std.ArrayList(u8).empty,
+        .bytes_read = 0,
+        .in_buffer = undefined,
+        .history = undefined,
+        .history_index = null,
+        .transient_line = null,
+        .kill_ring = kill_ring,
+        .replay_index = replay_index,
+        .ctrl_c_armed = false,
+    };
+}
+
+/// Feeds bytes through the same parser and command dispatch used by `helper`.
+fn typeBytes(state: *LineState, bytes: []const u8) CommandError!void {
+    var parser = InputParser{};
+    var events = std.ArrayList(InputEvent).empty;
+    defer events.deinit(testing.allocator);
+
+    for (bytes) |byte| {
+        events.clearRetainingCapacity();
+        try parser.feed(&.{byte}, &events, testing.allocator);
+        for (events.items) |event| switch (event) {
+            .byte => |b| {
+                state.in_buffer[0] = b;
+                state.bytes_read = 1;
+                try findCommandFn(state)(state);
+            },
+            .codepoint => |codepoint| try printCodepoint(state, codepoint),
+            .esc2, .csi3, .paste_start, .paste_byte, .paste_end => unreachable,
+        };
+    }
+    std.debug.assert(parser.carry_len == 0);
+}
+
+/// Returns the last zero-based absolute cursor column emitted in `out`.
+fn lastCursorColumn(out: []const u8) ?usize {
+    var result: ?usize = null;
+    var index: usize = 0;
+    while (std.mem.findPos(u8, out, index, "\x1b[")) |start| {
+        const digits_start = start + 2;
+        var end = digits_start;
+        while (end < out.len and std.ascii.isDigit(out[end])) : (end += 1) {}
+        if (end > digits_start and end < out.len and out[end] == 'G') {
+            const one_based = std.fmt.parseInt(usize, out[digits_start..end], 10) catch break;
+            result = one_based -| 1;
+        }
+        index = digits_start;
+    }
+    return result;
+}
+
+test "typing a multi-byte UTF-8 character inserts the whole character" {
+    // Regression test for https://github.com/roc-lang/roc/issues/10743
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    var kill_ring: ?[]const u8 = null;
+    defer if (kill_ring) |text| testing.allocator.free(text);
+    var replay_index: ?usize = null;
+    var state = testLineState(&aw.writer, &kill_ring, &replay_index);
+    defer state.line_buffer.deinit(testing.allocator);
+
+    try typeBytes(&state, "café");
+
+    try testing.expectEqualStrings("café", state.line_buffer.items);
+    try testing.expectEqual(@as(?usize, 6), lastCursorColumn(aw.writer.buffered()));
+}
+
+test "left arrow steps over a whole multi-byte UTF-8 character" {
+    // Regression test for https://github.com/roc-lang/roc/issues/10743
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    var kill_ring: ?[]const u8 = null;
+    defer if (kill_ring) |text| testing.allocator.free(text);
+    var replay_index: ?usize = null;
+    var state = testLineState(&aw.writer, &kill_ring, &replay_index);
+    defer state.line_buffer.deinit(testing.allocator);
+
+    try state.line_buffer.appendSlice(testing.allocator, "aéb");
+    try moveCursorToEnd(&state);
+    try moveCursorLeft(&state);
+    try moveCursorLeft(&state);
+    try typeBytes(&state, "X");
+
+    try testing.expectEqualStrings("aXéb", state.line_buffer.items);
+    try testing.expectEqual(@as(?usize, 4), lastCursorColumn(aw.writer.buffered()));
+}
+
+test "cursor movement and backspace operate on grapheme clusters" {
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    var kill_ring: ?[]const u8 = null;
+    defer if (kill_ring) |text| testing.allocator.free(text);
+    var replay_index: ?usize = null;
+    var state = testLineState(&aw.writer, &kill_ring, &replay_index);
+    defer state.line_buffer.deinit(testing.allocator);
+
+    try state.line_buffer.appendSlice(testing.allocator, "ae\u{301}b");
+    try moveCursorToEnd(&state);
+    try moveCursorLeft(&state);
+    try deleteBefore(&state);
+
+    try testing.expectEqualStrings("ab", state.line_buffer.items);
+    try testing.expectEqual(@as(?usize, 3), lastCursorColumn(aw.writer.buffered()));
+}
+
+test "edits that join adjacent graphemes keep the cursor on a boundary" {
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    var kill_ring: ?[]const u8 = null;
+    defer if (kill_ring) |text| testing.allocator.free(text);
+    var replay_index: ?usize = null;
+    var state = testLineState(&aw.writer, &kill_ring, &replay_index);
+    defer state.line_buffer.deinit(testing.allocator);
+
+    try state.line_buffer.appendSlice(testing.allocator, "👩👩");
+    state.col_offset = "👩".len;
+    try printCodepoint(&state, 0x200d);
+
+    try testing.expectEqualStrings("👩‍👩", state.line_buffer.items);
+    try testing.expectEqual(state.line_buffer.items.len, state.col_offset);
+    try moveCursorLeft(&state);
+    try testing.expectEqual(@as(usize, 0), state.col_offset);
+    try moveCursorRight(&state);
+    try testing.expectEqual(state.line_buffer.items.len, state.col_offset);
+}
+
+test "wide characters and Unicode paste use terminal-cell columns" {
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    var kill_ring: ?[]const u8 = null;
+    defer if (kill_ring) |text| testing.allocator.free(text);
+    var replay_index: ?usize = null;
+    var state = testLineState(&aw.writer, &kill_ring, &replay_index);
+    defer state.line_buffer.deinit(testing.allocator);
+
+    try testing.expect(!try insertPaste(&state, "a界é"));
+    try testing.expectEqualStrings("a界é", state.line_buffer.items);
+    try testing.expectEqual(@as(?usize, 6), lastCursorColumn(aw.writer.buffered()));
+
+    try moveCursorLeft(&state);
+    try moveCursorLeft(&state);
+    try testing.expectEqual(@as(?usize, 3), lastCursorColumn(aw.writer.buffered()));
+}
+
+test "invalid UTF-8 paste is rejected without mutating the line" {
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    var kill_ring: ?[]const u8 = null;
+    defer if (kill_ring) |text| testing.allocator.free(text);
+    var replay_index: ?usize = null;
+    var state = testLineState(&aw.writer, &kill_ring, &replay_index);
+    defer state.line_buffer.deinit(testing.allocator);
+
+    try state.line_buffer.appendSlice(testing.allocator, "ok");
+    try moveCursorToEnd(&state);
+    try testing.expectError(error.InvalidUtf8, insertPaste(&state, "\xff"));
+    try testing.expectEqualStrings("ok", state.line_buffer.items);
+    try testing.expectEqual(@as(usize, 2), state.col_offset);
+}
+
 test "InputParser: 2-byte ESC sequence" {
     var parser = InputParser{};
     var events = try collectEvents(&parser, &.{"\x1bb\x1bf\x1bd"});
@@ -1389,6 +1640,14 @@ test "History: basic appending and deduplication" {
     try testing.expectEqual(@as(usize, 2), history.entries.items.len);
     try testing.expectEqualStrings("x = 1", history.entries.items[0]);
     try testing.expectEqualStrings("y = 2", history.entries.items[1]);
+}
+
+test "History: invalid UTF-8 is rejected" {
+    var history = History.init(testing.allocator);
+    defer history.deinit();
+
+    try testing.expectError(error.InvalidUtf8, history.append("\xff"));
+    try testing.expectEqual(@as(usize, 0), history.entries.items.len);
 }
 
 test "History: transient line preservation" {

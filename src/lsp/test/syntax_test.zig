@@ -141,6 +141,7 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "record field completion in sub module", .run = recordFieldCompletionInSubModule },
     .{ .name = "record field completion works for nested nominal submodule", .run = recordFieldCompletionWorksForNestedNominalSubmodule },
     .{ .name = "record field completion works", .run = recordFieldCompletionWorks },
+    .{ .name = "optional record field completion inserts optional access", .run = optionalRecordFieldCompletionInsertsOptionalAccess },
     .{ .name = "tuple index completion works", .run = tupleIndexCompletionWorks },
     .{ .name = "record field completion with partial field name", .run = recordFieldCompletionWithPartialFieldName },
     .{ .name = "static dispatch completion for nominal type methods", .run = staticDispatchCompletionForNominalTypeMethods },
@@ -523,6 +524,51 @@ pub fn recordFieldCompletionWorks() integration_spec.SpecError!void {
     defer h.freeCompletions(items);
 
     try TestHarness.expectHasLabels(items, &.{ "foo", "bar" });
+}
+
+/// Verifies accepting an optional-field completion after `.` produces `.?field`.
+pub fn optionalRecordFieldCompletionInsertsOptionalAccess() integration_spec.SpecError!void {
+    var h = try TestHarness.init();
+    defer h.deinit();
+
+    const clean = try h.formatSource(
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\get_fields = |r| {{ a: r.?a, b: r.b }}
+        \\main = "ok"
+        \\
+    );
+    defer h.allocator.free(clean);
+
+    try h.writeFile("optional_record_completion.roc", clean);
+    try h.check(clean);
+
+    const incomplete = try h.formatSource(
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\get_fields = |r| r.
+        \\main = "ok"
+        \\
+    );
+    defer h.allocator.free(incomplete);
+
+    const items = try h.getCompletions(incomplete, 2, 19);
+    defer h.freeCompletions(items);
+    try TestHarness.expectHasLabels(items, &.{ "a", "b" });
+
+    var found_optional = false;
+    var found_required = false;
+    for (items) |item| {
+        if (std.mem.eql(u8, item.label, "a")) {
+            found_optional = true;
+            try std.testing.expectEqualStrings("?a", item.insertText orelse "");
+        } else if (std.mem.eql(u8, item.label, "b")) {
+            found_required = true;
+            try std.testing.expect(item.insertText == null);
+        }
+    }
+    try std.testing.expect(found_optional);
+    try std.testing.expect(found_required);
 }
 
 /// Verifies tuple index completions appear after a tuple dot.

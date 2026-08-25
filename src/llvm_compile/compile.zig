@@ -346,19 +346,27 @@ fn markDefinitionsDsoLocal(module: *bindings.Module) void {
     var func = module.getFirstFunction();
     while (func) |value| : (func = value.getNextFunction()) {
         if (value.isDeclaration().toBool()) continue;
+        if (isLocallyLinked(value)) continue;
         value.setVisibility(llvm_protected_visibility);
     }
 
     var global = module.getFirstGlobal();
     while (global) |value| : (global = value.getNextGlobal()) {
         if (value.isDeclaration().toBool()) continue;
+        if (isLocallyLinked(value)) continue;
         value.setVisibility(llvm_protected_visibility);
     }
 
     var alias = module.getFirstGlobalAlias();
     while (alias) |value| : (alias = value.getNextGlobalAlias()) {
+        if (isLocallyLinked(value)) continue;
         value.setVisibility(llvm_protected_visibility);
     }
+}
+
+fn isLocallyLinked(value: *bindings.Value) bool {
+    const linkage = value.getLinkage();
+    return linkage == bindings.internal_linkage or linkage == bindings.private_linkage;
 }
 
 fn removeBuiltinUsedRoots(module: *bindings.Module) void {
@@ -811,7 +819,7 @@ fn linkSharedLibrary(
             try args.append(allocator, roc_target.macos_deployment.linker_version);
             try args.append(allocator, roc_target.macos_deployment.linker_version);
             try args.append(allocator, "-syslibroot");
-            try args.append(allocator, build_options.darwin_sysroot);
+            try args.append(allocator, embedded_lld.darwin_sysroot.find(arena, io) catch return Error.OutOfMemory);
             try args.append(allocator, std.mem.sliceTo(object_path, 0));
             try args.append(allocator, "-lSystem");
         },

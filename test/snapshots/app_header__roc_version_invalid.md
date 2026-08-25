@@ -10,20 +10,18 @@ app [main!] { pf: platform "../main.roc", roc: "yesterday's build" }
 # EXPECTED
 INVALID ROC VERSION - app_header__roc_version_invalid.md:1:43:1:67
 # PROBLEMS
+── ✗ invalid roc version ─────────────── app_header__roc_version_invalid.md:1:43
 
-┌─────────────────────┐
-│ INVALID ROC VERSION ├─ I was parsing the `roc` entry of a header, and I ────┐
-└┬────────────────────┘  did not recognize this version.                      │
- │                                                                            │
- │  app [main!] { pf: platform "../main.roc", roc: "yesterday's build" }      │
- │                                            ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾        │
- └─────────────────────────────────── app_header__roc_version_invalid.md:1:43 ┘
+I was parsing the `roc` entry of a header, and I did not recognize this version.
 
-    The `roc` entry pins the version of the Roc compiler this file is written
-    for. It must be a string holding either a nightly tag or a release version.
+app [main!] { pf: platform "../main.roc", roc: "yesterday's build" }
+                                          ^^^^^^^^^^^^^^^^^^^^^^^^
 
-    For example:
-        roc: "nightly-2026-08-05-24f0b47"
+The roc entry pins the version of the Roc compiler this file is written for. It
+must be a string holding either a nightly tag or a release version.
+
+For example:
+    roc: "nightly-2026-08-05-24f0b47"
 
 # TOKENS
 ~~~zig

@@ -10,18 +10,16 @@ person.age + 5
 # EXPECTED
 POLYMORPHIC VALUE - record_access_in_expression.md:1:1:1:15
 # PROBLEMS
+── ✗ polymorphic value ────────────────────── record_access_in_expression.md:1:1
 
-┌───────────────────┐
-│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
-└┬──────────────────┘  polymorphic type.                                      │
- │                                                                            │
- │  person.age + 5                                                            │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                            │
- └──────────────────────────────────────── record_access_in_expression.md:1:1 ┘
+This top-level value still has an unresolved polymorphic type.
 
-    Its type is:
-    a where [a.plus : a, Dec -> a]
-    Add an annotation or use this value in a way that fixes its concrete type.
+person.age + 5
+^^^^^^^^^^^^^^
+
+Its type is:
+a where [a.plus : a, Dec -> a]
+Add an annotation or use this value in a way that fixes its concrete type.
 
 # TOKENS
 ~~~zig
@@ -32,8 +30,9 @@ EndOfFile,
 ~~~clojure
 (e-binop (op "+")
 	(e-field-access
-		(e-ident (raw "person"))
-		(e-ident (raw "age")))
+		(receiver
+			(e-ident (raw "person")))
+		(segment (mode "required") (field "age")))
 	(e-int (raw "5")))
 ~~~
 # FORMATTED
@@ -42,11 +41,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dispatch-call (method "plus") (constraint-fn-var 205)
+(e-dispatch-call (method "plus") (constraint-fn-var 215)
 	(receiver
-		(e-field-access (field "age")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(segments
+				(segment (name "age") (mode "required")))))
 	(args
 		(e-num (value "5"))))
 ~~~

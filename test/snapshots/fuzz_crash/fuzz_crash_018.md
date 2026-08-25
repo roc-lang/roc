@@ -14,63 +14,54 @@ UNEXPECTED STATEMENT - fuzz_crash_018.md:2:1:2:3
 UNDECLARED TYPE - fuzz_crash_018.md:1:5:1:6
 DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
 # PROBLEMS
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_018.md:1:1
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  0 b:S                                                                     │
- │  ‾                                                                         │
- └───────────────────────────────────────────────────── fuzz_crash_018.md:1:1 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+0 b:S
+^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `0` here.
+For example:
+    answer = 42
 
+I found 0 here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  .R                                                                        │
- │  ‾‾                                                                        │
- └───────────────────────────────────────────────────── fuzz_crash_018.md:2:1 ┘
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_018.md:2:1
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+.R
+^^
 
-    I found `.R` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `S` is not declared in this scope. ─────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  0 b:S                                                                     │
- │      ‾                                                                     │
- └───────────────────────────────────────────────────── fuzz_crash_018.md:1:5 ┘
+I found .R here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
+── ✗ undeclared type ───────────────────────────────────── fuzz_crash_018.md:1:5
 
+The type S is not declared in this scope.
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  0 b:S                                                                     │
- │    ‾‾‾                                                                     │
- └───────────────────────────────────────────────────── fuzz_crash_018.md:1:3 ┘
+0 b:S
+    ^
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+── ● declaration has no value ──────────────────────────── fuzz_crash_018.md:1:3
+
+This declaration has a type annotation but no implementation.
+
+0 b:S
+  ^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 
 # TOKENS
 ~~~zig
@@ -97,7 +88,7 @@ b : S
 (can-ir
 	(d-let
 		(p-assign (ident "b"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed))))
 ~~~

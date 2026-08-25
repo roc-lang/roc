@@ -1010,7 +1010,7 @@ fn runComptimeFloatBitsTest(
 
     const node = switch (roots[0].payload) {
         .const_node => |value| value,
-        .pending, .fn_value, .expect => {
+        .pending, .fn_value, .discarded, .expect => {
             return .{
                 .status = .fail,
                 .message = "compile-time float root did not produce a ConstStore node",
@@ -1113,7 +1113,7 @@ fn materializedComptimeFloatBitsMatch(
     resources: *helpers.ParsedResources,
     target: roc_target.RocTarget,
     expected: TestCase.Expected,
-) (std.mem.Allocator.Error || error{UnsupportedTarget})!bool {
+) (std.mem.Allocator.Error || lir.CheckedPipeline.HostedBindingError || error{UnsupportedTarget})!bool {
     const compile_time_root = resources.checked_artifact.compile_time_roots.roots[0];
     const pattern = compile_time_root.pattern orelse return false;
     const top_level = resources.checked_artifact.top_level_values.lookupByPattern(pattern) orelse return false;
@@ -1123,7 +1123,7 @@ fn materializedComptimeFloatBitsMatch(
     };
     const const_node = switch (compile_time_root.payload) {
         .const_node => |value| value,
-        .pending, .fn_value, .expect => return false,
+        .pending, .fn_value, .discarded, .expect => return false,
     };
     const static_request = lir.CheckedPipeline.StaticDataRequest{
         .const_locator = const_locator,
@@ -1742,6 +1742,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .erroneous_value_expr,
         .qualified_ident_does_not_exist,
         .invalid_top_level_statement,
+        .invalid_associated_statement,
         .expr_not_canonicalized,
         .range_op_chained,
         .invalid_string_interpolation,
@@ -1760,6 +1761,9 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .where_alias_constraint_not_on_receiver,
         .open_ext_not_allowed_in_type_decl,
         .unnamed_field_not_allowed_in_structural_record,
+        .optional_field_cannot_have_default,
+        .unnamed_field_cannot_have_default,
+        .record_default_not_literal,
         .var_across_function_boundary,
         .type_redeclared,
         .tuple_elem_not_canonicalized,

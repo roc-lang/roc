@@ -122,6 +122,24 @@ const TestEnv = struct {
         return try unify_mod.unify(&env, a, b, .{ .on_mismatch = .write_no_report });
     }
 
+    fn unifyExact(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
+        const env = unify_mod.Env{
+            .problems_gpa = self.module_env.gpa,
+            .ident_store = self.module_env.getIdentStoreConst(),
+            .self_module_identity = self.module_env.selfModuleIdentity(),
+            .types = &self.module_env.types,
+            .problems = &self.problems,
+            .snapshots = &self.snapshots,
+            .type_writer = &self.type_writer,
+            .unify_scratch = &self.scratch,
+            .occurs_scratch = &self.occurs_scratch,
+        };
+        return try unify_mod.unify(&env, a, b, .{
+            .on_mismatch = .write_no_report,
+            .row_width_relation = .exact,
+        });
+    }
+
     const Error = error{ VarIsNotRoot, IsNotRecord, IsNotTagUnion };
 
     /// Get a desc from a root var
@@ -245,7 +263,15 @@ const TestEnv = struct {
     }
 
     fn mkRecordFieldFromIdent(ident_idx: Ident.Idx, var_: Var) RecordField {
-        return RecordField{ .name = ident_idx, .var_ = var_ };
+        return RecordField{ .name = ident_idx, .presence = .required(var_) };
+    }
+
+    /// A field whose presence is still undetermined: `presence_var` is a
+    /// presence-sort variable (flex, or resolved to a `field_presence` fact) and
+    /// `type_var` is the field's type on the second axis.
+    fn mkUnknownRecordField(self: *Self, name: []const u8, presence_var: Var, type_var: Var) std.mem.Allocator.Error!RecordField {
+        const ident_idx = try self.module_env.getIdentStore().insert(self.module_env.gpa, Ident.for_text(name));
+        return RecordField{ .name = ident_idx, .presence = .unknown(presence_var, type_var) };
     }
 
     const RecordInfo = struct { record: Record, content: Content };
@@ -264,6 +290,25 @@ const TestEnv = struct {
     fn mkRecordClosed(self: *Self, fields: []const RecordField) std.mem.Allocator.Error!RecordInfo {
         const ext_var = try self.module_env.types.freshFromContent(.{ .structure = .empty_record });
         return self.mkRecord(fields, ext_var);
+    }
+
+    /// Build two closed records that each hold a single (same-named) field and
+    /// unify them, exercising the shared-field presence path. On success `a`
+    /// redirects to `b`, so callers inspect `b`.
+    const OneFieldUnify = struct { a: Var, b: Var, result: Result };
+    fn unifyOneFieldRecords(self: *Self, a_field: RecordField, b_field: RecordField) std.mem.Allocator.Error!OneFieldUnify {
+        const a = try self.module_env.types.freshFromContent((try self.mkRecordClosed(&[_]RecordField{a_field})).content);
+        const b = try self.module_env.types.freshFromContent((try self.mkRecordClosed(&[_]RecordField{b_field})).content);
+        const result = try self.unify(a, b);
+        return .{ .a = a, .b = b, .result = result };
+    }
+
+    /// Resolve a record var and return its single field's presence.
+    fn onlyFieldPresence(self: *Self, record_var: Var) error{ VarIsNotRoot, IsNotRecord, TestExpectedEqual }!RecordField.Presence {
+        const rec = try TestEnv.getRecordOrErr(try self.getDescForRootVar(record_var));
+        const fields = self.module_env.types.getRecordFieldsSlice(rec.fields);
+        try std.testing.expectEqual(@as(usize, 1), fields.len);
+        return fields.items(.presence)[0];
     }
 
     // helpers - structure - tag union //
@@ -305,7 +350,7 @@ test "unify - identical" {
 
     const result = try env.unify(a, a);
 
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
     try std.testing.expectEqual(desc, try env.getDescForRootVar(a));
 }
 
@@ -320,7 +365,7 @@ test "unify - both flex vars" {
 
     const result = try env.unify(a, b);
 
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
 }
 
@@ -336,7 +381,7 @@ test "rigid_var - unifies with flex_var" {
     const b = try env.module_env.types.freshFromContent(rigid);
 
     const result = try env.unify(a, b);
-    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(true, result.isAccepted());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
     try std.testing.expectEqual(rigid, (try env.getDescForRootVar(b)).content);
 }
@@ -351,7 +396,7 @@ test "rigid_var - unifies with flex_var (other way)" {
     const b = try env.module_env.types.freshFromContent(.{ .flex = Flex.init() });
 
     const result = try env.unify(a, b);
-    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(true, result.isAccepted());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
     try std.testing.expectEqual(rigid, (try env.getDescForRootVar(b)).content);
 }
@@ -365,7 +410,7 @@ test "rigid_var - cannot unify with structure (fail)" {
     const rigid = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
 
     const result = try env.unify(alias, rigid);
-    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(false, result.isAccepted());
 }
 
 test "rigid_var - cannot unify with identical ident str (fail)" {
@@ -377,25 +422,7 @@ test "rigid_var - cannot unify with identical ident str (fail)" {
     const rigid2 = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
 
     const result = try env.unify(rigid1, rigid2);
-    try std.testing.expectEqual(false, result.isOk());
-}
-test "unifyWriteNoReport - detects mismatch without recording or poisoning" {
-    const gpa = std.testing.allocator;
-    var env = try TestEnv.init(gpa);
-    defer env.deinit();
-
-    const a = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
-    const b = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
-
-    const result = try env.unifyWriteNoReport(a, b);
-
-    // A mismatch is detected...
-    try std.testing.expectEqual(false, result.isOk());
-    // ...but NOTHING is recorded to the problem store...
-    try std.testing.expectEqual(@as(usize, 0), env.problems.problems.items.len);
-    // ...and neither operand is poisoned to `.err`.
-    try std.testing.expect(env.module_env.types.resolveVar(a).desc.content != .err);
-    try std.testing.expect(env.module_env.types.resolveVar(b).desc.content != .err);
+    try std.testing.expectEqual(false, result.isAccepted());
 }
 
 test "unifyWriteNoReport - keeps successful child unifications before a later mismatch" {
@@ -452,7 +479,7 @@ test "unify - aliases with different names but same backing" {
 
     const result = try env.unify(a, b);
 
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
     try std.testing.expectEqual(a_alias, (try env.getDescForRootVar(a)).content);
     try std.testing.expectEqual(b_alias, (try env.getDescForRootVar(b)).content);
 }
@@ -470,7 +497,7 @@ test "unify - alias with concrete" {
 
     const result = try env.unify(a, b);
 
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
 
     // The alias remains a transparent checked view; the concrete structure
     // constrains its backing var instead of redirecting to the alias root.
@@ -502,7 +529,7 @@ test "unify - alias with concrete other way" {
 
     const result = try env.unify(a, b);
 
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
 
     // The concrete root and alias backing unify; the alias root remains the
     // source-level checked view.
@@ -532,7 +559,7 @@ test "unify - alias with own backing structure" {
 
     const result = try env.unify(alias_var, backing_var);
 
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
 
     const resolved_alias = env.module_env.types.resolveVar(alias_var);
     try std.testing.expect(resolved_alias.desc.content == .alias);
@@ -559,7 +586,7 @@ test "unify - own backing structure with alias" {
 
     const result = try env.unify(backing_var, alias_var);
 
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
 
     const resolved_alias = env.module_env.types.resolveVar(alias_var);
     try std.testing.expect(resolved_alias.desc.content == .alias);
@@ -587,7 +614,7 @@ test "unify - alias (flex backing) with rigid" {
     const rigid = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
 
     const result = try env.unify(a, rigid);
-    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(true, result.isAccepted());
 }
 
 test "unify - alias (flex backing) with rigid (other way)" {
@@ -602,7 +629,7 @@ test "unify - alias (flex backing) with rigid (other way)" {
     const rigid = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
 
     const result = try env.unify(rigid, alias);
-    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(true, result.isAccepted());
 }
 
 test "unify - alias (concrete backing) with rigid (fail)" {
@@ -617,7 +644,7 @@ test "unify - alias (concrete backing) with rigid (fail)" {
     const rigid = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
 
     const result = try env.unify(a, rigid);
-    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(false, result.isAccepted());
 }
 
 test "unify - alias (concrete backing) with rigid (fail, other way)" {
@@ -630,7 +657,7 @@ test "unify - alias (concrete backing) with rigid (fail, other way)" {
     const rigid = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
 
     const result = try env.unify(rigid, alias);
-    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(false, result.isAccepted());
 }
 
 // unification - structure/flex_vars //
@@ -648,7 +675,7 @@ test "unify - a is builtin and b is flex_var" {
 
     const result = try env.unify(a, b);
 
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
     try std.testing.expectEqual(str, (try env.getDescForRootVar(b)).content);
 }
@@ -666,9 +693,92 @@ test "unify - a is flex_var and b is builtin" {
 
     const result = try env.unify(a, b);
 
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
     try std.testing.expectEqual(str, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - erroneous record field does not merge enclosing records" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const healthy_field = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const erroneous_field = try env.module_env.types.freshFromContent(.err);
+    const healthy_record = try env.mkRecordClosed(&.{try env.mkRecordField("field", healthy_field)});
+    const erroneous_record = try env.mkRecordClosed(&.{try env.mkRecordField("field", erroneous_field)});
+    const healthy = try env.module_env.types.freshFromContent(healthy_record.content);
+    const erroneous = try env.module_env.types.freshFromContent(erroneous_record.content);
+
+    const result = try env.unify(healthy, erroneous);
+
+    try std.testing.expectEqual(.suppressed_by_error, result);
+    try std.testing.expect(result.isAccepted());
+    try std.testing.expect(!result.isEstablished());
+    try std.testing.expect(env.module_env.types.resolveVar(healthy).var_ != env.module_env.types.resolveVar(erroneous).var_);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, env.module_env.types.resolveVar(healthy_field).desc.content);
+    try std.testing.expectEqual(Content.err, env.module_env.types.resolveVar(erroneous_field).desc.content);
+}
+
+test "unify - erroneous type fills an unconstrained flex placeholder" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const placeholder = try env.module_env.types.fresh();
+    const erroneous = try env.module_env.types.freshFromContent(.err);
+
+    const result = try env.unify(placeholder, erroneous);
+
+    try std.testing.expectEqual(.unified, result);
+    try std.testing.expect(result.isEstablished());
+    try std.testing.expectEqual(env.module_env.types.resolveVar(placeholder).var_, env.module_env.types.resolveVar(erroneous).var_);
+    try std.testing.expectEqual(Content.err, env.module_env.types.resolveVar(placeholder).desc.content);
+
+    const other_placeholder = try env.module_env.types.fresh();
+    const other_erroneous = try env.module_env.types.freshFromContent(.err);
+
+    const other_result = try env.unify(other_erroneous, other_placeholder);
+
+    try std.testing.expectEqual(.unified, other_result);
+    try std.testing.expectEqual(env.module_env.types.resolveVar(other_placeholder).var_, env.module_env.types.resolveVar(other_erroneous).var_);
+    try std.testing.expectEqual(Content.err, env.module_env.types.resolveVar(other_placeholder).desc.content);
+}
+
+test "unify - erroneous type does not overwrite a constrained flex" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const method_var = try env.module_env.types.fresh();
+    const constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("method")),
+        .fn_var = method_var,
+        .origin = .{ .where_clause = .{} },
+    };
+    const constraints = try env.module_env.types.appendStaticDispatchConstraints(&.{constraint});
+
+    const constrained = try env.module_env.types.freshFromContent(.{ .flex = .{ .name = null, .constraints = constraints } });
+    const erroneous = try env.module_env.types.freshFromContent(.err);
+
+    const result = try env.unify(constrained, erroneous);
+
+    try std.testing.expectEqual(.suppressed_by_error, result);
+    try std.testing.expect(result.isAccepted());
+    try std.testing.expect(!result.isEstablished());
+    try std.testing.expect(env.module_env.types.resolveVar(constrained).var_ != env.module_env.types.resolveVar(erroneous).var_);
+    try std.testing.expectEqual(constraints, env.module_env.types.resolveVar(constrained).desc.content.flex.constraints);
+
+    const other_constrained = try env.module_env.types.freshFromContent(.{ .flex = .{ .name = null, .constraints = constraints } });
+    const other_erroneous = try env.module_env.types.freshFromContent(.err);
+
+    const other_result = try env.unify(other_erroneous, other_constrained);
+
+    try std.testing.expectEqual(.suppressed_by_error, other_result);
+    try std.testing.expect(other_result.isAccepted());
+    try std.testing.expect(!other_result.isEstablished());
+    try std.testing.expect(env.module_env.types.resolveVar(other_constrained).var_ != env.module_env.types.resolveVar(other_erroneous).var_);
+    try std.testing.expectEqual(constraints, env.module_env.types.resolveVar(other_constrained).desc.content.flex.constraints);
 }
 
 // unification - structure/structure - builtin //
@@ -686,7 +796,7 @@ test "unify - a & b are both str" {
 
     const result = try env.unify(a, b);
 
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
     try std.testing.expectEqual(str, (try env.getDescForRootVar(b)).content);
 }
@@ -707,7 +817,7 @@ test "unify - a & b box with same arg unify" {
 
     const result = try env.unify(a, b);
 
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
     try std.testing.expectEqual(box_str, (try env.getDescForRootVar(b)).content);
 }
@@ -737,7 +847,7 @@ test "unify - first is flex, second is func" {
 
     const result = try env.unify(a, b);
 
-    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(true, result.isAccepted());
 }
 // unification - structure/structure - nominal type //
 
@@ -767,7 +877,7 @@ test "unify - anonymous tag union unifies with nominal tag union (nominal on lef
     const result = try env.unify(nominal_var, anon_var);
 
     // Should succeed and merge to nominal type
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
     const resolved = env.module_env.types.resolveVar(anon_var);
     try std.testing.expect(resolved.desc.content == .structure);
     try std.testing.expect(resolved.desc.content.structure == .nominal_type);
@@ -797,7 +907,7 @@ test "unify - anonymous tag union unifies with nominal (nominal on right)" {
     const result = try env.unify(anon_var, nominal_var);
 
     // Should succeed and merge to nominal type
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
     const resolved = env.module_env.types.resolveVar(anon_var);
     try std.testing.expect(resolved.desc.content == .structure);
     try std.testing.expect(resolved.desc.content.structure == .nominal_type);
@@ -826,7 +936,7 @@ test "unify - anonymous tag union with wrong tag fails" {
     const result = try env.unify(nominal_var, anon_var);
 
     // Should fail
-    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(false, result.isAccepted());
 }
 
 test "unify - anonymous tag union with multiple tags unifies" {
@@ -854,7 +964,7 @@ test "unify - anonymous tag union with multiple tags unifies" {
     const result = try env.unify(nominal_var, anon_var);
 
     // Should succeed
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
     const resolved = env.module_env.types.resolveVar(anon_var);
     try std.testing.expect(resolved.desc.content == .structure);
     try std.testing.expect(resolved.desc.content.structure == .nominal_type);
@@ -880,7 +990,7 @@ test "unify - empty nominal type with empty tag union (nominal on left)" {
     const result = try env.unify(nominal_var, empty_var);
 
     // Should succeed and merge to nominal type
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
     const resolved = env.module_env.types.resolveVar(empty_var);
     try std.testing.expect(resolved.desc.content == .structure);
     try std.testing.expect(resolved.desc.content.structure == .nominal_type);
@@ -904,7 +1014,7 @@ test "unify - empty tag union with empty nominal type (nominal on right)" {
     const result = try env.unify(empty_var, nominal_var);
 
     // Should succeed and merge to nominal type
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
     const resolved = env.module_env.types.resolveVar(empty_var);
     try std.testing.expect(resolved.desc.content == .structure);
     try std.testing.expect(resolved.desc.content.structure == .nominal_type);
@@ -931,7 +1041,7 @@ test "unify - two empty nominal types" {
     const result = try env.unify(nominal_var1, nominal_var2);
 
     // Should fail because they're different nominal types
-    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(false, result.isAccepted());
 }
 
 test "unify - distinct concrete builtin numeric nominals never unify" {
@@ -1007,7 +1117,7 @@ test "unify - distinct concrete builtin numeric nominals never unify" {
 
     // Unify: U8 ~ I64 - must fail (no implicit numeric coercion)
     const result = try env.unify(u8_var, i64_var);
-    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(false, result.isAccepted());
 }
 
 test "unify - empty nominal type with non-empty tag union fails" {
@@ -1030,7 +1140,7 @@ test "unify - empty nominal type with non-empty tag union fails" {
     const result = try env.unify(nominal_var, anon_var);
 
     // Should fail
-    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(false, result.isAccepted());
 }
 
 // unification - opaque types with anonymous tag unions //
@@ -1060,7 +1170,7 @@ test "unify - anonymous tag union unifies with opaque type (same module)" {
     const result = try env.unify(opaque_var, anon_var);
 
     // Should succeed and merge to opaque type
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
     const resolved = env.module_env.types.resolveVar(anon_var);
     try std.testing.expect(resolved.desc.content == .structure);
     try std.testing.expect(resolved.desc.content.structure == .nominal_type);
@@ -1090,7 +1200,7 @@ test "unify - anonymous tag union unifies with opaque type (tag union on left)" 
     const result = try env.unify(anon_var, opaque_var);
 
     // Should succeed and merge to opaque type
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
     const resolved = env.module_env.types.resolveVar(anon_var);
     try std.testing.expect(resolved.desc.content == .structure);
     try std.testing.expect(resolved.desc.content.structure == .nominal_type);
@@ -1264,13 +1374,13 @@ test "unify - identical closed records" {
 
     const result = try env.unify(a, b);
 
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
 
     const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
     const b_record_fields = env.module_env.types.record_fields.sliceRange(b_record.fields);
     try std.testing.expectEqualSlices(Ident.Idx, record_data_fields.items(.name), b_record_fields.items(.name));
-    try std.testing.expectEqualSlices(Var, record_data_fields.items(.var_), b_record_fields.items(.var_));
+    try std.testing.expectEqualSlices(RecordField.Presence, record_data_fields.items(.presence), b_record_fields.items(.presence));
 }
 
 test "unify - closed record mismatch on diff fields (fail)" {
@@ -1291,7 +1401,7 @@ test "unify - closed record mismatch on diff fields (fail)" {
 
     const result = try env.unify(a, b);
 
-    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(false, result.isAccepted());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
 
     const desc_b = try env.getDescForRootVar(b);
@@ -1316,7 +1426,7 @@ test "unify - identical open records" {
 
     const result = try env.unify(a, b);
 
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
 
     // check that the update var at b is correct
@@ -1325,7 +1435,7 @@ test "unify - identical open records" {
     try std.testing.expectEqual(1, b_record.fields.len());
     const b_record_fields = env.module_env.types.getRecordFieldsSlice(b_record.fields);
     try std.testing.expectEqual(field_shared.name, b_record_fields.items(.name)[0]);
-    try std.testing.expectEqual(field_shared.var_, b_record_fields.items(.var_)[0]);
+    try std.testing.expectEqual(field_shared.presence, b_record_fields.items(.presence)[0]);
 
     const b_ext = env.module_env.types.resolveVar(b_record.ext).desc.content;
     try std.testing.expectEqual(Content{ .flex = Flex.init() }, b_ext);
@@ -1352,7 +1462,7 @@ test "unify - open record extends closed (fail)" {
 
     const result = try env.unify(open, closed);
 
-    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(false, result.isAccepted());
     try std.testing.expectEqual(Slot{ .redirect = closed }, env.module_env.types.getSlot(open));
     try std.testing.expectEqual(Content.err, (try env.getDescForRootVar(closed)).content);
 }
@@ -1372,8 +1482,240 @@ test "unify - closed record extends open" {
 
     const result = try env.unify(open, closed);
 
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
     try std.testing.expectEqual(Slot{ .redirect = closed }, env.module_env.types.getSlot(open));
+}
+
+test "unify - width absorption validates the complete extension chain before mutation" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const value_ty = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const optional_kind = try env.module_env.types.freshFromContent(.{ .field_presence = .optional });
+    const tail = try env.module_env.types.freshFromContent((try env.mkRecordClosed(&.{
+        try env.mkRecordField("required_tail", value_ty),
+    })).content);
+    const head = try env.module_env.types.freshFromContent((try env.mkRecord(&.{
+        try env.mkUnknownRecordField("optional_head", optional_kind, value_ty),
+    }, tail)).content);
+    const empty = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+
+    const result = try env.unifyWriteNoReport(head, empty);
+    try std.testing.expectEqual(Result.mismatch, result);
+    try std.testing.expect(env.module_env.types.resolveVar(head).desc_idx != env.module_env.types.resolveVar(empty).desc_idx);
+}
+
+test "unify - zero-field unbound row and empty record canonicalize without a fresh tail" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const no_fields = try env.module_env.types.appendRecordFields(&.{});
+    const unbound = try env.module_env.types.freshFromContent(.{ .structure = .{ .record_unbound = no_fields } });
+    const empty = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+
+    try std.testing.expectEqual(Result.unified, try env.unify(unbound, empty));
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, env.module_env.types.resolveVar(empty).desc.content);
+    try std.testing.expectEqual(@as(usize, 0), env.scratch.fresh_vars.len());
+}
+
+test "unify - exact zero-field closed row and empty record agree" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const closed_zero_field_row = try env.module_env.types.freshFromContent((try env.mkRecordClosed(&.{})).content);
+    const empty = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+
+    try std.testing.expectEqual(Result.unified, try env.unifyExact(closed_zero_field_row, empty));
+}
+
+// unification - structure/structure - records shared field presence //
+//
+// These exercise `unifySharedFieldPresence`: two closed records that share one
+// field name, whose presences must be combined. `unifyOneFieldRecords` passes
+// the first record as `a` and the second as `b`, so the pair below reads
+// left-to-right as `a_presence ~ b_presence`.
+
+test "unify - field presence - required and defaulted merge to required in both orders" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const default_id = types_mod.DefaultId{
+        .origin_module = env.module_env.selfModuleIdentity(),
+        .expr_node = 1,
+    };
+
+    for (0..2) |order| {
+        const required = try env.module_env.types.freshFromContent(.{ .field_presence = .required });
+        const defaulted = try env.module_env.types.freshFromContent(.{ .field_presence = .{ .defaulted = default_id } });
+        const result = if (order == 0)
+            try env.unify(required, defaulted)
+        else
+            try env.unify(defaulted, required);
+
+        try std.testing.expectEqual(Result.unified, result);
+        try std.testing.expectEqual(
+            Content{ .field_presence = .required },
+            env.module_env.types.resolveVar(required).desc.content,
+        );
+    }
+}
+
+test "unify - field presence - different default identities still mismatch" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const module_identity = env.module_env.selfModuleIdentity();
+    const first = try env.module_env.types.freshFromContent(.{ .field_presence = .{ .defaulted = .{
+        .origin_module = module_identity,
+        .expr_node = 1,
+    } } });
+    const second = try env.module_env.types.freshFromContent(.{ .field_presence = .{ .defaulted = .{
+        .origin_module = module_identity,
+        .expr_node = 2,
+    } } });
+
+    try std.testing.expectEqual(Result.mismatch, try env.unifyWriteNoReport(first, second));
+}
+
+test "unify - shared field presence - present ~ present" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const ta = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const tb = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+
+    const res = try env.unifyOneFieldRecords(
+        try env.mkRecordField("x", ta),
+        try env.mkRecordField("x", tb),
+    );
+
+    try std.testing.expectEqual(.unified, res.result);
+    try std.testing.expectEqual(null, (try env.onlyFieldPresence(res.b)).presenceVar());
+    // The two field types were unified.
+    try std.testing.expectEqual(
+        env.module_env.types.resolveVar(ta).desc_idx,
+        env.module_env.types.resolveVar(tb).desc_idx,
+    );
+}
+
+test "unify - shared field presence - present ~ unknown forces present" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const ta = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const tb = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const p = try env.module_env.types.freshFromContent(.{ .flex = Flex.init() });
+
+    const res = try env.unifyOneFieldRecords(
+        try env.mkRecordField("x", ta),
+        try env.mkUnknownRecordField("x", p, tb),
+    );
+
+    try std.testing.expectEqual(.unified, res.result);
+    // The merged field keeps referencing the presence var (load-bearing for
+    // annotation sealing); the fact lives in π.
+    const merged = try env.onlyFieldPresence(res.b);
+    try std.testing.expect(merged.presenceVar() != null);
+    // The undetermined presence var was forced to `present` and propagates.
+    try std.testing.expectEqual(Content{ .field_presence = .required }, env.module_env.types.resolveVar(p).desc.content);
+    try std.testing.expectEqual(Content{ .field_presence = .required }, env.module_env.types.resolveVar(merged.presenceVar().?).desc.content);
+    // The types were unified.
+    try std.testing.expectEqual(
+        env.module_env.types.resolveVar(ta).desc_idx,
+        env.module_env.types.resolveVar(tb).desc_idx,
+    );
+}
+
+test "unify - shared field presence - unknown ~ present forces present" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const ta = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const tb = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const p = try env.module_env.types.freshFromContent(.{ .flex = Flex.init() });
+
+    const res = try env.unifyOneFieldRecords(
+        try env.mkUnknownRecordField("x", p, ta),
+        try env.mkRecordField("x", tb),
+    );
+
+    try std.testing.expectEqual(.unified, res.result);
+    // Mirrors `present ~ unknown`: the wrapper is kept, the fact lives in π.
+    try std.testing.expect((try env.onlyFieldPresence(res.b)).presenceVar() != null);
+    try std.testing.expectEqual(Content{ .field_presence = .required }, env.module_env.types.resolveVar(p).desc.content);
+}
+
+test "unify - shared field presence - unknown ~ unknown stays undetermined" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const ta = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const tb = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const pa = try env.module_env.types.freshFromContent(.{ .flex = Flex.init() });
+    const pb = try env.module_env.types.freshFromContent(.{ .flex = Flex.init() });
+
+    const res = try env.unifyOneFieldRecords(
+        try env.mkUnknownRecordField("x", pa, ta),
+        try env.mkUnknownRecordField("x", pb, tb),
+    );
+
+    try std.testing.expectEqual(.unified, res.result);
+    try std.testing.expect((try env.onlyFieldPresence(res.b)).presenceVar() != null);
+    // Neither side forced a fact, so the two presence vars unified and stay flex.
+    try std.testing.expectEqual(
+        env.module_env.types.resolveVar(pa).desc_idx,
+        env.module_env.types.resolveVar(pb).desc_idx,
+    );
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, env.module_env.types.resolveVar(pa).desc.content);
+}
+
+test "unify - shared field presence - present ~ present with incompatible types (fail)" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Confirms the type axis is scheduled: same presence, but the field types
+    // cannot unify.
+    const ta = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const tb = try env.module_env.types.freshFromContent(.{ .structure = .empty_tag_union });
+
+    const res = try env.unifyOneFieldRecords(
+        try env.mkRecordField("x", ta),
+        try env.mkRecordField("x", tb),
+    );
+
+    try std.testing.expectEqual(false, res.result.isAccepted());
+    try std.testing.expectEqual(Content.err, (try env.getDescForRootVar(res.b)).content);
+}
+
+test "unify - shared field presence - present ~ unknown pinned optional (fail)" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Confirms the presence axis is scheduled: `a` demands present, but the
+    // unknown's kind var is already pinned to `optional` (one value, one
+    // layout—design.md "Field Kinds").
+    const ta = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const tb = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const p = try env.module_env.types.freshFromContent(.{ .field_presence = .optional });
+
+    const res = try env.unifyOneFieldRecords(
+        try env.mkRecordField("x", ta),
+        try env.mkUnknownRecordField("x", p, tb),
+    );
+
+    try std.testing.expectEqual(false, res.result.isAccepted());
+    try std.testing.expectEqual(Content.err, (try env.getDescForRootVar(res.b)).content);
 }
 
 // unification - tag unions - partition tags //
@@ -1544,7 +1886,7 @@ test "unify - identical closed tag_unions" {
 
     const result = try env.unify(a, b);
 
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
 
     const b_tag_union = try TestEnv.getTagUnionOrErr(try env.getDescForRootVar(b));
@@ -1581,7 +1923,7 @@ test "unify - identical open tag unions" {
 
     const result = try env.unify(a, b);
 
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
 
     // check that the update var at b is correct
@@ -1621,7 +1963,7 @@ test "unify - open tag extends closed (fail)" {
 
     const result = try env.unify(a, b);
 
-    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(false, result.isAccepted());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
     try std.testing.expectEqual(Content.err, (try env.getDescForRootVar(b)).content);
 }
@@ -1641,7 +1983,7 @@ test "unify - closed tag union extends open" {
 
     const result = try env.unify(a, b);
 
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
 
     // check that the update var at b is correct
@@ -1698,7 +2040,7 @@ test "unify - infinite type detected by occurs check" {
 
     // Unification succeeds (doesn't fail during unification)
     const result = try env.unify(a, b);
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
 
     // But the occurs check (run after definition solving) detects the infinite type
     const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, a);
@@ -1725,7 +2067,7 @@ test "unify - anonymous recursion detected by occurs check" {
 
     // Unification succeeds (doesn't fail during unification)
     const result = try env.unify(tag_var_a, tag_var_b);
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
 
     // But the occurs check (run after definition solving) detects the anonymous recursion
     const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, tag_var_a);
@@ -1757,10 +2099,10 @@ test "unify - succeeds on nominal, tag union recursion" {
     try types_store.setVarContent(b, try env.mkNominalType("TypeA", b_backing, &.{}));
 
     const result_nominal_type = try env.unify(a, b);
-    try std.testing.expectEqual(.ok, result_nominal_type);
+    try std.testing.expectEqual(.unified, result_nominal_type);
 
     const result_tag_union = try env.unify(a_backing, b_backing);
-    try std.testing.expectEqual(.ok, result_tag_union);
+    try std.testing.expectEqual(.unified, result_tag_union);
 }
 
 test "unify - deeply nested tuples do not depend on native call stack" {
@@ -1778,7 +2120,7 @@ test "unify - deeply nested tuples do not depend on native call stack" {
     }
 
     const result = try env.unify(a, b);
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
 }
 
 // static dispatch constraints //
@@ -1806,7 +2148,7 @@ test "unify - flex with no constraints unifies with flex with constraints" {
     } });
 
     const result = try env.unify(a, b);
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
 
     const resolved = env.module_env.types.resolveVar(a);
     try std.testing.expect(resolved.desc.content == .flex);
@@ -1841,7 +2183,7 @@ test "unify - flex with constraints unifies with flex with same constraints" {
     } });
 
     const result = try env.unify(a, b);
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
 }
 
 // capture constraints
@@ -1869,7 +2211,7 @@ test "unify - flex with constraints vs structure captures deferred check" {
     const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const result = try env.unify(flex_var, structure_var);
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
 
     // Check that constraint was captured
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
@@ -1904,7 +2246,7 @@ test "unify - structure vs flex with constraints captures deferred check (revers
     } });
 
     const result = try env.unify(structure_var, flex_var);
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
 
     // Check that constraint was captured (note: vars might be swapped due to merge order)
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
@@ -1925,7 +2267,7 @@ test "unify - flex with no constraints vs structure does not capture" {
     const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
 
     const result = try env.unify(flex_var, structure_var);
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
 
     // Check that NO constraint was captured
     try std.testing.expectEqual(0, env.scratch.deferred_constraints.len());
@@ -1953,7 +2295,7 @@ test "unify - rigid with from_numeral flex retains constraints on resolved rigid
     } });
 
     const result = try env.unify(rigid_var, flex_var);
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
 
     const resolved = env.module_env.types.resolveVar(rigid_var);
     try std.testing.expect(resolved.desc.content == .rigid);
@@ -1985,7 +2327,7 @@ test "unify - non-numeric flex with rigid keeps constraints deferred-only" {
     const rigid_var = try env.module_env.types.freshFromContent(.{ .rigid = Rigid.init(rigid_ident) });
 
     const result = try env.unify(flex_var, rigid_var);
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
 
     const resolved = env.module_env.types.resolveVar(rigid_var);
     try std.testing.expect(resolved.desc.content == .rigid);
@@ -2021,7 +2363,7 @@ test "unify order - resulting type is order-independent for recursive types" {
             const b = try ts.freshFromContent(b_tu.content);
 
             const result = if (e_first) try env.unify(e, b) else try env.unify(b, e);
-            try std.testing.expectEqual(true, result.isOk());
+            try std.testing.expectEqual(true, result.isAccepted());
             return ts.resolveVar(r).desc.content == .structure;
         }
     };
@@ -2061,7 +2403,7 @@ test "unify order - deferred constraint origin var depends on operand order" {
             const rigid = try ts.freshFromContent(.{ .rigid = Rigid.init(rigid_ident) });
 
             const result = if (flex_first) try env.unify(flex, rigid) else try env.unify(rigid, flex);
-            try std.testing.expectEqual(.ok, result);
+            try std.testing.expectEqual(.unified, result);
             try std.testing.expectEqual(@as(usize, 1), env.scratch.deferred_constraints.len());
             const origin = env.scratch.deferred_constraints.items.items[0].var_;
             return @intFromEnum(ts.resolveVar(origin).var_);
@@ -2275,7 +2617,7 @@ test "content identity: same module content reached as two envs unifies (two URL
     const from_b = try copyIntoConsumer(&consumer, &json_b, try json_b.mkNominalVar("Value", 7));
 
     const result = try consumer.unify(from_a, from_b);
-    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(.unified, result);
 }
 
 test "content identity: changed module content does not unify (version coexistence)" {
@@ -2342,6 +2684,8 @@ test "content identity: declaration reordering changes no identity except via th
         unrelated_2.env.contentIdentityHash().?,
     );
 }
+
+// existential witness identity //
 
 test "content identity: deep hash covers transitive imports (byte-identical modules over different deps stay distinct)" {
     const gpa = std.testing.allocator;

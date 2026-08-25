@@ -28,111 +28,94 @@ UNUSED VARIABLE - multi_qualified_import.md:8:12:8:19
 MOD NOT IMPORTED - multi_qualified_import.md:11:8:11:34
 UNRECOGNIZED SYNTAX - multi_qualified_import.md:12:8:12:38
 # PROBLEMS
+── ✗ expected record accessor ────────────────── multi_qualified_import.md:12:12
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  data = json.Core.Utf8.encode("hello")                                     │
- │             ‾‾‾‾‾                                                          │
- └─────────────────────────────────────────── multi_qualified_import.md:12:12 ┘
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+data = json.Core.Utf8.encode("hello")
+           ^^^^^
 
-    For example:
-        person.name
-        pair.0
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
-    I found `.Core` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+For example:
+    person.name
+    maybe_person.?name
+    pair.0
 
+I found .Core here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  data = json.Core.Utf8.encode("hello")                                     │
- │                  ‾‾‾‾‾                                                     │
- └─────────────────────────────────────────── multi_qualified_import.md:12:17 ┘
+── ✗ expected record accessor ────────────────── multi_qualified_import.md:12:17
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    For example:
-        person.name
-        pair.0
+data = json.Core.Utf8.encode("hello")
+                ^^^^^
 
-    I found `.Utf8` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
+For example:
+    person.name
+    maybe_person.?name
+    pair.0
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `Encoder` type is declared to be in `json.Core`, ──┐
-└┬─────────────────┘  which does not exist.                                   │
- │                                                                            │
- │  json_encoder : Encoder                                                    │
- │                 ‾‾‾‾‾‾‾                                                    │
- └──────────────────────────────────────────── multi_qualified_import.md:3:16 ┘
+I found .Utf8 here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
+── ✗ mod not found ─────────────────────────── multi_qualified_import.md:3:16
 
+This Encoder type is declared to be in json.Core, which does not exist.
 
-┌────────────────┐
-│ DOES NOT EXIST ├─ `Json.defaultEncoder` does not exist. ────────────────────┐
-└┬───────────────┘                                                            │
- │                                                                            │
- │  json_encoder = Json.Core.Utf8.defaultEncoder                              │
- │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                              │
- └──────────────────────────────────────────── multi_qualified_import.md:4:16 ┘
+json_encoder : Encoder
+               ^^^^^^^
 
-    `Json` is in scope, but it has no associated `defaultEncoder`.
+── ✗ does not exist ───────────────────────────── multi_qualified_import.md:4:16
 
+Json.defaultEncoder does not exist.
 
-┌─────────────────────┐
-│ MOD NOT IMPORTED ├─ There is no mod with the name `json.Core.Utf8` ───┐
-└┬────────────────────┘  imported into this Roc file.                         │
- │                                                                            │
- │  process : json.Core.Utf8.Encoder -> Str                                   │
- │            ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
- └──────────────────────────────────────────── multi_qualified_import.md:7:11 ┘
+json_encoder = Json.Core.Utf8.defaultEncoder
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Json is in scope, but it has no associated defaultEncoder.
 
+── ✗ mod not imported ──────────────────────── multi_qualified_import.md:7:11
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `encoder` is defined here and then never used. ─┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  process = |encoder| "processing"                                          │
- │             ‾‾‾‾‾‾‾                                                        │
- └──────────────────────────────────────────── multi_qualified_import.md:8:12 ┘
+There is no mod with the name json.Core.Utf8 imported into this Roc file.
 
-    If you don't need this variable, prefix it with an underscore like
-    `_encoder` to suppress this warning.
+process : json.Core.Utf8.Encoder -> Str
+          ^^^^^^^^^^^^^^^^^^^^^^
 
+── ● unused variable ──────────────────────────── multi_qualified_import.md:8:12
 
-┌─────────────────────┐
-│ MOD NOT IMPORTED ├─ There is no mod with the name `json.Core.Utf8` ───┐
-└┬────────────────────┘  imported into this Roc file.                         │
- │                                                                            │
- │  data : json.Core.Utf8.EncodedData                                         │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
- └──────────────────────────────────────────── multi_qualified_import.md:11:8 ┘
+Variable encoder is defined here and then never used:
 
+process = |encoder| "processing"
+           ^^^^^^^
 
+If you don't need this variable, prefix it with an underscore like _encoder to
+suppress this warning.
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  data = json.Core.Utf8.encode("hello")                                     │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
- └──────────────────────────────────────────── multi_qualified_import.md:12:8 ┘
+── ✗ mod not imported ──────────────────────── multi_qualified_import.md:11:8
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+There is no mod with the name json.Core.Utf8 imported into this Roc file.
+
+data : json.Core.Utf8.EncodedData
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+── ✗ unrecognized syntax ──────────────────────── multi_qualified_import.md:12:8
+
+I don't recognize this syntax.
+
+data = json.Core.Utf8.encode("hello")
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
@@ -205,11 +188,7 @@ data = .encode("hello")
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "process"))
-		(e-lambda
-			(args
-				(p-assign (ident "encoder")))
-			(e-string
-				(e-literal (string "processing"))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)

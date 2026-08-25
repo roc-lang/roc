@@ -66,14 +66,43 @@ pub fn elfDebugInfoSearchPaths(_: []const u8) if (builtin.object_format == .elf)
     return;
 }
 
-/// Shared `std.Options` value for shim and platform-host code that needs to disable
-/// std stack tracing. Zig 0.16's `std.debug.SelfInfo` on Windows references
+/// Shared `std.Options` value for the shims, the builtins static libraries and
+/// the platform hosts—every static archive roc links into a program it
+/// produces. Both settings keep std from reaching for a symbol that link cannot
+/// resolve.
+///
+/// Zig 0.16's `std.debug.SelfInfo` on Windows references
 /// `ntdll.LdrRegisterDllNotification`, which isn't linked into roc-compiled
 /// programs that embed these static archives—leaving stack tracing on would
-/// trigger an unresolved-symbol link error. Hosts that need extra fields
-/// (e.g. `logFn`, `log_level`) should declare their own `std.Options` literal
-/// rather than alias this one.
-pub const std_options_no_stack_tracing: std.Options = .{ .allow_stack_tracing = false };
+/// trigger an unresolved-symbol link error.
+///
+/// `std.heap.defaultQueryPageSize` reaches the auxiliary vector through
+/// `getauxval`; with no libc that is an extern call whose weak definition Zig
+/// emits only for executables, so a static archive is left referencing it and
+/// the `-nostdlib` link of a roc program has nothing to bind it to. Only
+/// targets whose page size is not comptime-known query it at all, which is why
+/// aarch64 Linux hits this and x86-64 does not. See `queryPageSize`.
+///
+/// Hosts that need extra fields (e.g. `logFn`, `log_level`) should declare
+/// their own `std.Options` literal rather than alias this one.
+pub const std_options_static_archive: std.Options = .{
+    .allow_stack_tracing = false,
+    .queryPageSize = queryPageSize,
+};
+
+/// Page size for code linked into roc-produced programs.
+///
+/// libc reads the auxiliary vector during its own startup, so where it is
+/// linked std's own query answers exactly. Without it these archives have no
+/// auxiliary vector to read—they are not the program's entry point, so nothing
+/// populates `std.os.linux.elf_aux_maybe`—so report the target's largest
+/// supported page size. Allocations rounded up to it stay page-aligned for
+/// whatever smaller page size the kernel actually uses, which is also what std
+/// itself settles on when the auxiliary vector is unavailable.
+fn queryPageSize() usize {
+    if (comptime builtin.link_libc) return std.heap.defaultQueryPageSize();
+    return std.heap.page_size_max;
+}
 
 const linux_vtable: std.Io.VTable = blk: {
     var vtable = std.Io.failing.vtable.*;

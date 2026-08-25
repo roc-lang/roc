@@ -549,6 +549,7 @@ pub const SyntaxChecker = struct {
         // Release the previous_build_env owner first.
         if (self.previous_build_env) |old_prev| {
             old_prev.release(owner_previous);
+            self.previous_build_env = null;
         }
 
         // Move build_env to previous_build_env, transferring ownership tag.
@@ -562,7 +563,7 @@ pub const SyntaxChecker = struct {
         // Create a fresh BuildEnv. The LSP reuses one pre-published Builtin
         // across checks; each BuildEnv borrows it and never deinitializes it.
         const cwd = try std.Io.Dir.cwd().realPathFileAlloc(self.std_io, ".", self.allocator);
-        defer self.allocator.free(cwd);
+        errdefer self.allocator.free(cwd);
         const builtin_modules = try self.sharedBuiltinModules();
         var env = BuildEnv.initBorrowingBuiltinModules(
             self.allocator,
@@ -573,6 +574,7 @@ pub const SyntaxChecker = struct {
             self.std_io,
             builtin_modules,
         );
+        errdefer env.deinit();
         env.compiler_version = build_options.compiler_version;
         env.setFinalizeExecutableArtifacts(false);
 
@@ -583,7 +585,7 @@ pub const SyntaxChecker = struct {
         }
 
         const debug_handles = self.debug.build or self.debug.syntax or self.debug.server;
-        const handle = try BuildEnvHandle.create(self.allocator, env, owner_build, debug_handles);
+        const handle = try BuildEnvHandle.create(self.allocator, env, cwd, owner_build, debug_handles);
         self.build_env = handle;
         return handle;
     }
@@ -611,7 +613,7 @@ pub const SyntaxChecker = struct {
                 for (entry.reports) |report| {
                     switch (report.severity) {
                         .runtime_error, .fatal => return false,
-                        .info, .warning => {},
+                        .warning => {},
                     }
                 }
             }
@@ -832,7 +834,6 @@ pub const SyntaxChecker = struct {
         const range = self.rangeFromReport(rep);
         const severity: u32 = switch (rep.severity) {
             .warning => 2,
-            .info => 3,
             .runtime_error, .fatal => 1,
         };
 
@@ -890,6 +891,7 @@ pub const SyntaxChecker = struct {
                 .link,
                 .vertical_stack,
                 .horizontal_concat,
+                .source_location,
                 => {},
             }
         }
@@ -948,6 +950,7 @@ pub const SyntaxChecker = struct {
             .source_code_region => |region| return textHasAny(region.line_text, needles),
             .source_code_multi_region => |multi| return textHasAny(multi.source, needles),
             .source_code_with_underlines => |with_underlines| return textHasAny(with_underlines.display_region.line_text, needles),
+            .source_location => {},
             .line_break,
             .indent,
             .space,
@@ -980,6 +983,10 @@ pub const SyntaxChecker = struct {
     pub const DefinitionResult = struct {
         uri: []const u8,
         range: LspRange,
+
+        pub fn deinit(self: DefinitionResult, allocator: std.mem.Allocator) void {
+            allocator.free(self.uri);
+        }
     };
 
     /// Returns true when a byte can be part of a Roc identifier token used for
@@ -1049,13 +1056,13 @@ pub const SyntaxChecker = struct {
         // Prefer lookup expression semantics when hovering over identifiers in
         // calls (e.g. `multiply(…)`): callers expect the callee's function type
         // and docs, not the enclosing call expression's return type.
-        var lookup_expr_idx_opt = cir_queries.findLookupAtOffset(module_env, target_offset);
-        if (lookup_expr_idx_opt == null and result.region.start.offset != target_offset) {
-            lookup_expr_idx_opt = cir_queries.findLookupAtOffset(module_env, result.region.start.offset);
+        var lookup_result_opt = cir_queries.findLookupAtOffset(module_env, target_offset);
+        if (lookup_result_opt == null and result.region.start.offset != target_offset) {
+            lookup_result_opt = cir_queries.findLookupAtOffset(module_env, result.region.start.offset);
         }
 
-        var hover_type_var = if (lookup_expr_idx_opt) |lookup_expr_idx|
-            ModuleEnv.varFrom(lookup_expr_idx)
+        var hover_type_var = if (lookup_result_opt) |lookup_result|
+            lookup_result.typeVar()
         else
             result.type_var;
 
@@ -1063,24 +1070,33 @@ pub const SyntaxChecker = struct {
         // resolve an explicit annotation for a symbol, prefer that exact text.
         var hover_type_text_opt: ?[]const u8 = null;
 
-        if (lookup_expr_idx_opt) |lookup_expr_idx| {
-            const lookup_expr = module_env.store.getExpr(lookup_expr_idx);
-            const lookup_tag = std.meta.activeTag(lookup_expr);
-            const method_parts: ?struct { receiver: CIR.Expr.Idx, method_name: base.Ident.Idx } = if (lookup_tag == .e_method_call)
-                .{ .receiver = lookup_expr.e_method_call.receiver, .method_name = lookup_expr.e_method_call.method_name }
-            else if (lookup_tag == .e_dispatch_call)
-                .{ .receiver = lookup_expr.e_dispatch_call.receiver, .method_name = lookup_expr.e_dispatch_call.method_name }
-            else
-                null;
-            if (method_parts) |method_call| {
-                const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
-                if (resolveMethodOwnerForLookup(module_env, receiver_type_var)) |method_owner| {
-                    if (findMethodQualifiedIdent(module_env, method_owner.owner, method_call.method_name)) |qualified_ident| {
-                        if (findTypeForQualifiedIdent(module_env, qualified_ident)) |method_type_var| {
-                            hover_type_var = method_type_var;
+        if (lookup_result_opt) |lookup_result| {
+            switch (lookup_result) {
+                .expr => |lookup_expr_idx| {
+                    const lookup_expr = module_env.store.getExpr(lookup_expr_idx);
+                    if (lookup_expr == .e_method_call) {
+                        const method_call = lookup_expr.e_method_call;
+                        const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
+                        if (resolveMethodOwnerForLookup(module_env, receiver_type_var)) |method_owner| {
+                            if (findMethodQualifiedIdent(module_env, method_owner.owner, method_call.method_name)) |qualified_ident| {
+                                if (findTypeForQualifiedIdent(module_env, qualified_ident)) |method_type_var| {
+                                    hover_type_var = method_type_var;
+                                }
+                            }
+                        }
+                    } else if (lookup_expr == .e_dispatch_call) {
+                        const method_call = lookup_expr.e_dispatch_call;
+                        const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
+                        if (resolveMethodOwnerForLookup(module_env, receiver_type_var)) |method_owner| {
+                            if (findMethodQualifiedIdent(module_env, method_owner.owner, method_call.method_name)) |qualified_ident| {
+                                if (findTypeForQualifiedIdent(module_env, qualified_ident)) |method_type_var| {
+                                    hover_type_var = method_type_var;
+                                }
+                            }
                         }
                     }
-                }
+                },
+                .field_access => {},
             }
         }
 
@@ -1094,8 +1110,8 @@ pub const SyntaxChecker = struct {
         // Extract documentation for the definition/pattern at this location.
         // When we already have a lookup expression, resolve directly to avoid
         // region/offset ambiguity around delimiters.
-        var documentation = if (lookup_expr_idx_opt) |lookup_expr_idx|
-            try self.resolveDocForLookup(env, module_env, lookup_expr_idx)
+        var documentation = if (lookup_result_opt) |lookup_result|
+            try self.resolveDocForLookup(env, module_env, lookup_result)
         else
             try self.findDocumentationForRegion(env, module_env, result.region, target_offset);
 
@@ -1107,6 +1123,7 @@ pub const SyntaxChecker = struct {
             const def_loc_opt = self.findDefinitionAtOffset(module_env, target_offset, uri, &def_oom);
             if (def_oom) |e| return e;
             if (def_loc_opt) |def_loc| {
+                defer def_loc.deinit(self.allocator);
                 if (std.mem.eql(u8, def_loc.uri, uri)) {
                     if (pos.positionToOffset(module_env, def_loc.range.start_line, def_loc.range.start_col)) |def_offset| {
                         if (cir_queries.findPatternAtOffset(module_env, def_offset)) |pattern_idx| {
@@ -1201,8 +1218,8 @@ pub const SyntaxChecker = struct {
 
         // First, check if this is a lookup expression (e.g., a function call)
         // If so, resolve it to the definition and extract docs from there
-        if (cir_queries.findLookupAtOffset(module_env, target_offset)) |expr_idx| {
-            if (try self.resolveDocForLookup(env, module_env, expr_idx)) |doc| return doc;
+        if (cir_queries.findLookupAtOffset(module_env, target_offset)) |lookup_result| {
+            if (try self.resolveDocForLookup(env, module_env, lookup_result)) |doc| return doc;
         }
 
         // Hover positions can land on delimiters around the symbol (e.g. `(` in
@@ -1210,8 +1227,8 @@ pub const SyntaxChecker = struct {
         // the start of the selected type region as an anchor for lookup-based
         // documentation resolution.
         if (region.start.offset != target_offset) {
-            if (cir_queries.findLookupAtOffset(module_env, region.start.offset)) |expr_idx| {
-                if (try self.resolveDocForLookup(env, module_env, expr_idx)) |doc| return doc;
+            if (cir_queries.findLookupAtOffset(module_env, region.start.offset)) |lookup_result| {
+                if (try self.resolveDocForLookup(env, module_env, lookup_result)) |doc| return doc;
             }
         }
 
@@ -1251,9 +1268,13 @@ pub const SyntaxChecker = struct {
     }
 
     /// Resolve documentation for a local lookup, external lookup, or attached method dispatch.
-    fn resolveDocForLookup(self: *SyntaxChecker, env: *BuildEnv, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) Allocator.Error!?[]const u8 {
+    fn resolveDocForLookup(self: *SyntaxChecker, env: *BuildEnv, module_env: *ModuleEnv, lookup_result: cir_queries.LookupResult) Allocator.Error!?[]const u8 {
         const source = module_env.common.source;
         const store = &module_env.store;
+        const expr_idx = switch (lookup_result) {
+            .expr => |idx| idx,
+            .field_access => return null,
+        };
         const expr = store.getExpr(expr_idx);
 
         const expr_tag = std.meta.activeTag(expr);
@@ -1532,8 +1553,7 @@ pub const SyntaxChecker = struct {
     /// Find the definition location for the expression at the given byte offset.
     /// Looks for lookups (e_lookup_local, e_lookup_external) and returns the definition location.
     fn findDefinitionAtOffset(self: *SyntaxChecker, module_env: *ModuleEnv, target_offset: u32, current_uri: []const u8, oom: *?Allocator.Error) ?DefinitionResult {
-        var best_expr: ?CIR.Expr.Idx = null;
-        var best_size: u32 = std.math.maxInt(u32);
+        var best_lookup: ?cir_queries.LookupResult = null;
 
         // Iterate through all definitions
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
@@ -1546,8 +1566,12 @@ pub const SyntaxChecker = struct {
                 if (self.findTypeAnnoAtOffset(module_env, annotation.anno, target_offset, oom)) |result| {
                     // If URI is empty, it's a local type - use current file
                     if (result.uri.len == 0) {
+                        const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
+                            oom.* = err;
+                            return null;
+                        };
                         return DefinitionResult{
-                            .uri = current_uri,
+                            .uri = uri_copy,
                             .range = result.range,
                         };
                     }
@@ -1566,8 +1590,7 @@ pub const SyntaxChecker = struct {
                 }
                 // Then search for lookup expressions
                 if (cir_queries.findLookupAtOffset(module_env, target_offset)) |found| {
-                    best_expr = found;
-                    best_size = 0; // found the narrowest match
+                    best_lookup = found;
                 }
             }
         }
@@ -1600,8 +1623,12 @@ pub const SyntaxChecker = struct {
                 if (self.findTypeAnnoAtOffset(module_env, type_anno_idx, target_offset, oom)) |result| {
                     // If URI is empty, it's a local type - use current file
                     if (result.uri.len == 0) {
+                        const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
+                            oom.* = err;
+                            return null;
+                        };
                         return DefinitionResult{
-                            .uri = current_uri,
+                            .uri = uri_copy,
                             .range = result.range,
                         };
                     }
@@ -1617,8 +1644,7 @@ pub const SyntaxChecker = struct {
 
                 if (cir_queries.regionContainsOffset(expr_region, target_offset)) {
                     if (cir_queries.findLookupAtOffset(module_env, target_offset)) |found| {
-                        best_expr = found;
-                        best_size = 0;
+                        best_lookup = found;
                     }
                 }
             }
@@ -1629,15 +1655,18 @@ pub const SyntaxChecker = struct {
 
                 if (cir_queries.regionContainsOffset(expr_region, target_offset)) {
                     if (cir_queries.findLookupAtOffset(module_env, target_offset)) |found| {
-                        best_expr = found;
-                        best_size = 0;
+                        best_lookup = found;
                     }
                 }
             }
         }
 
         // If we found a lookup expression, resolve it to a definition
-        if (best_expr) |expr_idx| {
+        if (best_lookup) |lookup_result| {
+            const expr_idx = switch (lookup_result) {
+                .expr => |idx| idx,
+                .field_access => return null,
+            };
             const expr = module_env.store.getExpr(expr_idx);
             const expr_tag = std.meta.activeTag(expr);
             if (expr_tag == .e_lookup_local) {
@@ -1646,8 +1675,12 @@ pub const SyntaxChecker = struct {
                 const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(lookup.pattern_idx));
                 const def_region = module_env.store.getRegionAt(pattern_node_idx);
                 const range = cir_queries.regionToRange(module_env, def_region) orelse return null;
+                const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
+                    oom.* = err;
+                    return null;
+                };
                 return DefinitionResult{
-                    .uri = current_uri,
+                    .uri = uri_copy,
                     .range = range,
                 };
             }
@@ -1976,8 +2009,12 @@ pub const SyntaxChecker = struct {
                     if (maybe_type_anno) |type_anno_idx| {
                         if (self.findTypeAnnoAtOffset(module_env, type_anno_idx, target_offset, oom)) |result| {
                             if (result.uri.len == 0) {
+                                const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
+                                    oom.* = err;
+                                    return null;
+                                };
                                 return DefinitionResult{
-                                    .uri = current_uri,
+                                    .uri = uri_copy,
                                     .range = result.range,
                                 };
                             }

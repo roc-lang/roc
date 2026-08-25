@@ -16,25 +16,24 @@ type=expr
 # EXPECTED
 MISSING METHOD - polymorphism.md:6:29:6:35
 # PROBLEMS
+── ✗ missing method ─────────────────────────────────────── polymorphism.md:6:29
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `to_str` method is being called on a value whose ────┐
-└┬───────────────┘  type doesn't have that method.                            │
- │                                                                            │
- │  { pair1, pair2, pair3 }.to_str()                                          │
- │                          ‾‾‾‾‾‾                                            │
- └────────────────────────────────────────────────────── polymorphism.md:6:29 ┘
+This to_str method is being called on a value whose type doesn't have that
+method.
 
-    The value's type, which does not have a method named `to_str`, is:
+{ pair1, pair2, pair3 }.to_str()
+                        ^^^^^^
 
-        { pair1: { first: a, second: b }, pair2: { first: c, second: d },
-        pair3: { first: [True, ..], second: [False, ..] } }
-          where [
-            a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-            b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),
-            c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)]),
-            d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-          ]
+The value's type, which does not have a method named to_str, is:
+
+    { pair1: { first: a, second: b }, pair2: { first: c, second: d }, pair3: {
+    first: [True, ..], second: [False, ..] } }
+      where [
+        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),
+        c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)]),
+        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+      ]
 
 # TOKENS
 ~~~zig
@@ -119,7 +118,7 @@ EndOfFile,
 							(p-assign (ident "y"))))))))
 	(s-let
 		(p-assign (ident "pair1"))
-		(e-call (constraint-fn-var 249)
+		(e-call (constraint-fn-var 264)
 			(e-lookup-local
 				(p-assign (ident "make_pair")))
 			(e-num (value "1"))
@@ -127,7 +126,7 @@ EndOfFile,
 				(e-literal (string "a")))))
 	(s-let
 		(p-assign (ident "pair2"))
-		(e-call (constraint-fn-var 269)
+		(e-call (constraint-fn-var 287)
 			(e-lookup-local
 				(p-assign (ident "make_pair")))
 			(e-string
@@ -135,7 +134,7 @@ EndOfFile,
 			(e-num (value "42"))))
 	(s-let
 		(p-assign (ident "pair3"))
-		(e-call (constraint-fn-var 276)
+		(e-call (constraint-fn-var 297)
 			(e-lookup-local
 				(p-assign (ident "make_pair")))
 			(e-tag (name "True"))

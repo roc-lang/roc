@@ -58,9 +58,8 @@ pub const WasmImportMemory = enum {
 
 /// Optional wasm-specific settings from a target record in a platform header.
 pub const WasmTargetConfig = struct {
-    /// Final host-visible function exports. `null` preserves the legacy
-    /// contract where public symbols are read from the platform object; a
-    /// present slice, including an empty one, is the complete export set.
+    /// Final host-visible function exports. The platform header is the sole
+    /// authority: `null` and an explicit empty slice both export no functions.
     exports: ?[]const []const u8 = null,
     import_memory: WasmImportMemory = .no,
     minimum_memory: ?usize = null,
@@ -100,6 +99,7 @@ pub const TargetConfigResolveReason = enum {
     missing_top_level_value,
     not_constant,
     unevaluated_constant,
+    unimplemented_declaration,
     expected_import_memory,
     expected_unsigned_integer,
     integer_out_of_range,
@@ -109,6 +109,7 @@ pub const TargetConfigResolveReason = enum {
             .missing_top_level_value => "does not name a top-level value in the platform module",
             .not_constant => "names a function, but target configuration requires a constant",
             .unevaluated_constant => "does not have a stored compile-time constant value",
+            .unimplemented_declaration => "has a type annotation but no implementation",
             .expected_import_memory => "must resolve to Zeroed, Uninitialized, or No",
             .expected_unsigned_integer => "must resolve to a non-negative whole number",
             .integer_out_of_range => "resolves to a number outside the supported range",
@@ -783,6 +784,10 @@ fn topLevelConstNode(
             .stored_const => |stored| stored.node,
             .reserved, .eval_template => blk: {
                 reason.* = .unevaluated_constant;
+                break :blk null;
+            },
+            .unimplemented => blk: {
+                reason.* = .unimplemented_declaration;
                 break :blk null;
             },
         };

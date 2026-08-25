@@ -12,33 +12,30 @@ foo = "hello ${namF
 EXPECTED INTERPOLATION END - fuzz_crash_017.md:2:7:2:8
 UNRECOGNIZED SYNTAX - fuzz_crash_017.md:2:7:2:20
 # PROBLEMS
+── ✗ expected interpolation end ────────────────────────── fuzz_crash_017.md:2:7
 
-┌────────────────────────────┐
-│ EXPECTED INTERPOLATION END ├─ I was parsing a string interpolation, and I ──┐
-└┬───────────────────────────┘  expected `}` before returning to the string.  │
- │                                                                            │
- │  foo = "hello ${namF                                                       │
- │        ‾                                                                   │
- └───────────────────────────────────────────────────── fuzz_crash_017.md:2:7 ┘
+I was parsing a string interpolation, and I expected `}` before returning to
+the string.
 
-    String interpolations start with `${` and must close with `}` after the
-    embedded expression.
+foo = "hello ${namF
+      ^
 
-    For example:
-        "Hello, ${name}!"
+String interpolations start with ${ and must close with } after the embedded
+expression.
 
-    I found `"` here.
+For example:
+    "Hello, ${name}!"
 
+I found " here.
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  foo = "hello ${namF                                                       │
- │        ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_017.md:2:7 ┘
+── ✗ unrecognized syntax ───────────────────────────────── fuzz_crash_017.md:2:7
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+I don't recognize this syntax.
+
+foo = "hello ${namF
+      ^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig

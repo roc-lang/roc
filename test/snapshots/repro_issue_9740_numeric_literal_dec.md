@@ -204,25 +204,25 @@ main! = |_| {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_gt") (constraint-fn-var 306)
+													(e-dispatch-call (method "is_gt") (constraint-fn-var 318)
 														(receiver
 															(e-lookup-local
 																(p-assign (ident "start"))))
 														(args
 															(e-num (value "0"))))
 													(e-block
-														(e-call (constraint-fn-var 343)
+														(e-call (constraint-fn-var 357)
 															(e-lookup-local
 																(p-assign (ident "slice")))
 															(e-lookup-local
 																(p-assign (ident "rest")))
-															(e-dispatch-call (method "minus") (constraint-fn-var 326)
+															(e-dispatch-call (method "minus") (constraint-fn-var 340)
 																(receiver
 																	(e-lookup-local
 																		(p-assign (ident "start"))))
 																(args
 																	(e-num (value "1"))))
-															(e-dispatch-call (method "minus") (constraint-fn-var 339)
+															(e-dispatch-call (method "minus") (constraint-fn-var 353)
 																(receiver
 																	(e-lookup-local
 																		(p-assign (ident "end"))))
@@ -242,16 +242,16 @@ main! = |_| {
 																	(p-assign (ident "x"))))))))
 											(if-else
 												(e-block
-													(e-call (constraint-fn-var 392)
+													(e-call (constraint-fn-var 408)
 														(e-lookup-external
 															(builtin))
-														(e-call (constraint-fn-var 391)
+														(e-call (constraint-fn-var 407)
 															(e-lookup-local
 																(p-assign (ident "slice")))
 															(e-lookup-local
 																(p-assign (ident "rest")))
 															(e-num (value "0"))
-															(e-dispatch-call (method "minus") (constraint-fn-var 387)
+															(e-dispatch-call (method "minus") (constraint-fn-var 403)
 																(receiver
 																	(e-lookup-local
 																		(p-assign (ident "end"))))

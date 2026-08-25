@@ -68,6 +68,7 @@ pub const GlueArgs = struct {
     platform_path: []const u8,
     report_config: reporting.ReportingConfig,
     opt: GlueOpt = .dev,
+    specialization_strategy: base.SpecializationStrategy = .lss,
     no_cache: bool = false,
     /// Prebuilt plugin dylib from a `roc install`ed glue spec. When set, it
     /// is the only dylib considered: its stamp must verify, and a mismatch is
@@ -165,7 +166,14 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         _ = try build_env.renderDiagnostics(stderr, args.report_config);
         return error.CompilationFailed;
     };
-    _ = try build_env.renderDiagnostics(stderr, args.report_config);
+    // Glue emits the platform's declared checked surface: its requires,
+    // provides, and hosted sections and the types they name. A platform that
+    // checking rejected has no such surface to emit—a hosted declaration its
+    // header left out of the hosted section has no linker symbol for glue to
+    // name—so stop on the diagnostics rendered here rather than reading a
+    // surface checking already refused.
+    const diagnostics = try build_env.renderDiagnostics(stderr, args.report_config);
+    if (diagnostics.errors > 0) return error.CompilationFailed;
 
     const modules = build_env.getModulesInSerializationOrder(gpa) catch {
         return error.ModuleRetrieval;
@@ -175,15 +183,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     const hosted_indices = collectHostedProcGlobalIndices(gpa, modules) catch {
         return error.OutOfMemory;
     };
-    defer {
-        for (hosted_indices) |index| gpa.free(index.sort_key);
-        gpa.free(hosted_indices);
-    }
-    var hosted_symbols = collectHostedSymbols(gpa, &platform_info) catch {
-        return error.OutOfMemory;
-    };
-    defer deinitHostedSymbols(gpa, &hosted_symbols);
-
+    defer gpa.free(hosted_indices);
     // 3. Collect platform module type information from checked artifacts.
     var collected_modules = std.ArrayList(CollectedModuleTypeInfo).empty;
     defer {
@@ -217,7 +217,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         if (mod.is_platform_sibling or mod.is_platform_main) {
             const artifact = mod.semantic.checked_artifact orelse continue;
             type_table.clearVarMap();
-            const collected = collectModuleTypeInfo(gpa, artifact, mod.name, hosted_indices, &hosted_symbols, &type_table) catch |err| switch (err) {
+            const collected = collectModuleTypeInfo(gpa, artifact, mod.name, hosted_indices, &type_table) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.UnresolvedByValue => return reportUnresolvedTypeVariable(stderr, &type_table),
             };
@@ -283,12 +283,13 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         break;
     }
 
-    type_table.attachAbiLayouts(&build_env) catch {
-        return error.OutOfMemory;
+    type_table.attachAbiLayouts(&build_env) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.HostedFunctionNotBound => return error.CompilationFailed,
     };
 
     // 5. Compile glue spec through checked artifacts and lower to LIR.
-    var spec = try compileGlueSpec(gpa, stderr, args.glue_spec, args.no_cache, args.report_config, std_io);
+    var spec = try compileGlueSpec(gpa, stderr, args.glue_spec, args.no_cache, args.report_config, args.specialization_strategy, std_io);
     defer spec.deinit(gpa);
     const lowered = &spec.lowered;
     const root_artifact = spec.root_artifact;
@@ -404,6 +405,7 @@ fn compileGlueSpec(
     glue_spec: []const u8,
     no_cache: bool,
     report_config: reporting.ReportingConfig,
+    specialization_strategy: base.SpecializationStrategy,
     std_io: std.Io,
 ) GlueError!CompiledGlueSpec {
     std.Io.Dir.cwd().access(std_io, glue_spec, .{}) catch {
@@ -467,9 +469,11 @@ fn compileGlueSpec(
         .{ .requests = lir_roots },
         .{
             .target_usize = script_target_usize,
+            .specialization_strategy = specialization_strategy,
         },
-    ) catch {
-        return error.OutOfMemory;
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.HostedFunctionNotBound => return error.CompilationFailed,
     };
     errdefer lowered.deinit();
 
@@ -546,10 +550,10 @@ fn buildGlueSpecDylibFileInner(
 ) GlueError!void {
     if (builtin.target.os.tag == .freestanding) return error.GlueDylibUnavailable;
 
-    var spec = try compileGlueSpec(gpa, stderr, glue_spec, false, report_config, std_io);
+    var spec = try compileGlueSpec(gpa, stderr, glue_spec, false, report_config, .lss, std_io);
     defer spec.deinit(gpa);
 
-    const stamp = gluePluginStamp(spec.root_artifact.key);
+    const stamp = gluePluginStamp(spec.root_artifact.key, .lss);
     const temp_path = try buildGlueDylib(gpa, &spec.lowered, spec.glue_proc, spec.arg_layouts, stamp, opt, std_io);
     defer {
         std.Io.Dir.deleteFileAbsolute(std_io, std.mem.sliceTo(temp_path, 0)) catch {};
@@ -578,7 +582,8 @@ const GluePluginStampV1 = extern struct {
     size: u32,
     kind: u32,
     abi_version: u32,
-    reserved: u32 = 0,
+    /// Zero is reserved for plugin stamps created before strategy identity was explicit.
+    specialization_strategy_tag: u32,
     target_hash: [32]u8,
     compiler_hash: [32]u8,
     glue_platform_hash: [32]u8,
@@ -613,7 +618,7 @@ fn runGlueSpecDylib(
 ) GlueError!void {
     if (builtin.target.os.tag == .freestanding) return error.GlueDylibUnavailable;
 
-    const stamp = gluePluginStamp(root_artifact_key);
+    const stamp = gluePluginStamp(root_artifact_key, args.specialization_strategy);
     var dylib: ?BuiltGlueDylib = try getOrBuildGlueDylib(gpa, lowered, glue_proc, arg_layouts, root_artifact_key, stamp, args, roc_ctx, std_io);
     defer if (dylib) |d| d.deinit(gpa, std_io);
 
@@ -650,7 +655,7 @@ fn runGlueSpecDylib(
     };
     defer lib.close();
 
-    const GlueEntryFn = *const fn (*builtins.host_abi.RocOps, [*]u8, ?*anyopaque) callconv(.c) void;
+    const GlueEntryFn = *const fn (*builtins.host_abi.RocOps, [*]u8, ?*anyopaque, *const eval_mod.boxy_abi.BoxyNativeFnTable) callconv(.c) void;
     const entry = lib.lookup(GlueEntryFn, builtins.shim_symbols.roc_make_glue) orelse return error.GlueDylibUnavailable;
 
     runtime_env.resetObservation();
@@ -660,12 +665,34 @@ fn runGlueSpecDylib(
     var crash_boundary = runtime_env.enterCrashBoundary();
     defer crash_boundary.deinit();
 
+    const boxy_tables = eval_mod.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result);
+    const boxy_runtime = if (boxy_tables.needsRuntimeForStore(&lowered.lir_result.store))
+        try eval_mod.boxy_abi.createRuntimeFromStores(
+            gpa,
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            boxy_tables,
+            runtime_env.get_ops(),
+        )
+    else
+        null;
+    defer if (boxy_runtime) |runtime| eval_mod.boxy_abi.deinitRuntime(runtime);
+    const previous_boxy_runtime = if (boxy_runtime) |runtime|
+        eval_mod.boxy_abi.swapActiveRuntime(runtime)
+    else
+        null;
+    defer if (boxy_runtime != null) {
+        _ = eval_mod.boxy_abi.swapActiveRuntime(previous_boxy_runtime);
+    };
+    const boxy_fns = eval_mod.boxy_abi.nativeFnTable();
+
     const sj = crash_boundary.set();
     if (sj == 0) {
         entry(
             @ptrCast(runtime_env.get_ops()),
             @ptrCast(result_ptr),
             @ptrCast(types_list),
+            &boxy_fns,
         );
     }
 
@@ -759,7 +786,12 @@ fn buildGlueDylib(
     opt: GlueOpt,
     std_io: std.Io,
 ) GlueError![:0]const u8 {
-    var codegen = llvm_compile.MonoLlvmCodeGen.init(gpa, &lowered.lir_result.store);
+    var codegen = llvm_compile.MonoLlvmCodeGen.init(
+        gpa,
+        &lowered.lir_result.store,
+        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+        lowered.lir_result.boxy_erased_arg_desc_params.items,
+    );
     codegen.layout_store = &lowered.lir_result.layouts;
     codegen.plugin_stamp_bytes = std.mem.asBytes(&stamp);
     codegen.plugin_stamp_alignment = @alignOf(GluePluginStampV1);
@@ -945,17 +977,30 @@ fn glueDylibOutputHash(root_artifact_key: CheckedArtifact.CheckedModuleArtifactK
     return digest;
 }
 
-fn gluePluginStamp(root_artifact_key: CheckedArtifact.CheckedModuleArtifactKey) GluePluginStampV1 {
+fn gluePluginStamp(
+    root_artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
+    specialization_strategy: base.SpecializationStrategy,
+) GluePluginStampV1 {
     return .{
         .magic = glue_plugin_stamp_magic,
         .size = @sizeOf(GluePluginStampV1),
         .kind = @intFromEnum(GluePluginKind.glue),
         .abi_version = glue_plugin_abi_version,
+        .specialization_strategy_tag = @as(u32, @intFromEnum(specialization_strategy)) + 1,
         .target_hash = hashTarget(),
         .compiler_hash = hashCompiler(),
         .glue_platform_hash = compile.compiler_platforms.sourceHash(.glue),
         .artifact_input_hash = root_artifact_key.bytes,
     };
+}
+
+test "glue dylib output hash includes specialization strategy" {
+    const artifact_key: CheckedArtifact.CheckedModuleArtifactKey = .{
+        .bytes = [_]u8{0x5a} ** 32,
+    };
+    const lss_hash = glueDylibOutputHash(artifact_key, gluePluginStamp(artifact_key, .lss));
+    const boxy_hash = glueDylibOutputHash(artifact_key, gluePluginStamp(artifact_key, .boxy));
+    try std.testing.expect(!std.mem.eql(u8, &lss_hash, &boxy_hash));
 }
 
 fn hashTarget() [32]u8 {
@@ -1005,6 +1050,7 @@ fn writeHostEvents(stderr: *std.Io.Writer, runtime_env: *const eval_mod.RuntimeH
             .dbg => |msg| try stderr.print("[dbg] {s}\n", .{msg}),
             .expect_failed => |msg| try stderr.print("Expect failed: {s}\n", .{msg}),
             .crashed => {},
+            .effect => unreachable,
         }
     }
 }
@@ -1013,7 +1059,9 @@ const HostedProcGlobalIndex = struct {
     artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
     def_idx: can.CIR.Def.Idx,
     index: usize,
-    sort_key: []const u8,
+    /// The linker symbol the platform header's hosted section gave this
+    /// declaration, empty when no platform bound it.
+    symbol: []const u8,
 };
 
 fn checkedArtifactKeysEqual(
@@ -1058,31 +1106,61 @@ fn hostedProcForDef(
     return null;
 }
 
+/// The host dispatch slot of every hosted procedure the platform binds.
+///
+/// The platform header's `hosted` section is the authority for those slots, and
+/// checking outputs it as the hosted binding table, so a slot is the binding's
+/// position in that table. Post-check lowering emits the same number as each
+/// hosted call's `dispatch_index`, so generated glue and compiled Roc index one
+/// host-side table the same way.
 fn collectHostedProcGlobalIndices(
     allocator: Allocator,
     modules: []const BuildEnv.CompiledModuleInfo,
 ) Allocator.Error![]HostedProcGlobalIndex {
     var indices = std.ArrayList(HostedProcGlobalIndex).empty;
-    errdefer {
-        for (indices.items) |index| allocator.free(index.sort_key);
-        indices.deinit(allocator);
+    errdefer indices.deinit(allocator);
+
+    if (platformArtifact(modules)) |platform| {
+        const bindings = platform.hosted_bindings.bindings;
+        try indices.ensureTotalCapacity(allocator, bindings.len);
+        for (bindings, 0..) |binding, dispatch_index| {
+            indices.appendAssumeCapacity(.{
+                .artifact_key = .{ .bytes = binding.target_checked_module.bytes },
+                .def_idx = binding.target_def,
+                .index = dispatch_index,
+                .symbol = platform.canonical_names.externalSymbolNameText(binding.external_symbol_name),
+            });
+        }
+        return try indices.toOwnedSlice(allocator);
+    }
+
+    // No platform binds these declarations, so order them the way the lowerers
+    // order an unbound catalog: by the procedure's deterministic order key.
+    const Candidate = struct {
+        artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
+        def_idx: can.CIR.Def.Idx,
+        sort_key: []const u8,
+    };
+    var candidates = std.ArrayList(Candidate).empty;
+    defer {
+        for (candidates.items) |candidate| allocator.free(candidate.sort_key);
+        candidates.deinit(allocator);
     }
 
     for (modules) |mod| {
         if (!(mod.is_platform_sibling or mod.is_platform_main)) continue;
         const artifact = mod.semantic.checked_artifact orelse continue;
         for (artifact.hosted_procs.procs) |hosted| {
-            try indices.append(allocator, .{
+            try candidates.append(allocator, .{
                 .artifact_key = artifact.key,
                 .def_idx = hosted.def_idx,
-                .index = 0,
                 .sort_key = try hostedProcSortKey(allocator, artifact, hosted),
             });
         }
     }
 
     const SortContext = struct {
-        pub fn lessThan(_: void, a: HostedProcGlobalIndex, b: HostedProcGlobalIndex) bool {
+        pub fn lessThan(_: void, a: Candidate, b: Candidate) bool {
             return switch (std.mem.order(u8, a.sort_key, b.sort_key)) {
                 .lt => true,
                 .gt => false,
@@ -1090,29 +1168,47 @@ fn collectHostedProcGlobalIndices(
             };
         }
     };
-    std.mem.sort(HostedProcGlobalIndex, indices.items, {}, SortContext.lessThan);
+    std.mem.sort(Candidate, candidates.items, {}, SortContext.lessThan);
 
-    for (indices.items, 0..) |*index, i| {
-        index.index = i;
+    try indices.ensureTotalCapacity(allocator, candidates.items.len);
+    for (candidates.items, 0..) |candidate, i| {
+        indices.appendAssumeCapacity(.{
+            .artifact_key = candidate.artifact_key,
+            .def_idx = candidate.def_idx,
+            .index = i,
+            .symbol = "",
+        });
     }
 
     return try indices.toOwnedSlice(allocator);
 }
 
-fn hostedGlobalIndexForDef(
+/// The platform module among these, whose hosted bindings name every host
+/// function and the linker symbol each one carries.
+fn platformArtifact(
+    modules: []const BuildEnv.CompiledModuleInfo,
+) ?*const CheckedArtifact.CheckedModuleArtifact {
+    for (modules) |mod| {
+        const artifact = mod.semantic.checked_artifact orelse continue;
+        if (artifact.module_identity.kind != .platform) continue;
+        return artifact;
+    }
+    return null;
+}
+
+/// The platform's binding for a hosted declaration, identified the way the
+/// binding table identifies it rather than by any name it goes under.
+fn hostedBindingForDef(
     indices: []const HostedProcGlobalIndex,
     artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
     def_idx: can.CIR.Def.Idx,
-) usize {
+) ?HostedProcGlobalIndex {
     for (indices) |index| {
         if (index.def_idx == def_idx and checkedArtifactKeysEqual(index.artifact_key, artifact_key)) {
-            return index.index;
+            return index;
         }
     }
-    if (builtin.mode == .Debug) {
-        std.debug.panic("glue invariant violated: hosted proc has no global index", .{});
-    }
-    unreachable;
+    return null;
 }
 
 fn stripTrailingBang(name: []const u8) []const u8 {
@@ -1124,44 +1220,6 @@ fn hostedKeyAlloc(allocator: Allocator, module_name: []const u8, local_name: []c
     const stripped = stripTrailingBang(local_name);
     if (module_name.len == 0) return try allocator.dupe(u8, stripped);
     return try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, stripped });
-}
-
-fn deinitHostedSymbols(allocator: Allocator, hosted_symbols: *std.StringHashMap([]const u8)) void {
-    var it = hosted_symbols.iterator();
-    while (it.next()) |entry| {
-        allocator.free(entry.key_ptr.*);
-        allocator.free(entry.value_ptr.*);
-    }
-    hosted_symbols.deinit();
-}
-
-fn collectHostedSymbols(
-    allocator: Allocator,
-    platform_info: *const PlatformHeaderInfo,
-) Allocator.Error!std.StringHashMap([]const u8) {
-    var hosted_symbols = std.StringHashMap([]const u8).init(allocator);
-    errdefer deinitHostedSymbols(allocator, &hosted_symbols);
-
-    for (platform_info.hosted_entries) |entry| {
-        const key = try allocator.dupe(u8, entry.key);
-        const symbol = allocator.dupe(u8, entry.ffi_symbol) catch |err| {
-            allocator.free(key);
-            return err;
-        };
-        const gop = hosted_symbols.getOrPut(key) catch |err| {
-            allocator.free(key);
-            allocator.free(symbol);
-            return err;
-        };
-        if (gop.found_existing) {
-            allocator.free(key);
-            allocator.free(symbol);
-        } else {
-            gop.value_ptr.* = symbol;
-        }
-    }
-
-    return hosted_symbols;
 }
 
 fn selectGlueSpecRootProc(
@@ -2137,7 +2195,9 @@ const TypeTable = struct {
             if (i > 0) try buf.appendSlice(self.gpa, ", ");
             const field = all_fields.items[src_idx];
             try buf.appendSlice(self.gpa, field.artifact.canonical_names.recordFieldLabelText(field.field.name));
-            try buf.appendSlice(self.gpa, " : ");
+            // An optional field renders its kind (`name ?: T`), mirroring the
+            // solver-side TypeWriter (design.md "Field Kinds").
+            try buf.appendSlice(self.gpa, if (field.field.kind.tag == .optional) " ?: " else " : ");
             try self.writeTypeStringBound(field.artifact, field.field.ty, buf, active);
         }
         try buf.appendSlice(self.gpa, " }");
@@ -2560,7 +2620,7 @@ const TypeTable = struct {
         }
     }
 
-    fn attachAbiLayouts(self: *TypeTable, build_env: *BuildEnv) Allocator.Error!void {
+    fn attachAbiLayouts(self: *TypeTable, build_env: *BuildEnv) (Allocator.Error || lir.CheckedPipeline.HostedBindingError)!void {
         var artifacts = std.ArrayList(*const CheckedArtifact.CheckedModuleArtifact).empty;
         defer artifacts.deinit(self.gpa);
 
@@ -2604,7 +2664,7 @@ const TypeTable = struct {
                 // ABI fact glue emits is an explicit dual-width query
                 // (`sizeAt(.u32/.u64)`, `getStructFieldOffsetByOriginalIndexAt(..., .u32/.u64)`,
                 // ...), so this fixed choice cannot affect glue output.
-                .{ .target_usize = .u64, .layout_request_const_plans = false },
+                .{ .target_usize = .u64, .specialization_strategy = .lss, .layout_request_const_plans = false },
             );
             defer lowered.deinit();
 
@@ -4502,7 +4562,9 @@ fn writeRecordTypeString(
         if (i > 0) try buf.appendSlice(gpa, ", ");
         const field = all_fields.items[src_idx];
         try buf.appendSlice(gpa, artifact.canonical_names.recordFieldLabelText(field.name));
-        try buf.appendSlice(gpa, " : ");
+        // An optional field renders its kind (`name ?: T`), mirroring the
+        // solver-side TypeWriter (design.md "Field Kinds").
+        try buf.appendSlice(gpa, if (field.kind.tag == .optional) " ?: " else " : ");
         try writeTypeString(gpa, artifact, field.ty, buf, active);
     }
     try buf.appendSlice(gpa, " }");
@@ -4558,7 +4620,6 @@ fn collectModuleTypeInfo(
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     module_name: []const u8,
     hosted_indices: []const HostedProcGlobalIndex,
-    hosted_symbols: *const std.StringHashMap([]const u8),
     type_table: *TypeTable,
 ) TypeTableError!?CollectedModuleTypeInfo {
     var main_type_str: []const u8 = try gpa.dupe(u8, "");
@@ -4615,16 +4676,24 @@ fn collectModuleTypeInfo(
     for (artifact.top_level_values.entries) |entry| {
         const def_idx = entry.def;
 
-        _ = member_by_def.get(def_idx) orelse continue;
+        // A platform module's own hosted declaration is a plain top-level
+        // value rather than a member of an exposed type module, so it reaches
+        // the host boundary here without a member entry.
+        const is_member = member_by_def.get(def_idx) != null;
+        const hosted_proc_for_entry = hostedProcForDef(&artifact.hosted_procs, def_idx);
+        if (!is_member and hosted_proc_for_entry == null) continue;
         const source_name = artifact.canonical_names.exportNameText(entry.source_name);
-        const local_name = try moduleLocalMemberName(gpa, module_name, source_name);
+        const local_name = if (is_member)
+            try moduleLocalMemberName(gpa, module_name, source_name)
+        else
+            try gpa.dupe(u8, source_name);
         defer gpa.free(local_name);
 
         const checked_type = checkedTypeRootForScheme(artifact, entry.source_scheme);
         const type_str = try typeStringAlloc(gpa, artifact, checked_type);
         errdefer gpa.free(type_str);
 
-        if (hostedProcForDef(&artifact.hosted_procs, def_idx)) |hosted_proc| {
+        if (hosted_proc_for_entry) |hosted_proc| {
             // Extract record fields from function arg and return types.
             var arg_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
             errdefer {
@@ -4655,15 +4724,15 @@ fn collectModuleTypeInfo(
                 ret_type_id = try type_table.insertUnit();
             }
 
-            const hosted_key = hosted_proc.orderKey(&artifact.hosted_procs);
-            const hosted_symbol = hosted_symbols.get(hosted_key) orelse
-                glueInvariant("hosted function '{s}' has no platform hosted symbol", .{hosted_key});
+            const bound = hostedBindingForDef(hosted_indices, artifact.key, def_idx) orelse
+                glueInvariant("hosted function '{s}' has no platform hosted symbol", .{hosted_proc.orderKey(&artifact.hosted_procs)});
+            const hosted_symbol = bound.symbol;
             const ffi_symbol = try gpa.dupe(u8, hosted_symbol);
             errdefer gpa.free(ffi_symbol);
             const name = try gpa.dupe(u8, local_name);
             errdefer gpa.free(name);
             try hosted_functions.append(gpa, .{
-                .index = hostedGlobalIndexForDef(hosted_indices, artifact.key, def_idx),
+                .index = bound.index,
                 .ffi_symbol = ffi_symbol,
                 .name = name,
                 .type_str = type_str,

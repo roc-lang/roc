@@ -17,31 +17,25 @@ decode_things # After member name
 UNDECLARED TYPE - where_clauses_10.md:7:7:7:14
 DECLARATION HAS NO VALUE - where_clauses_10.md:3:1:7:15
 # PROBLEMS
+── ✗ undeclared type ─────────────────────────────────── where_clauses_10.md:7:7
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Decode` is not declared in this scope. ────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  [a.Decode]                                                                │
- │    ‾‾‾‾‾‾‾                                                                 │
- └─────────────────────────────────────────────────── where_clauses_10.md:7:7 ┘
+The type Decode is not declared in this scope.
 
+[a.Decode]
+  ^^^^^^^
 
+── ● declaration has no value ────────────────────────── where_clauses_10.md:3:1
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  decode_things # After member name                                         │
- │      : # After colon                                                       │
- │          List(List(U8)) -> List(a) # After anno                            │
- │              where # after where                                           │
- │                  [a.Decode]                                                │
- │                                                                            │
- └─────────────────────────────────────────────────── where_clauses_10.md:3:1 ┘
+This declaration has a type annotation but no implementation.
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+decode_things # After member name
+    : # After colon
+        List(List(U8)) -> List(a) # After anno
+            where # after where
+                [a.Decode]
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 
 # TOKENS
 ~~~zig
@@ -91,7 +85,7 @@ decode_things # After member name
 (can-ir
 	(d-let
 		(p-assign (ident "decode_things"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)

@@ -13,22 +13,19 @@ t = MyList.([])
 # EXPECTED
 INVALID RECURSIVE TYPE - recursion_through_builtin_arg.md:1:1:1:23
 # PROBLEMS
+── ✗ invalid recursive type ─────────────── recursion_through_builtin_arg.md:1:1
 
-┌────────────────────────┐
-│ INVALID RECURSIVE TYPE ├─ The nominal type MyList refers to itself in a ────┐
-└┬───────────────────────┘  way that would make it infinite.                  │
- │                                                                            │
- │  MyList := List(MyList)                                                    │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                    │
- └────────────────────────────────────── recursion_through_builtin_arg.md:1:1 ┘
+The nominal type MyList refers to itself in a way that would make it infinite.
 
-    Its definition is:
+MyList := List(MyList)
+^^^^^^^^^^^^^^^^^^^^^^
 
-        List(MyList)
+Its definition is:
 
-    Hint: Recursion in a nominal type is only allowed inside a tag union
-    payload or record field—for example `ConsList(a) := [Nil, Cons(a,
-    ConsList(a))]`.
+    List(MyList)
+
+Hint: Recursion in a nominal type is only allowed inside a tag union payload or
+record field—for example ConsList(a) := [Nil, Cons(a, ConsList(a))].
 
 # TOKENS
 ~~~zig
@@ -65,8 +62,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "t"))
-		(e-nominal (nominal "MyList")
-			(e-empty_list))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "MyList") (local))))
 	(s-nominal-decl

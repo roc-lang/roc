@@ -45,6 +45,8 @@ pub const CanonicalizeImport = struct {
     import_name: []const u8,
     /// The fully-ready semantic env for this import
     module_env: *const ModuleEnv,
+    /// Exact type declaration selected by a package/platform public entry.
+    selected_type_decl: ?can.CIR.Statement.Idx = null,
 };
 
 /// Information about detected import cycles
@@ -99,9 +101,8 @@ pub const CanonicalizeTask = struct {
     cached_ast: *AST,
     /// Real imported semantic envs available to canonicalization
     imported_modules: []const CanonicalizeImport,
-    /// Validate this module as an explicitly requested checked-artifact root
-    /// instead of as a standalone `roc check` root.
-    validate_as_explicit_roots: bool,
+    /// Post-canonicalization validation this module receives.
+    validation: can.Can.Validation,
 };
 
 /// Task to type-check a canonicalized module
@@ -128,6 +129,10 @@ pub const TypeCheckTask = struct {
     platform_requirements: ?PlatformRequirementSurface = null,
     /// Additional checked roots requested by package-level metadata.
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
+    /// How this module's compile-time roots are established. Decides whether
+    /// an app root's entrypoint contract with its platform is enforced, and
+    /// participates in the checked-artifact cache identity.
+    validation: can.Can.Validation = .checking,
     /// True when this module is the platform root of an app build: its
     /// check-time publication is skipped so finalization publishes the
     /// relation-bearing platform root exactly once.
@@ -137,16 +142,21 @@ pub const TypeCheckTask = struct {
 /// The platform root's requirement surface, borrowed from its completed
 /// type check: the checked platform ModuleEnv (stable once the module is
 /// Done), the cache-identity context derived from its published artifact,
-/// and the platform path for diagnostics. Plain borrowed data—nothing here
-/// is owned, so copies are free and there is nothing to deinit.
+/// and the platform path for diagnostics. The coordinator's stored surface
+/// borrows all data; a worker-task copy additionally borrows its task-owned
+/// owner-module slice, which the worker frees after checking.
 pub const PlatformRequirementSurface = struct {
     env: *const ModuleEnv,
+    /// Exact owner closure of the platform root whose requirement types are
+    /// copied into the app. Populated on the worker-task copy of the surface.
+    owner_modules: []const *const ModuleEnv = &.{},
     context: CheckedArtifact.PlatformRequirementContextKey,
     path: []const u8,
 
     pub fn checkerInput(self: *const PlatformRequirementSurface) check.Check.PlatformRequirementInput {
         return .{
             .env = self.env,
+            .owner_modules = self.owner_modules,
             .path = self.path,
         };
     }

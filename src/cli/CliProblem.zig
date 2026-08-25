@@ -165,6 +165,11 @@ pub const CliProblem = union(enum) {
         app_path: []const u8,
     },
 
+    /// A platform with app requirements was built without an app
+    platform_requires_app: struct {
+        platform_path: []const u8,
+    },
+
     /// Platform file not found
     platform_not_found: struct {
         app_path: []const u8,
@@ -397,6 +402,7 @@ pub const CliProblem = union(enum) {
             .file_not_found,
             .platform_not_found,
             .no_platform_found,
+            .platform_requires_app,
             .build_not_supported_for_headerless,
             .unsupported_default_platform_target,
             .unsupported_opt_level,
@@ -457,6 +463,7 @@ pub const CliProblem = union(enum) {
             .temp_dir_failed => |info| try createTempDirFailedReport(allocator, info),
             .cache_dir_unavailable => |info| try createCacheDirUnavailableReport(allocator, info),
             .no_platform_found => |info| try createNoPlatformFoundReport(allocator, info),
+            .platform_requires_app => |info| try createPlatformRequiresAppReport(allocator, info),
             .platform_not_found => |info| try createPlatformNotFoundReport(allocator, info),
             .platform_source_not_found => |info| try createPlatformSourceNotFoundReport(allocator, info),
             .missing_platform_module => |info| try createMissingPlatformModuleReport(allocator, info),
@@ -605,6 +612,20 @@ fn createNoPlatformFoundReport(allocator: Allocator, info: anytype) Allocator.Er
     try report.document.addCodeBlock(
         \\app [main] { pf: platform "https://..." }
     );
+
+    return report;
+}
+
+fn createPlatformRequiresAppReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(
+        allocator,
+        "The platform file {s} declares app requirements, so it cannot be built by itself.",
+        .{info.platform_path},
+    );
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Platform Requires an App", headline, .fatal);
+
+    try report.document.addText("Build an app that uses this platform, or use `roc glue` to generate its host interface.");
 
     return report;
 }
@@ -889,7 +910,6 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
         error.ConnectionResetByPeer,
         error.Crash,
         error.CrossDevice,
-        error.DarwinSysrootNotFound,
         error.DecompressionFailed,
         error.DeviceBusy,
         error.DictionaryIdFlagUnsupported,
@@ -1077,7 +1097,6 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
         error.ConnectionResetByPeer,
         error.Crash,
         error.CrossDevice,
-        error.DarwinSysrootNotFound,
         error.DecompressionFailed,
         error.DeviceBusy,
         error.DictionaryIdFlagUnsupported,
@@ -1510,6 +1529,20 @@ test "no_platform_found generates correct report" {
     defer report.deinit();
 
     try std.testing.expectEqualStrings("No Platform Found", report.title);
+    try std.testing.expectEqual(Severity.fatal, report.severity);
+}
+
+test "platform_requires_app generates correct report" {
+    const allocator = std.testing.allocator;
+
+    const problem = CliProblem{ .platform_requires_app = .{
+        .platform_path = "platform.roc",
+    } };
+
+    var report = try problem.toReport(allocator);
+    defer report.deinit();
+
+    try std.testing.expectEqualStrings("Platform Requires an App", report.title);
     try std.testing.expectEqual(Severity.fatal, report.severity);
 }
 

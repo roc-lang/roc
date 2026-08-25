@@ -50,16 +50,18 @@ EndOfFile,
 						(e-binop (op "-")
 							(e-binop (op "+")
 								(e-field-access
-									(e-record
-										(field (field "a")
-											(e-int (raw "0"))))
-									(e-ident (raw "a")))
+									(receiver
+										(e-record
+											(field (field "a")
+												(e-int (raw "0")))))
+									(segment (mode "required") (field "a")))
 								(e-ident (raw "age")))
 							(e-field-access
-								(e-record
-									(field (field "a")
-										(e-int (raw "0"))))
-								(e-ident (raw "a"))))))))))
+								(receiver
+									(e-record
+										(field (field "a")
+											(e-int (raw "0")))))
+								(segment (mode "required") (field "a"))))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -87,26 +89,30 @@ extract_age = |person| {
 									(p-assign (ident "age"))))))
 					(e-lookup-local
 						(p-assign (ident "person"))))
-				(e-dispatch-call (method "minus") (constraint-fn-var 259)
+				(e-dispatch-call (method "minus") (constraint-fn-var 272)
 					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 242)
+						(e-dispatch-call (method "plus") (constraint-fn-var 258)
 							(receiver
-								(e-field-access (field "a")
+								(e-field-access
 									(receiver
 										(e-record
 											(fields
 												(field (name "a")
-													(e-num (value "0"))))))))
+													(e-num (value "0"))))))
+									(segments
+										(segment (name "a") (mode "required")))))
 							(args
 								(e-lookup-local
 									(p-assign (ident "age"))))))
 					(args
-						(e-field-access (field "a")
+						(e-field-access
 							(receiver
 								(e-record
 									(fields
 										(field (name "a")
-											(e-num (value "0")))))))))))
+											(e-num (value "0"))))))
+							(segments
+								(segment (name "a") (mode "required"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-record

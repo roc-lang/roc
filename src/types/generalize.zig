@@ -52,8 +52,82 @@ const builtin = @import("builtin");
 
 const TypesStore = @import("store.zig").Store;
 const Var = @import("types.zig").Var;
-const Content = @import("types.zig").Content;
 const Rank = @import("types.zig").Rank;
+const DescStoreIdx = @import("store.zig").DescStoreIdx;
+const RecordField = @import("types.zig").RecordField;
+
+/// The descriptor a rank frame settles once its children have reported.
+const RankFill = struct {
+    desc_idx: DescStoreIdx,
+};
+
+/// One suspended step of rank adjustment. A frame is pushed only after its var
+/// is marked in `rank_adjusted_vars`, so a cyclic type re-reaching that var
+/// short-circuits on the mark instead of descending again—the same cycle
+/// termination the recursion used.
+///
+/// Child runs are held as slices into the type store. Rank adjustment only
+/// rewrites descriptors and never appends to the store, so a run stays valid
+/// across the children that suspend the frame holding it.
+const RankFrame = union(enum) {
+    over_args: OverArgsFrame,
+    func: FuncFrame,
+    record: RecordFrame,
+    record_unbound: RecordUnboundFrame,
+    tag_union: TagUnionFrame,
+};
+
+/// An applied container (alias, nominal type, tuple): the max over its args.
+const OverArgsFrame = struct {
+    fill: RankFill,
+    args: []const Var,
+    idx: u32 = 0,
+    acc: Rank = Rank.generalized,
+    /// Whether a requested child's rank is still to be folded in.
+    awaiting: bool = false,
+};
+
+const FuncFrame = struct {
+    fill: RankFill,
+    args: []const Var,
+    effect_deps: []const Var,
+    ret: Var,
+    idx: u32 = 0,
+    acc: Rank = Rank.generalized,
+    awaiting: bool = false,
+    stage: enum { ret, await_ret, args, effect_deps } = .ret,
+};
+
+const RecordFrame = struct {
+    fill: RankFill,
+    fields: []const RecordField.Presence,
+    ext: Var,
+    idx: u32 = 0,
+    acc: Rank = Rank.generalized,
+    awaiting: bool = false,
+    field_axis: enum { type_var, presence_var } = .type_var,
+    stage: enum { ext, await_ext, fields } = .ext,
+};
+
+const RecordUnboundFrame = struct {
+    fill: RankFill,
+    fields: []const RecordField.Presence,
+    idx: u32 = 0,
+    acc: Rank,
+    awaiting: bool = false,
+    field_axis: enum { type_var, presence_var } = .type_var,
+};
+
+const TagUnionFrame = struct {
+    fill: RankFill,
+    tag_args: []const Var.SafeList.Range,
+    ext: Var,
+    tag_idx: u32 = 0,
+    arg_idx: u32 = 0,
+    acc: Rank = Rank.generalized,
+    awaiting: bool = false,
+    stage: enum { ext, await_ext, tags } = .ext,
+};
 
 /// Manages the generalization process for type variables.
 ///
@@ -64,6 +138,7 @@ const Rank = @import("types.zig").Rank;
 /// ## Main entry point
 /// - `Generalizer.generalize()` - Generalize all variables at a given rank
 pub const Generalizer = struct {
+    gpa: std.mem.Allocator,
     /// Borrowed reference to the type store
     store: *TypesStore,
     /// Tracks which variables we've already adjusted (for handling recursive types)
@@ -72,6 +147,12 @@ pub const Generalizer = struct {
     tmp_var_pool: VarPool,
     /// Map of which variables we are generalizing this pass
     vars_to_generalized: std.AutoHashMap(Var, void),
+    /// Suspended steps of rank adjustment, innermost last. The walk descends
+    /// on this heap stack rather than the native one, so the depth it can
+    /// reach is bounded only by available memory.
+    rank_frames: std.ArrayList(RankFrame),
+    /// Settled child ranks, consumed by the frame that requested them.
+    pending_ranks: std.ArrayList(Rank),
 
     const Self = @This();
 
@@ -79,10 +160,13 @@ pub const Generalizer = struct {
 
     pub fn init(gpa: std.mem.Allocator, store: *TypesStore) std.mem.Allocator.Error!Self {
         return .{
+            .gpa = gpa,
             .store = store,
             .tmp_var_pool = try VarPool.init(gpa),
             .rank_adjusted_vars = std.AutoHashMap(Var, void).init(gpa),
             .vars_to_generalized = std.AutoHashMap(Var, void).init(gpa),
+            .rank_frames = .empty,
+            .pending_ranks = .empty,
         };
     }
 
@@ -97,6 +181,8 @@ pub const Generalizer = struct {
         self.tmp_var_pool.deinit();
         self.rank_adjusted_vars.deinit();
         self.vars_to_generalized.deinit();
+        self.rank_frames.deinit(self.gpa);
+        self.pending_ranks.deinit(self.gpa);
     }
 
     /// Performs generalization for all variables at the given rank.
@@ -164,7 +250,7 @@ pub const Generalizer = struct {
         for (self.tmp_var_pool.slice(), 0..) |vars_at_rank, group_rank_int| {
             const group_rank: Rank = @enumFromInt(group_rank_int);
             for (vars_at_rank.items) |var_| {
-                _ = try self.adjustRank(var_, group_rank, vars_to_generalize);
+                _ = try self.adjustRank(var_, group_rank);
             }
         }
 
@@ -258,8 +344,52 @@ pub const Generalizer = struct {
     /// ## Recursion handling:
     /// - `rank_adjusted_vars` tracks variables we've already processed to handle cycles
     /// - For recursive types like `type List a = [Nil, Cons a (List a)]`, we mark the
-    ///   variable as "seen" immediately before recursing, preventing infinite loops
-    fn adjustRank(self: *Self, var_: Var, group_rank: Rank, vars_to_generalize: []Var) std.mem.Allocator.Error!Rank {
+    ///   variable as "seen" immediately before descending, preventing infinite loops
+    ///
+    /// The walk runs on an explicit heap worklist, so the depth it can descend
+    /// is bounded only by available memory, never by the native stack.
+    fn adjustRank(self: *Self, var_: Var, group_rank: Rank) std.mem.Allocator.Error!Rank {
+        const frames_base = self.rank_frames.items.len;
+        const values_base = self.pending_ranks.items.len;
+        // A completed walk drains both buffers back to their entry length. An
+        // allocation failure mid-walk can leave entries behind on buffers this
+        // generalizer keeps for the next adjustment, so unwind them here.
+        errdefer {
+            self.rank_frames.items.len = frames_base;
+            self.pending_ranks.items.len = values_base;
+        }
+
+        if (!try self.requestRank(var_, group_rank)) {
+            while (self.rank_frames.items.len > frames_base) {
+                const top = &self.rank_frames.items[self.rank_frames.items.len - 1];
+                // A step either suspends after requesting exactly one child
+                // (having already written its own resume state), or finishes
+                // without requesting anything—so popping on finish always
+                // removes the frame the step ran for.
+                const finished = switch (top.*) {
+                    .over_args => |*frame| try self.stepOverArgs(frame, group_rank),
+                    .func => |*frame| try self.stepFunc(frame, group_rank),
+                    .record => |*frame| try self.stepRecord(frame, group_rank),
+                    .record_unbound => |*frame| try self.stepRecordUnbound(frame, group_rank),
+                    .tag_union => |*frame| try self.stepTagUnion(frame, group_rank),
+                };
+                if (finished) {
+                    self.rank_frames.items.len -= 1;
+                }
+            }
+        }
+
+        std.debug.assert(self.pending_ranks.items.len == values_base + 1);
+        return self.pending_ranks.pop().?;
+    }
+
+    /// Adjust one var's rank: short-circuit an already-adjusted var, settle a
+    /// var that is not being generalized, and otherwise mark the var as seen
+    /// and either settle its rank immediately (contents with no children) or
+    /// push the frame that will reduce over its children. Returns true when
+    /// the resulting rank is already on the value stack; false when a frame
+    /// was pushed.
+    fn requestRank(self: *Self, var_: Var, group_rank: Rank) std.mem.Allocator.Error!bool {
         const resolved = self.store.resolveVar(var_);
 
         // Check if this variable is one we're trying to generalize at this rank
@@ -267,27 +397,108 @@ pub const Generalizer = struct {
 
         // Early return for already-processed vars to handle recursive types
         if (is_var_to_generalize and self.rank_adjusted_vars.contains(resolved.var_)) {
-            return resolved.desc.rank;
+            try self.pending_ranks.append(self.gpa, resolved.desc.rank);
+            return true;
         }
 
-        // Calculate the new rank based on whether we're generalizing this var
-        const new_rank = if (is_var_to_generalize) blk: {
-            // Mark as seen before recursing to handle cycles
-            try self.rank_adjusted_vars.put(resolved.var_, {});
-
-            // For vars being generalized: rank INCREASES to max of nested vars
-            // This allows us to detect when a variable "escapes" by referencing
-            // variables from outer scopes (lower ranks)
-            break :blk try self.adjustRankContent(resolved.desc.content, group_rank, vars_to_generalize);
-        } else blk: {
+        if (!is_var_to_generalize) {
             // For other vars: rank can only DECREASE (maintain invariant)
             // This ensures that if an outer type references an inner variable,
             // the outer type's rank is lowered to match
-            break :blk resolved.desc.rank.min(group_rank);
-        };
+            try self.settleRank(resolved.desc_idx, resolved.desc.rank.min(group_rank));
+            return true;
+        }
 
-        try self.store.setDescRank(resolved.desc_idx, new_rank);
-        return new_rank;
+        // Mark as seen before descending to handle cycles
+        try self.rank_adjusted_vars.put(resolved.var_, {});
+
+        // For vars being generalized: rank INCREASES to max of nested vars
+        // This allows us to detect when a variable "escapes" by referencing
+        // variables from outer scopes (lower ranks)
+        const fill = RankFill{ .desc_idx = resolved.desc_idx };
+        switch (resolved.desc.content) {
+            .flex => {
+                // Here, we start at group_rank (since flex should be generalized).
+                // Constraints are deliberately not descended into.
+                try self.settleRank(fill.desc_idx, group_rank);
+                return true;
+            },
+            .rigid => {
+                // Here, we start at group_rank (since rigid should be generalized).
+                // Constraints are deliberately not descended into.
+                try self.settleRank(fill.desc_idx, group_rank);
+                return true;
+            },
+            .field_presence => {
+                // A settled presence marker is ground. An unresolved presence
+                // is represented by an ordinary flex/rigid var and reaches the
+                // corresponding arm above.
+                try self.settleRank(fill.desc_idx, .outermost);
+                return true;
+            },
+            .err => {
+                try self.settleRank(fill.desc_idx, group_rank);
+                return true;
+            },
+            .alias => |alias| {
+                // THEORY: we don't need to descend into the backing type. Everything
+                // in the alias RHS is either a reference to an arg (already visited
+                // via the args below) or a concrete type (which resolves to
+                // `outermost` on its own, so it can't raise the rank). Traversing the
+                // backing var would therefore be redundant—the rank is just the max
+                // over the args.
+                return try self.pushOverArgs(fill, self.store.sliceAliasArgs(alias));
+            },
+            .structure => |flat_type| switch (flat_type) {
+                .empty_record, .empty_tag_union => {
+                    // THEORY: Empty records/tag unions never need to be generalized
+                    try self.settleRank(fill.desc_idx, .outermost);
+                    return true;
+                },
+                .tuple => |tuple| return try self.pushOverArgs(fill, self.store.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| {
+                    // Same as .alias: don't descend into the backing type, take
+                    // the max over the args.
+                    return try self.pushOverArgs(fill, self.store.sliceNominalArgs(nominal));
+                },
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try self.rank_frames.append(self.gpa, .{ .func = .{
+                        .fill = fill,
+                        .args = self.store.sliceVars(func.args),
+                        .effect_deps = self.store.sliceVars(func.effect_deps),
+                        .ret = func.ret,
+                    } });
+                    return false;
+                },
+                .record => |record| {
+                    try self.rank_frames.append(self.gpa, .{ .record = .{
+                        .fill = fill,
+                        .fields = self.store.getRecordFieldsSlice(record.fields).items(.presence),
+                        .ext = record.ext,
+                    } });
+                    return false;
+                },
+                .record_unbound => |record_fields| {
+                    // Unbounds are special-cased: An unbound represents a flex
+                    // var _at the same rank_ as the unbound record, which would
+                    // reduce to group_rank, so that seeds the max directly.
+                    try self.rank_frames.append(self.gpa, .{ .record_unbound = .{
+                        .fill = fill,
+                        .fields = self.store.getRecordFieldsSlice(record_fields).items(.presence),
+                        .acc = group_rank,
+                    } });
+                    return false;
+                },
+                .tag_union => |tag_union| {
+                    try self.rank_frames.append(self.gpa, .{ .tag_union = .{
+                        .fill = fill,
+                        .tag_args = self.store.getTagsSlice(tag_union.tags).items(.args),
+                        .ext = tag_union.ext,
+                    } });
+                    return false;
+                },
+            },
+        }
     }
 
     /// Rank reduction shared by applied containers (aliases, nominal types,
@@ -297,122 +508,189 @@ pub const Generalizer = struct {
     /// when every arg is already generalized, wrongly blocking generalization of
     /// the type that uses the container. No args means a ground type, which sits
     /// at `outermost`.
-    fn adjustRankOverArgs(self: *Self, args_iter: Var.SafeList.Iterator, group_rank: Rank, vars_to_generalize: []Var) std.mem.Allocator.Error!Rank {
-        var iter = args_iter;
-        if (iter.count() == 0) return Rank.outermost;
-        var next_rank = Rank.generalized;
-        while (iter.next()) |arg_var| {
-            next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
+    fn pushOverArgs(self: *Self, fill: RankFill, args: []const Var) std.mem.Allocator.Error!bool {
+        if (args.len == 0) {
+            try self.settleRank(fill.desc_idx, Rank.outermost);
+            return true;
         }
-        return next_rank;
+        try self.rank_frames.append(self.gpa, .{ .over_args = .{ .fill = fill, .args = args } });
+        return false;
     }
 
-    fn adjustRankContent(self: *Self, content: Content, group_rank: Rank, vars_to_generalize: []Var) std.mem.Allocator.Error!Rank {
-        return switch (content) {
-            .flex => {
-                // Here, we start at group_rank (since flex should be generalized),
-                // then we recurse into the constraints.
-                const next_rank = group_rank;
-                // for (self.store.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                //     next_rank = next_rank.max(try self.adjustRank(constraint.fn_var, group_rank, vars_to_generalize));
-                // }
-                return next_rank;
-            },
-            .rigid => {
-                // Here, we start at group_rank (since rigid should be generalized),
-                // then we recurse into the constraints.
-                const next_rank = group_rank;
-                // for (self.store.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                //     next_rank = next_rank.max(try self.adjustRank(constraint.fn_var, group_rank, vars_to_generalize));
-                // }
-                return next_rank;
-            },
-            .alias => |alias| {
-                // THEORY: we don't need to recurse into the backing type. Everything
-                // in the alias RHS is either a reference to an arg (already visited
-                // via the args below) or a concrete type (which resolves to
-                // `outermost` on its own, so it can't raise the rank). Traversing the
-                // backing var would therefore be redundant—the rank is just the max
-                // over the args.
-                return self.adjustRankOverArgs(self.store.iterAliasArgs(alias), group_rank, vars_to_generalize);
-            },
-            .structure => |flat_type| {
-                switch (flat_type) {
-                    .empty_record, .empty_tag_union => {
-                        // THEORY: Empty records/tag unions never need to be generalized
-                        return .outermost;
-                    },
-                    .tuple => |tuple| {
-                        return self.adjustRankOverArgs(self.store.iterVars(tuple.elems), group_rank, vars_to_generalize);
-                    },
-                    .nominal_type => |nominal| {
-                        // Same as .alias: don't recurse into the backing type, take
-                        // the max over the args.
-                        return self.adjustRankOverArgs(self.store.iterNominalArgs(nominal), group_rank, vars_to_generalize);
-                    },
-                    .fn_pure => |func| {
-                        var next_rank = try self.adjustRank(func.ret, group_rank, vars_to_generalize);
-                        for (self.store.sliceVars(func.args)) |arg_var| {
-                            next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
+    /// Record a var's finished rank and hand it to the frame that asked for it.
+    fn settleRank(self: *Self, desc_idx: DescStoreIdx, new_rank: Rank) std.mem.Allocator.Error!void {
+        try self.store.setDescRank(desc_idx, new_rank);
+        try self.pending_ranks.append(self.gpa, new_rank);
+    }
+
+    fn stepOverArgs(self: *Self, frame: *OverArgsFrame, group_rank: Rank) std.mem.Allocator.Error!bool {
+        while (true) {
+            if (frame.awaiting) {
+                frame.acc = frame.acc.max(self.pending_ranks.pop().?);
+                frame.idx += 1;
+                frame.awaiting = false;
+                continue;
+            }
+            if (frame.idx < frame.args.len) {
+                frame.awaiting = true;
+                if (!try self.requestRank(frame.args[frame.idx], group_rank)) return false;
+                continue;
+            }
+            try self.settleRank(frame.fill.desc_idx, frame.acc);
+            return true;
+        }
+    }
+
+    fn stepFunc(self: *Self, frame: *FuncFrame, group_rank: Rank) std.mem.Allocator.Error!bool {
+        while (true) {
+            switch (frame.stage) {
+                .ret => {
+                    frame.stage = .await_ret;
+                    if (!try self.requestRank(frame.ret, group_rank)) return false;
+                    continue;
+                },
+                .await_ret => {
+                    frame.acc = self.pending_ranks.pop().?;
+                    frame.stage = .args;
+                },
+                .args => {
+                    if (frame.awaiting) {
+                        frame.acc = frame.acc.max(self.pending_ranks.pop().?);
+                        frame.idx += 1;
+                        frame.awaiting = false;
+                        continue;
+                    }
+                    if (frame.idx < frame.args.len) {
+                        frame.awaiting = true;
+                        if (!try self.requestRank(frame.args[frame.idx], group_rank)) return false;
+                        continue;
+                    }
+                    frame.idx = 0;
+                    frame.stage = .effect_deps;
+                },
+                .effect_deps => {
+                    if (frame.awaiting) {
+                        frame.acc = frame.acc.max(self.pending_ranks.pop().?);
+                        frame.idx += 1;
+                        frame.awaiting = false;
+                        continue;
+                    }
+                    if (frame.idx < frame.effect_deps.len) {
+                        frame.awaiting = true;
+                        if (!try self.requestRank(frame.effect_deps[frame.idx], group_rank)) return false;
+                        continue;
+                    }
+                    try self.settleRank(frame.fill.desc_idx, frame.acc);
+                    return true;
+                },
+            }
+        }
+    }
+
+    fn stepRecord(self: *Self, frame: *RecordFrame, group_rank: Rank) std.mem.Allocator.Error!bool {
+        while (true) {
+            switch (frame.stage) {
+                .ext => {
+                    frame.stage = .await_ext;
+                    if (!try self.requestRank(frame.ext, group_rank)) return false;
+                    continue;
+                },
+                .await_ext => {
+                    frame.acc = self.pending_ranks.pop().?;
+                    frame.stage = .fields;
+                },
+                .fields => {
+                    if (frame.awaiting) {
+                        frame.acc = frame.acc.max(self.pending_ranks.pop().?);
+                        frame.awaiting = false;
+                        if (frame.field_axis == .type_var and frame.fields[frame.idx].presenceVar() != null) {
+                            frame.field_axis = .presence_var;
+                        } else {
+                            frame.idx += 1;
+                            frame.field_axis = .type_var;
                         }
-                        for (self.store.sliceVars(func.effect_deps)) |effect_dep| {
-                            next_rank = next_rank.max(try self.adjustRank(effect_dep, group_rank, vars_to_generalize));
-                        }
-                        return next_rank;
-                    },
-                    .fn_effectful => |func| {
-                        var next_rank = try self.adjustRank(func.ret, group_rank, vars_to_generalize);
-                        for (self.store.sliceVars(func.args)) |arg_var| {
-                            next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
-                        }
-                        for (self.store.sliceVars(func.effect_deps)) |effect_dep| {
-                            next_rank = next_rank.max(try self.adjustRank(effect_dep, group_rank, vars_to_generalize));
-                        }
-                        return next_rank;
-                    },
-                    .fn_unbound => |func| {
-                        var next_rank = try self.adjustRank(func.ret, group_rank, vars_to_generalize);
-                        for (self.store.sliceVars(func.args)) |arg_var| {
-                            next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
-                        }
-                        for (self.store.sliceVars(func.effect_deps)) |effect_dep| {
-                            next_rank = next_rank.max(try self.adjustRank(effect_dep, group_rank, vars_to_generalize));
-                        }
-                        return next_rank;
-                    },
-                    .record => |record| {
-                        var next_rank = try self.adjustRank(record.ext, group_rank, vars_to_generalize);
-                        for (self.store.getRecordFieldsSlice(record.fields).items(.var_)) |rec_var| {
-                            next_rank = next_rank.max(try self.adjustRank(rec_var, group_rank, vars_to_generalize));
-                        }
-                        return next_rank;
-                    },
-                    .record_unbound => |record_fields| {
-                        var next_rank = blk: {
-                            // Unbounds are special-cased: An unbound represents a
-                            // flex var _at the same rank_ as the unbound record. So,
-                            // if we actually had that, it would recurse and unwrap
-                            // to group_rank. So we just return that directly here.
-                            break :blk group_rank;
+                        continue;
+                    }
+                    if (frame.idx < frame.fields.len) {
+                        const presence = frame.fields[frame.idx];
+                        const child = switch (frame.field_axis) {
+                            .type_var => presence.typeVar(),
+                            .presence_var => presence.presenceVar().?,
                         };
-                        for (self.store.getRecordFieldsSlice(record_fields).items(.var_)) |rec_var| {
-                            next_rank = next_rank.max(try self.adjustRank(rec_var, group_rank, vars_to_generalize));
-                        }
-                        return next_rank;
-                    },
-                    .tag_union => |tag_union| {
-                        var next_rank = try self.adjustRank(tag_union.ext, group_rank, vars_to_generalize);
-                        for (self.store.getTagsSlice(tag_union.tags).items(.args)) |arg_range| {
-                            for (self.store.sliceVars(arg_range)) |tag_arg_var| {
-                                next_rank = next_rank.max(try self.adjustRank(tag_arg_var, group_rank, vars_to_generalize));
-                            }
-                        }
-                        return next_rank;
-                    },
+                        frame.awaiting = true;
+                        if (!try self.requestRank(child, group_rank)) return false;
+                        continue;
+                    }
+                    try self.settleRank(frame.fill.desc_idx, frame.acc);
+                    return true;
+                },
+            }
+        }
+    }
+
+    fn stepRecordUnbound(self: *Self, frame: *RecordUnboundFrame, group_rank: Rank) std.mem.Allocator.Error!bool {
+        while (true) {
+            if (frame.awaiting) {
+                frame.acc = frame.acc.max(self.pending_ranks.pop().?);
+                frame.awaiting = false;
+                if (frame.field_axis == .type_var and frame.fields[frame.idx].presenceVar() != null) {
+                    frame.field_axis = .presence_var;
+                } else {
+                    frame.idx += 1;
+                    frame.field_axis = .type_var;
                 }
-            },
-            .err => return group_rank,
-        };
+                continue;
+            }
+            if (frame.idx < frame.fields.len) {
+                const presence = frame.fields[frame.idx];
+                const child = switch (frame.field_axis) {
+                    .type_var => presence.typeVar(),
+                    .presence_var => presence.presenceVar().?,
+                };
+                frame.awaiting = true;
+                if (!try self.requestRank(child, group_rank)) return false;
+                continue;
+            }
+            try self.settleRank(frame.fill.desc_idx, frame.acc);
+            return true;
+        }
+    }
+
+    fn stepTagUnion(self: *Self, frame: *TagUnionFrame, group_rank: Rank) std.mem.Allocator.Error!bool {
+        while (true) {
+            switch (frame.stage) {
+                .ext => {
+                    frame.stage = .await_ext;
+                    if (!try self.requestRank(frame.ext, group_rank)) return false;
+                    continue;
+                },
+                .await_ext => {
+                    frame.acc = self.pending_ranks.pop().?;
+                    frame.stage = .tags;
+                },
+                .tags => {
+                    if (frame.awaiting) {
+                        frame.acc = frame.acc.max(self.pending_ranks.pop().?);
+                        frame.arg_idx += 1;
+                        frame.awaiting = false;
+                        continue;
+                    }
+                    if (frame.tag_idx >= frame.tag_args.len) {
+                        try self.settleRank(frame.fill.desc_idx, frame.acc);
+                        return true;
+                    }
+                    const args = self.store.sliceVars(frame.tag_args[frame.tag_idx]);
+                    if (frame.arg_idx >= args.len) {
+                        frame.tag_idx += 1;
+                        frame.arg_idx = 0;
+                        continue;
+                    }
+                    frame.awaiting = true;
+                    if (!try self.requestRank(args[frame.arg_idx], group_rank)) return false;
+                    continue;
+                },
+            }
+        }
     }
 };
 
@@ -585,4 +863,51 @@ test "mergeFrom - vars at multiple ranks" {
     try expectVarsEqual(pool_a.getVarsForRank(.outermost), &.{ mkVar(1), mkVar(10) });
     try expectVarsEqual(pool_a.getVarsForRank(@enumFromInt(2)), &.{mkVar(20)});
     try expectVarsEqual(pool_a.getVarsForRank(@enumFromInt(3)), &.{mkVar(30)});
+}
+
+// Depth pin for rank adjustment. Generalization visits every var the
+// instantiator produced, and instantiation depth is bounded only by heap, so
+// this walk must be too. A 40,000-element chain of tuples—a position rank
+// adjustment does descend, unlike alias and nominal backing vars—is past what
+// a per-node native frame can hold on any ordinary 8 MiB stack: the recursive
+// walk this replaced segfaulted on exactly this chain.
+test "generalize - adjusts a spine deeper than any native-stack budget" {
+    const gpa = std.testing.allocator;
+    const depth: u32 = 40000;
+
+    var store = try TypesStore.initCapacity(gpa, depth + 8, 8);
+    defer store.deinit();
+
+    var pool = try VarPool.init(gpa);
+    defer pool.deinit();
+    try pool.pushRank();
+
+    var gen = try Generalizer.init(gpa, &store);
+    defer gen.deinit(gpa);
+
+    const rank: Rank = .outermost;
+    var chain = try std.array_list.Managed(Var).initCapacity(gpa, depth + 1);
+    defer chain.deinit();
+
+    var current = try store.freshFromContentWithRank(.{ .structure = .empty_record }, rank);
+    try chain.append(current);
+    for (0..depth) |_| {
+        const elems = try store.appendVars(&.{current});
+        current = try store.freshFromContentWithRank(
+            .{ .structure = .{ .tuple = .{ .elems = elems } } },
+            rank,
+        );
+        try chain.append(current);
+    }
+
+    // Outermost first, so the pool's first var is the one whose adjustment
+    // has to walk the whole chain.
+    var i = chain.items.len;
+    while (i > 0) {
+        i -= 1;
+        try pool.addVarToRank(chain.items[i], rank);
+    }
+
+    try gen.generalize(gpa, &pool, rank);
+    try std.testing.expectEqual(Rank.generalized, store.resolveVar(current).desc.rank);
 }

@@ -7,7 +7,6 @@ const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const collections = @import("collections");
 const build_options = @import("build_options");
-const libc_finder = @import("libc_finder.zig");
 const embedded_lld = @import("embedded_lld");
 const stack_probe = embedded_lld.stack_probe;
 const CodeSignature = @import("vendor_macho").CodeSignature;
@@ -36,6 +35,7 @@ const RocBinaryenOptimizeConfig = extern struct {
     strip_debug: u8,
     strip_producers: u8,
     strip_target_features: u8,
+    simd128: u8,
     validate: u8,
 };
 
@@ -84,9 +84,6 @@ pub const WasmOptimizeMode = enum {
     size,
     speed,
 };
-
-/// Default WASM initial memory: 64MB
-pub const DEFAULT_WASM_INITIAL_MEMORY: usize = 64 * 1024 * 1024;
 
 /// Default WASM stack size: 8MB
 pub const DEFAULT_WASM_STACK_SIZE: usize = 8 * 1024 * 1024;
@@ -149,7 +146,8 @@ pub const LinkConfig = struct {
 
     /// Initial memory size for WASM targets (bytes). This is the amount of linear memory
     /// available to the WASM module at runtime. Must be a multiple of 64KB (WASM page size).
-    wasm_initial_memory: usize = DEFAULT_WASM_INITIAL_MEMORY,
+    /// Null lets wasm-ld size memory itself from the data segments plus the stack.
+    wasm_initial_memory: ?usize = null,
 
     /// Maximum memory size for WASM targets (bytes), when the runtime contract needs one.
     wasm_maximum_memory: ?usize = null,
@@ -169,6 +167,10 @@ pub const LinkConfig = struct {
 
     /// Whether to run Binaryen over linked wasm output.
     wasm_optimize: WasmOptimizeMode = .none,
+
+    /// The selected Wasm CPU contract whose instruction features Binaryen may
+    /// preserve or introduce while optimizing the linked module.
+    wasm_cpu_level: roc_target.CpuLevel = .default,
 
     /// Optional data/global base for freestanding WASM links.
     wasm_global_base: ?u32 = null,
@@ -275,15 +277,7 @@ pub const LinkError = error{
     InvalidArguments,
     LLVMNotAvailable,
     WindowsSDKNotFound,
-    DarwinSysrootNotFound,
 } || std.zig.system.DetectError;
-
-const SelfExePathError = std.Io.Dir.ReadLinkError || error{
-    NameTooLong,
-    UnsupportedOs,
-};
-
-const SelfExeDirError = Allocator.Error || SelfExePathError;
 
 const PatchMachoStackSizeError = std.Io.File.OpenError || std.Io.File.ReadPositionalError || std.Io.File.WritePositionalError || error{
     NotMacho64,
@@ -299,105 +293,6 @@ const ResignMachoError = Allocator.Error || CodeSignature.WriteError || std.Io.F
     NotMacho64,
     UnexpectedEof,
 };
-
-/// Resolve the path of the currently running executable, host-OS specific.
-///
-/// Zig 0.16 removed `std.fs.selfExePath` and the private std helpers live inside
-/// `std.Io.Threaded` / `std.Io.Dispatch`. We need a cross-host implementation
-/// because the linker runs on Linux/macOS/Windows but may target any OS.
-fn selfExePath(std_io: std.Io, buf: []u8) SelfExePathError![]const u8 {
-    switch (comptime builtin.os.tag) {
-        .macos, .ios, .tvos, .watchos, .visionos => {
-            var n: u32 = @intCast(buf.len);
-            if (std.c._NSGetExecutablePath(buf.ptr, &n) != 0) return error.NameTooLong;
-            return std.mem.sliceTo(buf, 0);
-        },
-        .linux => {
-            const len = try std.Io.Dir.readLinkAbsolute(std_io, "/proc/self/exe", buf);
-            return buf[0..len];
-        },
-        .windows => {
-            // The PEB's ImagePathName contains the full path to the running exe.
-            const image_path_name = std.os.windows.peb().ProcessParameters.ImagePathName;
-            const wide = image_path_name.sliceZ();
-            const written = std.unicode.wtf16LeToWtf8(buf, wide);
-            return buf[0..written];
-        },
-        .freestanding,
-        .other,
-        .contiki,
-        .fuchsia,
-        .hermit,
-        .managarm,
-        .haiku,
-        .hurd,
-        .illumos,
-        .plan9,
-        .rtems,
-        .serenity,
-        .dragonfly,
-        .driverkit,
-        .maccatalyst,
-        .uefi,
-        .freebsd,
-        .openbsd,
-        .netbsd,
-        .@"3ds",
-        .ps3,
-        .ps4,
-        .ps5,
-        .psp,
-        .vita,
-        .emscripten,
-        .wasi,
-        .amdhsa,
-        .amdpal,
-        .cuda,
-        .mesa3d,
-        .nvcl,
-        .opencl,
-        .opengl,
-        .vulkan,
-        => return error.UnsupportedOs,
-    }
-}
-
-/// Get the directory containing the currently running executable.
-fn getSelfExeDir(allocator: std.mem.Allocator, std_io: std.Io) SelfExeDirError![]const u8 {
-    var symlink_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const symlink_path = try selfExePath(std_io, &symlink_path_buf);
-    var real_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const exe_path_len = std.Io.Dir.cwd().realPathFile(std_io, symlink_path, &real_path_buf) catch return error.OutOfMemory;
-    const exe_path = real_path_buf[0..exe_path_len];
-    return allocator.dupe(u8, std.fs.path.dirname(exe_path) orelse return error.OutOfMemory);
-}
-
-/// Find the Darwin sysroot directory at runtime.
-/// First looks for a 'darwin' directory next to the executable (for distributed builds),
-/// then falls back to the compile-time path (for local development builds).
-fn findDarwinSysroot(allocator: std.mem.Allocator, std_io: std.Io) Allocator.Error![]const u8 {
-    const exe_dir = getSelfExeDir(allocator, std_io) catch |err| {
-        std.log.warn("Failed to resolve executable path: {}, falling back to compile-time path", .{err});
-        return build_options.darwin_sysroot;
-    };
-
-    // Try to find 'darwin' directory next to executable (for distributed builds)
-    const runtime_sysroot = std.fs.path.join(allocator, &.{ exe_dir, "darwin" }) catch {
-        return build_options.darwin_sysroot;
-    };
-
-    // Check if the runtime path exists and contains the expected libSystem.tbd
-    const tbd_path = std.fs.path.join(allocator, &.{ runtime_sysroot, "usr", "lib", "libSystem.tbd" }) catch {
-        return build_options.darwin_sysroot;
-    };
-
-    std.Io.Dir.cwd().access(std_io, tbd_path, .{}) catch {
-        // Runtime path doesn't exist, fall back to compile-time path (local dev builds)
-        return build_options.darwin_sysroot;
-    };
-
-    return runtime_sysroot;
-}
 
 /// Find a platform-provided sysroot for macOS cross-compilation.
 /// Looks for 'macos-sysroot' directory in the platform's files directory.
@@ -566,7 +461,7 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 // dependencies by choosing which frameworks to bundle in their sysroot.
                 try discoverAndLinkFrameworks(ctx.arena, ctx.io.std_io, &args, fw_path);
             } else {
-                const darwin_sysroot = findDarwinSysroot(ctx.arena, ctx.io.std_io) catch return LinkError.DarwinSysrootNotFound;
+                const darwin_sysroot = embedded_lld.darwin_sysroot.find(ctx.arena, ctx.io.std_io) catch return LinkError.OutOfMemory;
                 try args.append(darwin_sysroot);
             }
 
@@ -622,28 +517,12 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                         // process's dynamic linker resolves them.
                         try args.append("-shared");
                     } else
-                    // Dynamic GNU linking - dynamic linker path is handled by caller
-                    // for cross-compilation. Only detect locally for native builds
+                    // Cross-compiling callers pass -dynamic-linker via extra_args.
                     if (config.extra_args.len == 0) {
-                        // Native build - try to detect dynamic linker
-                        if (libc_finder.findLibc(ctx)) |libc_info| {
-                            // We need to copy the path since args holds references
-                            try args.append("-dynamic-linker");
-                            try args.append(libc_info.dynamic_linker);
-                        } else |err| {
-                            // Fallback to hardcoded path based on architecture
-                            std.log.warn("Failed to detect libc: {}, using fallback", .{err});
-                            try args.append("-dynamic-linker");
-                            const fallback_ld = if (builtin.target.cpu.arch == .x86_64)
-                                "/lib64/ld-linux-x86-64.so.2"
-                            else if (builtin.target.cpu.arch == .aarch64)
-                                "/lib/ld-linux-aarch64.so.1"
-                            else
-                                "/lib/ld-linux.so.2";
-                            try args.append(fallback_ld);
-                        }
+                        try args.append("-dynamic-linker");
+                        try args.append(roc_target.glibcProgramInterpreter(target_arch) orelse
+                            return LinkError.LinkFailed);
                     }
-                    // Otherwise, dynamic linker is set via extra_args from caller
                 },
             }
 
@@ -808,14 +687,25 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             // Allow undefined symbols (imports from host environment)
             try args.append("--allow-undefined");
 
+            // A non-debug final module exposes only its Import and Export
+            // sections. Compiler-owned local names have no runtime purpose and
+            // must not make implementation details observable in name/linking
+            // metadata (also keeps output independent of its filename).
+            if (!config.wasm_debug_info) {
+                try args.append("--strip-all");
+            }
+
             if (config.wasm_import_memory) {
                 try args.append("--import-memory");
             }
 
-            // Set initial memory size (configurable, default 64MB)
-            // Must be a multiple of 64KB (WASM page size)
-            const initial_memory_str = std.fmt.allocPrint(ctx.arena, "--initial-memory={d}", .{config.wasm_initial_memory}) catch return LinkError.OutOfMemory;
-            try args.append(initial_memory_str);
+            // Set initial memory size when one was configured. Must be a
+            // multiple of 64KB (WASM page size). Without the flag wasm-ld
+            // sizes memory itself from the data segments plus the stack.
+            if (config.wasm_initial_memory) |initial_memory| {
+                const initial_memory_str = std.fmt.allocPrint(ctx.arena, "--initial-memory={d}", .{initial_memory}) catch return LinkError.OutOfMemory;
+                try args.append(initial_memory_str);
+            }
 
             if (config.wasm_maximum_memory) |maximum_memory| {
                 const maximum_memory_str = std.fmt.allocPrint(ctx.arena, "--max-memory={d}", .{maximum_memory}) catch return LinkError.OutOfMemory;
@@ -1017,6 +907,33 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
     }
 }
 
+/// Compose only compiler-owned Wasm objects into one relocatable object.
+/// Platform inputs are categorically excluded by the caller; sealing happens
+/// immediately after this link and before the result reaches a platform link.
+pub fn linkWasmObjectsRelocatable(
+    ctx: *CliCtx,
+    output_path: []const u8,
+    input_paths: []const []const u8,
+) LinkError!void {
+    if (comptime !llvm_available) return LinkError.LLVMNotAvailable;
+
+    var args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, input_paths.len + 4) catch
+        return LinkError.OutOfMemory;
+    try args.append("wasm-ld");
+    try args.append("-r");
+    try args.append("-o");
+    try args.append(output_path);
+    try args.appendSlice(input_paths);
+
+    embedded_lld.link(ctx.arena, .wasm, args.items, .{
+        .can_exit_early = false,
+        .disable_output = false,
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return LinkError.OutOfMemory,
+        error.LinkFailed => return LinkError.LinkFailed,
+    };
+}
+
 fn binaryenStatusName(status: c_int) []const u8 {
     return switch (status) {
         1 => "invalid arguments",
@@ -1045,6 +962,7 @@ fn binaryenConfig(config: LinkConfig) RocBinaryenOptimizeConfig {
         .strip_debug = @intFromBool(!config.wasm_debug_info),
         .strip_producers = 1,
         .strip_target_features = @intFromBool(config.wasm_optimize == .size and !config.wasm_debug_info),
+        .simd128 = @intFromBool(config.wasm_cpu_level == .default),
         .validate = 1,
     };
 }
@@ -1256,6 +1174,15 @@ fn findArg(args: []const []const u8, needle: []const u8) ?usize {
     return null;
 }
 
+/// Whether `args` contains an argument starting with `prefix`, for the linker
+/// options that are spelled as a single `--flag=value` argument.
+fn findArgWithPrefix(args: []const []const u8, prefix: []const u8) ?usize {
+    for (args, 0..) |arg, i| {
+        if (std.mem.startsWith(u8, arg, prefix)) return i;
+    }
+    return null;
+}
+
 /// Whether `args` contains `flag` immediately followed by `value`, for the
 /// linker options that are spelled as two separate arguments.
 fn hasArgPair(args: []const []const u8, flag: []const u8, value: []const u8) bool {
@@ -1303,6 +1230,45 @@ test "size wasm strips final target feature metadata" {
 
     const speed = binaryenConfig(.{ .output_path = "out.wasm", .object_files = &.{}, .wasm_optimize = .speed });
     try std.testing.expectEqual(@as(u8, 0), speed.strip_target_features);
+    try std.testing.expectEqual(@as(u8, 1), speed.simd128);
+
+    const v1 = binaryenConfig(.{ .output_path = "out.wasm", .object_files = &.{}, .wasm_optimize = .speed, .wasm_cpu_level = .v1 });
+    try std.testing.expectEqual(@as(u8, 0), v1.simd128);
+}
+
+test "wasm initial memory reaches wasm-ld only when configured" {
+    var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena_instance.deinit();
+
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    // Unconfigured: no --initial-memory at all, so wasm-ld sizes memory
+    // itself from the data segments plus the stack.
+    const auto_config = LinkConfig{
+        .target_format = .wasm,
+        .target_os = .freestanding,
+        .target_arch = .wasm32,
+        .output_path = "test_output.wasm",
+        .object_files = &.{"app.o"},
+    };
+    const auto_args = try buildLinkArgs(&ctx, auto_config);
+    try std.testing.expectEqual(@as(?usize, null), findArgWithPrefix(auto_args.items, "--initial-memory="));
+
+    // Configured: the exact value reaches wasm-ld.
+    const sized_config = LinkConfig{
+        .target_format = .wasm,
+        .target_os = .freestanding,
+        .target_arch = .wasm32,
+        .output_path = "test_output.wasm",
+        .object_files = &.{"app.o"},
+        .wasm_initial_memory = 1114112,
+    };
+    const sized_args = try buildLinkArgs(&ctx, sized_config);
+    const idx = findArgWithPrefix(sized_args.items, "--initial-memory=") orelse return error.MissingInitialMemory;
+    try std.testing.expectEqualStrings("--initial-memory=1114112", sized_args.items[idx]);
 }
 
 test "force undefined symbols use target linker spelling" {
@@ -1442,6 +1408,39 @@ test "macOS non-archive platform files are passed directly" {
     try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-all_load"));
     try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-force_load"));
     _ = findArg(args.items, object_path) orelse return error.MissingObjectFile;
+}
+
+test "native glibc executables name the canonical program interpreter" {
+    const cases = [_]struct { arch: std.Target.Cpu.Arch, interpreter: []const u8 }{
+        .{ .arch = .x86_64, .interpreter = "/lib64/ld-linux-x86-64.so.2" },
+        .{ .arch = .aarch64, .interpreter = "/lib/ld-linux-aarch64.so.1" },
+    };
+
+    for (cases) |case| {
+        var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+        defer arena_instance.deinit();
+
+        var io = Io.create(std.testing.io);
+        var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+        ctx.initIo();
+        defer ctx.deinit();
+
+        const config = LinkConfig{
+            .target_format = .elf,
+            .target_os = .linux,
+            .target_abi = .gnu,
+            .target_arch = case.arch,
+            .output_path = "test_output",
+            .object_files = &.{"libroc_interpreter_shim.a"},
+        };
+
+        const args = try buildLinkArgs(&ctx, config);
+
+        try std.testing.expectEqualStrings("ld.lld", args.items[0]);
+        const linker_idx = findArg(args.items, "-dynamic-linker") orelse return error.MissingDynamicLinker;
+        try std.testing.expect(linker_idx + 1 < args.items.len);
+        try std.testing.expectEqualStrings(case.interpreter, args.items[linker_idx + 1]);
+    }
 }
 
 test "BSD executables name their OS program interpreter" {

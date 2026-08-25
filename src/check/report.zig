@@ -79,7 +79,10 @@ const PlatformDefNotFound = problem_mod.PlatformDefNotFound;
 const PlatformHostedSection = problem_mod.PlatformHostedSection;
 const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
 const HostBoundaryOpenRow = problem_mod.HostBoundaryOpenRow;
+const HostBoundaryOptionalField = problem_mod.HostBoundaryOptionalField;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
+const AnnotationOnlyValueUse = problem_mod.AnnotationOnlyValueUse;
+const UnsupportedGeneratedMethod = problem_mod.UnsupportedGeneratedMethod;
 const AssociatedItemNotFound = problem_mod.AssociatedItemNotFound;
 const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
 const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
@@ -97,6 +100,11 @@ const ComptimeEvalError = problem_mod.ComptimeEvalError;
 const InvalidNumericLiteral = problem_mod.InvalidNumericLiteral;
 const TupleAccessNeedsAnnotation = problem_mod.TupleAccessNeedsAnnotation;
 const InvalidTupleAccess = problem_mod.InvalidTupleAccess;
+const OptionalAccessOfRequiredField = problem_mod.OptionalAccessOfRequiredField;
+const EffectfulDefaultValue = problem_mod.EffectfulDefaultValue;
+const NonConcreteDefaultValue = problem_mod.NonConcreteDefaultValue;
+const RecursiveDefaultValue = problem_mod.RecursiveDefaultValue;
+const CircularValueDefinition = problem_mod.CircularValueDefinition;
 const LiteralDefaulted = problem_mod.LiteralDefaulted;
 
 // Generic errors
@@ -216,6 +224,14 @@ pub const ReportBuilder = struct {
     }
 
     /// Add source code highlighting for a region.
+    /// The declaration region of a defaulted field's default expression,
+    /// when it was declared in THIS module (a foreign default's source is
+    /// not reachable from this report; render only the local side).
+    fn defaultDeclRegion(self: *Self, id: types_mod.DefaultId) ?Region {
+        if (id.origin_module != self.can_ir.selfModuleIdentity()) return null;
+        return self.can_ir.store.getExprRegion(@enumFromInt(id.expr_node));
+    }
+
     fn addSourceHighlightRegion(self: *Self, report: *Report, region: Region) Allocator.Error!void {
         const region_info = self.module_env.calcRegionInfo(region);
         try report.document.addSourceRegion(
@@ -741,6 +757,53 @@ pub const ReportBuilder = struct {
                         },
                     }
                 },
+                .field_presence_mismatch => |fpm| {
+                    switch (fpm.optional_side) {
+                        .expected => {
+                            try D.renderSlice(&.{
+                                D.bytes("Hint:").withAnnotation(.emphasized),
+                                D.bytes("The"),
+                                D.ident(fpm.field).withAnnotation(.inline_code),
+                                D.bytes("field is optional, so it may be missing."),
+                                D.bytes("It cannot be used as if it is always present—access it with"),
+                                D.bytes(".?").withAnnotation(.inline_code),
+                                D.bytes("instead."),
+                            }, self, report);
+                        },
+                        .actual => {
+                            try D.renderSlice(&.{
+                                D.bytes("Hint:").withAnnotation(.emphasized),
+                                D.bytes("The"),
+                                D.ident(fpm.field).withAnnotation(.inline_code),
+                                D.bytes("field is optional here, so it may be missing—but I expected a record whose"),
+                                D.ident(fpm.field).withAnnotation(.inline_code),
+                                D.bytes("field is always present."),
+                            }, self, report);
+                        },
+                    }
+                },
+                .field_default_mismatch => |fdm| {
+                    try D.renderSlice(&.{
+                        D.bytes("Hint:").withAnnotation(.emphasized),
+                        D.bytes("The"),
+                        D.ident(fdm.field).withAnnotation(.inline_code),
+                        D.bytes("field has a"),
+                        D.bytes("??").withAnnotation(.inline_code),
+                        D.bytes("default in both types, but they are two DIFFERENT defaults—two separately written defaults never merge, even when their values look the same. To share one default, declare the record type once (e.g. as a type alias) and annotate both values with it."),
+                    }, self, report);
+                    if (self.defaultDeclRegion(fdm.expected_default)) |region| {
+                        try report.document.addLineBreak();
+                        try D.renderSlice(&.{D.bytes("One default is declared here:")}, self, report);
+                        try report.document.addLineBreak();
+                        try self.addSourceHighlightRegion(report, region);
+                    }
+                    if (self.defaultDeclRegion(fdm.actual_default)) |region| {
+                        try report.document.addLineBreak();
+                        try D.renderSlice(&.{D.bytes("And the other is declared here:")}, self, report);
+                        try report.document.addLineBreak();
+                        try self.addSourceHighlightRegion(report, region);
+                    }
+                },
                 .ext_mismatch => |em| {
                     switch (em.type) {
                         .tag_union => {
@@ -933,6 +996,12 @@ pub const ReportBuilder = struct {
             .annotation_only_value => |data| {
                 return self.buildAnnotationOnlyValueReport(data);
             },
+            .annotation_only_value_use => |data| {
+                return self.buildAnnotationOnlyValueUseReport(data);
+            },
+            .unsupported_generated_method => |data| {
+                return self.buildUnsupportedGeneratedMethodReport(data);
+            },
             .associated_item_not_found => |data| {
                 return self.buildAssociatedItemNotFoundReport(data);
             },
@@ -941,6 +1010,9 @@ pub const ReportBuilder = struct {
             },
             .host_boundary_open_row => |data| {
                 return self.buildHostBoundaryOpenRowReport(data);
+            },
+            .host_boundary_optional_field => |data| {
+                return self.buildHostBoundaryOptionalFieldReport(data);
             },
             .platform_alias_not_found => |data| {
                 return self.buildPlatformAliasNotFound(data);
@@ -959,6 +1031,11 @@ pub const ReportBuilder = struct {
             .invalid_numeric_literal => |data| return self.buildInvalidNumericLiteralReport(data),
             .tuple_access_needs_annotation => |data| return self.buildTupleAccessNeedsAnnotationReport(data),
             .invalid_tuple_access => |data| return self.buildInvalidTupleAccessReport(data),
+            .optional_access_of_required_field => |data| return self.buildOptionalAccessOfRequiredFieldReport(data),
+            .effectful_default_value => |data| return self.buildEffectfulDefaultValueReport(data),
+            .non_concrete_default_value => |data| return self.buildNonConcreteDefaultValueReport(data),
+            .recursive_default_value => |data| return self.buildRecursiveDefaultValueReport(data),
+            .circular_value_definition => |data| return self.buildCircularValueDefinitionReport(data),
             .literal_defaulted => |data| return self.buildLiteralDefaultedReport(data),
             .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
             .non_exhaustive_destructure => |data| return self.buildNonExhaustiveDestructureReport(data),
@@ -2476,6 +2553,25 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
+        if (data.grown_from_snapshot) |grown_from_snapshot| {
+            const grown_from_str = try report.addOwnedString(self.getFormattedString(grown_from_snapshot));
+            try D.renderSlice(&.{
+                D.bytes("Satisfying this dispatch re-enters"),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("with a dispatch state that has grown—in its dispatcher or in the method type it requires—since an earlier step on the same chain, whose dispatcher was:"),
+            }, self, &report);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addCodeBlock(grown_from_str);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{
+                D.bytes("The dispatch state grows on every such step, so the chain can never terminate."),
+            }, self, &report);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+        }
+
         try D.renderSlice(&.{
             D.bytes("Hint:").withAnnotation(.emphasized),
             D.bytes("Use a more specific result type, or add an associated function whose"),
@@ -2951,6 +3047,188 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Build a report for `.?` access of a field the checker proved is always
+    /// present: the inverse of `buildOptionalFieldAccessReport`. The access is
+    /// sound (the Try would always be Ok) but almost certainly not what the
+    /// user intended, so it is rejected (design.md "Existential Presence",
+    /// definitely-present optional access).
+    /// A field default must be pure: the compiler materializes it at every
+    /// construction site that omits the field, so an effectful default would
+    /// run effects at unpredictable times (design.md "Defaulted Fields").
+    /// A default is evaluated once at compile time, so its type must be
+    /// concrete (design.md "Defaulted Fields").
+    fn buildNonConcreteDefaultValueReport(
+        self: *Self,
+        data: NonConcreteDefaultValue,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Default Value Not Concrete", "", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSliceInto(&.{
+            D.bytes("The default value for the"),
+            D.ident(data.field_name).withAnnotation(.inline_code),
+            D.bytes("field does not have a concrete type."),
+        }, self, &report, &report.headline);
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("A default is evaluated once at compile time and filled in wherever construction omits the field, so it must have exactly one runtime representation. Annotate the field (or the default) with a concrete type.");
+
+        return report;
+    }
+
+    fn buildEffectfulDefaultValueReport(
+        self: *Self,
+        data: EffectfulDefaultValue,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Effectful Default Value", "", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSliceInto(&.{
+            D.bytes("The default value for the"),
+            D.ident(data.field_name).withAnnotation(.inline_code),
+            D.bytes("field performs effects, but a field default must be pure."),
+        }, self, &report, &report.headline);
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("A default is filled in by the compiler wherever construction omits the field, so running effects here would happen at unpredictable times. Compute the value with an effectful function first, then pass it explicitly.");
+
+        return report;
+    }
+
+    fn buildRecursiveDefaultValueReport(
+        self: *Self,
+        data: RecursiveDefaultValue,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Recursive Default Value", "", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSliceInto(&.{
+            D.bytes("The default value for the"),
+            D.ident(data.field_name).withAnnotation(.inline_code),
+            D.bytes("field constructs a record that eventually needs this same default again."),
+        }, self, &report, &report.headline);
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Every omitted defaulted field is filled in by the compiler. This chain of omitted fields comes back to the default it started from, so construction would never finish. Supply a field explicitly somewhere in the cycle or use a non-recursive default.");
+
+        return report;
+    }
+
+    fn buildCircularValueDefinitionReport(
+        self: *Self,
+        data: CircularValueDefinition,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Circular Value Definition", "", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSliceInto(&.{
+            D.bytes("The value"),
+            D.ident(data.ident),
+            D.bytes("is part of a recursive non-function definition cycle."),
+        }, self, &report, &report.headline);
+        try self.addSourceHighlightRegion(&report, data.region);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.");
+
+        return report;
+    }
+
+    fn buildOptionalAccessOfRequiredFieldReport(
+        self: *Self,
+        data: OptionalAccessOfRequiredField,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Optional Access Of Required Field", "", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSliceInto(&.{
+            D.bytes("The"),
+            D.ident(data.field_name).withAnnotation(.inline_code),
+            D.bytes("field is always present, but it is being accessed as if it were optional."),
+        }, self, &report, &report.headline);
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("An optional access produces a ");
+        try report.document.addAnnotated("Try", .inline_code);
+        try report.document.addReflowingText(" for a field that may be missing\u{2014}but this field can never be missing, so the ");
+        try report.document.addAnnotated("Try", .inline_code);
+        try report.document.addReflowingText(" would always be ");
+        try report.document.addAnnotated("Ok", .inline_code);
+        try report.document.addReflowingText(". Use ");
+        try report.document.addAnnotated(".", .inline_code);
+        try report.document.addReflowingText(" to access it directly.");
+
+        return report;
+    }
+
+    /// Build a report for direct access of an optional (`?:`) field: the
+    /// field exists, but its presence is not guaranteed, so treating it as
+    /// always present is the actual error—not a missing field or a typo.
+    /// (Record UPDATE no longer routes here: a supplied update field has
+    /// creation semantics, so its kind-flexible probe joins an optional base
+    /// field instead of mismatching—design.md "Field Kinds".)
+    fn buildOptionalFieldAccessReport(
+        self: *Self,
+        field_name: Ident.Idx,
+        source_region: SourceHighlightRegion,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
+            D.bytes("The"),
+            D.ident(field_name).withAnnotation(.inline_code),
+            D.bytes("field is optional, but it is being accessed as if it is always present."),
+        }, self, &report, &report.headline);
+
+        switch (source_region) {
+            .idx => |idx| try self.addSourceHighlight(&report, idx),
+            .region => |region| try self.addSourceHighlightRegion(&report, region),
+        }
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("An optional field may be missing from the record. Use ");
+        try report.document.addAnnotated(".?", .inline_code);
+        try report.document.addReflowingText(" to access it—that produces a ");
+        try report.document.addAnnotated("Try", .inline_code);
+        try report.document.addReflowingText(" you can match on or default with ");
+        try report.document.addAnnotated("??", .inline_code);
+        try report.document.addText(".");
+
+        return report;
+    }
+
     /// Build a report for when a record field is accessed but doesn't exist
     fn buildRecordAccess(
         self: *Self,
@@ -2992,10 +3270,25 @@ pub const ReportBuilder = struct {
                 );
             },
             .record => |actual_fields_range| {
-                const actual_fields = self.diff_fields.sliceRange(actual_fields_range).items(.name);
+                const actual_slice = self.diff_fields.sliceRange(actual_fields_range);
+
+                // If the record HAS the field but its kind SOLVED `optional`
+                // (`?:`), the failure is the kind axis: direct access demands
+                // a required field. Without this check the error reads as a
+                // baffling "missing field"—with a typo suggestion of the
+                // field's own name.
+                for (actual_slice.items(.name), actual_slice.items(.presence)) |name, presence| {
+                    if (name.eql(ctx.field_name) and presence == .optional) {
+                        return try self.buildOptionalFieldAccessReport(
+                            ctx.field_name,
+                            SourceHighlightRegion{ .region = ctx.field_region },
+                        );
+                    }
+                }
+
                 return try self.buildTypoSuggestionsReport(
                     ctx.field_name,
-                    actual_fields,
+                    actual_slice.items(.name),
                     SourceHighlightRegion{ .region = ctx.field_region },
                     false,
                 );
@@ -3055,10 +3348,11 @@ pub const ReportBuilder = struct {
                 const actual_field = switch (actual_record) {
                     .record => |fields| blk: {
                         const slice = self.diff_fields.sliceRange(fields);
-                        for (slice.items(.name), slice.items(.content)) |name, content| {
+                        for (slice.items(.name), slice.items(.content), slice.items(.presence)) |name, content, presence| {
                             if (name.eql(ctx.field_name)) break :blk SnapshotRecordField{
                                 .name = name,
                                 .content = content,
+                                .presence = presence,
                             };
                         }
 
@@ -3078,16 +3372,23 @@ pub const ReportBuilder = struct {
                 // Get the possible field we're trying to update
                 const mb_expected_field = blk: {
                     const slice = self.diff_fields.sliceRange(expected_fields);
-                    for (slice.items(.name), slice.items(.content)) |name, content| {
+                    for (slice.items(.name), slice.items(.content), slice.items(.presence)) |name, content, presence| {
                         if (name.eql(ctx.field_name)) break :blk SnapshotRecordField{
                             .name = name,
                             .content = content,
+                            .presence = presence,
                         };
                     }
                     break :blk null;
                 };
 
                 if (mb_expected_field) |expected_field| {
+                    // A supplied update field has creation semantics: its
+                    // kind-flexible probe joins an optional base field, so a
+                    // mismatch that lands here on an optional field is a
+                    // PAYLOAD-type mismatch, rendered below like any other
+                    // incompatible field type (design.md "Field Kinds").
+
                     // If the expected  field exist, but we're here in a
                     // type mismatch, then it must mean that the fields are
                     // incompatible
@@ -3791,7 +4092,7 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
         switch (data.reason) {
             .function_not_in_section => try D.renderSliceInto(&.{
-                D.bytes("This platform's exposed modules declare a hosted function named"),
+                D.bytes("This platform declares a hosted function named"),
                 D.bytes(name).withAnnotation(.inline_code),
                 D.bytes(",").withNoPrecedingSpace(),
                 D.bytes("but the platform header's"),
@@ -3924,6 +4225,22 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    fn buildHostBoundaryOptionalFieldReport(self: *Self, data: HostBoundaryOptionalField) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Host Boundary Forbids Optional Fields", "Host-bound types cannot contain `?:` record fields.", .runtime_error);
+        errdefer report.deinit();
+
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Replace each"),
+            D.bytes("?:").withAnnotation(.inline_code),
+            D.bytes("field with a required field whose value explicitly represents absence before it crosses the host boundary."),
+        }, self, &report);
+        return report;
+    }
+
     fn buildEffectfulTopLevelReport(self: *Self, data: EffectfulTopLevel) Allocator.Error!Report {
         var report = try Report.init(self.gpa, "Effectful Top Level Value", "This top-level definition performs an effect while initializing.", .runtime_error);
         errdefer report.deinit();
@@ -3978,6 +4295,54 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try D.renderSlice(&.{
             D.bytes("Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildAnnotationOnlyValueUseReport(self: *Self, data: AnnotationOnlyValueUse) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Reference Has No Value", "This refers to a declaration that has a type annotation but no implementation, so there is no value here to use.", .runtime_error);
+        errdefer report.deinit();
+
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Give that declaration a value body, or stop referring to it here."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildUnsupportedGeneratedMethodReport(self: *Self, data: UnsupportedGeneratedMethod) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Unsupported Generated Method", "", .warning);
+        errdefer report.deinit();
+
+        try D.renderSliceInto(&.{
+            D.bytes("The compiler cannot generate the associated method"),
+            D.ident(data.method_name).withAnnotation(.inline_code),
+            D.bytes(".").withNoPrecedingSpace(),
+        }, self, &report, &report.headline);
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Using"),
+            D.bytes("_").withAnnotation(.inline_code),
+            D.bytes("as the entire annotation requests a compiler-generated implementation. The compiler currently supports this for"),
+            D.bytes("is_eq").withAnnotation(.inline_code),
+            D.bytes(",").withNoPrecedingSpace(),
+            D.bytes("to_hash").withAnnotation(.inline_code),
+            D.bytes(",").withNoPrecedingSpace(),
+            D.bytes("parser_for").withAnnotation(.inline_code),
+            D.bytes(",").withNoPrecedingSpace(),
+            D.bytes("encoder_for").withAnnotation(.inline_code),
+            D.bytes(",").withNoPrecedingSpace(),
+            D.bytes("map").withAnnotation(.inline_code),
+            D.bytes(",").withNoPrecedingSpace(),
+            D.bytes("and"),
+            D.bytes("map!").withAnnotation(.inline_code),
+            D.bytes(".").withNoPrecedingSpace(),
         }, self, &report);
         return report;
     }
@@ -4487,8 +4852,8 @@ pub const ReportBuilder = struct {
         if (method_ident.eql(idents.is_gt)) return ">";
         if (method_ident.eql(idents.is_gte)) return ">=";
         if (method_ident.eql(idents.not)) return "not";
-        if (method_ident.eql(idents.range_exclusive)) return "..<";
-        if (method_ident.eql(idents.range_inclusive)) return "..=";
+        if (method_ident.eql(idents.range_exclusive_to)) return "..<";
+        if (method_ident.eql(idents.range_inclusive_to)) return "..=";
         return null;
     }
 };

@@ -23,6 +23,7 @@ pub const parallel = @import("parallel.zig");
 pub const ConcurrentU64 = @import("ConcurrentU64.zig").ConcurrentU64;
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
 pub const SerialStringInterner = @import("SerialStringInterner.zig");
+pub const SpecializationStrategy = @import("SpecializationStrategy.zig").SpecializationStrategy;
 pub const ModuleIdentity = @import("module_identity.zig");
 
 /// Single-threaded arena allocator, re-exported from `collections` for callers
@@ -161,6 +162,7 @@ test "base tests" {
     std.testing.refAllDecls(@import("SExprTree.zig"));
     std.testing.refAllDecls(@import("SerialStringInterner.zig"));
     std.testing.refAllDecls(@import("SmallStringInterner.zig"));
+    std.testing.refAllDecls(@import("SpecializationStrategy.zig"));
     std.testing.refAllDecls(@import("elf_self_relocate.zig"));
     std.testing.refAllDecls(@import("source_utils.zig"));
     std.testing.refAllDecls(@import("stack_overflow.zig"));

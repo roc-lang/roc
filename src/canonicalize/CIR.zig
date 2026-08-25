@@ -21,6 +21,7 @@ pub const NodeStore = @import("NodeStore.zig");
 pub const Node = @import("Node.zig");
 pub const Expr = @import("Expression.zig").Expr;
 pub const DerivedMethodKind = @import("Expression.zig").DerivedMethodKind;
+pub const AnnotationOnlyKind = @import("Expression.zig").AnnotationOnlyKind;
 pub const Pattern = @import("Pattern.zig").Pattern;
 pub const Statement = @import("Statement.zig").Statement;
 pub const TypeAnno = @import("TypeAnnotation.zig").TypeAnno;
@@ -54,6 +55,7 @@ pub const BuiltinIndices = struct {
     http_header_encoding_type: Statement.Idx,
     http_header_type: Statement.Idx,
     utf8_problem_type: Statement.Idx,
+    range_type: Statement.Idx,
     u8_type: Statement.Idx,
     i8_type: Statement.Idx,
     u16_type: Statement.Idx,
@@ -106,6 +108,7 @@ pub const BuiltinIndices = struct {
     http_header_encoding_ident: Ident.Idx,
     http_header_ident: Ident.Idx,
     utf8_problem_ident: Ident.Idx,
+    range_ident: Ident.Idx,
     u8_ident: Ident.Idx,
     i8_ident: Ident.Idx,
     u16_ident: Ident.Idx,
@@ -195,6 +198,7 @@ pub const builtin_type_specs = [_]BuiltinTypeSpec{
     .{ .display_name = "HttpHeaderEncoding", .qualified_name = "Builtin.Encoding.HttpHeaderEncoding", .type_field = "http_header_encoding_type", .ident_field = "http_header_encoding_ident", .lookup = .{ .qualified = "Builtin.Encoding.HttpHeaderEncoding" }, .auto_import = false },
     .{ .display_name = "HttpHeader", .qualified_name = "Builtin.Encoding.HttpHeader", .type_field = "http_header_type", .ident_field = "http_header_ident", .lookup = .{ .nested = .{ .parent = "Encoding", .name = "HttpHeader" } }, .auto_import = false },
     .{ .display_name = "Utf8Problem", .qualified_name = "Builtin.Str.Utf8Problem", .type_field = "utf8_problem_type", .ident_field = "utf8_problem_ident", .lookup = .{ .nested = .{ .parent = "Str", .name = "Utf8Problem" } } },
+    .{ .display_name = "Range", .qualified_name = "Builtin.Num.Range", .type_field = "range_type", .ident_field = "range_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "Range" } } },
     .{ .display_name = "U8", .qualified_name = "Builtin.Num.U8", .type_field = "u8_type", .ident_field = "u8_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U8" } }, .num_kind = .u8 },
     .{ .display_name = "I8", .qualified_name = "Builtin.Num.I8", .type_field = "i8_type", .ident_field = "i8_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I8" } }, .num_kind = .i8 },
     .{ .display_name = "U16", .qualified_name = "Builtin.Num.U16", .type_field = "u16_type", .ident_field = "u16_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U16" } }, .num_kind = .u16 },

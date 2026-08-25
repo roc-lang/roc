@@ -690,10 +690,14 @@ pub fn int_to_str(comptime T: type, buf: []u8, val: T) []const u8 {
 // Uses Roc's vendored Ryu binary-to-decimal conversion followed by manual
 // decimal formatting, avoiding Zig formatting symbols in compiled programs.
 
+/// Buffer size that `f32_to_str` and `f64_to_str` always fit within: a
+/// subnormal f64 in decimal notation is the longest output either produces.
+pub const float_string_capacity = 400;
+
 /// Format an f64 as a decimal string into the provided buffer.
 /// Uses Ryu binary-to-decimal conversion (u64-only).
 /// Returns the slice of `buf` that contains the formatted number.
-/// Buffer must be at least 400 bytes.
+/// Buffer must be at least `float_string_capacity` bytes.
 pub fn f64_to_str(buf: []u8, val: f64) []const u8 {
     return formatFloatDecimal(buf, @bitCast(val), false);
 }
@@ -701,7 +705,7 @@ pub fn f64_to_str(buf: []u8, val: f64) []const u8 {
 /// Format an f32 as a decimal string into the provided buffer.
 /// Uses Ryu binary-to-decimal conversion (u64-only).
 /// Returns the slice of `buf` that contains the formatted number.
-/// Buffer must be at least 400 bytes.
+/// Buffer must be at least `float_string_capacity` bytes.
 pub fn f32_to_str(buf: []u8, val: f32) []const u8 {
     return formatFloatDecimal(buf, @as(u64, @as(u32, @bitCast(val))), true);
 }
@@ -873,31 +877,4 @@ pub fn pow10_i128(exp: u6) i128 {
         break :blk t;
     };
     return table[exp];
-}
-
-// ── compiler-rt symbol replacements ──
-//
-// On wasm32, Zig's codegen emits calls to __multi3 and __muloti4 for native
-// i128 multiply operations. Rather than depending on compiler-rt, we provide
-// these symbols ourselves using our decomposed 64-bit implementations.
-// This makes the builtins module fully self-contained with zero external deps.
-
-// __multi3 / __muloti4: compiler-rt i128 multiply symbols.
-// On wasm32, Zig codegen emits calls to these for native i128 multiply ops.
-// We provide them ourselves so the builtins module is fully self-contained.
-comptime {
-    if (is_wasm) {
-        @export(&wasm_multi3, .{ .name = "__multi3", .linkage = .strong });
-        @export(&wasm_muloti4, .{ .name = "__muloti4", .linkage = .strong });
-    }
-}
-
-fn wasm_multi3(a: i128, b: i128) callconv(.c) i128 {
-    return mul_i128(a, b);
-}
-
-/// __muloti4: i128 multiply with overflow detection (compiler-rt symbol).
-/// Called by Zig codegen for `@mulWithOverflow(a, b)` on i128.
-fn wasm_muloti4(a: i128, b: i128, overflow: *c_int) callconv(.c) i128 {
-    return mulWithOverflow_i128(a, b, overflow);
 }

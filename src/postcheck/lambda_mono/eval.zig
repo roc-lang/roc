@@ -351,7 +351,7 @@ pub const Evaluator = struct {
             .direct_call => |call| return try self.evalDirectCall(frame, call),
             .indirect_erased_call => |call| return try self.evalErasedCall(frame, call),
             .low_level => |low| return try self.evalLowLevel(frame, expr.ty, low.op, low.args),
-            .field_access => |access| return try self.evalFieldAccess(frame, access.receiver, access.field),
+            .field_access => |access| return try self.evalFieldAccess(frame, access.receiver, access.segments),
             .capture_access => |slot| return try self.evalCaptureAccess(frame, slot),
             .tuple_access => |access| {
                 const receiver = try self.evalExpr(frame, access.tuple);
@@ -556,15 +556,29 @@ pub const Evaluator = struct {
         return std.meta.eql(variants[@intFromEnum(a)].source, variants[@intFromEnum(b)].source);
     }
 
-    fn evalFieldAccess(self: *Evaluator, frame: *Frame, receiver: Ast.ExprId, field: Type.names.RecordFieldNameId) EvalError!Value {
-        const value = try self.evalExpr(frame, receiver);
-        const content = self.structural(self.exprType(receiver));
-        if (content != .record) return self.unsupported_("field access on non-record");
-        const type_fields = self.program.types.fieldSpan(content.record);
-        const index = self.recordFieldIndex(type_fields, field) orelse
-            return self.unsupported_("field access field not found");
-        if (value != .record) return self.unsupported_("field access on non-record value");
-        return value.record[index];
+    fn evalFieldAccess(
+        self: *Evaluator,
+        frame: *Frame,
+        receiver: Ast.ExprId,
+        segments_span: Ast.Span(Ast.FieldAccessSegment),
+    ) EvalError!Value {
+        var value = try self.evalExpr(frame, receiver);
+        var receiver_ty = self.exprType(receiver);
+        const segments = self.program.fieldAccessSegmentSpan(segments_span);
+        if (segments.len == 0) return self.unsupported_("field access path had no segments");
+
+        for (0..segments.len) |segment_index| {
+            const segment = GuardedList.at(segments, segment_index);
+            const structural_content = self.structural(receiver_ty);
+            if (structural_content != .record) return self.unsupported_("field access on non-record");
+            const type_fields = self.program.types.fieldSpan(structural_content.record);
+            const index = self.recordFieldIndex(type_fields, segment.field) orelse
+                return self.unsupported_("field access field not found");
+            receiver_ty = GuardedList.at(type_fields, index).ty;
+            if (value != .record) return self.unsupported_("field access on non-record value");
+            value = value.record[index];
+        }
+        return value;
     }
 
     fn evalCaptureAccess(self: *Evaluator, frame: *Frame, slot: Ast.CaptureSlot) EvalError!Value {
@@ -1175,12 +1189,18 @@ pub const Evaluator = struct {
             .num_is_gt => self.numCompare(args, arg_types, .gt),
             .num_is_gte => self.numCompare(args, arg_types, .gte),
 
-            .num_plus, .num_plus_checked => self.numArith(args, arg_types, result_ty, .add),
-            .num_minus, .num_minus_checked => self.numArith(args, arg_types, result_ty, .sub),
-            .num_times, .num_times_checked => self.numArith(args, arg_types, result_ty, .mul),
-            .num_plus_wrap => self.numWrappingArith(args, arg_types, result_ty, .plus),
-            .num_minus_wrap => self.numWrappingArith(args, arg_types, result_ty, .minus),
-            .num_times_wrap => self.numWrappingArith(args, arg_types, result_ty, .times),
+            .num_plus, .num_int_add_crash_on_overflow => self.numArith(args, arg_types, result_ty, .add),
+            .num_minus, .num_int_sub_crash_on_overflow => self.numArith(args, arg_types, result_ty, .sub),
+            .num_times, .num_int_mul_crash_on_overflow, .dec_mul => self.numArith(args, arg_types, result_ty, .mul),
+            .num_int_add_wrap => self.numWrappingArith(args, arg_types, result_ty, .plus),
+            .num_int_sub_wrap => self.numWrappingArith(args, arg_types, result_ty, .minus),
+            .num_int_mul_wrap => self.numWrappingArith(args, arg_types, result_ty, .times),
+            .num_int_add_overflows => self.numOverflows(args, arg_types, .add),
+            .num_int_sub_overflows => self.numOverflows(args, arg_types, .sub),
+            .num_int_mul_overflows => self.numOverflows(args, arg_types, .mul),
+            .num_float_add => self.numArith(args, arg_types, result_ty, .add),
+            .num_float_sub => self.numArith(args, arg_types, result_ty, .sub),
+            .num_float_mul => self.numArith(args, arg_types, result_ty, .mul),
             .num_div_by, .num_div_by_checked => self.numArith(args, arg_types, result_ty, .div),
             .num_div_trunc_by, .num_div_trunc_by_checked => self.numArith(args, arg_types, result_ty, .div_trunc),
             .num_rem_by, .num_rem_by_checked => self.numArith(args, arg_types, result_ty, .rem),
@@ -1327,6 +1347,7 @@ pub const Evaluator = struct {
             => self.evalStrOp(op, args, result_ty),
 
             .list_len,
+            .list_capacity,
             .list_get_unsafe,
             .list_append_unsafe,
             .list_concat,
@@ -1354,7 +1375,7 @@ pub const Evaluator = struct {
             => self.evalListOp(op, args, arg_types, result_ty),
 
             .box_box => self.boxValue(args[0]),
-            .box_unbox => if (args[0] == .box) args[0].box.* else self.unsupported_("box_unbox on non-box value"),
+            .box_unbox, .box_unbox_borrowed => if (args[0] == .box) args[0].box.* else self.unsupported_("box_unbox on non-box value"),
             .box_prepare_update => if (args[0] == .box) self.boxValue(args[0].box.*) else self.unsupported_("box_prepare_update on non-box value"),
             .erased_capture_load => if (args[0] == .box) args[0].box.* else args[0],
 
@@ -1641,7 +1662,6 @@ pub const Evaluator = struct {
             .dec_to_i64_trunc,
             .dec_to_i64_try_unsafe,
             .dec_to_i128_trunc,
-            .dec_to_i128_try_unsafe,
             .dec_to_u8_trunc,
             .dec_to_u8_try_unsafe,
             .dec_to_u16_trunc,
@@ -1660,6 +1680,9 @@ pub const Evaluator = struct {
             .ptr_store,
             .ptr_load,
             .ptr_cast,
+            .num_int_add_proven_cannot_overflow,
+            .num_int_sub_proven_cannot_overflow,
+            .num_int_mul_proven_cannot_overflow,
             .list_append_range_within,
             .list_copy_range_within,
             .list_append_range_within_unsafe,
@@ -1750,6 +1773,25 @@ pub const Evaluator = struct {
                 break :blk self.canonicalInt(result_prim, bitsOf(T, result));
             },
             .bool, .str, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => self.unsupported_("wrapping arithmetic on non-integer type"),
+        };
+    }
+
+    fn numOverflows(self: *Evaluator, args: []const Value, arg_types: []const Type.TypeId, op: ArithOp) EvalError!Value {
+        const prim = self.primitiveOf(arg_types[0]) orelse return self.unsupported_("overflow predicate operand without primitive type");
+        return switch (prim) {
+            inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => |p| blk: {
+                const T = intType(p);
+                const a = readAs(T, args[0]);
+                const b = readAs(T, args[1]);
+                const overflowed = switch (op) {
+                    .add => @addWithOverflow(a, b)[1] != 0,
+                    .sub => @subWithOverflow(a, b)[1] != 0,
+                    .mul => @mulWithOverflow(a, b)[1] != 0,
+                    .div, .div_trunc, .rem, .mod, .negate, .abs, .abs_diff => unreachable,
+                };
+                break :blk .{ .bool_ = overflowed };
+            },
+            .bool, .str, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => self.unsupported_("overflow predicate on non-integer type"),
         };
     }
 
@@ -1844,8 +1886,16 @@ pub const Evaluator = struct {
         const a = va.dec;
         const b = vb.dec;
         switch (op) {
-            .add => return .{ .dec = a +% b },
-            .sub => return .{ .dec = a -% b },
+            .add => {
+                const result = @addWithOverflow(a, b);
+                if (result[1] != 0) return self.crashAbort("Integer addition overflowed");
+                return .{ .dec = result[0] };
+            },
+            .sub => {
+                const result = @subWithOverflow(a, b);
+                if (result[1] != 0) return self.crashAbort("Integer subtraction overflowed");
+                return .{ .dec = result[0] };
+            },
             .mul => {
                 const result = RocDec.mulWithOverflow(.{ .num = a }, .{ .num = b });
                 if (result.has_overflowed) return self.crashAbort("Decimal multiplication overflowed!");

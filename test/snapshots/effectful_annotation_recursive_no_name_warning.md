@@ -25,16 +25,14 @@ main! = |_| {
 # EXPECTED
 EFFECTFUL FUNCTION NAME - effectful_annotation_recursive_no_name_warning.md:11:1:11:7
 # PROBLEMS
+── ● effectful function name ─ effectful_annotation_recursive_no_name_warning.md:11:1
 
-┌─────────────────────────┐
-│ EFFECTFUL FUNCTION NAME ├─ This function performs an effect, so its name ───┐
-└┬────────────────────────┘  must end in `!`.                                 │
- │                                                                            │
- │  caller = |n| recurse(n)                                                   │
- │  ‾‾‾‾‾‾                                                                    │
- └──────────────────── effectful_annotation_recursive_no_name_warning.md:11:1 ┘
+This function performs an effect, so its name must end in `!`.
 
-    Add a trailing `!` to this function name.
+caller = |n| recurse(n)
+^^^^^^
+
+Add a trailing ! to this function name.
 
 # TOKENS
 ~~~zig
@@ -171,14 +169,14 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-dispatch-call (method "plus") (constraint-fn-var 318)
+			(e-dispatch-call (method "plus") (constraint-fn-var 328)
 				(receiver
 					(e-num (value "1")))
 				(args
-					(e-call (constraint-fn-var 317)
+					(e-call (constraint-fn-var 327)
 						(e-lookup-local
 							(p-assign (ident "recurse")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 311)
+						(e-dispatch-call (method "plus") (constraint-fn-var 321)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
@@ -204,10 +202,10 @@ main! = |_| {
 								(e-num (value "0"))))
 						(e-num (value "1"))))
 				(if-else
-					(e-call (constraint-fn-var 364)
+					(e-call (constraint-fn-var 374)
 						(e-lookup-local
 							(p-assign (ident "pongIt")))
-						(e-dispatch-call (method "minus") (constraint-fn-var 358)
+						(e-dispatch-call (method "minus") (constraint-fn-var 368)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
@@ -233,10 +231,10 @@ main! = |_| {
 								(e-num (value "0"))))
 						(e-num (value "2"))))
 				(if-else
-					(e-call (constraint-fn-var 402)
+					(e-call (constraint-fn-var 412)
 						(e-lookup-local
 							(p-assign (ident "pingIt")))
-						(e-dispatch-call (method "minus") (constraint-fn-var 398)
+						(e-dispatch-call (method "minus") (constraint-fn-var 408)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
@@ -251,7 +249,7 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-call (constraint-fn-var 403)
+			(e-call (constraint-fn-var 413)
 				(e-lookup-local
 					(p-assign (ident "recurse")))
 				(e-lookup-local
@@ -264,7 +262,7 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-underscore)
-					(e-call (constraint-fn-var 411)
+					(e-call (constraint-fn-var 421)
 						(e-lookup-local
 							(p-assign (ident "caller")))
 						(e-num (value "0"))))

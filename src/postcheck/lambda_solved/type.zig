@@ -33,10 +33,13 @@ pub const Span = extern struct {
     }
 };
 
-/// Record field type entry.
+/// Record field type entry. `default` is the Monotype `??` default identity
+/// carried verbatim through lambda solving (shared program name store).
 pub const Field = struct {
     name: names.RecordFieldNameId,
     ty: TypeVarId,
+    value_ty: ?TypeVarId = null,
+    default: ?MonoType.FieldDefault,
 };
 
 /// Tag-union variant type entry.
@@ -62,8 +65,8 @@ pub const FnMember = struct {
     captures: Span,
 };
 
-/// One entry of a nominal record's declared layout order; consumed only by
-/// layout selection (the backing row stays lexicographic).
+/// One entry of a nominal record's declared fields; consumed by layout and
+/// descriptor planning (the backing row stays lexicographic).
 pub const DeclaredField = union(enum) {
     named: names.RecordFieldNameId,
     padding: TypeVarId,
@@ -86,8 +89,7 @@ pub const Content = union(enum) {
             use: MonoType.BackingUse,
             authority: MonoType.BackingAuthority = .checked_public,
         } = null,
-        /// Declared field order for a nominal/opaque record backing; empty
-        /// otherwise.
+        /// Declared fields for a nominal/opaque record backing; empty otherwise.
         declared_order: Span = Span.empty(),
     },
     record: Span,
@@ -405,7 +407,7 @@ test "lambda solved empty spans use shared empty descriptor" {
 
     const unit = try store.add(.zst);
     const nonempty_span = try store.addSpan(&.{unit});
-    const nonempty_fields = try store.addFields(&.{.{ .name = @enumFromInt(1), .ty = unit }});
+    const nonempty_fields = try store.addFields(&.{.{ .name = @enumFromInt(1), .ty = unit, .default = null }});
     const nonempty_tags = try store.addTags(&.{.{ .name = @enumFromInt(2), .checked_name = @enumFromInt(2), .payloads = nonempty_span }});
     const nonempty_captures = try store.addCaptures(&.{.{ .local = @enumFromInt(3), .symbol = @enumFromInt(4), .binder = null, .ty = unit }});
     const nonempty_members = try store.addMembers(&.{.{ .lambda = @enumFromInt(5), .captures = nonempty_captures }});

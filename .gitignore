@@ -161,3 +161,6 @@ tmp/
 
 # Local implementation planning notes / scratch planning docs (CI forbids tracking these)
 plan.md
+
+# Boxy status report—local planning doc, not committed
+report.md

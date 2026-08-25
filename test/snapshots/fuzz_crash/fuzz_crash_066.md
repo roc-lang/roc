@@ -11,32 +11,27 @@ C:[0]
 UNEXPECTED TYPE SYNTAX - fuzz_crash_066.md:1:4:1:5
 MALFORMED TYPE - fuzz_crash_066.md:1:4:1:5
 # PROBLEMS
+── ✗ unexpected type syntax ────────────────────────────── fuzz_crash_066.md:1:4
 
-┌────────────────────────┐
-│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
-└┬───────────────────────┘  cannot start a type here.                         │
- │                                                                            │
- │  C:[0]                                                                     │
- │     ‾                                                                      │
- └───────────────────────────────────────────────────── fuzz_crash_066.md:1:4 ┘
+I was parsing a type annotation, and this token cannot start a type here.
 
-    Types can be type variables, uppercase type names, function types, tuples,
-    records, or tag unions.
+C:[0]
+   ^
 
-    For example:
-        List(U64)
+Types can be type variables, uppercase type names, function types, tuples,
+records, or tag unions.
 
-    I found `0` here.
+For example:
+    List(U64)
 
+I found 0 here.
 
-┌────────────────┐
-│ MALFORMED TYPE ├─ This type annotation is malformed or contains invalid ────┐
-└┬───────────────┘  syntax.                                                   │
- │                                                                            │
- │  C:[0]                                                                     │
- │     ‾                                                                      │
- └───────────────────────────────────────────────────── fuzz_crash_066.md:1:4 ┘
+── ✗ malformed type ────────────────────────────────────── fuzz_crash_066.md:1:4
 
+This type annotation is malformed or contains invalid syntax.
+
+C:[0]
+   ^
 
 # TOKENS
 ~~~zig

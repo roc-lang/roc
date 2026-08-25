@@ -24,7 +24,7 @@ const core = @import("lir_core");
 const layout_mod = @import("layout");
 const arc_sig = @import("arc_sig.zig");
 const arc_solve = @import("arc_solve.zig");
-const arc_takes = @import("arc_takes.zig");
+const body_clone = @import("body_clone.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -36,38 +36,157 @@ pub const Error = std.mem.Allocator.Error;
 
 const no_index: u32 = std.math.maxInt(u32);
 
-/// One refcounted field a dismantled container still owns at its death
-/// point: emission reads it into a temporary and releases the temporary.
-pub const ResidualField = struct {
+/// Compact description of an aggregate projection whose result may carry a
+/// stored ownership unit out of its source. The high two bits identify the
+/// projection form; the remaining bits hold the semantic field or tag indices.
+pub const no_projection: u64 = std.math.maxInt(u64);
+const projection_kind_shift = 62;
+const projection_data_mask = (@as(u64, 1) << projection_kind_shift) - 1;
+const ProjectionKind = enum(u2) {
+    field,
+    tag_payload,
+    tag_payload_struct,
+    reserved,
+};
+
+/// Encodes the ownership-relevant shape of a reference projection, or null
+/// when the operation does not select aggregate storage.
+pub fn encodeProjection(op: LIR.RefOp) ?u64 {
+    return switch (op) {
+        .field => |field| @as(u64, field.field_idx),
+        .tag_payload => |payload| (@as(u64, @intFromEnum(ProjectionKind.tag_payload)) << projection_kind_shift) |
+            (@as(u64, payload.variant_index) << 16) |
+            @as(u64, payload.payload_idx),
+        .tag_payload_struct => |payload| (@as(u64, @intFromEnum(ProjectionKind.tag_payload_struct)) << projection_kind_shift) |
+            @as(u64, payload.variant_index),
+        .local, .discriminant, .list_reinterpret, .nominal => null,
+    };
+}
+
+fn projectionKind(projection: u64) ProjectionKind {
+    return @enumFromInt(@as(u2, @intCast(projection >> projection_kind_shift)));
+}
+
+fn projectionField(projection: u64) u16 {
+    return @intCast(projection & projection_data_mask);
+}
+
+fn projectionVariant(projection: u64) u16 {
+    return switch (projectionKind(projection)) {
+        .tag_payload => @intCast((projection >> 16) & 0xffff),
+        .tag_payload_struct => @intCast(projection & 0xffff),
+        .field, .reserved => 0,
+    };
+}
+
+fn projectionPayload(projection: u64) u16 {
+    return @intCast(projection & 0xffff);
+}
+
+fn structFieldBySemanticIndex(layouts: *const layout_mod.Store, struct_layout: layout_mod.Layout, field_idx: u16) ?layout_mod.StructField {
+    const info = layouts.getStructInfo(struct_layout);
+    for (0..info.fields.len) |index| {
+        const field = info.fields.get(@intCast(index));
+        if (field.index == field_idx) return field;
+    }
+    return null;
+}
+
+fn structHasOneRcField(layouts: *const layout_mod.Store, struct_layout: layout_mod.Layout, field_idx: u16) bool {
+    const info = layouts.getStructInfo(struct_layout);
+    var only_field: ?u16 = null;
+    for (0..info.fields.len) |index| {
+        const field = info.fields.get(@intCast(index));
+        if (!layouts.layoutContainsRefcounted(layouts.getLayout(field.layout))) continue;
+        if (only_field != null) return false;
+        only_field = field.index;
+    }
+    return only_field != null and only_field.? == field_idx;
+}
+
+/// Whether this projection covers every refcounted byte owned by the source's
+/// active aggregate shape. Moving such a projection transfers the source's
+/// one ownership unit without a retain or a residual release. For a tag union,
+/// the payload read itself proves which variant is active on that path; other
+/// variants remain ordinary whole releases on their own paths.
+pub fn projectionOwnsAllRc(
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    source: LIR.LocalId,
+    target: LIR.LocalId,
+    projection: u64,
+) bool {
+    if (projection == no_projection) return false;
+    const source_layout_idx = store.getLocal(source).layout_idx;
+    const target_layout_idx = store.getLocal(target).layout_idx;
+    const source_layout = layouts.getLayout(source_layout_idx);
+    switch (projectionKind(projection)) {
+        .field => {
+            if (source_layout.tag != .struct_) return false;
+            const field_idx = projectionField(projection);
+            const field = structFieldBySemanticIndex(layouts, source_layout, field_idx) orelse return false;
+            return field.layout == target_layout_idx and
+                layouts.layoutContainsRefcounted(layouts.getLayout(field.layout)) and
+                structHasOneRcField(layouts, source_layout, field_idx);
+        },
+        .tag_payload, .tag_payload_struct => {
+            if (source_layout.tag != .tag_union) return false;
+            const info = layouts.getTagUnionInfo(source_layout);
+            const variant_index = projectionVariant(projection);
+            if (variant_index >= info.variants.len) return false;
+            const payload_layout_idx = info.variants.get(variant_index).payload_layout;
+            const payload_layout = layouts.getLayout(payload_layout_idx);
+            if (projectionKind(projection) == .tag_payload_struct) {
+                return payload_layout_idx == target_layout_idx and
+                    layouts.layoutContainsRefcounted(payload_layout);
+            }
+            const payload_idx = projectionPayload(projection);
+            if (payload_layout.tag == .struct_) {
+                const field = structFieldBySemanticIndex(layouts, payload_layout, payload_idx) orelse return false;
+                return field.layout == target_layout_idx and
+                    layouts.layoutContainsRefcounted(layouts.getLayout(field.layout)) and
+                    structHasOneRcField(layouts, payload_layout, payload_idx);
+            }
+            return payload_idx == 0 and payload_layout_idx == target_layout_idx and
+                layouts.layoutContainsRefcounted(payload_layout);
+        },
+        .reserved => return false,
+    }
+}
+
+/// One committed refcounted field place of a dismantlable container.
+pub const FieldPlace = struct {
     /// Original field index, as `assign_ref .field` addresses it.
     field_idx: u32,
     layout_idx: layout_mod.Idx,
 };
 
-/// Residual ownership plan for one taken variant of a dismantled tag union.
-/// At the death point, an arm keyed by the variant's discriminant releases
-/// exactly the refcounted payload fields its takes left behind.
-pub const VariantPlan = struct {
-    variant_index: u16,
-    tag_discriminant: u16,
-    /// Whether the payload is addressed through a struct view. A direct
-    /// payload is released as one value read straight off the union.
-    payload_is_struct: bool,
-    payload_layout: layout_mod.Idx,
-    residual: []const ResidualField,
+/// Committed field-place domain for one dismantlable container. Residual
+/// ownership is path state in ARC, not a global property of this descriptor.
+pub const Container = struct {
+    fields: []const FieldPlace,
+    full_mask: u64,
 };
 
-/// Residual ownership plan for one container local selected for dismantling.
-pub const Container = struct {
-    residual: []const ResidualField,
-    /// Tag-union dismantling: the death point switches on the runtime
-    /// discriminant, each planned variant releases its own residual, and
-    /// every unplanned variant keeps the whole release. Empty for struct
-    /// containers.
-    variant_plans: []const VariantPlan = &.{},
-    /// Layout for the discriminant scratch local of a tag-union dismantle,
-    /// taken from an observed discriminant read of the container.
-    disc_layout: ?layout_mod.Idx = null,
+/// Exact resource-place transfer performed by one field read.
+pub const Take = struct {
+    root: LIR.LocalId,
+    field_mask: u64,
+};
+
+/// One direct-call argument whose owned unit came from an exact aggregate
+/// field place. The callee's declared outcome convention may return that
+/// unit to this place on selected result edges.
+pub const CallArg = struct {
+    stmt: LIR.CFStmtId,
+    position: u8,
+};
+
+/// Exact aggregate field place and result refinement that can restore it.
+pub const FieldRestitutionArg = struct {
+    place: Take,
+    projection: LIR.CFStmtId,
+    refinement: LIR.CFStmtId,
 };
 
 /// Per-procedure dismantling decisions consumed while emitting ARC operations.
@@ -75,20 +194,41 @@ pub const Dismantles = struct {
     arena: std.heap.ArenaAllocator,
     /// `assign_ref .field` statements whose reads consume the container's
     /// stored unit; emission skips their retain.
-    takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, void),
-    /// Dismantled containers. At the container's death point emission
-    /// releases the residual fields instead of the whole value.
+    takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, Take),
+    /// Dismantlable containers and their committed field-place domains.
     containers: std.AutoHashMapUnmanaged(LIR.LocalId, Container),
     /// Takes on containers that are proc parameters solved borrowed: valid
     /// only in emissions where the demand vector overrides the parameter to
     /// owned (mode-specialized variants). The value is the parameter local,
     /// so emission can check the override for the current variant.
-    owned_only_takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, LIR.LocalId),
+    owned_only_takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, Take),
     /// Containers behind `owned_only_takes`, keyed by the parameter local.
     owned_only_containers: std.AutoHashMapUnmanaged(LIR.LocalId, Container),
     /// Parameter positions whose owned variant activates an exact field take,
     /// indexed directly by source procedure id.
     owned_only_param_benefits: []arc_sig.ParamMask,
+    /// Binding targets produced by unconditional field takes. The target
+    /// carries the stored field unit even when its base binding was solved
+    /// borrowed.
+    take_bindings: []bool,
+    /// For a binding solved borrowed whose field read becomes a take in an
+    /// owned-parameter variant, the exact borrowed parameter root authorizing
+    /// that binding-mode override; `no_index` means no override.
+    owned_only_binding_roots: []u32,
+    /// Exact field-place destinations for outcome-conditioned argument
+    /// restitution. Entries exist only when the projection binding has no
+    /// operand use other than this call and the call result has the closed,
+    /// explicit discriminant refinement accepted by this pass.
+    field_restitution_args: std.AutoHashMapUnmanaged(CallArg, FieldRestitutionArg),
+    /// Borrowed projection locals that denote the complete refcounted payload
+    /// of another local. Moving one of these locals moves the root's unit
+    /// directly when that unit is present; otherwise the ordinary retain is
+    /// preserved.
+    projection_units: std.AutoHashMapUnmanaged(LIR.LocalId, LIR.LocalId),
+    /// Complete projection reads whose owned target can receive the root's
+    /// unit directly. The solve-time transfer still checks path liveness and
+    /// keeps the ordinary retain when the root must survive.
+    complete_takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, LIR.LocalId),
 
     pub fn deinit(self: *Dismantles) void {
         const gpa = self.arena.child_allocator;
@@ -96,14 +236,17 @@ pub const Dismantles = struct {
         self.containers.deinit(gpa);
         self.owned_only_takes.deinit(gpa);
         self.owned_only_containers.deinit(gpa);
+        self.field_restitution_args.deinit(gpa);
+        self.projection_units.deinit(gpa);
+        self.complete_takes.deinit(gpa);
         self.arena.deinit();
     }
 
-    pub fn isTake(self: *const Dismantles, stmt: LIR.CFStmtId) bool {
-        return self.takes.contains(stmt);
+    pub fn takeAt(self: *const Dismantles, stmt: LIR.CFStmtId) ?Take {
+        return self.takes.get(stmt);
     }
 
-    pub fn ownedOnlyTakeParam(self: *const Dismantles, stmt: LIR.CFStmtId) ?LIR.LocalId {
+    pub fn ownedOnlyTake(self: *const Dismantles, stmt: LIR.CFStmtId) ?Take {
         return self.owned_only_takes.get(stmt);
     }
 
@@ -122,6 +265,36 @@ pub const Dismantles = struct {
         }
         return self.owned_only_param_benefits[index];
     }
+
+    pub fn ownedOnlyBindingRoot(self: *const Dismantles, local: LIR.LocalId) ?LIR.LocalId {
+        const index = @intFromEnum(local);
+        if (index >= self.owned_only_binding_roots.len) {
+            dismantleInvariant("ARC owned-only binding lookup exceeded the analyzed local table");
+        }
+        const root = self.owned_only_binding_roots[index];
+        return if (root == no_index) null else @enumFromInt(root);
+    }
+
+    pub fn isTakeBinding(self: *const Dismantles, local: LIR.LocalId) bool {
+        const index = @intFromEnum(local);
+        if (index >= self.take_bindings.len) {
+            dismantleInvariant("ARC take-binding lookup exceeded the analyzed local table");
+        }
+        return self.take_bindings[index];
+    }
+
+    pub fn fieldRestitutionArg(self: *const Dismantles, stmt: LIR.CFStmtId, position: usize) ?FieldRestitutionArg {
+        if (position > std.math.maxInt(u8)) return null;
+        return self.field_restitution_args.get(.{ .stmt = stmt, .position = @intCast(position) });
+    }
+
+    pub fn projectionUnitOf(self: *const Dismantles, local: LIR.LocalId) ?LIR.LocalId {
+        return self.projection_units.get(local);
+    }
+
+    pub fn completeTakeRoot(self: *const Dismantles, stmt: LIR.CFStmtId) ?LIR.LocalId {
+        return self.complete_takes.get(stmt);
+    }
 };
 
 fn dismantleInvariant(comptime message: []const u8) noreturn {
@@ -136,24 +309,12 @@ const State = enum(u8) {
     /// Borrowed pure same-value alias of a candidate; reads through it
     /// attribute to the root container.
     transparent_alias,
-    /// Borrowed struct view of one variant's payload of a tag-union
-    /// candidate (or a pure alias of such a view); field reads through it
-    /// attribute to the root container under that variant.
-    payload_view,
 };
-
-/// Variant marker for reads of struct containers, which have no variant.
-const no_variant: u16 = std.math.maxInt(u16);
 
 const Read = struct {
     stmt: LIR.CFStmtId,
     target: LIR.LocalId,
     field_idx: u32,
-    /// Variant the read addresses for tag-union containers; `no_variant`
-    /// for struct containers.
-    variant_index: u16,
-    tag_discriminant: u16,
-    consuming: bool,
 };
 
 const Candidate = struct {
@@ -166,11 +327,6 @@ const Candidate = struct {
     /// stay valid as long as no whole use can run after a take, which the
     /// dataflow checks exactly like a borrow of every field at once.
     whole_uses: std.ArrayList(LIR.CFStmtId) = .empty,
-    /// Locals holding this container's discriminant, each defined exactly
-    /// once by that read. A switch on one of these partitions the paths by
-    /// variant, which is what lets takes on one variant coexist with exits
-    /// that never see that variant.
-    disc_targets: std.ArrayList(LIR.LocalId) = .empty,
 };
 
 const Analysis = struct {
@@ -179,34 +335,53 @@ const Analysis = struct {
     layouts: *const layout_mod.Store,
     solution: *const arc_solve.Solution,
     state: []State,
-    /// Root container local per transparent alias or payload view,
-    /// `no_index` otherwise.
+    /// Root container local per transparent alias, `no_index` otherwise.
     alias_root: []u32,
-    /// Variant addressed per payload view, parallel to `alias_root`.
-    view_variant: []u16,
-    /// Discriminant value per payload view, parallel to `alias_root`.
-    view_disc: []u16,
-    /// Definition count per local, saturating. Discriminant targets are
-    /// trusted for switch partitioning only when defined exactly once.
-    def_counts: []u8,
     candidates: std.AutoHashMapUnmanaged(u32, Candidate),
     /// Proc parameters. A parameter solved borrowed may still qualify as an
     /// owned-only candidate: mode-specialized variants re-emit it owned.
     is_param: []const bool,
+    /// Solved-borrowed bindings whose value reaches an explicitly owned
+    /// direct-call or low-level operand. Field-take variants override exactly
+    /// these bindings to owned instead of manufacturing a retain at that
+    /// ownership boundary.
+    owned_demand: []bool,
+    /// Same-value aliases propagate an owned demand back to their source.
+    demand_aliases: std.ArrayList(struct { source: LIR.LocalId, target: LIR.LocalId }) = .empty,
 
     fn deinit(self: *Analysis) void {
         var it = self.candidates.valueIterator();
         while (it.next()) |candidate| {
             candidate.reads.deinit(self.gpa);
             candidate.whole_uses.deinit(self.gpa);
-            candidate.disc_targets.deinit(self.gpa);
         }
         self.candidates.deinit(self.gpa);
-        self.gpa.free(self.def_counts);
-        self.gpa.free(self.view_disc);
-        self.gpa.free(self.view_variant);
         self.gpa.free(self.alias_root);
         self.gpa.free(self.state);
+        self.gpa.free(self.owned_demand);
+        self.demand_aliases.deinit(self.gpa);
+    }
+
+    fn demandOwned(self: *Analysis, local: LIR.LocalId) void {
+        self.owned_demand[@intFromEnum(local)] = true;
+    }
+
+    fn noteDemandAlias(self: *Analysis, source: LIR.LocalId, target: LIR.LocalId) Error!void {
+        try self.demand_aliases.append(self.gpa, .{ .source = source, .target = target });
+    }
+
+    fn closeOwnedDemand(self: *Analysis) void {
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (self.demand_aliases.items) |edge| {
+                if (!self.owned_demand[@intFromEnum(edge.target)]) continue;
+                const source = &self.owned_demand[@intFromEnum(edge.source)];
+                if (source.*) continue;
+                source.* = true;
+                changed = true;
+            }
+        }
     }
 
     /// Whether the local's layout and binding shape could ever benefit from
@@ -214,16 +389,10 @@ const Analysis = struct {
     /// happens for locals that pass.
     fn passesGate(self: *Analysis, local: LIR.LocalId) bool {
         const local_layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
-        if (local_layout.tag != .struct_ and local_layout.tag != .tag_union) return false;
+        if (local_layout.tag != .struct_) return false;
         if (self.solution.isBorrowed(local) and !self.is_param[@intFromEnum(local)]) return false;
         if (self.solution.isJoinParam(local)) return false;
         if (self.solution.maybeUninitializedCondition(local) != null) return false;
-
-        if (local_layout.tag == .tag_union) {
-            const encoding = arc_takes.unionClaimEncoding(self.layouts, local_layout) orelse return false;
-            var it = encoding.iterate();
-            return it.next() != null;
-        }
 
         const info = self.layouts.getStructInfo(local_layout);
         var any_rc = false;
@@ -240,7 +409,7 @@ const Analysis = struct {
     fn entryOf(self: *Analysis, local: LIR.LocalId) Error!?*Candidate {
         const index = @intFromEnum(local);
         switch (self.state[index]) {
-            .ineligible, .transparent_alias, .payload_view => return null,
+            .ineligible, .transparent_alias => return null,
             .candidate => return self.candidates.getPtr(index).?,
             .unknown => {
                 if (!self.passesGate(local)) {
@@ -258,7 +427,7 @@ const Analysis = struct {
     /// The container a source local stands for: itself, or its alias root.
     fn resolveRoot(self: *Analysis, local: LIR.LocalId) LIR.LocalId {
         const index = @intFromEnum(local);
-        if (self.state[index] == .transparent_alias or self.state[index] == .payload_view) {
+        if (self.state[index] == .transparent_alias) {
             return @enumFromInt(self.alias_root[index]);
         }
         return local;
@@ -292,8 +461,7 @@ const Analysis = struct {
     /// once by a value-producing assignment.
     fn noteDef(self: *Analysis, local: LIR.LocalId, stmt: LIR.CFStmtId) Error!void {
         const index = @intFromEnum(local);
-        self.def_counts[index] +|= 1;
-        if (self.state[index] == .transparent_alias or self.state[index] == .payload_view) {
+        if (self.state[index] == .transparent_alias) {
             // A second definition of an alias re-points it; the root can no
             // longer attribute its reads.
             self.disqualify(local);
@@ -309,130 +477,19 @@ const Analysis = struct {
         }
     }
 
-    /// A definition that never produces a candidate binding but still counts
-    /// toward the local's definition total.
-    fn noteNonCandidateDef(self: *Analysis, local: LIR.LocalId) void {
-        self.def_counts[@intFromEnum(local)] +|= 1;
-    }
-
     fn noteFieldRead(self: *Analysis, stmt: LIR.CFStmtId, source: LIR.LocalId, field_idx: u32, target: LIR.LocalId) Error!void {
-        const source_index = @intFromEnum(source);
-        const through_view = self.state[source_index] == .payload_view;
         const root = self.resolveRoot(source);
         const candidate = (try self.entryOf(root)) orelse return;
-        const root_layout = self.layouts.getLayout(self.store.getLocal(root).layout_idx);
-        if ((root_layout.tag == .tag_union) != through_view) {
-            // A direct field read of a tag union, or a view of a struct:
-            // neither addresses the container's field space.
-            self.disqualify(root);
-            return;
-        }
         try candidate.reads.append(self.gpa, .{
             .stmt = stmt,
             .target = target,
             .field_idx = field_idx,
-            .variant_index = if (through_view) self.view_variant[source_index] else no_variant,
-            .tag_discriminant = if (through_view) self.view_disc[source_index] else no_variant,
-            .consuming = !self.solution.isBorrowed(target),
         });
     }
 
-    /// A read of the container's discriminant. The tag word is disjoint from
-    /// every stored payload unit, so the read itself needs no ordering with
-    /// takes; the target is remembered so switches on it can partition the
-    /// dataflow by variant.
-    fn noteDiscriminantRead(self: *Analysis, source: LIR.LocalId, target: LIR.LocalId) Error!void {
-        const source_index = @intFromEnum(source);
-        if (self.state[source_index] == .payload_view) {
-            self.disqualify(source);
-            return;
-        }
-        const root = self.resolveRoot(source);
-        const candidate = (try self.entryOf(root)) orelse return;
-        try candidate.disc_targets.append(self.gpa, target);
-    }
-
-    /// A `tag_payload_struct` read of one variant's payload. A struct
-    /// payload read borrowed against the container becomes a payload view;
-    /// a non-struct payload read is the variant's single field. Handles the
-    /// target's definition bookkeeping itself: a view target is an alias
-    /// binding, not a candidate definition.
-    fn notePayloadStructRead(
-        self: *Analysis,
-        stmt: LIR.CFStmtId,
-        source: LIR.LocalId,
-        variant_index: u16,
-        tag_discriminant: u16,
-        target: LIR.LocalId,
-    ) Error!void {
-        const source_index = @intFromEnum(source);
-        if (self.state[source_index] == .payload_view) {
-            self.disqualify(source);
-            try self.noteDef(target, stmt);
-            return;
-        }
-        const root = self.resolveRoot(source);
-        const candidate = (try self.entryOf(root)) orelse {
-            self.disqualify(source);
-            try self.noteDef(target, stmt);
-            return;
-        };
-        const root_layout = self.layouts.getLayout(self.store.getLocal(root).layout_idx);
-        if (root_layout.tag != .tag_union) {
-            self.disqualify(root);
-            try self.noteDef(target, stmt);
-            return;
-        }
-        const info = self.layouts.getTagUnionInfo(root_layout);
-        if (variant_index >= info.variants.len) {
-            self.disqualify(root);
-            try self.noteDef(target, stmt);
-            return;
-        }
-        const payload_layout = self.layouts.getLayout(info.variants.get(variant_index).payload_layout);
-        if (payload_layout.tag == .struct_) {
-            const target_index = @intFromEnum(target);
-            self.def_counts[target_index] +|= 1;
-            if (self.state[target_index] == .transparent_alias or self.state[target_index] == .payload_view) {
-                // Re-pointing an existing alias: neither root can attribute
-                // reads through it any longer.
-                self.disqualify(target);
-                self.disqualify(root);
-                self.state[target_index] = .ineligible;
-                return;
-            }
-            const transparent = self.solution.isBorrowed(target) and
-                self.solution.leaderOf(target) == root;
-            if (!transparent) {
-                self.disqualify(root);
-                self.disqualify(target);
-                return;
-            }
-            if (self.state[target_index] == .candidate) {
-                if (self.candidates.getPtr(target_index)) |view_candidate| view_candidate.disqualified = true;
-            }
-            self.state[target_index] = .payload_view;
-            self.alias_root[target_index] = @intFromEnum(root);
-            self.view_variant[target_index] = variant_index;
-            self.view_disc[target_index] = tag_discriminant;
-            return;
-        }
-        // The payload is the variant's single field, addressed as field 0.
-        try candidate.reads.append(self.gpa, .{
-            .stmt = stmt,
-            .target = target,
-            .field_idx = 0,
-            .variant_index = variant_index,
-            .tag_discriminant = tag_discriminant,
-            .consuming = !self.solution.isBorrowed(target),
-        });
-        try self.noteDef(target, stmt);
-    }
-
-    fn noteAliasDef(self: *Analysis, target: LIR.LocalId, source: LIR.LocalId) Error!void {
+    fn noteAliasDef(self: *Analysis, stmt: LIR.CFStmtId, target: LIR.LocalId, source: LIR.LocalId) Error!void {
         const target_index = @intFromEnum(target);
-        self.def_counts[target_index] +|= 1;
-        if (self.state[target_index] == .transparent_alias or self.state[target_index] == .payload_view) {
+        if (self.state[target_index] == .transparent_alias) {
             // Redefinition of an existing alias: neither its old nor its new
             // root can attribute reads through it.
             self.disqualify(target);
@@ -440,8 +497,6 @@ const Analysis = struct {
             self.state[target_index] = .ineligible;
             return;
         }
-        const source_index = @intFromEnum(source);
-        const source_is_view = self.state[source_index] == .payload_view;
         const root = self.resolveRoot(source);
         const transparent = self.solution.isBorrowed(target) and
             self.solution.leaderOf(target) == root and
@@ -451,70 +506,156 @@ const Analysis = struct {
             if (self.state[target_index] == .candidate) {
                 if (self.candidates.getPtr(target_index)) |candidate| candidate.disqualified = true;
             }
-            if (source_is_view) {
-                self.state[target_index] = .payload_view;
-                self.view_variant[target_index] = self.view_variant[source_index];
-                self.view_disc[target_index] = self.view_disc[source_index];
-            } else {
-                self.state[target_index] = .transparent_alias;
-            }
+            self.state[target_index] = .transparent_alias;
             self.alias_root[target_index] = @intFromEnum(root);
         } else {
-            // An owned alias duplicates the value; the container keeps a
-            // second observer.
-            self.useWhole(source);
+            // An owned same-value binding is a path-local whole use. It can
+            // move an intact container on this edge, while takes on mutually
+            // exclusive edges keep their exact residual states.
+            try self.useWholeAt(source, stmt);
             self.disqualify(target);
         }
     }
 };
 
-/// Per-field take dataflow state at one point in a candidate's region:
-/// which fields may have been taken on some path reaching this point, and
-/// which must have been taken on every such path. A take is valid only where
-/// the field cannot have been taken yet, a borrow only where it cannot have
-/// been taken yet, and every exit must agree (`may == must`) so the residual
-/// release is the same on all paths.
+/// Per-field take dataflow state at one point in a candidate's region. The
+/// may/must pair rejects double takes and post-take observations. Divergent
+/// exits are allowed: ARC carries their exact residual masks and normalizes
+/// them explicitly at the merge.
 const FlowState = struct {
     may: u64,
     must: u64,
-    /// Variants (by index) this path cannot carry at runtime, refined by
-    /// switches on the container's own discriminant. An exit reached with a
-    /// variant excluded owes nothing for that variant's takes: control can
-    /// only arrive here when the container holds some other variant, whose
-    /// residual release the death point dispatches separately.
-    excluded: u64,
 
     fn meet(a: FlowState, b: FlowState) FlowState {
-        return .{ .may = a.may | b.may, .must = a.must & b.must, .excluded = a.excluded & b.excluded };
+        return .{ .may = a.may | b.may, .must = a.must & b.must };
     }
 
     fn eql(a: FlowState, b: FlowState) bool {
-        return a.may == b.may and a.must == b.must and a.excluded == b.excluded;
+        return a.may == b.may and a.must == b.must;
     }
 };
 
 /// How one statement reads the candidate under dataflow: which field's bit
-/// it touches, which variant it addresses (`no_variant` for struct fields
-/// and whole uses), and whether it consumes (owned result) or borrows.
+/// it touches and whether it consumes (owned result) or borrows.
 const ReadKind = struct {
     bit: u64,
-    variant_index: u16,
     consuming: bool,
     visited: bool = false,
 };
 
-/// The take dataflow's record of one region exit: the fields whose takes
-/// ran on every path reaching it, and the variants the path had excluded.
-const ExitRecord = struct {
-    must: u64,
-    excluded: u64,
+const FieldRestitution = struct {
+    call_arg: CallArg,
+    projection: LIR.CFStmtId,
+    switch_stmt: LIR.CFStmtId,
+    field_mask: u64,
+    outcomes: arc_sig.OutcomeSpan,
 };
 
-/// One (variant, discriminant) pair addressed by a union candidate's reads.
-const VariantCase = struct {
-    variant_index: u16,
-    tag_discriminant: u16,
-};
+fn findOutcomeRefinement(
+    allocator: Allocator,
+    store: *const LirStore,
+    target: LIR.LocalId,
+    next: LIR.CFStmtId,
+    outcomes: arc_sig.OutcomeSpan,
+) Error!?LIR.CFStmtId {
+    if (outcomes.isEmpty()) return null;
+    var aliases = std.ArrayList(LIR.LocalId).empty;
+    defer aliases.deinit(allocator);
+    try aliases.append(allocator, target);
+    var discriminant: ?LIR.LocalId = null;
+    var cursor = next;
+    while (true) {
+        const stmt = store.getCFStmt(cursor);
+        if (stmt == .assign_ref) {
+            const assign = stmt.assign_ref;
+            switch (assign.op) {
+                .local => |source| {
+                    var source_is_result = false;
+                    for (aliases.items) |alias| source_is_result = source_is_result or alias == source;
+                    if (!source_is_result) return null;
+                    var already = false;
+                    for (aliases.items) |alias| already = already or alias == assign.target;
+                    if (!already) try aliases.append(allocator, assign.target);
+                    cursor = assign.next;
+                },
+                .discriminant => |op| {
+                    var source_is_result = false;
+                    for (aliases.items) |alias| source_is_result = source_is_result or alias == op.source;
+                    if (!source_is_result or discriminant != null) return null;
+                    discriminant = assign.target;
+                    cursor = assign.next;
+                },
+                .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return null,
+            }
+        } else if (stmt == .switch_stmt) {
+            if (discriminant == null or stmt.switch_stmt.cond != discriminant.?) return null;
+            return cursor;
+        } else {
+            return null;
+        }
+    }
+}
+
+fn outcomeMaskForValue(outcomes: []const arc_sig.Outcome, value: u64) ?arc_sig.ParamMask {
+    if (value > std.math.maxInt(u16)) return null;
+    for (outcomes) |outcome| {
+        if (outcome.discriminant == @as(u16, @intCast(value))) return outcome.restituted_params;
+    }
+    return null;
+}
+
+fn defaultOutcomeMask(outcomes: []const arc_sig.Outcome, branches: anytype) ?arc_sig.ParamMask {
+    var mask: arc_sig.ParamMask = std.math.maxInt(arc_sig.ParamMask);
+    var any = false;
+    for (outcomes) |outcome| {
+        var explicit = false;
+        for (0..GuardedList.borrowLen(branches)) |index| {
+            if (GuardedList.at(branches, index).value == outcome.discriminant) {
+                explicit = true;
+                break;
+            }
+        }
+        if (explicit) continue;
+        any = true;
+        mask &= outcome.restituted_params;
+    }
+    return if (any) mask else null;
+}
+
+fn restoredFieldMaskForBranch(
+    solution: *const arc_solve.Solution,
+    restorations: []const FieldRestitution,
+    switch_stmt: LIR.CFStmtId,
+    value: u64,
+) u64 {
+    var restored: u64 = 0;
+    for (restorations) |receipt| {
+        if (receipt.switch_stmt != switch_stmt) continue;
+        const position_bit = arc_sig.paramBit(receipt.call_arg.position).?;
+        const outcomes = solution.sigTable().outcomesOf(.{ .outcomes = receipt.outcomes });
+        const mask = outcomeMaskForValue(outcomes, value) orelse continue;
+        if ((mask & position_bit) != 0) restored |= receipt.field_mask;
+    }
+    return restored;
+}
+
+fn restoredFieldMaskForDefault(
+    solution: *const arc_solve.Solution,
+    store: *const LirStore,
+    restorations: []const FieldRestitution,
+    switch_stmt: LIR.CFStmtId,
+) u64 {
+    const branches = store.getCFSwitchBranches(store.getCFStmt(switch_stmt).switch_stmt.branches);
+    var restored: u64 = 0;
+    for (restorations) |receipt| {
+        if (receipt.switch_stmt != switch_stmt) continue;
+        const position_bit = arc_sig.paramBit(receipt.call_arg.position).?;
+        const outcomes = solution.sigTable().outcomesOf(.{ .outcomes = receipt.outcomes });
+        const mask = defaultOutcomeMask(outcomes, branches) orelse continue;
+        if ((mask & position_bit) != 0) restored |= receipt.field_mask;
+    }
+    return restored;
+}
 
 /// Solve takes for every reachable statement in the store.
 pub fn compute(
@@ -531,6 +672,15 @@ pub fn compute(
     const is_param = try gpa.alloc(bool, store.localCount());
     defer gpa.free(is_param);
     @memset(is_param, false);
+    const operand_read_counts = try gpa.alloc(u32, store.localCount());
+    defer gpa.free(operand_read_counts);
+    @memset(operand_read_counts, 0);
+    const direct_call_stmt_by_arg = try gpa.alloc(u32, store.localCount());
+    defer gpa.free(direct_call_stmt_by_arg);
+    @memset(direct_call_stmt_by_arg, no_index);
+    const direct_call_position_by_arg = try gpa.alloc(u8, store.localCount());
+    defer gpa.free(direct_call_position_by_arg);
+    @memset(direct_call_position_by_arg, std.math.maxInt(u8));
     for (0..store.procSpecCount()) |proc_index| {
         const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
         const body = proc.body orelse continue;
@@ -554,18 +704,14 @@ pub fn compute(
         .solution = solution,
         .state = try gpa.alloc(State, store.localCount()),
         .alias_root = try gpa.alloc(u32, store.localCount()),
-        .view_variant = try gpa.alloc(u16, store.localCount()),
-        .view_disc = try gpa.alloc(u16, store.localCount()),
-        .def_counts = try gpa.alloc(u8, store.localCount()),
         .candidates = .empty,
         .is_param = is_param,
+        .owned_demand = try gpa.alloc(bool, store.localCount()),
     };
     defer analysis.deinit();
     @memset(analysis.state, .unknown);
     @memset(analysis.alias_root, no_index);
-    @memset(analysis.view_variant, no_variant);
-    @memset(analysis.view_disc, no_variant);
-    @memset(analysis.def_counts, 0);
+    @memset(analysis.owned_demand, false);
 
     // One linear scan over every reachable statement, classifying each
     // occurrence of each local. The switch is exhaustive so a new statement
@@ -583,9 +729,10 @@ pub fn compute(
         const stmt_index = @intFromEnum(current);
         if (visited.isSet(stmt_index)) continue;
         visited.set(stmt_index);
-        switch (store.getCFStmt(current)) {
+        const current_stmt = store.getCFStmt(current);
+        body_clone.countStmtReads(store, operand_read_counts, current_stmt);
+        switch (current_stmt) {
             .init_uninitialized => |stmt| {
-                analysis.noteNonCandidateDef(stmt.target);
                 analysis.useWhole(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
@@ -596,14 +743,15 @@ pub fn compute(
                         try analysis.noteDef(stmt.target, current);
                     },
                     .local => |source| {
+                        try analysis.noteDemandAlias(source, stmt.target);
                         if (stmt.target == source) {
                             analysis.useWhole(source);
                         } else {
-                            try analysis.noteAliasDef(stmt.target, source);
+                            try analysis.noteAliasDef(current, stmt.target, source);
                         }
                     },
                     .discriminant => |op| {
-                        try analysis.noteDiscriminantRead(op.source, stmt.target);
+                        analysis.useWhole(op.source);
                         try analysis.noteDef(stmt.target, current);
                     },
                     .tag_payload => |op| {
@@ -611,16 +759,15 @@ pub fn compute(
                         try analysis.noteDef(stmt.target, current);
                     },
                     .tag_payload_struct => |op| {
-                        try analysis.notePayloadStructRead(current, op.source, op.variant_index, op.tag_discriminant, stmt.target);
+                        analysis.useWhole(op.source);
+                        try analysis.noteDef(stmt.target, current);
                     },
                     .list_reinterpret => |op| {
                         analysis.useWhole(op.backing_ref);
-                        analysis.noteNonCandidateDef(stmt.target);
                         analysis.disqualify(stmt.target);
                     },
                     .nominal => |op| {
                         analysis.useWhole(op.backing_ref);
-                        analysis.noteNonCandidateDef(stmt.target);
                         analysis.disqualify(stmt.target);
                     },
                 }
@@ -632,7 +779,16 @@ pub fn compute(
             },
             .assign_call => |stmt| {
                 const args = store.getLocalSpan(stmt.args);
-                for (0..GuardedList.borrowLen(args)) |i| try analysis.useWholeAt(GuardedList.at(args, i), current);
+                const callee_sig = solution.sigOf(stmt.proc);
+                for (0..GuardedList.borrowLen(args)) |i| {
+                    const arg = GuardedList.at(args, i);
+                    if (i < arc_sig.tracked_param_count) {
+                        direct_call_stmt_by_arg[@intFromEnum(arg)] = @intFromEnum(current);
+                        direct_call_position_by_arg[@intFromEnum(arg)] = @intCast(i);
+                    }
+                    try analysis.useWholeAt(arg, current);
+                    if (callee_sig.paramMode(i) == .owned) analysis.demandOwned(arg);
+                }
                 try analysis.noteDef(stmt.target, current);
                 try stack.append(gpa, stmt.next);
             },
@@ -650,9 +806,94 @@ pub fn compute(
                 try analysis.noteDef(stmt.target, current);
                 try stack.append(gpa, stmt.next);
             },
+            .assign_boxy_desc_ref => |stmt| {
+                if (stmt.desc.localOrNull()) |local| analysis.useWhole(local);
+                if (stmt.tag_residual_for) |desc| if (desc.localOrNull()) |local| analysis.useWhole(local);
+                const captures = store.getLocalSpan(stmt.captures);
+                for (0..GuardedList.borrowLen(captures)) |i| analysis.useWhole(GuardedList.at(captures, i));
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_boxy_dict_ref => |stmt| {
+                if (stmt.dict.localOrNull()) |local| analysis.useWhole(local);
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_boxy_box => |stmt| {
+                analysis.useWhole(stmt.payload);
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_boxy_reuse_box => |stmt| {
+                analysis.useWhole(stmt.source);
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_boxy_unbox => |stmt| {
+                analysis.useWhole(stmt.source);
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_boxy_adapt => |stmt| {
+                analysis.useWhole(stmt.source);
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_boxy_inspect => |stmt| {
+                analysis.useWhole(stmt.source);
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_boxy_eq => |stmt| {
+                analysis.useWhole(stmt.lhs);
+                analysis.useWhole(stmt.rhs);
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_boxy_tag => |stmt| {
+                if (stmt.payload) |payload| analysis.useWhole(payload);
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_boxy_tag_payload => |stmt| {
+                analysis.useWhole(stmt.source);
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                if (stmt.target_desc) |target_desc| {
+                    try analysis.noteDef(target_desc, current);
+                    analysis.disqualify(target_desc);
+                }
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_call_dict => |stmt| {
+                if (stmt.dict.localOrNull()) |local| analysis.useWhole(local);
+                const args = store.getLocalSpan(stmt.args);
+                for (0..GuardedList.borrowLen(args)) |i| analysis.useWhole(GuardedList.at(args, i));
+                const arg_descs = store.getLocalSpan(stmt.arg_descs);
+                for (0..GuardedList.borrowLen(arg_descs)) |i| analysis.useWhole(GuardedList.at(arg_descs, i));
+                const hidden_args = store.getLocalSpan(stmt.hidden_args);
+                for (0..GuardedList.borrowLen(hidden_args)) |i| analysis.useWhole(GuardedList.at(hidden_args, i));
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
             .assign_low_level => |stmt| {
                 const args = store.getLocalSpan(stmt.args);
-                for (0..GuardedList.borrowLen(args)) |i| try analysis.useWholeAt(GuardedList.at(args, i), current);
+                const demand_mask = stmt.rc_effect.consume_args | stmt.rc_effect.retain_args;
+                for (0..GuardedList.borrowLen(args)) |i| {
+                    const arg = GuardedList.at(args, i);
+                    try analysis.useWholeAt(arg, current);
+                    if (i < 64 and (demand_mask & (@as(u64, 1) << @intCast(i))) != 0) analysis.demandOwned(arg);
+                }
                 try analysis.noteDef(stmt.target, current);
                 try stack.append(gpa, stmt.next);
             },
@@ -686,7 +927,6 @@ pub fn compute(
             },
             .set_local => |stmt| {
                 try analysis.useWholeAt(stmt.value, current);
-                analysis.noteNonCandidateDef(stmt.target);
                 analysis.useWhole(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
@@ -764,6 +1004,11 @@ pub fn compute(
                 }
                 try stack.append(gpa, stmt.on_miss);
             },
+            .boxy_tag_match => |stmt| {
+                analysis.useWhole(stmt.source);
+                try stack.append(gpa, stmt.on_match);
+                try stack.append(gpa, stmt.on_miss);
+            },
             .loop_continue, .loop_break => {},
             .join => |stmt| {
                 // Join parameters are excluded by the gate; the condition
@@ -777,6 +1022,8 @@ pub fn compute(
         }
     }
 
+    analysis.closeOwnedDemand();
+
     // Second phase: verify the surviving candidates' read shapes and spines,
     // and build the output.
     var result = Dismantles{
@@ -786,10 +1033,19 @@ pub fn compute(
         .owned_only_takes = .empty,
         .owned_only_containers = .empty,
         .owned_only_param_benefits = &.{},
+        .take_bindings = &.{},
+        .owned_only_binding_roots = &.{},
+        .field_restitution_args = .empty,
+        .projection_units = .empty,
+        .complete_takes = .empty,
     };
     errdefer result.deinit();
     result.owned_only_param_benefits = try result.arena.allocator().alloc(arc_sig.ParamMask, store.procSpecCount());
     @memset(result.owned_only_param_benefits, 0);
+    result.take_bindings = try result.arena.allocator().alloc(bool, store.localCount());
+    @memset(result.take_bindings, false);
+    result.owned_only_binding_roots = try result.arena.allocator().alloc(u32, store.localCount());
+    @memset(result.owned_only_binding_roots, no_index);
 
     var read_kinds = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
     defer read_kinds.deinit(gpa);
@@ -800,8 +1056,8 @@ pub fn compute(
     const FlowFrame = struct { cursor: LIR.CFStmtId, state: FlowState };
     var flow_frames = std.ArrayList(FlowFrame).empty;
     defer flow_frames.deinit(gpa);
-    var exit_musts = std.ArrayList(ExitRecord).empty;
-    defer exit_musts.deinit(gpa);
+    var field_restitutions = std.ArrayList(FieldRestitution).empty;
+    defer field_restitutions.deinit(gpa);
 
     var it = analysis.candidates.iterator();
     candidates: while (it.next()) |entry| {
@@ -820,6 +1076,18 @@ pub fn compute(
                 inline .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag => |stmt| stmt.next,
                 .init_uninitialized,
                 .assign_ref,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
                 .store_struct,
                 .store_tag,
                 .set_local,
@@ -858,53 +1126,14 @@ pub fn compute(
 
         // Only refcounted fields carry stored units worth taking; a
         // container with no refcounted take keeps its ordinary whole
-        // release. A tag union's fields live behind its variants, so its
-        // bits use the shared (variant, field) claim encoding and its reads
-        // must address variants inside the exclusion mask's reach.
+        // release.
         const local_layout = layouts.getLayout(store.getLocal(local).layout_idx);
-        const is_union = local_layout.tag == .tag_union;
-        const encoding: ?arc_takes.UnionClaimEncoding = if (is_union)
-            (arc_takes.unionClaimEncoding(layouts, local_layout) orelse continue :candidates)
-        else
-            null;
+        const info = layouts.getStructInfo(local_layout);
         var rc_mask: u64 = 0;
-        if (encoding) |enc| {
-            var enc_it = enc.iterate();
-            while (enc_it.next()) |field| rc_mask |= @as(u64, 1) << field.bit;
-        } else {
-            const info = layouts.getStructInfo(local_layout);
-            for (0..info.fields.len) |i| {
-                const field = info.fields.get(@intCast(i));
-                if (layouts.layoutContainsRefcounted(layouts.getLayout(field.layout))) {
-                    rc_mask |= @as(u64, 1) << @intCast(field.index);
-                }
-            }
-        }
-
-        // The bit each read touches. A union read of a non-refcounted field
-        // has no bit and needs no ordering; a struct read keys directly by
-        // field index.
-        var variant_cases = std.ArrayList(VariantCase).empty;
-        defer variant_cases.deinit(gpa);
-        for (candidate.reads.items) |read| {
-            if (is_union) {
-                if (read.variant_index == no_variant or read.variant_index >= 64) continue :candidates;
-                var known = false;
-                for (variant_cases.items) |case| {
-                    if (case.variant_index == read.variant_index) {
-                        if (case.tag_discriminant != read.tag_discriminant) continue :candidates;
-                        known = true;
-                        break;
-                    }
-                }
-                if (!known) {
-                    try variant_cases.append(gpa, .{
-                        .variant_index = read.variant_index,
-                        .tag_discriminant = read.tag_discriminant,
-                    });
-                }
-            } else if (read.variant_index != no_variant) {
-                continue :candidates;
+        for (0..info.fields.len) |i| {
+            const field = info.fields.get(@intCast(i));
+            if (layouts.layoutContainsRefcounted(layouts.getLayout(field.layout))) {
+                rc_mask |= @as(u64, 1) << @intCast(field.index);
             }
         }
 
@@ -912,22 +1141,51 @@ pub fn compute(
         // definition over the control-flow graph: a consuming read is a take
         // only if the field cannot have been taken yet at that point, a
         // borrow of a taken field must run before every take that could
-        // reach it, and every exit the flow reaches must agree on the taken
-        // set so the residual release is the same on all paths. Loops poison
-        // themselves: a take inside one reaches itself as possibly-taken.
+        // reach it. Divergent residuals remain exact per path in ARC. Loops
+        // poison themselves: a take inside one reaches itself as
+        // possibly-taken.
         read_kinds.clearRetainingCapacity();
+        field_restitutions.clearRetainingCapacity();
         for (candidate.reads.items) |read| {
-            const bit: u64 = if (encoding) |enc|
-                (if (enc.bitFor(read.variant_index, @intCast(read.field_idx))) |b| @as(u64, 1) << b else continue)
-            else blk: {
-                const b = @as(u64, 1) << @intCast(read.field_idx);
-                if (rc_mask & b == 0) continue;
-                break :blk b;
-            };
+            const bit = @as(u64, 1) << @intCast(read.field_idx);
+            if (rc_mask & bit == 0) continue;
+            const consuming = !solution.isBorrowed(read.target) or analysis.owned_demand[@intFromEnum(read.target)];
             try read_kinds.put(gpa, read.stmt, .{
                 .bit = bit,
-                .variant_index = read.variant_index,
-                .consuming = read.consuming,
+                .consuming = consuming,
+            });
+
+            // Initial closed field-place restitution capability. The field
+            // binding must have exactly one operand read, and that read must
+            // be one represented owned position of a direct call whose
+            // result is refined by the explicit alias/discriminant/switch
+            // continuation. This is a total syntactic/metadata boundary:
+            // unsupported continuations simply keep the ordinary schedule.
+            if (!consuming or operand_read_counts[@intFromEnum(read.target)] != 1) continue;
+            const call_stmt_index = direct_call_stmt_by_arg[@intFromEnum(read.target)];
+            const position = direct_call_position_by_arg[@intFromEnum(read.target)];
+            if (call_stmt_index == no_index or position == std.math.maxInt(u8)) continue;
+            const call_stmt_id: LIR.CFStmtId = @enumFromInt(call_stmt_index);
+            const call_stmt = store.getCFStmt(call_stmt_id);
+            if (call_stmt != .assign_call) continue;
+            const args = store.getLocalSpan(call_stmt.assign_call.args);
+            if (position >= GuardedList.borrowLen(args) or GuardedList.at(args, position) != read.target) continue;
+            const callee_sig = solution.sigOf(call_stmt.assign_call.proc);
+            if (callee_sig.paramMode(position) != .owned) continue;
+            const outcomes = solution.availableOutcomeSpanOf(call_stmt.assign_call.proc);
+            const refinement = (try findOutcomeRefinement(gpa, store, call_stmt.assign_call.target, call_stmt.assign_call.next, outcomes)) orelse continue;
+            const position_bit = arc_sig.paramBit(position).?;
+            var any_restitution = false;
+            for (solution.sigTable().outcomesOf(.{ .outcomes = outcomes })) |outcome| {
+                any_restitution = any_restitution or (outcome.restituted_params & position_bit) != 0;
+            }
+            if (!any_restitution) continue;
+            try field_restitutions.append(gpa, .{
+                .call_arg = .{ .stmt = call_stmt_id, .position = position },
+                .projection = read.stmt,
+                .switch_stmt = refinement,
+                .field_mask = bit,
+                .outcomes = outcomes,
             });
         }
         // A whole use behaves like a borrow of every field at once: no take
@@ -935,47 +1193,32 @@ pub fn compute(
         // is the intact container.
         for (candidate.whole_uses.items) |stmt| {
             const slot = try read_kinds.getOrPut(gpa, stmt);
-            slot.value_ptr.* = .{ .bit = ~@as(u64, 0), .variant_index = no_variant, .consuming = false };
+            if (slot.found_existing) {
+                slot.value_ptr.bit = ~@as(u64, 0);
+                slot.value_ptr.consuming = false;
+            } else {
+                slot.value_ptr.* = .{ .bit = ~@as(u64, 0), .consuming = false };
+            }
         }
 
         var candidate_mask: u64 = 0;
         for (candidate.reads.items) |read| {
-            if (!read.consuming) continue;
-            if (encoding) |enc| {
-                if (enc.bitFor(read.variant_index, @intCast(read.field_idx))) |b| {
-                    candidate_mask |= @as(u64, 1) << b;
-                }
-            } else {
+            if (!solution.isBorrowed(read.target) or analysis.owned_demand[@intFromEnum(read.target)]) {
                 candidate_mask |= @as(u64, 1) << @intCast(read.field_idx);
             }
         }
         candidate_mask &= rc_mask;
         if (candidate_mask == 0) continue;
 
-        // Emitting a union dismantle needs a discriminant scratch layout;
-        // one comes from any single-definition discriminant read of the
-        // container. Reads whose target is rebound cannot name the
-        // discriminant reliably and are skipped for switch partitioning too.
-        var disc_layout: ?layout_mod.Idx = null;
-        if (is_union) {
-            for (candidate.disc_targets.items) |disc_target| {
-                if (analysis.def_counts[@intFromEnum(disc_target)] != 1) continue;
-                disc_layout = store.getLocal(disc_target).layout_idx;
-                break;
-            }
-            if (disc_layout == null) continue :candidates;
-        }
-
         var poison: u64 = 0;
-        exit_musts.clearRetainingCapacity();
         join_bodies.clearRetainingCapacity();
         body_states.clearRetainingCapacity();
         flow_frames.clearRetainingCapacity();
-        try flow_frames.append(gpa, .{ .cursor = spine_start, .state = .{ .may = 0, .must = 0, .excluded = 0 } });
+        try flow_frames.append(gpa, .{ .cursor = spine_start, .state = .{ .may = 0, .must = 0 } });
         var steps: usize = 0;
         // Each statement is re-walked at most once per lattice step of its
-        // reaching state; 3 bits per tracked field bound the lattice height.
-        const step_limit = (store.cfStmtCount() + 1) * (3 * 64 + 1);
+        // reaching state; 2 bits per tracked field bound the lattice height.
+        const step_limit = (store.cfStmtCount() + 1) * (2 * 64 + 1);
         flow: while (flow_frames.pop()) |frame| {
             var cursor = frame.cursor;
             var state = frame.state;
@@ -987,14 +1230,7 @@ pub fn compute(
                 }
                 if (read_kinds.getPtr(cursor)) |kind| {
                     kind.visited = true;
-                    if (kind.variant_index != no_variant and
-                        (state.excluded >> @intCast(kind.variant_index)) & 1 != 0)
-                    {
-                        // A read of a variant the path has excluded is
-                        // statically walkable but never runs here; keeping
-                        // its field residual sidesteps the contradiction.
-                        poison |= kind.bit;
-                    } else if (kind.consuming) {
+                    if (kind.consuming) {
                         // A take where the field may already be gone would
                         // double-consume its unit on that path.
                         poison |= state.may & kind.bit;
@@ -1007,49 +1243,24 @@ pub fn compute(
                     }
                 }
                 switch (store.getCFStmt(cursor)) {
-                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
                     .join => |stmt| {
                         try join_bodies.put(gpa, @intFromEnum(stmt.id), stmt.body);
                         cursor = stmt.remainder;
                     },
                     .switch_stmt => |stmt| {
-                        // A switch on the container's own discriminant
-                        // partitions the paths by variant: each arm excludes
-                        // every read variant whose discriminant is some
-                        // other case, and the default excludes every read
-                        // variant whose discriminant is a listed case.
-                        var partitions = false;
-                        if (is_union) {
-                            for (candidate.disc_targets.items) |disc_target| {
-                                if (disc_target != stmt.cond) continue;
-                                if (analysis.def_counts[@intFromEnum(disc_target)] != 1) continue;
-                                partitions = true;
-                                break;
-                            }
-                        }
                         const heads = store.getCFSwitchBranches(stmt.branches);
                         for (0..GuardedList.borrowLen(heads)) |i| {
-                            const head = GuardedList.at(heads, i);
-                            var branch_state = state;
-                            if (partitions) {
-                                for (variant_cases.items) |case| {
-                                    if (case.tag_discriminant != head.value) {
-                                        branch_state.excluded |= @as(u64, 1) << @intCast(case.variant_index);
-                                    }
-                                }
-                            }
-                            try flow_frames.append(gpa, .{ .cursor = head.body, .state = branch_state });
+                            const branch = GuardedList.at(heads, i);
+                            const restored = restoredFieldMaskForBranch(solution, field_restitutions.items, cursor, branch.value);
+                            try flow_frames.append(gpa, .{
+                                .cursor = branch.body,
+                                .state = .{ .may = state.may & ~restored, .must = state.must & ~restored },
+                            });
                         }
-                        if (partitions) {
-                            for (variant_cases.items) |case| {
-                                for (0..GuardedList.borrowLen(heads)) |i| {
-                                    if (GuardedList.at(heads, i).value == case.tag_discriminant) {
-                                        state.excluded |= @as(u64, 1) << @intCast(case.variant_index);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
+                        const default_restored = restoredFieldMaskForDefault(solution, store, field_restitutions.items, cursor);
+                        state.may &= ~default_restored;
+                        state.must &= ~default_restored;
                         cursor = stmt.default_branch;
                     },
                     .jump => |stmt| {
@@ -1061,8 +1272,11 @@ pub fn compute(
                         // return would. Reads living past it are never
                         // visited, which keeps their fields residual.
                         const body = join_bodies.get(@intFromEnum(stmt.target)) orelse {
-                            poison |= state.may & ~state.must;
-                            try exit_musts.append(gpa, .{ .must = state.must, .excluded = state.excluded });
+                            // A back edge can execute this region again with
+                            // its taken fields absent. The current closed
+                            // analysis rejects those takes; ordinary retains
+                            // remain the sound schedule.
+                            poison |= state.may;
                             break :chain;
                         };
                         const slot = try body_states.getOrPut(gpa, body);
@@ -1092,11 +1306,11 @@ pub fn compute(
                         }
                         cursor = stmt.on_miss;
                     },
-                    // Every exit the flow reaches must agree, so the death
-                    // point's residual is the same however it was reached.
+                    .boxy_tag_match => |stmt| {
+                        try flow_frames.append(gpa, .{ .cursor = stmt.on_match, .state = state });
+                        cursor = stmt.on_miss;
+                    },
                     .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {
-                        poison |= state.may & ~state.must;
-                        try exit_musts.append(gpa, .{ .must = state.must, .excluded = state.excluded });
                         break :chain;
                     },
                 }
@@ -1110,102 +1324,65 @@ pub fn compute(
             if (!kind.visited) poison |= kind.bit;
         }
 
-        // One static residual serves every death point, so a field is taken
-        // only if every exit the flow reached agrees its take ran: an exit a
-        // taken field's take did not dominate would be under-released. An
-        // exit that excluded the field's variant owes nothing: the death
-        // point's variant dispatch never releases that variant's residual on
-        // paths that cannot carry it. Bits only ever leave the set, so this
-        // converges.
-        var taken_mask: u64 = candidate_mask & ~poison;
-        while (taken_mask != 0) {
-            var missing: u64 = 0;
-            for (exit_musts.items) |exit| {
-                var owed = taken_mask;
-                if (encoding) |enc| {
-                    for (variant_cases.items) |case| {
-                        if ((exit.excluded >> @intCast(case.variant_index)) & 1 != 0) {
-                            owed &= ~enc.variantMask(case.variant_index);
-                        }
-                    }
-                }
-                missing |= owed & ~exit.must;
-            }
-            if (missing == 0) break;
-            taken_mask &= ~missing;
-        }
+        const taken_mask: u64 = candidate_mask & ~poison;
         if (taken_mask == 0) continue;
 
-        // Accepted. Record the takes and the residual: every refcounted
-        // field that was not taken is released at the death point. A tag
-        // union's residual is per taken variant; the variants its reads
-        // never addressed keep the whole release behind the death point's
-        // variant dispatch.
-        var residual = std.ArrayList(ResidualField).empty;
-        defer residual.deinit(gpa);
-        var variant_plans = std.ArrayList(VariantPlan).empty;
-        defer variant_plans.deinit(gpa);
-        if (encoding) |enc| {
-            const info = layouts.getTagUnionInfo(local_layout);
-            for (variant_cases.items) |case| {
-                if (taken_mask & enc.variantMask(case.variant_index) == 0) continue;
-                residual.clearRetainingCapacity();
-                var enc_it = enc.iterate();
-                while (enc_it.next()) |field| {
-                    if (field.variant != case.variant_index) continue;
-                    if (taken_mask & (@as(u64, 1) << field.bit) != 0) continue;
-                    try residual.append(gpa, .{ .field_idx = field.field_idx, .layout_idx = field.field_layout });
-                }
-                const payload_idx = info.variants.get(case.variant_index).payload_layout;
-                try variant_plans.append(gpa, .{
-                    .variant_index = case.variant_index,
-                    .tag_discriminant = case.tag_discriminant,
-                    .payload_is_struct = layouts.getLayout(payload_idx).tag == .struct_,
-                    .payload_layout = payload_idx,
-                    .residual = try result.arena.allocator().dupe(ResidualField, residual.items),
-                });
-            }
-            residual.clearRetainingCapacity();
-        } else {
-            const info = layouts.getStructInfo(local_layout);
-            for (0..info.fields.len) |i| {
-                const field = info.fields.get(@intCast(i));
-                const bit = @as(u64, 1) << @intCast(field.index);
-                if (taken_mask & bit != 0) continue;
-                if (!layouts.layoutContainsRefcounted(layouts.getLayout(field.layout))) continue;
-                try residual.append(gpa, .{ .field_idx = field.index, .layout_idx = field.layout });
-            }
+        // Accepted. Record the exact committed field-place domain. ARC owns
+        // the path-sensitive residual mask and release normalization.
+        var fields = std.ArrayList(FieldPlace).empty;
+        defer fields.deinit(gpa);
+        for (0..info.fields.len) |i| {
+            const field = info.fields.get(@intCast(i));
+            if (!layouts.layoutContainsRefcounted(layouts.getLayout(field.layout))) continue;
+            try fields.append(gpa, .{ .field_idx = field.index, .layout_idx = field.layout });
         }
 
         // A parameter solved borrowed dismantles only in emissions whose
         // demand vector overrides it to owned; everything else applies to
         // every emission of its proc.
         const owned_only = solution.isBorrowed(local);
-        const stored_residual = try result.arena.allocator().dupe(ResidualField, residual.items);
+        const stored_fields = try result.arena.allocator().dupe(FieldPlace, fields.items);
         for (candidate.reads.items) |read| {
-            const bit: u64 = if (encoding) |enc|
-                (if (enc.bitFor(read.variant_index, @intCast(read.field_idx))) |b| @as(u64, 1) << b else continue)
-            else
-                @as(u64, 1) << @intCast(read.field_idx);
+            const bit = @as(u64, 1) << @intCast(read.field_idx);
             if (taken_mask & bit == 0) continue;
-            // Borrowing reads of a taken field stay plain borrows; only the
-            // consuming reads take the stored unit.
-            if (!read.consuming) continue;
+            if (solution.isBorrowed(read.target) and !analysis.owned_demand[@intFromEnum(read.target)]) continue;
+            const take = Take{ .root = local, .field_mask = bit };
             if (owned_only) {
-                try result.owned_only_takes.put(gpa, read.stmt, local);
+                try result.owned_only_takes.put(gpa, read.stmt, take);
+                const target_index = @intFromEnum(read.target);
+                const prior = result.owned_only_binding_roots[target_index];
+                if (prior != no_index and prior != @intFromEnum(local)) {
+                    dismantleInvariant("ARC owned-only field binding had conflicting parameter roots");
+                }
+                result.owned_only_binding_roots[target_index] = @intFromEnum(local);
             } else {
-                try result.takes.put(gpa, read.stmt, {});
+                try result.takes.put(gpa, read.stmt, take);
+                result.take_bindings[@intFromEnum(read.target)] = true;
             }
         }
-        const stored_container = Container{
-            .residual = stored_residual,
-            .variant_plans = try result.arena.allocator().dupe(VariantPlan, variant_plans.items),
-            .disc_layout = disc_layout,
-        };
+        for (field_restitutions.items) |receipt| {
+            if ((receipt.field_mask & taken_mask) == 0) continue;
+            const slot = try result.field_restitution_args.getOrPut(gpa, receipt.call_arg);
+            if (slot.found_existing) {
+                if (slot.value_ptr.place.root != local or
+                    slot.value_ptr.place.field_mask != receipt.field_mask or
+                    slot.value_ptr.projection != receipt.projection or
+                    slot.value_ptr.refinement != receipt.switch_stmt)
+                {
+                    dismantleInvariant("ARC field restitution call argument had conflicting committed places");
+                }
+            } else {
+                slot.value_ptr.* = .{
+                    .place = .{ .root = local, .field_mask = receipt.field_mask },
+                    .projection = receipt.projection,
+                    .refinement = receipt.switch_stmt,
+                };
+            }
+        }
         if (owned_only) {
-            try result.owned_only_containers.put(gpa, local, stored_container);
+            try result.owned_only_containers.put(gpa, local, .{ .fields = stored_fields, .full_mask = rc_mask });
         } else {
-            try result.containers.put(gpa, local, stored_container);
+            try result.containers.put(gpa, local, .{ .fields = stored_fields, .full_mask = rc_mask });
         }
     }
 
@@ -1220,6 +1397,248 @@ pub fn compute(
             if (result.owned_only_containers.contains(param)) {
                 result.owned_only_param_benefits[proc_index] |= bit;
             }
+        }
+    }
+
+    // A complete aggregate projection denotes the same ownership place as its
+    // root: it can transfer that root's unit without manufacturing a second
+    // one. Discover those places to a fixpoint over complete projections and
+    // transparent aliases. The graph is sparse, so its memory is proportional
+    // to relevant reads rather than the total local count.
+    const ambiguous_index = no_index - 1;
+    const ParamInfo = struct { proc: u32, position: u16 };
+    var param_info = std.AutoHashMapUnmanaged(u32, ParamInfo).empty;
+    defer param_info.deinit(gpa);
+
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const params = store.getLocalSpan(store.getProcSpec(proc_id).args);
+        for (0..GuardedList.borrowLen(params)) |position| {
+            const param = GuardedList.at(params, position);
+            const param_index = @intFromEnum(param);
+            if (position >= arc_sig.tracked_param_count) continue;
+            const param_slot = try param_info.getOrPut(gpa, param_index);
+            if (param_slot.found_existing) {
+                param_slot.value_ptr.* = .{ .proc = ambiguous_index, .position = 0 };
+                continue;
+            }
+            param_slot.value_ptr.* = .{ .proc = @intCast(proc_index), .position = @intCast(position) };
+        }
+    }
+
+    const PlaceOrigin = struct {
+        root: u32,
+        projected: bool,
+    };
+    const PlaceEdgeKind = union(enum) {
+        alias,
+        projection: u32,
+    };
+    const PlaceEdge = struct {
+        source: u32,
+        target: u32,
+        kind: PlaceEdgeKind,
+        next: u32,
+    };
+    var place_edges = std.ArrayList(PlaceEdge).empty;
+    defer place_edges.deinit(gpa);
+    var place_heads = std.AutoHashMapUnmanaged(u32, u32).empty;
+    defer place_heads.deinit(gpa);
+    for (0..store.cfStmtCount()) |stmt_index| {
+        if (!visited.isSet(stmt_index)) continue;
+        const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+        if (stmt != .assign_ref) continue;
+        const assign = stmt.assign_ref;
+        const source: LIR.LocalId, const kind: PlaceEdgeKind = switch (assign.op) {
+            .local => |local| blk: {
+                if (!solution.isBorrowed(assign.target)) continue;
+                if (solution.unitLocalOf(assign.target) != solution.unitLocalOf(local)) continue;
+                break :blk .{ local, .alias };
+            },
+            .field, .tag_payload, .tag_payload_struct => blk: {
+                const projection = encodeProjection(assign.op).?;
+                const projection_source = switch (assign.op) {
+                    .field => |op| op.source,
+                    .tag_payload => |op| op.source,
+                    .tag_payload_struct => |op| op.source,
+                    .local,
+                    .discriminant,
+                    .list_reinterpret,
+                    .nominal,
+                    => unreachable,
+                };
+                if (!projectionOwnsAllRc(store, layouts, projection_source, assign.target, projection)) continue;
+                break :blk .{ projection_source, .{ .projection = @intCast(stmt_index) } };
+            },
+            .discriminant, .list_reinterpret, .nominal => continue,
+        };
+        const source_index = @intFromEnum(source);
+        const previous_head = place_heads.get(source_index) orelse no_index;
+        try place_edges.append(gpa, .{
+            .source = source_index,
+            .target = @intFromEnum(assign.target),
+            .kind = kind,
+            .next = previous_head,
+        });
+        try place_heads.put(gpa, source_index, @intCast(place_edges.items.len - 1));
+    }
+
+    var places = std.AutoHashMapUnmanaged(u32, PlaceOrigin).empty;
+    defer places.deinit(gpa);
+    var place_work = std.ArrayList(u32).empty;
+    defer place_work.deinit(gpa);
+
+    // Seed only locals that can actually carry a unit: owned bindings, proc
+    // or join parameters (which can be owned in an emission), and borrowed
+    // pure aliases whose `unitLocalOf` resolves to one of those roots. A
+    // borrowed payload local is therefore reached only through its explicit
+    // complete-projection edge.
+    var source_it = place_heads.keyIterator();
+    while (source_it.next()) |source_ptr| {
+        const source: LIR.LocalId = @enumFromInt(source_ptr.*);
+        const root = solution.unitLocalOf(source);
+        const root_index = @intFromEnum(root);
+        const root_can_own = !solution.isBorrowed(root) or
+            is_param[root_index] or
+            solution.isJoinParam(root);
+        if (!root_can_own) continue;
+        try places.put(gpa, source_ptr.*, .{ .root = root_index, .projected = false });
+        try place_work.append(gpa, source_ptr.*);
+    }
+
+    while (place_work.pop()) |source_index| {
+        const source_origin = places.get(source_index) orelse continue;
+        if (source_origin.root == ambiguous_index) continue;
+        var edge_index = place_heads.get(source_index) orelse no_index;
+        while (edge_index != no_index) {
+            const edge = place_edges.items[edge_index];
+            const projected = source_origin.projected or edge.kind == .projection;
+            const target: LIR.LocalId = @enumFromInt(edge.target);
+            // A join parameter is a cell with one definition per incoming
+            // edge, not an SSA value. Its edge-specific transfer is handled
+            // by join solving; one global place origin would incorrectly
+            // apply one edge's source to every arrival.
+            if (solution.isJoinParam(target)) {
+                edge_index = edge.next;
+                continue;
+            }
+            if (edge.kind == .projection and !solution.isBorrowed(target)) {
+                edge_index = edge.next;
+                continue;
+            }
+            const slot = try places.getOrPut(gpa, edge.target);
+            if (!slot.found_existing) {
+                slot.value_ptr.* = .{ .root = source_origin.root, .projected = projected };
+                try place_work.append(gpa, edge.target);
+            } else if (slot.value_ptr.root != ambiguous_index and slot.value_ptr.root != source_origin.root) {
+                slot.value_ptr.* = .{ .root = ambiguous_index, .projected = false };
+                try place_work.append(gpa, edge.target);
+            } else if (slot.value_ptr.root == source_origin.root and projected and !slot.value_ptr.projected) {
+                slot.value_ptr.projected = true;
+                try place_work.append(gpa, edge.target);
+            }
+            edge_index = edge.next;
+        }
+    }
+
+    // Borrowed complete projections keep the root as their unit key. Owned
+    // projection targets instead receive a solve-time move opportunity at the
+    // read itself; if liveness says the root survives, ARC retains exactly as
+    // before and the target owns the retained unit independently.
+    var places_it = places.iterator();
+    while (places_it.next()) |entry| {
+        const origin = entry.value_ptr.*;
+        if (origin.root == ambiguous_index or !origin.projected) continue;
+        const local: LIR.LocalId = @enumFromInt(entry.key_ptr.*);
+        if (!solution.isBorrowed(local) or solution.isJoinParam(local)) continue;
+        try result.projection_units.put(gpa, local, @enumFromInt(origin.root));
+    }
+    for (place_edges.items) |edge| {
+        if (edge.kind != .projection) continue;
+        const target: LIR.LocalId = @enumFromInt(edge.target);
+        // Unlike a borrowed place origin, this move is attached to one exact
+        // incoming read. An owned join cell can therefore receive the unit on
+        // this edge without conflating its other definitions.
+        if (solution.isBorrowed(target)) continue;
+        const origin = places.get(edge.source) orelse continue;
+        if (origin.root == ambiguous_index) continue;
+        try result.complete_takes.put(gpa, @enumFromInt(edge.kind.projection), @enumFromInt(origin.root));
+
+        // A complete projection can move its root's exact unit in an owned
+        // parameter emission. Publish that mechanical capability to variant
+        // admission just like an ordinary field dismantle; the path solver
+        // remains responsible for proving whether the move is legal at this
+        // particular read (including outcome-conditioned restitution).
+        const source_info = param_info.get(origin.root) orelse continue;
+        if (source_info.proc == ambiguous_index) continue;
+        const source_proc: LIR.LirProcSpecId = @enumFromInt(source_info.proc);
+        if (solution.isPinnedProc(source_proc)) continue;
+        result.owned_only_param_benefits[source_info.proc] |= arc_sig.paramBit(source_info.position).?;
+    }
+
+    // A leaf procedure's ordinary field dismantle makes its parameter
+    // beneficial. Direct calls propagate that benefit through complete places
+    // and plain forwarding to a fixpoint, admitting owned parameter variants
+    // all the way up a derived-encoder wrapper chain.
+    const BenefitEdge = struct {
+        source_key: u32,
+        next: u32,
+    };
+    var benefit_edges = std.ArrayList(BenefitEdge).empty;
+    defer benefit_edges.deinit(gpa);
+    var benefit_heads = std.AutoHashMapUnmanaged(u32, u32).empty;
+    defer benefit_heads.deinit(gpa);
+    for (0..store.cfStmtCount()) |stmt_index| {
+        if (!visited.isSet(stmt_index)) continue;
+        const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+        if (stmt != .assign_call) continue;
+        const call = stmt.assign_call;
+        const args = store.getLocalSpan(call.args);
+        for (0..GuardedList.borrowLen(args)) |position| {
+            if (position >= arc_sig.tracked_param_count) continue;
+            const arg = GuardedList.at(args, position);
+            const arg_index = @intFromEnum(arg);
+            const place_origin = places.get(arg_index);
+            const root_index: u32 = if (place_origin) |origin| origin.root else @intFromEnum(solution.unitLocalOf(arg));
+            if (root_index == no_index or root_index == ambiguous_index) continue;
+            const source_info = param_info.get(root_index) orelse continue;
+            if (source_info.proc == ambiguous_index) continue;
+            const source_proc: LIR.LirProcSpecId = @enumFromInt(source_info.proc);
+            if (solution.isPinnedProc(source_proc)) continue;
+            const target_key: u32 = @intCast(@intFromEnum(call.proc) * arc_sig.tracked_param_count + position);
+            const previous_head = benefit_heads.get(target_key) orelse no_index;
+            try benefit_edges.append(gpa, .{
+                .source_key = @intCast(source_info.proc * arc_sig.tracked_param_count + source_info.position),
+                .next = previous_head,
+            });
+            try benefit_heads.put(gpa, target_key, @intCast(benefit_edges.items.len - 1));
+        }
+    }
+
+    // Propagate each newly beneficial parameter exactly once. A wrapper chain
+    // is therefore linear in its calls rather than one full call-site scan per
+    // wrapper depth.
+    var benefit_work = std.ArrayList(u32).empty;
+    defer benefit_work.deinit(gpa);
+    for (result.owned_only_param_benefits, 0..) |mask, proc_index| {
+        for (0..arc_sig.tracked_param_count) |position| {
+            const bit = arc_sig.paramBit(position).?;
+            if ((mask & bit) == 0) continue;
+            try benefit_work.append(gpa, @intCast(proc_index * arc_sig.tracked_param_count + position));
+        }
+    }
+    while (benefit_work.pop()) |target_key| {
+        var edge_index = benefit_heads.get(target_key) orelse no_index;
+        while (edge_index != no_index) {
+            const edge = benefit_edges.items[edge_index];
+            const source_proc_index = edge.source_key / arc_sig.tracked_param_count;
+            const source_position = edge.source_key % arc_sig.tracked_param_count;
+            const source_bit = arc_sig.paramBit(source_position).?;
+            if ((result.owned_only_param_benefits[source_proc_index] & source_bit) == 0) {
+                result.owned_only_param_benefits[source_proc_index] |= source_bit;
+                try benefit_work.append(gpa, edge.source_key);
+            }
+            edge_index = edge.next;
         }
     }
 

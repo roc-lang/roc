@@ -339,14 +339,21 @@ fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) Fx
     };
 }
 
-fn expectProvidedBoxedCallableDrop(opt_flag: []const u8, output_basename: []const u8) FxPlatformTestError!void {
+/// Run one self-test mode of the provided-callable host and require it to
+/// report `<self_test_name> ok` without leaking or panicking.
+fn expectProvidedCallableHostSelfTest(
+    opt_flag: []const u8,
+    output_basename: []const u8,
+    self_test_flag: []const u8,
+    self_test_name: []const u8,
+) FxPlatformTestError!void {
     const allocator = testing.allocator;
     const run_result = try runNativeBackendHostSelfTest(
         allocator,
         "test/provided-callable-host/app.roc",
         opt_flag,
         output_basename,
-        "--run-provided-boxed-callable-drop",
+        self_test_flag,
     );
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
@@ -354,23 +361,34 @@ fn expectProvidedBoxedCallableDrop(opt_flag: []const u8, output_basename: []cons
     switch (run_result.term) {
         .exited => |code| {
             if (code != 0) {
-                std.debug.print("provided boxed callable drop test exited with code {}\n", .{code});
+                std.debug.print("{s} test exited with code {}\n", .{ self_test_name, code });
                 std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
                 return error.UnexpectedExitCode;
             }
         },
         .signal, .stopped, .unknown => {
-            std.debug.print("provided boxed callable drop test terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("{s} test terminated abnormally: {}\n", .{ self_test_name, run_result.term });
             std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.UnexpectedTermination;
         },
     }
 
-    try testing.expect(std.mem.find(u8, run_result.stderr, "provided boxed callable drop ok") != null);
+    const success = try std.fmt.allocPrint(allocator, "{s} ok", .{self_test_name});
+    defer allocator.free(success);
+    try testing.expect(std.mem.find(u8, run_result.stderr, success) != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "[Roc Memory Info]") == null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "panic") == null);
+}
+
+fn expectProvidedBoxedCallableDrop(opt_flag: []const u8, output_basename: []const u8) FxPlatformTestError!void {
+    try expectProvidedCallableHostSelfTest(
+        opt_flag,
+        output_basename,
+        "--run-provided-boxed-callable-drop",
+        "provided boxed callable drop",
+    );
 }
 
 test "fx platform boxed erased callable host boundary (interpreter)" {
@@ -385,12 +403,32 @@ test "fx platform boxed erased callable host boundary (speed backend)" {
     try runIoSpecTest("--opt=speed", fx_test_specs.host_boxed_fn_boundary_test);
 }
 
+/// Repro for https://github.com/roc-lang/roc/issues/10770: one boxed callable
+/// stored in two fields of a provided root's result is one heap allocation, so
+/// the host must receive the same erased-callable pointer for both fields.
+fn expectProvidedBoxedCallableIdentity(opt_flag: []const u8, output_basename: []const u8) FxPlatformTestError!void {
+    try expectProvidedCallableHostSelfTest(
+        opt_flag,
+        output_basename,
+        "--run-provided-boxed-callable-identity",
+        "provided boxed callable identity",
+    );
+}
+
 test "fx platform provided root drops boxed callable (dev backend)" {
     try expectProvidedBoxedCallableDrop("--opt=dev", "fx_provided_boxed_callable_drop_dev");
 }
 
 test "fx platform provided root drops boxed callable (speed backend)" {
     try expectProvidedBoxedCallableDrop("--opt=speed", "fx_provided_boxed_callable_drop_speed");
+}
+
+test "fx platform provided root preserves boxed callable identity (dev backend)" {
+    try expectProvidedBoxedCallableIdentity("--opt=dev", "fx_provided_boxed_callable_identity_dev");
+}
+
+test "fx platform provided root preserves boxed callable identity (speed backend)" {
+    try expectProvidedBoxedCallableIdentity("--opt=speed", "fx_provided_boxed_callable_identity_speed");
 }
 
 test "fx platform direct run preserves RocOps after F32.abs before list allocation" {
@@ -645,11 +683,11 @@ test "fx platform check unused state var reports correct errors" {
 
     var line_iter = std.mem.splitScalar(u8, stderr, '\n');
     while (line_iter.next()) |line| {
-        if (std.mem.find(u8, line, "UNUSED VARIABLE") != null) {
+        if (std.mem.find(u8, line, "unused variable") != null) {
             unused_variable_count += 1;
-        } else if (std.mem.find(u8, line, "MODULE NOT FOUND") != null) {
+        } else if (std.mem.find(u8, line, "module not found") != null) {
             module_not_found_count += 1;
-        } else if (std.mem.find(u8, line, "EXPOSED BUT NOT DEFINED") != null) {
+        } else if (std.mem.find(u8, line, "exposed but not defined") != null) {
             exposed_but_not_defined_count += 1;
         }
     }
@@ -705,7 +743,7 @@ test "fx platform checked directly finds sibling modules" {
 
     var line_iter = std.mem.splitScalar(u8, stderr, '\n');
     while (line_iter.next()) |line| {
-        if (std.mem.find(u8, line, "MODULE NOT FOUND") != null) {
+        if (std.mem.find(u8, line, "module not found") != null) {
             module_not_found_count += 1;
         }
     }
@@ -745,7 +783,7 @@ test "custom platform and package qualifiers work in default roc command" {
     defer allocator.free(run_result.stderr);
 
     // Check for name-not-in-scope errors which would indicate qualifier mismatch
-    if (std.mem.find(u8, run_result.stderr, "NAME NOT IN SCOPE") != null) {
+    if (std.mem.find(u8, run_result.stderr, "name not in scope") != null) {
         std.debug.print("\n❌ Custom qualifiers not recognized\n", .{});
         std.debug.print("This indicates the qualifiers were not correctly extracted from the app header.\n", .{});
         std.debug.print("\n========== FULL OUTPUT ==========\n", .{});
@@ -798,7 +836,7 @@ test "fx platform string interpolation type mismatch (interpreter)" {
 
     // Verify the error output contains proper diagnostic info
     // Should show TYPE MISMATCH error with the type information
-    try testing.expect(std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "type mismatch") != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "U8") != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "Str") != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "1 error") != null);
@@ -822,7 +860,7 @@ test "fx platform string interpolation type mismatch (dev backend)" {
 
     // Verify the error output contains proper diagnostic info
     // Should show TYPE MISMATCH error with the type information
-    try testing.expect(std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "type mismatch") != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "U8") != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "Str") != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "1 error") != null);
@@ -1034,7 +1072,7 @@ test "fx platform test_type_mismatch" {
         .exited => |code| {
             if (code != 0) {
                 // Expected to fail - check for type mismatch error message
-                try testing.expect(std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null);
+                try testing.expect(std.mem.find(u8, run_result.stderr, "type mismatch") != null);
             } else {
                 std.debug.print("Expected compilation error but succeeded\n", .{});
                 return error.UnexpectedSuccess;
@@ -1044,7 +1082,7 @@ test "fx platform test_type_mismatch" {
             // Abnormal termination should also indicate error
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            try testing.expect(std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null);
+            try testing.expect(std.mem.find(u8, run_result.stderr, "type mismatch") != null);
         },
     }
 }
@@ -1059,7 +1097,7 @@ test "fx platform inspect_wrong_sig reports type mismatch" {
     // The file declares a BadColor type whose to_inspect returns I64 instead of Str,
     // which is rejected by the type checker. We only need a TYPE MISMATCH report;
     // exact exit semantics aren't asserted because the dev path may bail differently.
-    try testing.expect(std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "type mismatch") != null);
 }
 
 test "fx platform issue8433" {
@@ -1075,7 +1113,7 @@ test "fx platform issue8433" {
         .exited => |code| {
             if (code != 0) {
                 // Expected to fail - check for type mismatch error message
-                try testing.expect(std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null);
+                try testing.expect(std.mem.find(u8, run_result.stderr, "type mismatch") != null);
             } else {
                 std.debug.print("Expected compilation error but succeeded\n", .{});
                 return error.UnexpectedSuccess;
@@ -1085,7 +1123,7 @@ test "fx platform issue8433" {
             // Abnormal termination should also indicate error
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            try testing.expect(std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null);
+            try testing.expect(std.mem.find(u8, run_result.stderr, "type mismatch") != null);
         },
     }
 }
@@ -1098,7 +1136,7 @@ test "run executes until it reaches a checked error by default" {
     defer allocator.free(run_result.stderr);
 
     try util.checkFailure(run_result);
-    try testing.expect(std.mem.find(u8, run_result.stderr, "NAME NOT IN SCOPE") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "name not in scope") != null);
     try testing.expect(std.mem.find(u8, run_result.stdout, "Hello, World!") != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "Roc crashed:") != null);
 }
@@ -1115,7 +1153,7 @@ test "run aborts on parse errors by default" {
     try util.checkFailure(run_result);
 
     // Should show the errors
-    try testing.expect(std.mem.find(u8, run_result.stderr, "UNEXPECTED STATEMENT") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "unexpected statement") != null);
 }
 
 test "run executes until it reaches a checked error in an explicit backend" {
@@ -1132,7 +1170,7 @@ test "run executes until it reaches a checked error in an explicit backend" {
     defer allocator.free(run_result.stderr);
 
     // Should still show the errors
-    try testing.expect(std.mem.find(u8, run_result.stderr, "NAME NOT IN SCOPE") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "name not in scope") != null);
 
     try testing.expect(std.mem.find(u8, run_result.stdout, "Hello, World!") != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "Roc crashed:") != null);
@@ -1153,7 +1191,7 @@ test "run handles a checked type mismatch in function args" {
     defer allocator.free(run_result.stderr);
 
     // Should report the type mismatch
-    try testing.expect(std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "type mismatch") != null);
 
     // Must not crash with SIGABRT—the process should exit cleanly (or with
     // a runtime error exit code), not be killed by a signal.
@@ -1182,7 +1220,7 @@ test "run allows warnings without blocking execution" {
     try util.checkFailure(run_result);
 
     // Should show the warning
-    try testing.expect(std.mem.find(u8, run_result.stderr, "UNUSED VARIABLE") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "unused variable") != null);
 
     // Should produce output (runs successfully)
     try testing.expect(std.mem.find(u8, run_result.stdout, "Hello, World!") != null);
@@ -1196,7 +1234,7 @@ test "fx platform check warns for adjacent string pattern captures" {
     defer allocator.free(run_result.stderr);
 
     try util.checkFailure(run_result);
-    try testing.expect(std.mem.find(u8, run_result.stderr, "UNREACHABLE PATTERN CAPTURE") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "unreachable pattern capture") != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "0 error") != null);
 }
 
@@ -1208,7 +1246,7 @@ test "fx platform run warns for adjacent string pattern captures without crashin
     defer allocator.free(run_result.stderr);
 
     try util.checkFailure(run_result);
-    try testing.expect(std.mem.find(u8, run_result.stderr, "UNREACHABLE PATTERN CAPTURE") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "unreachable pattern capture") != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "panic") == null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "Segmentation fault") == null);
 }
@@ -1524,7 +1562,7 @@ test "fx platform invalid nested where-clause static dispatch fails in check" {
         .stderr = check_result.stderr,
         .term = check_result.term,
     });
-    try testing.expect(std.mem.find(u8, check_result.stderr, "TYPE MISMATCH") != null);
+    try testing.expect(std.mem.find(u8, check_result.stderr, "type mismatch") != null);
     try testing.expect(std.mem.find(u8, check_result.stderr, "postcheck invariant violated") == null);
 }
 
@@ -1631,7 +1669,7 @@ test "fx platform issue8826 app vs platform type mismatch" {
         .exited => |code| {
             if (code != 0) {
                 // Expected to fail - check for type mismatch error message
-                try testing.expect(std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null);
+                try testing.expect(std.mem.find(u8, run_result.stderr, "type mismatch") != null);
             } else {
                 std.debug.print("Expected type mismatch error but roc check succeeded\n", .{});
                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -1671,9 +1709,9 @@ test "fx platform issue8826 large file type checking" {
     // The file has mutually recursive type aliases, type mismatches, etc.
     // On Windows, we may hit OOM due to shared memory limits, which should
     // still print an error message (just not the type error message).
-    const has_type_error = std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null or
-        std.mem.find(u8, run_result.stderr, "MUTUALLY RECURSIVE TYPE ALIASES") != null or
-        std.mem.find(u8, run_result.stderr, "UNDECLARED TYPE") != null;
+    const has_type_error = std.mem.find(u8, run_result.stderr, "type mismatch") != null or
+        std.mem.find(u8, run_result.stderr, "mutually recursive type aliases") != null or
+        std.mem.find(u8, run_result.stderr, "undeclared type") != null;
     const has_oom_error = std.mem.find(u8, run_result.stderr, "Out of memory") != null;
 
     if (!has_type_error and !has_oom_error) {
@@ -1704,7 +1742,7 @@ test "fx platform issue8943 error message memory corruption" {
     try util.checkFailure(run_result);
 
     // Check that the TYPE MISMATCH error is present
-    const has_try_type_error = std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null;
+    const has_try_type_error = std.mem.find(u8, run_result.stderr, "type mismatch") != null;
     if (!has_try_type_error) {
         std.debug.print("Expected 'TYPE MISMATCH' error but got:\n", .{});
         std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -1713,7 +1751,7 @@ test "fx platform issue8943 error message memory corruption" {
 
     // The invalid top-level `?` must not escape checking and become a
     // post-check compile-time crash.
-    const has_comptime_crash = std.mem.find(u8, run_result.stderr, "COMPILE TIME CRASH") != null;
+    const has_comptime_crash = std.mem.find(u8, run_result.stderr, "compile time crash") != null;
     if (has_comptime_crash) {
         std.debug.print("Unexpected 'COMPTIME CRASH' after checking reported the invalid `?` expression:\n", .{});
         std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -1788,7 +1826,7 @@ test "fx platform issue9118 try operator on tuple in type method (interpreter)" 
                 return error.UnexpectedSuccess;
             }
             // Expected to fail - check for type mismatch error message
-            const has_type_error = std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null;
+            const has_type_error = std.mem.find(u8, run_result.stderr, "type mismatch") != null;
             if (!has_type_error) {
                 std.debug.print("Expected 'TYPE MISMATCH' error but got:\n", .{});
                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -1840,7 +1878,7 @@ test "fx platform issue9118 try operator on tuple in type method (dev backend)" 
                 return error.UnexpectedSuccess;
             }
             // Expected to fail - check for type mismatch error message
-            const has_type_error = std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null;
+            const has_type_error = std.mem.find(u8, run_result.stderr, "type mismatch") != null;
             if (!has_type_error) {
                 std.debug.print("Expected 'TYPE MISMATCH' error but got:\n", .{});
                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
@@ -2017,7 +2055,7 @@ test "imports reject package-root escape and physical source aliases" {
     defer allocator.free(private_result.stdout);
     defer allocator.free(private_result.stderr);
     try util.checkFailure(private_result);
-    try testing.expect(std.mem.find(u8, private_result.stderr, "PACKAGE MODULE IS PRIVATE") != null);
+    try testing.expect(std.mem.find(u8, private_result.stderr, "package module is private") != null);
 
     var escape_tmp = testing.tmpDir(.{});
     defer escape_tmp.cleanup();
@@ -2038,7 +2076,7 @@ test "imports reject package-root escape and physical source aliases" {
     defer allocator.free(escape_result.stdout);
     defer allocator.free(escape_result.stderr);
     try util.checkFailure(escape_result);
-    try testing.expect(std.mem.find(u8, escape_result.stderr, "IMPORT ESCAPES PACKAGE ROOT") != null);
+    try testing.expect(std.mem.find(u8, escape_result.stderr, "import escapes package root") != null);
 
     var case_tmp = testing.tmpDir(.{});
     defer case_tmp.cleanup();
@@ -2116,7 +2154,7 @@ test "imports reject package-root escape and physical source aliases" {
     defer allocator.free(alias_result.stdout);
     defer allocator.free(alias_result.stderr);
     try util.checkFailure(alias_result);
-    try testing.expect(std.mem.find(u8, alias_result.stderr, "IMPORT SOURCE ALIAS") != null);
+    try testing.expect(std.mem.find(u8, alias_result.stderr, "import source alias") != null);
     try testing.expect(std.mem.find(u8, alias_result.stderr, "same source file") != null);
 
     var root_alias_tmp = testing.tmpDir(.{});
@@ -2138,5 +2176,5 @@ test "imports reject package-root escape and physical source aliases" {
     defer allocator.free(root_alias_result.stdout);
     defer allocator.free(root_alias_result.stderr);
     try util.checkFailure(root_alias_result);
-    try testing.expect(std.mem.find(u8, root_alias_result.stderr, "IMPORT SOURCE ALIAS") != null);
+    try testing.expect(std.mem.find(u8, root_alias_result.stderr, "import source alias") != null);
 }

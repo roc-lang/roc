@@ -89,320 +89,259 @@ UNDECLARED TYPE - can_import_exposing_types.md:47:34:47:40
 UNDECLARED TYPE - can_import_exposing_types.md:47:48:47:56
 UNDECLARED TYPE - can_import_exposing_types.md:47:58:47:63
 NAME NOT IN SCOPE - can_import_exposing_types.md:50:33:50:44
+TYPE MISMATCH - can_import_exposing_types.md:50:22:50:74
 # PROBLEMS
+── ● duplicate definition ───────────────────── can_import_exposing_types.md:1:1
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  import json.Json exposing [Value, Error, Config]                          │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                          │
- └────────────────────────────────────────── can_import_exposing_types.md:1:1 ┘
+The name Json is being redeclared here:
 
-    In this scope, `Json` was already defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    1 │  import json.Json exposing [Value, Error, Config]                     │
-      │  ‾                                                                    │
-      └───────────────────────────────────── can_import_exposing_types.md:1:1 ┘
+import json.Json exposing [Value, Error, Config]
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+In this scope, Json was already defined in can_import_exposing_types.md:1:1:
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Value` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  parseJson : Str -> Try(Value, Error)                                      │
- │                         ‾‾‾‾‾                                              │
- └───────────────────────────────────────── can_import_exposing_types.md:6:24 ┘
+import json.Json exposing [Value, Error, Config]
+^
 
+── ✗ undeclared type ───────────────────────── can_import_exposing_types.md:6:24
 
+The type Value is not declared in this scope.
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Error` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  parseJson : Str -> Try(Value, Error)                                      │
- │                                ‾‾‾‾‾                                       │
- └───────────────────────────────────────── can_import_exposing_types.md:6:31 ┘
+parseJson : Str -> Try(Value, Error)
+                       ^^^^^
 
+── ✗ undeclared type ───────────────────────── can_import_exposing_types.md:6:31
 
+The type Error is not declared in this scope.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `parse` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  parseJson = |input| Json.parse(input)                                     │
- │                      ‾‾‾‾‾‾‾‾‾‾                                            │
- └───────────────────────────────────────── can_import_exposing_types.md:7:21 ┘
+parseJson : Str -> Try(Value, Error)
+                              ^^^^^
 
-    Is it misspelled, or is there an import missing?
+── ✗ name not in scope ─────────────────────── can_import_exposing_types.md:7:21
 
+Nothing is named parse in this scope.
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Request` is not declared in this scope. ───────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  handleRequest : Request -> Response                                       │
- │                  ‾‾‾‾‾‾‾                                                   │
- └──────────────────────────────────────── can_import_exposing_types.md:10:17 ┘
+parseJson = |input| Json.parse(input)
+                    ^^^^^^^^^^
 
+Is it misspelled, or is there an import missing?
 
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:10:17
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Response` is not declared in this scope. ──────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  handleRequest : Request -> Response                                       │
- │                             ‾‾‾‾‾‾‾‾                                       │
- └──────────────────────────────────────── can_import_exposing_types.md:10:28 ┘
+The type Request is not declared in this scope.
 
+handleRequest : Request -> Response
+                ^^^^^^^
 
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:10:28
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `decode` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  result = Json.decode(req.body)                                            │
- │           ‾‾‾‾‾‾‾‾‾‾‾                                                      │
- └──────────────────────────────────────── can_import_exposing_types.md:12:14 ┘
+The type Response is not declared in this scope.
 
-    Is it misspelled, or is there an import missing?
+handleRequest : Request -> Response
+                           ^^^^^^^^
 
+── ✗ name not in scope ────────────────────── can_import_exposing_types.md:12:14
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `ok` in this scope. ──────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  Ok(value) => Http.ok(value)                                               │
- │               ‾‾‾‾‾‾‾                                                      │
- └──────────────────────────────────────── can_import_exposing_types.md:14:22 ┘
+Nothing is named decode in this scope.
 
-    Is it misspelled, or is there an import missing?
+result = Json.decode(req.body)
+         ^^^^^^^^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `badRequest` in this scope. ──────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  Err(error) => Http.badRequest(error)                                      │
- │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
- └──────────────────────────────────────── can_import_exposing_types.md:15:23 ┘
+── ✗ name not in scope ────────────────────── can_import_exposing_types.md:14:22
 
-    Is it misspelled, or is there an import missing?
+Nothing is named ok in this scope.
 
+Ok(value) => Http.ok(value)
+             ^^^^^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Config` is not declared in this scope. ────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  processData : Config, List(Value) -> Try(List(Value), Error)              │
- │                ‾‾‾‾‾‾                                                      │
- └──────────────────────────────────────── can_import_exposing_types.md:20:15 ┘
+Is it misspelled, or is there an import missing?
 
+── ✗ name not in scope ────────────────────── can_import_exposing_types.md:15:23
 
+Nothing is named badRequest in this scope.
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Value` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  processData : Config, List(Value) -> Try(List(Value), Error)              │
- │                             ‾‾‾‾‾                                          │
- └──────────────────────────────────────── can_import_exposing_types.md:20:28 ┘
+Err(error) => Http.badRequest(error)
+              ^^^^^^^^^^^^^^^
 
+Is it misspelled, or is there an import missing?
 
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:20:15
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Value` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  processData : Config, List(Value) -> Try(List(Value), Error)              │
- │                                                ‾‾‾‾‾                       │
- └──────────────────────────────────────── can_import_exposing_types.md:20:47 ┘
+The type Config is not declared in this scope.
 
+processData : Config, List(Value) -> Try(List(Value), Error)
+              ^^^^^^
 
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:20:28
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Error` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  processData : Config, List(Value) -> Try(List(Value), Error)              │
- │                                                        ‾‾‾‾‾               │
- └──────────────────────────────────────── can_import_exposing_types.md:20:55 ┘
+The type Value is not declared in this scope.
 
+processData : Config, List(Value) -> Try(List(Value), Error)
+                           ^^^^^
 
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:20:47
 
-┌────────────────┐
-│ DOES NOT EXIST ├─ `List.mapTry` does not exist. ────────────────────────────┐
-└┬───────────────┘                                                            │
- │                                                                            │
- │  List.mapTry(                                                              │
- │  ‾‾‾‾‾‾‾‾‾‾‾                                                               │
- └───────────────────────────────────────── can_import_exposing_types.md:22:5 ┘
+The type Value is not declared in this scope.
 
-    `List` is in scope, but it has no associated `mapTry`.
+processData : Config, List(Value) -> Try(List(Value), Error)
+                                              ^^^^^
 
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:20:55
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `validateWith` in this scope. ────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  |v| Json.validateWith(config, v),                                         │
- │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
- └──────────────────────────────────────── can_import_exposing_types.md:24:13 ┘
+The type Error is not declared in this scope.
 
-    Is it misspelled, or is there an import missing?
+processData : Config, List(Value) -> Try(List(Value), Error)
+                                                      ^^^^^
 
+── ✗ does not exist ────────────────────────── can_import_exposing_types.md:22:5
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Config` is not declared in this scope. ────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  jsonConfig : Config,                                                      │
- │               ‾‾‾‾‾‾                                                       │
- └──────────────────────────────────────── can_import_exposing_types.md:29:18 ┘
+List.mapTry does not exist.
 
+List.mapTry(
+^^^^^^^^^^^
 
+List is in scope, but it has no associated mapTry.
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Status` is not declared in this scope. ────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  httpStatus : Status,                                                      │
- │               ‾‾‾‾‾‾                                                       │
- └──────────────────────────────────────── can_import_exposing_types.md:30:18 ┘
+── ✗ name not in scope ────────────────────── can_import_exposing_types.md:24:13
 
+Nothing is named validateWith in this scope.
 
+|v| Json.validateWith(config, v),
+    ^^^^^^^^^^^^^^^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Response` is not declared in this scope. ──────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  defaultResponse : Response,                                               │
- │                    ‾‾‾‾‾‾‾‾                                                │
- └──────────────────────────────────────── can_import_exposing_types.md:31:23 ┘
+Is it misspelled, or is there an import missing?
 
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:29:18
 
+The type Config is not declared in this scope.
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Config` is not declared in this scope. ────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  createClient : Config -> Http.Client                                      │
- │                 ‾‾‾‾‾‾                                                     │
- └──────────────────────────────────────── can_import_exposing_types.md:35:16 ┘
+jsonConfig : Config,
+             ^^^^^^
 
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:30:18
 
+The type Status is not declared in this scope.
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `Client` type is declared to be in ────────────────┐
-└┬─────────────────┘  `http.Client`, which does not exist.                    │
- │                                                                            │
- │  createClient : Config -> Http.Client                                      │
- │                               ‾‾‾‾‾‾‾                                      │
- └──────────────────────────────────────── can_import_exposing_types.md:35:30 ┘
+httpStatus : Status,
+             ^^^^^^
 
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:31:23
 
+The type Response is not declared in this scope.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `clientWith` in this scope. ──────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  createClient = |config| Http.clientWith(config)                           │
- │                          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                   │
- └──────────────────────────────────────── can_import_exposing_types.md:36:25 ┘
+defaultResponse : Response,
+                  ^^^^^^^^
 
-    Is it misspelled, or is there an import missing?
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:35:16
 
+The type Config is not declared in this scope.
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Response` is not declared in this scope. ──────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  handleResponse : Response -> Str                                          │
- │                   ‾‾‾‾‾‾‾‾                                                 │
- └──────────────────────────────────────── can_import_exposing_types.md:39:18 ┘
+createClient : Config -> Http.Client
+               ^^^^^^
 
+── ✗ mod not found ─────────────────────── can_import_exposing_types.md:35:30
 
+This Client type is declared to be in http.Client, which does not exist.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `statusToString` in this scope. ──────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  Ok(status) => Http.statusToString(status)                                 │
- │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
- └──────────────────────────────────────── can_import_exposing_types.md:42:23 ┘
+createClient : Config -> Http.Client
+                             ^^^^^^^
 
-    Is it misspelled, or is there an import missing?
+── ✗ name not in scope ────────────────────── can_import_exposing_types.md:36:25
 
+Nothing is named clientWith in this scope.
 
-┌────────────────┐
-│ DOES NOT EXIST ├─ `Error.toString` does not exist. ─────────────────────────┐
-└┬───────────────┘                                                            │
- │                                                                            │
- │  Err(error) => Error.toString(error)                                       │
- │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
- └──────────────────────────────────────── can_import_exposing_types.md:43:23 ┘
+createClient = |config| Http.clientWith(config)
+                        ^^^^^^^^^^^^^^^
 
+Is it misspelled, or is there an import missing?
 
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:39:18
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Value` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  combineTrys : Try(Value, Error), Status -> Try(Response, Error)           │
- │                    ‾‾‾‾‾                                                   │
- └──────────────────────────────────────── can_import_exposing_types.md:47:19 ┘
+The type Response is not declared in this scope.
 
+handleResponse : Response -> Str
+                 ^^^^^^^^
 
+── ✗ name not in scope ────────────────────── can_import_exposing_types.md:42:23
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Error` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  combineTrys : Try(Value, Error), Status -> Try(Response, Error)           │
- │                           ‾‾‾‾‾                                            │
- └──────────────────────────────────────── can_import_exposing_types.md:47:26 ┘
+Nothing is named statusToString in this scope.
 
+Ok(status) => Http.statusToString(status)
+              ^^^^^^^^^^^^^^^^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Status` is not declared in this scope. ────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  combineTrys : Try(Value, Error), Status -> Try(Response, Error)           │
- │                                   ‾‾‾‾‾‾                                   │
- └──────────────────────────────────────── can_import_exposing_types.md:47:34 ┘
+── ✗ does not exist ───────────────────────── can_import_exposing_types.md:43:23
 
+Error.toString does not exist.
 
+Err(error) => Error.toString(error)
+              ^^^^^^^^^^^^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Response` is not declared in this scope. ──────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  combineTrys : Try(Value, Error), Status -> Try(Response, Error)           │
- │                                                 ‾‾‾‾‾‾‾‾                   │
- └──────────────────────────────────────── can_import_exposing_types.md:47:48 ┘
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:47:19
 
+The type Value is not declared in this scope.
 
+combineTrys : Try(Value, Error), Status -> Try(Response, Error)
+                  ^^^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Error` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  combineTrys : Try(Value, Error), Status -> Try(Response, Error)           │
- │                                                           ‾‾‾‾‾            │
- └──────────────────────────────────────── can_import_exposing_types.md:47:58 ┘
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:47:26
 
+The type Error is not declared in this scope.
 
+combineTrys : Try(Value, Error), Status -> Try(Response, Error)
+                         ^^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `to_str` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })         │
- │                          ‾‾‾‾‾‾‾‾‾‾‾                                       │
- └──────────────────────────────────────── can_import_exposing_types.md:50:33 ┘
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:47:34
 
-    Is it misspelled, or is there an import missing?
+The type Status is not declared in this scope.
+
+combineTrys : Try(Value, Error), Status -> Try(Response, Error)
+                                 ^^^^^^
+
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:47:48
+
+The type Response is not declared in this scope.
+
+combineTrys : Try(Value, Error), Status -> Try(Response, Error)
+                                               ^^^^^^^^
+
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:47:58
+
+The type Error is not declared in this scope.
+
+combineTrys : Try(Value, Error), Status -> Try(Response, Error)
+                                                         ^^^^^
+
+── ✗ name not in scope ────────────────────── can_import_exposing_types.md:50:33
+
+Nothing is named to_str in this scope.
+
+Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })
+                        ^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ type mismatch ────────────────────────── can_import_exposing_types.md:50:22
+
+The first branch of this match does not match the previous branch .
+
+Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The first branch is:
+
+    [Ok({ body: Error, status: Error }), ..]
+
+But the previous branch results in:
+
+    Try(Error, Error)
+
+All branches in a match must have compatible types.
+Note: You can wrap branches values in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
@@ -495,8 +434,9 @@ EndOfFile,
 							(e-apply
 								(e-ident (raw "Json.decode"))
 								(e-field-access
-									(e-ident (raw "req"))
-									(e-ident (raw "body")))))
+									(receiver
+										(e-ident (raw "req")))
+									(segment (mode "required") (field "body")))))
 						(e-match
 							(e-ident (raw "result"))
 							(branches
@@ -573,8 +513,9 @@ EndOfFile,
 					(p-ident (raw "response")))
 				(e-match
 					(e-field-access
-						(e-ident (raw "response"))
-						(e-ident (raw "status")))
+						(receiver
+							(e-ident (raw "response")))
+						(segment (mode "required") (field "status")))
 					(branches
 						(branch
 							(p-tag (raw "Ok")
@@ -687,10 +628,7 @@ combineTrys = |jsonTry, httpStatus|
 (can-ir
 	(d-let
 		(p-assign (ident "parseJson"))
-		(e-lambda
-			(args
-				(p-assign (ident "input")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
@@ -699,21 +637,14 @@ combineTrys = |jsonTry, httpStatus|
 					(ty-malformed)))))
 	(d-let
 		(p-assign (ident "handleRequest"))
-		(e-lambda
-			(args
-				(p-assign (ident "req")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-malformed))))
 	(d-let
 		(p-assign (ident "processData"))
-		(e-lambda
-			(args
-				(p-assign (ident "config"))
-				(p-assign (ident "values")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -725,49 +656,21 @@ combineTrys = |jsonTry, httpStatus|
 					(ty-malformed)))))
 	(d-let
 		(p-assign (ident "createClient"))
-		(e-lambda
-			(args
-				(p-assign (ident "config")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-malformed))))
 	(d-let
 		(p-assign (ident "handleResponse"))
-		(e-lambda
-			(args
-				(p-assign (ident "response")))
-			(e-match
-				(match
-					(cond
-						(e-field-access (field "status")
-							(receiver
-								(e-runtime-error (tag "erroneous_value_use")))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-runtime-error (tag "erroneous_value_expr"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-runtime-error (tag "erroneous_value_expr"))))))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "combineTrys"))
-		(e-lambda
-			(args
-				(p-assign (ident "jsonTry"))
-				(p-assign (ident "httpStatus")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Try") (builtin)

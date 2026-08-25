@@ -16,25 +16,23 @@ collide = |x| x
 # EXPECTED
 TYPE MISMATCH - type_mismatch_deep_nested_tag_union.md:7:15:7:16
 # PROBLEMS
+── ✗ type mismatch ───────────────── type_mismatch_deep_nested_tag_union.md:7:15
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  collide = |x| x                                                           │
- │                ‾                                                           │
- └─────────────────────────────── type_mismatch_deep_nested_tag_union.md:7:15 ┘
+This expression is used in an unexpected way.
 
-    It has the type:
+collide = |x| x
+              ^
 
-        [A6([A5([A4([A3([A2([A1([Z1, Z10, Z2, Z3, Z4, Z5, Z6, Z7, Z8, Z9]),
-        B1_1, B1_2, B1_3, B1_4, B1_5]), B2_1, B2_2, B2_3, B2_4, B2_5]), B3_1,
-        B3_2, B3_3, B3_4, B3_5]), B4_1, B4_2, B4_3, B4_4, B4_5]), B5_1, B5_2,
-        B5_3, B5_4, B5_5]), B6_1, B6_2, B6_3, B6_4, B6_5]
+It has the type:
 
-    But the annotation says it should be:
+    [A6([A5([A4([A3([A2([A1([Z1, Z10, Z2, Z3, Z4, Z5, Z6, Z7, Z8, Z9]), B1_1,
+    B1_2, B1_3, B1_4, B1_5]), B2_1, B2_2, B2_3, B2_4, B2_5]), B3_1, B3_2, B3_3,
+    B3_4, B3_5]), B4_1, B4_2, B4_3, B4_4, B4_5]), B5_1, B5_2, B5_3, B5_4,
+    B5_5]), B6_1, B6_2, B6_3, B6_4, B6_5]
 
-        Str
+But the annotation says it should be:
+
+    Str
 
 # TOKENS
 ~~~zig
@@ -132,10 +130,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "collide"))
-		(e-lambda
-			(args
-				(p-assign (ident "x")))
-			(e-runtime-error (tag "erroneous_value_use")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-tag-union

@@ -21,6 +21,8 @@ const Allocator = std.mem.Allocator;
 const target_mod = @import("roc_target");
 const RocTarget = target_mod.RocTarget;
 
+const layout = @import("layout");
+
 const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
 
@@ -41,6 +43,10 @@ pub const CallingConvention = struct {
     /// Whether x64 Windows ABI special rules apply.
     /// Note: Windows aarch64 follows AAPCS64 in this backend.
     is_windows: bool,
+    /// Whether overflow arguments pack on the stack at their natural size and
+    /// alignment instead of each taking a full eightbyte slot. Apple's arm64
+    /// ABI packs; AAPCS64 everywhere else and both x86_64 conventions do not.
+    packs_stack_args: bool,
 
     pub const ParamReg = union(enum) {
         x86_64: x86_64.GeneralReg,
@@ -70,6 +76,7 @@ pub const CallingConvention = struct {
                     .return_by_ptr_threshold = 8,
                     .pass_by_ptr_threshold = 8, // Only 1,2,4,8 byte structs by value
                     .is_windows = true,
+                    .packs_stack_args = false,
                 }
             else
                 CallingConvention{
@@ -79,6 +86,7 @@ pub const CallingConvention = struct {
                     .return_by_ptr_threshold = 16,
                     .pass_by_ptr_threshold = std.math.maxInt(usize),
                     .is_windows = false,
+                    .packs_stack_args = false,
                 },
             .aarch64, .aarch64_be => CallingConvention{
                 .param_regs = .{ .aarch64 = &AAPCS64_PARAM_REGS },
@@ -87,6 +95,7 @@ pub const CallingConvention = struct {
                 .return_by_ptr_threshold = 16,
                 .pass_by_ptr_threshold = std.math.maxInt(usize),
                 .is_windows = false,
+                .packs_stack_args = target.isMacOS(),
             },
             .arm, .wasm32, .other => unsupportedArchCallingConvention(target),
         };
@@ -165,6 +174,56 @@ pub const CallingConvention = struct {
     }
 };
 
+/// The C promotion a narrow integer scalar owes the argument slot that carries
+/// it. A host compiled from the generated C signature reads the promoted width,
+/// so the caller must place the promotion's bits there rather than whatever the
+/// staged copy of the Roc-sized value left behind.
+pub const Promotion = enum {
+    none,
+    zero_byte,
+    sign_byte,
+    zero_halfword,
+    sign_halfword,
+
+    /// The promotion `piece` owes, as decided by the shared ABI lowering.
+    pub fn fromRegPiece(piece: layout.abi.RegPiece) Promotion {
+        return switch (piece.extend) {
+            .none => .none,
+            .zero => switch (piece.size) {
+                1 => .zero_byte,
+                2 => .zero_halfword,
+                else => unreachable,
+            },
+            .sign => switch (piece.size) {
+                1 => .sign_byte,
+                2 => .sign_halfword,
+                else => unreachable,
+            },
+        };
+    }
+
+    /// The promotion `stack_value`'s overflow slot owes.
+    pub fn fromStackValue(stack_value: layout.abi.StackValue) Promotion {
+        return switch (stack_value.extend) {
+            .none => .none,
+            .zero => switch (stack_value.size) {
+                1 => .zero_byte,
+                2 => .zero_halfword,
+                else => unreachable,
+            },
+            .sign => switch (stack_value.size) {
+                1 => .sign_byte,
+                2 => .sign_halfword,
+                else => unreachable,
+            },
+        };
+    }
+
+    /// Bytes the promoted value occupies in an outgoing stack slot. C promotes
+    /// to `int`, so a promoted argument's slot carries four meaningful bytes.
+    pub const promoted_stack_size: u8 = 4;
+};
+
 /// Call builder for setting up cross-platform function calls
 /// The Emit type must provide:
 /// - CC: Calling convention struct with PARAM_REGS, FLOAT_PARAM_REGS, etc.
@@ -179,6 +238,10 @@ pub fn CallBuilder(comptime EmitType: type) type {
     const is_aarch64 = roc_target.toCpuArch() == .aarch64 or roc_target.toCpuArch() == .aarch64_be;
     const is_windows = roc_target.isWindows();
     const uses_position_based_float_args = is_x86_64 and is_windows;
+    // Apple's arm64 ABI packs overflow arguments on the stack at their natural
+    // size and alignment; AAPCS64 elsewhere and both x86_64 conventions give
+    // each one a full eightbyte slot.
+    const target_packs_stack_args = is_aarch64 and roc_target.isMacOS();
 
     // Represents a deferred argument source (used for both stack and register args)
     const ArgSource = union(enum) {
@@ -189,7 +252,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         // Store LEA result: lea scratch, [base+offset]; mov [RSP+stack_offset], scratch
         from_lea: struct { base: GeneralReg, offset: i32 },
         // Store memory value: mov scratch, [base+offset]; mov [RSP+stack_offset], scratch
-        from_mem: struct { base: GeneralReg, offset: i32 },
+        from_mem: struct { base: GeneralReg, offset: i32, promote: Promotion = .none },
     };
 
     // A deferred register argument, resolved later via parallel move algorithm
@@ -216,12 +279,22 @@ pub fn CallBuilder(comptime EmitType: type) type {
     return struct {
         const Self = @This();
 
+        /// Whether this target's ABI packs overflow arguments on the stack at
+        /// their natural size, which is what makes `packStackArgsForCAbi`
+        /// meaningful. Callers read this to require declared parameter sizes
+        /// only where placement actually depends on them.
+        pub const packs_stack_args = target_packs_stack_args;
+
         emit: *EmitType,
         stack_offset: *i32,
         int_arg_index: usize = 0,
         /// Float argument index (separate from int_arg_index on System V, same on Windows)
         float_arg_index: usize = 0,
         stack_arg_count: usize = 0,
+        /// Overflow arguments added one-per-parameter through
+        /// `addImplicitStackArg`. Repacking to a packed-stack ABI is only
+        /// defined when every stack argument was placed that way.
+        implicit_stack_arg_count: usize = 0,
         stack_arg_size: u16 = 0,
         stack_args: [MAX_STACK_ARGS]StackArg = undefined,
         return_by_ptr: bool = false,
@@ -316,8 +389,18 @@ pub fn CallBuilder(comptime EmitType: type) type {
         }
 
         /// Add an integer-class memory argument at its ABI-assigned register.
-        pub fn addMemArgAt(self: *Self, register_index: u16, base_reg: GeneralReg, offset: i32) void {
-            self.addDeferredRegArg(register_index, .{ .from_mem = .{ .base = base_reg, .offset = offset } });
+        pub fn addMemArgAt(
+            self: *Self,
+            register_index: u16,
+            base_reg: GeneralReg,
+            offset: i32,
+            promote: Promotion,
+        ) void {
+            self.addDeferredRegArg(register_index, .{ .from_mem = .{
+                .base = base_reg,
+                .offset = offset,
+                .promote = promote,
+            } });
         }
 
         /// Add a by-value stack argument copied from memory, rounded up to
@@ -338,7 +421,18 @@ pub fn CallBuilder(comptime EmitType: type) type {
             base_reg: GeneralReg,
             source_offset: i32,
             size: usize,
+            promote: Promotion,
         ) void {
+            if (promote != .none) {
+                // A promoted argument's slot carries the promoted width, not
+                // the Roc value's own bytes.
+                self.addStackArg(stack_byte_offset, Promotion.promoted_stack_size, .{ .from_mem = .{
+                    .base = base_reg,
+                    .offset = source_offset,
+                    .promote = promote,
+                } });
+                return;
+            }
             self.addStackMemPieces(stack_byte_offset, base_reg, source_offset, size);
         }
 
@@ -378,6 +472,42 @@ pub fn CallBuilder(comptime EmitType: type) type {
         fn addImplicitStackArg(self: *Self, src: ArgSource) void {
             const byte_offset = std.mem.alignForward(u16, self.stack_arg_size, 8);
             self.addStackArg(byte_offset, 8, src);
+            self.implicit_stack_arg_count += 1;
+        }
+
+        /// Re-place the overflow arguments for a C callee whose parameter ABI
+        /// sizes are `param_abi_sizes`, one entry per declared parameter in
+        /// order. On a packed-stack ABI a sub-word parameter occupies only its
+        /// own bytes, so the eightbyte slots assigned while arguments were
+        /// added put every later argument at the wrong offset. On every other
+        /// ABI the slots are already right and this does nothing.
+        ///
+        /// Only defined when each overflow argument was added one-per-parameter
+        /// and all parameters are integer class, which is what the boxy runtime
+        /// entrypoints are.
+        pub fn packStackArgsForCAbi(self: *Self, param_abi_sizes: []const u8) void {
+            if (comptime !target_packs_stack_args) return;
+            if (self.stack_arg_count == 0) return;
+            std.debug.assert(self.stack_arg_count == self.implicit_stack_arg_count);
+            std.debug.assert(self.float_arg_index == 0);
+
+            const first_stack_param = param_abi_sizes.len - self.stack_arg_count;
+            std.debug.assert(first_stack_param == CC_EMIT.PARAM_REGS.len);
+
+            var cursor: u16 = 0;
+            for (self.stack_args[0..self.stack_arg_count], 0..) |*arg, i| {
+                const size = param_abi_sizes[first_stack_param + i];
+                std.debug.assert(size == 1 or size == 2 or size == 4 or size == 8);
+                // A pointer-valued argument is always a full eightbyte, so a
+                // narrower declared size would mean the table and the emitted
+                // argument disagree about what is being passed.
+                std.debug.assert(arg.src != .from_lea or size == 8);
+                cursor = std.mem.alignForward(u16, cursor, size);
+                arg.byte_offset = cursor;
+                arg.size = size;
+                cursor += size;
+            }
+            self.stack_arg_size = std.mem.alignForward(u16, cursor, 8);
         }
 
         fn addDeferredRegArg(self: *Self, register_index: usize, src: ArgSource) void {
@@ -586,12 +716,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                         try self.emit.leaRegMem(dst, lea.base, lea.offset);
                     }
                 },
-                .from_mem => |mem| {
-                    if (comptime is_aarch64)
-                        try self.emit.ldrRegMemSoff(.w64, dst, mem.base, mem.offset)
-                    else
-                        try self.emit.movRegMem(.w64, dst, mem.base, mem.offset);
-                },
+                .from_mem => |mem| try self.emitLoadPromoted(dst, mem.base, mem.offset, mem.promote),
                 .from_imm => |value| {
                     if (comptime is_aarch64)
                         try self.emit.movRegImm64(dst, @bitCast(value))
@@ -601,28 +726,79 @@ pub fn CallBuilder(comptime EmitType: type) type {
             }
         }
 
+        /// Load a value into `dst`, applying the C promotion it owes. An
+        /// unpromoted value fills the whole register, which is what every
+        /// register-sized value and every piece of an aggregate needs.
+        fn emitLoadPromoted(
+            self: *Self,
+            dst: GeneralReg,
+            base: GeneralReg,
+            offset: i32,
+            promote: Promotion,
+        ) Allocator.Error!void {
+            if (comptime is_aarch64) {
+                switch (promote) {
+                    .none => try self.emit.ldrRegMemSoff(.w64, dst, base, offset),
+                    .zero_byte => try self.emit.ldrbRegMemSoff(dst, base, offset),
+                    .sign_byte => try self.emit.ldrsbRegMemSoff(dst, base, offset),
+                    .zero_halfword => try self.emit.ldrhRegMemSoff(dst, base, offset),
+                    .sign_halfword => try self.emit.ldrshRegMemSoff(dst, base, offset),
+                }
+            } else {
+                switch (promote) {
+                    .none => try self.emit.movRegMem(.w64, dst, base, offset),
+                    .zero_byte => try self.emit.movzxBRegMem(dst, base, offset),
+                    .sign_byte => try self.emit.movsxBRegMem(dst, base, offset),
+                    .zero_halfword => try self.emit.movzxWRegMem(dst, base, offset),
+                    .sign_halfword => try self.emit.movsxWRegMem(dst, base, offset),
+                }
+            }
+        }
+
+        /// Store the low `size` bytes of `reg` into the outgoing argument area.
+        /// A packed-stack ABI gives a sub-word argument only its own bytes, so
+        /// a wider store would overwrite the argument that follows it.
+        fn storeNarrowedAarch64(self: *Self, reg: GeneralReg, size: u8, stack_offset: i32) Allocator.Error!void {
+            switch (size) {
+                1 => try self.emit.strbRegMemSoff(reg, CC_EMIT.STACK_PTR, stack_offset),
+                2 => try self.emit.strhRegMemSoff(reg, CC_EMIT.STACK_PTR, stack_offset),
+                4 => try self.emit.strRegMemSoff(.w32, reg, CC_EMIT.STACK_PTR, stack_offset),
+                8 => try self.emit.strRegMemSoff(.w64, reg, CC_EMIT.STACK_PTR, stack_offset),
+                else => unreachable,
+            }
+        }
+
         /// Emit one byte-exact stack argument piece for AArch64.
         fn emitStackArgAarch64(self: *Self, arg: StackArg) Allocator.Error!void {
             const stack_offset: i32 = @intCast(CC_EMIT.SHADOW_SPACE + arg.byte_offset);
             switch (arg.src) {
                 .from_reg => |reg| {
-                    std.debug.assert(arg.size == 8);
-                    try self.emit.strRegMemSoff(.w64, reg, CC_EMIT.STACK_PTR, stack_offset);
+                    try storeNarrowedAarch64(self, reg, arg.size, stack_offset);
                 },
                 .from_imm => |value| {
-                    std.debug.assert(arg.size == 8);
                     try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, @bitCast(value));
-                    try self.emit.strRegMemSoff(.w64, CC_EMIT.SCRATCH_REG, CC_EMIT.STACK_PTR, stack_offset);
+                    try storeNarrowedAarch64(self, CC_EMIT.SCRATCH_REG, arg.size, stack_offset);
                 },
                 .from_lea => |lea| {
                     std.debug.assert(arg.size == 8);
-                    if (lea.offset >= 0)
-                        try self.emit.addRegRegImm12(.w64, CC_EMIT.SCRATCH_REG, lea.base, @intCast(lea.offset))
-                    else
+                    // `add`/`sub` reach 4095 bytes; a frame larger than that
+                    // needs the displacement materialized into a register.
+                    if (lea.offset >= 0 and lea.offset <= 4095) {
+                        try self.emit.addRegRegImm12(.w64, CC_EMIT.SCRATCH_REG, lea.base, @intCast(lea.offset));
+                    } else if (lea.offset < 0 and -lea.offset <= 4095) {
                         try self.emit.subRegRegImm12(.w64, CC_EMIT.SCRATCH_REG, lea.base, @intCast(-lea.offset));
+                    } else {
+                        try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, @bitCast(@as(i64, lea.offset)));
+                        try self.emit.addRegRegReg(.w64, CC_EMIT.SCRATCH_REG, lea.base, CC_EMIT.SCRATCH_REG);
+                    }
                     try self.emit.strRegMemSoff(.w64, CC_EMIT.SCRATCH_REG, CC_EMIT.STACK_PTR, stack_offset);
                 },
                 .from_mem => |mem| {
+                    if (mem.promote != .none) {
+                        try self.emitLoadPromoted(CC_EMIT.SCRATCH_REG, mem.base, mem.offset, mem.promote);
+                        try self.storeNarrowedAarch64(CC_EMIT.SCRATCH_REG, arg.size, stack_offset);
+                        return;
+                    }
                     switch (arg.size) {
                         1 => {
                             try self.emit.ldrbRegMemSoff(CC_EMIT.SCRATCH_REG, mem.base, mem.offset);
@@ -671,7 +847,11 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     try self.emit.movMemReg(width, CC_EMIT.STACK_PTR, stack_offset, CC_EMIT.SCRATCH_REG);
                 },
                 .from_mem => |mem| {
-                    try self.emit.movRegMem(width, CC_EMIT.SCRATCH_REG, mem.base, mem.offset);
+                    if (mem.promote != .none) {
+                        try self.emitLoadPromoted(CC_EMIT.SCRATCH_REG, mem.base, mem.offset, mem.promote);
+                    } else {
+                        try self.emit.movRegMem(width, CC_EMIT.SCRATCH_REG, mem.base, mem.offset);
+                    }
                     try self.emit.movMemReg(width, CC_EMIT.STACK_PTR, stack_offset, CC_EMIT.SCRATCH_REG);
                 },
             }
@@ -732,7 +912,13 @@ pub fn CallBuilder(comptime EmitType: type) type {
                             try self.emit.movRegMem(.w64, CC_EMIT.SCRATCH_REG, mem.base, mem.offset);
                             try self.emit.movMemReg(.w64, CC_EMIT.BASE_PTR, save_offset, CC_EMIT.SCRATCH_REG);
                         }
-                        ra.src = .{ .from_mem = .{ .base = CC_EMIT.BASE_PTR, .offset = save_offset } };
+                        // The relocated copy is byte-identical, so the value
+                        // still owes its promotion when it is finally loaded.
+                        ra.src = .{ .from_mem = .{
+                            .base = CC_EMIT.BASE_PTR,
+                            .offset = save_offset,
+                            .promote = mem.promote,
+                        } };
                     },
                     .from_lea => |lea| {
                         if (!has_dst_reg[@intFromEnum(lea.base)]) continue;
@@ -2346,8 +2532,8 @@ test "aarch64 explicit register assignments preserve ABI alignment holes" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
-    builder.addMemArgAt(0, .FP, -8);
-    builder.addMemArgAt(2, .FP, -24);
+    builder.addMemArgAt(0, .FP, -8, .none);
+    builder.addMemArgAt(2, .FP, -24, .none);
 
     try std.testing.expectEqual(@as(u8, 2), builder.reg_arg_count);
     try std.testing.expectEqual(@as(u8, 0), builder.reg_args[0].dst_index);
@@ -2366,9 +2552,9 @@ test "aarch64 outgoing stack assignments preserve compact byte offsets" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
-    builder.addStackMemArgAt(0, .FP, -8, 1);
-    builder.addStackMemArgAt(2, .FP, -16, 2);
-    builder.addStackMemArgAt(4, .FP, -24, 4);
+    builder.addStackMemArgAt(0, .FP, -8, 1, .none);
+    builder.addStackMemArgAt(2, .FP, -16, 2, .none);
+    builder.addStackMemArgAt(4, .FP, -24, 4, .none);
 
     try std.testing.expectEqual(@as(usize, 3), builder.stack_arg_count);
     try std.testing.expectEqual(@as(u16, 8), builder.stack_arg_size);

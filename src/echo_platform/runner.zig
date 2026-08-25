@@ -267,7 +267,7 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
         return err;
     };
 
-    const view = lir.LirImage.viewMappedImage(
+    var view = lir.LirImage.viewMappedImage(
         image_header,
         opts.runtime_fba.buffer.ptr,
         opts.runtime_fba.end_index,
@@ -276,6 +276,7 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
         diag.step("LirImage.viewMappedImage", err);
         return err;
     };
+    defer view.deinit();
 
     return runEchoView(allocator, &view, diag, opts.std_io) catch |err| {
         diag.step("runEchoView", err);
@@ -290,11 +291,11 @@ fn runEchoView(
     std_io: std.Io,
 ) RunEchoError!u8 {
     // HostedFn array order matters: the interpreter calls
-    // `roc_ops.hosted_fns.fns[dispatch_index]`. Dispatch indices are sorted
-    // alphabetically by fully-qualified `Module.fn_name` (with trailing `!`
-    // stripped). The echo platform has only `Echo.line`, so order is
-    // trivially correct—but additions must respect alphabetical order or
-    // the wrong function will be called silently. See README "Host functions".
+    // `roc_ops.hosted_fns.fns[dispatch_index]`, and a dispatch index is the
+    // function's position in the platform header's `hosted` section. The echo
+    // platform's section lists only `Echo.line!`, so order is trivially
+    // correct—but additions must follow that section's order or the wrong
+    // function will be called silently. See README "Host functions".
     var hosted_fn_array = [_]HostedFn{echo_platform.echoLineHostedFn()};
     var echo_env: echo_platform.EchoEnv = .{ .std_io = std_io };
     var roc_ops = echo_platform.makeDefaultRocOps(&echo_env, &hosted_fn_array);
@@ -302,10 +303,11 @@ fn runEchoView(
     var cli_args_list = try echo_platform.buildCliArgs(&.{}, &roc_ops);
     var result_buf: [16]u8 align(16) = undefined;
 
-    var interpreter = eval.LirInterpreter.init(
+    var interpreter = eval.LirInterpreter.initWithBoxyTables(
         allocator,
         &view.store,
         &view.layouts,
+        eval.LirInterpreter.BoxyTables.fromImageView(view),
         &roc_ops,
         .preserve,
     ) catch |err| {
@@ -339,6 +341,7 @@ fn runEchoView(
         // expect_err statements only occur in top-level expect test roots,
         // never in program entrypoints.
         error.ExpectErr => unreachable,
+        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
     };
 
     if (echo_env.inline_expect_failed) return 1;
@@ -356,7 +359,7 @@ fn emitDiagnostics(build_env: *BuildEnv, diag: Diagnostics, gpa: Allocator) Allo
         for (mod.reports) |*report| {
             switch (report.severity) {
                 .runtime_error, .fatal => has_blocking_error = true,
-                .info, .warning => {},
+                .warning => {},
             }
             diag.emitReport(gpa, report);
         }

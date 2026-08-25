@@ -39,13 +39,20 @@ const default_threshold_ns: u64 = std.time.ns_per_s;
 
 /// Minimum width of the phase-name column. A separator is always emitted after
 /// the padded name so a future longer label cannot run into its duration.
-const name_width: usize = 28;
+const name_width: usize = 37;
 
 /// Maximum number of top-level phases a single operation reports.
 const max_phases: usize = 16;
 const max_subphases: usize = 24;
-const max_counter_groups: usize = 4;
+// Test-cache diagnostics plus the post-check workload groups already require
+// four entries; retain headroom so later explicit diagnostics are not silently
+// dropped merely because their recording order changes.
+const max_counter_groups: usize = 8;
 const max_counters_per_group: usize = 24;
+
+/// Wide enough for at least seven digits, their grouping underscores, and the ms suffix.
+/// This accommodates durations up to tens of minutes (5_999_000ms is just under 100 minutes).
+const min_completed_duration_width: usize = "5_999_000ms".len;
 
 const spinner_frames = [_][]const u8{
     "\u{280B}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283C}",
@@ -481,12 +488,12 @@ pub const Reporter = struct {
             if (show_parent) {
                 var parent_buf: [32]u8 = undefined;
                 const total = (p.end_ns orelse self.elapsedNs()) - p.start_ns;
-                const parent_dur = formatDuration(&parent_buf, total, .final);
+                const parent_dur = formatCompletedRowDuration(&parent_buf, total);
                 self.writer.print("  {s} {f} {s}{s}\n", .{ check, padName(p.name), parent_dur, mem }) catch {};
             }
             for (p.sub[0..p.sub_len], 0..) |s, sub_index| {
                 var buf: [32]u8 = undefined;
-                const dur = formatDuration(&buf, s.ns, .final);
+                const dur = formatCompletedRowDuration(&buf, s.ns);
                 var sub_mem_buf: [48]u8 = undefined;
                 const sub_range = p.sub_mem[sub_index];
                 const sub_mem = formatMemRange(&sub_mem_buf, sub_range.min, sub_range.max);
@@ -500,7 +507,7 @@ pub const Reporter = struct {
         }
         const total = (p.end_ns orelse self.elapsedNs()) - p.start_ns;
         var buf: [32]u8 = undefined;
-        const dur = formatDuration(&buf, total, .final);
+        const dur = formatCompletedRowDuration(&buf, total);
         self.writer.print("  {s} {f} {s}{s}\n", .{ check, padName(p.name), dur, mem }) catch {};
     }
 
@@ -559,10 +566,11 @@ pub fn writeDuration(writer: *std.Io.Writer, ns: u64) std.Io.Writer.Error!void {
 const DurationStyle = enum {
     /// Whole-second granularity, for the live ticking counter.
     live,
-    /// Sub-second precision, for finished phases.
+    /// Human-friendly formatting with sub-second precision, for finished phases.
     final,
 };
 
+/// Format a duration in human-readable units.
 /// Format a nanosecond duration into `buf`, returning the written slice.
 fn formatDuration(buf: []u8, ns: u64, style: DurationStyle) []const u8 {
     const total_secs = ns / std.time.ns_per_s;
@@ -593,6 +601,51 @@ fn formatDuration(buf: []u8, ns: u64, style: DurationStyle) []const u8 {
             return std.fmt.bufPrint(buf, "{d:.1}s", .{secs_f}) catch buf[0..0];
         },
     }
+}
+
+/// Format a duration as rounded, right-aligned, grouped milliseconds.
+/// Format a nanosecond duration into `buf`, returning the written slice.
+fn formatCompletedRowDuration(buf: []u8, ns: u64) []const u8 {
+    var total_ms = ns / std.time.ns_per_ms;
+    if (ns % std.time.ns_per_ms >= std.time.ns_per_ms / 2) total_ms += 1;
+
+    const digit_count = countDigits(total_ms);
+    const number_length = digit_count + (digit_count - 1) / 3;
+    const content_length = number_length + "ms".len;
+    const output_length = @max(min_completed_duration_width, content_length);
+    if (output_length > buf.len) return buf[0..0];
+
+    const padding_length = output_length - content_length;
+    @memset(buf[0..padding_length], ' ');
+
+    const number_end = padding_length + number_length;
+    var cursor = number_end;
+    var remaining = total_ms;
+    var digits_written: usize = 0;
+    while (digits_written < digit_count) {
+        cursor -= 1;
+        buf[cursor] = '0' + @as(u8, @intCast(remaining % 10));
+        remaining /= 10;
+        digits_written += 1;
+        if (digits_written % 3 == 0 and digits_written < digit_count) {
+            cursor -= 1;
+            buf[cursor] = '_';
+        }
+    }
+
+    @memcpy(buf[number_end .. number_end + "ms".len], "ms");
+
+    return buf[0..output_length];
+}
+
+fn countDigits(value: u64) usize {
+    var remaining = value;
+    var result: usize = 1;
+    while (remaining >= 10) {
+        remaining /= 10;
+        result += 1;
+    }
+    return result;
 }
 
 /// Format `, RSS 123MB - 456MB` for a sampled range, or an empty string when
@@ -662,18 +715,31 @@ test "formatDuration final: ms and seconds" {
     try testing.expectEqualStrings("1m 5s", formatDuration(&buf, 65 * std.time.ns_per_s, .final));
 }
 
+test "formatCompletedRowDuration pads and groups milliseconds" {
+    var buf: [32]u8 = undefined;
+    try testing.expectEqualStrings("        0ms", formatCompletedRowDuration(&buf, 100_000));
+    try testing.expectEqualStrings("       12ms", formatCompletedRowDuration(&buf, 12 * std.time.ns_per_ms));
+    try testing.expectEqualStrings("      999ms", formatCompletedRowDuration(&buf, 999_499_999));
+    try testing.expectEqualStrings("    1_000ms", formatCompletedRowDuration(&buf, 999_500_000));
+    try testing.expectEqualStrings("    1_200ms", formatCompletedRowDuration(&buf, 1200 * std.time.ns_per_ms));
+    try testing.expectEqualStrings("   65_000ms", formatCompletedRowDuration(&buf, 65 * std.time.ns_per_s));
+    try testing.expectEqualStrings("  100_500ms", formatCompletedRowDuration(&buf, 100 * std.time.ns_per_s + 500 * std.time.ns_per_ms));
+    try testing.expectEqualStrings("6_000_000ms", formatCompletedRowDuration(&buf, 100 * std.time.ns_per_min));
+    try testing.expectEqualStrings("60_000_000ms", formatCompletedRowDuration(&buf, 1000 * std.time.ns_per_min));
+}
+
 test "padName pads short names and leaves long names" {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     try aw.writer.print("[{f}]", .{padName("Parsing")});
-    try testing.expectEqualStrings("[Parsing                     ]", aw.written());
+    try testing.expectEqualStrings("[Parsing                              ]", aw.written());
 }
 
 test "full-width phase name remains separated from its duration" {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     try aw.writer.print("{f} {s}", .{ padName("arm64 Instruction Generation"), "4ms" });
-    try testing.expectEqualStrings("arm64 Instruction Generation 4ms", aw.written());
+    try testing.expectEqualStrings("arm64 Instruction Generation          4ms", aw.written());
 }
 
 fn collectStatic(buf: *std.Io.Writer.Allocating, timings_flag: bool) void {
@@ -731,7 +797,7 @@ test "static breakdown lists every phase with the timings flag" {
     try testing.expect(std.mem.find(u8, out, "Type Inference") != null);
     try testing.expect(std.mem.find(u8, out, "Compile-Time Evaluation") != null);
     try testing.expect(std.mem.find(u8, out, "Monotype Lowering") != null);
-    try testing.expect(std.mem.find(u8, out, "40ms") != null);
+    try testing.expect(std.mem.find(u8, out, "       40ms") != null);
     try testing.expect(std.mem.find(u8, out, "LIR Passes") != null);
     try testing.expect(std.mem.find(u8, out, "ARC") != null);
     try testing.expect(std.mem.find(u8, out, "Store Results") != null);

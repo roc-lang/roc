@@ -76,8 +76,9 @@ EndOfFile,
 							(p-tag (raw ".WithRecord")
 								(p-ident (raw "r")))
 							(e-field-access
-								(e-ident (raw "r"))
-								(e-ident (raw "name"))))))))
+								(receiver
+									(e-ident (raw "r")))
+								(segment (mode "required") (field "name"))))))))
 		(s-expect
 			(e-binop (op "==")
 				(e-apply
@@ -145,10 +146,12 @@ expect getName(Wrapper.WithRecord({ name: "hello" })) == "hello"
 									(p-nominal
 										(p-applied-tag))))
 							(value
-								(e-field-access (field "name")
+								(e-field-access
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "r")))))))))))
+											(p-assign (ident "r"))))
+									(segments
+										(segment (name "name") (mode "required"))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Wrapper") (local))
@@ -165,7 +168,7 @@ expect getName(Wrapper.WithRecord({ name: "hello" })) == "hello"
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 307)
+				(e-call (constraint-fn-var 317)
 					(e-lookup-local
 						(p-assign (ident "getName")))
 					(e-nominal (nominal "Wrapper")
@@ -179,7 +182,7 @@ expect getName(Wrapper.WithRecord({ name: "hello" })) == "hello"
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 346)
+				(e-call (constraint-fn-var 358)
 					(e-lookup-local
 						(p-assign (ident "getName")))
 					(e-nominal (nominal "Wrapper")

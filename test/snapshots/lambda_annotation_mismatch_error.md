@@ -17,34 +17,30 @@ wrong_type_function = |x| x * 3.14
 MISSING METHOD - lambda_annotation_mismatch_error.md:3:23:3:29
 INVALID NUMBER - lambda_annotation_mismatch_error.md:7:31:7:35
 # PROBLEMS
+── ✗ missing method ─────────────────── lambda_annotation_mismatch_error.md:3:23
 
-┌────────────────┐
-│ MISSING METHOD ├─ The value before this `+` operator has a type that ───────┐
-└┬───────────────┘  doesn't have a `plus` method.                             │
- │                                                                            │
- │  string_function = |x| x + 42                                              │
- │                        ‾‾‾‾‾‾                                              │
- └────────────────────────────────── lambda_annotation_mismatch_error.md:3:23 ┘
+The value before this + operator has a type that doesn't have a plus method.
 
-    The value's type, which does not have a method named `plus`, is:
+string_function = |x| x + 42
+                      ^^^^^^
 
-        Str
+The value's type, which does not have a method named plus, is:
 
-    Hint: The `+` operator calls a method named `plus` on the value preceding
-    it, passing the value after the operator as the one argument.
+    Str
 
+Hint: The + operator calls a method named plus on the value preceding it,
+passing the value after the operator as the one argument.
 
-┌────────────────┐
-│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
-└┬───────────────┘                                                            │
- │                                                                            │
- │  wrong_type_function = |x| x * 3.14                                        │
- │                                ‾‾‾‾                                        │
- └────────────────────────────────── lambda_annotation_mismatch_error.md:7:31 ┘
+── ✗ invalid number ─────────────────── lambda_annotation_mismatch_error.md:7:31
 
-    The inferred type is:
+This number literal does not fit in the inferred type.
 
-        I64
+wrong_type_function = |x| x * 3.14
+                              ^^^^
+
+The inferred type is:
+
+    I64
 
 # TOKENS
 ~~~zig
@@ -93,24 +89,14 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "string_function"))
-		(e-lambda
-			(args
-				(p-assign (ident "x")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "wrong_type_function"))
-		(e-lambda
-			(args
-				(p-assign (ident "x")))
-			(e-dispatch-call (method "times") (constraint-fn-var 248)
-				(receiver
-					(e-runtime-error (tag "erroneous_value_use")))
-				(args
-					(e-runtime-error (tag "erroneous_value_expr")))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "I64") (builtin))

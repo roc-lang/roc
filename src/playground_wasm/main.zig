@@ -49,7 +49,7 @@ var allocator: Allocator = std.heap.wasm_allocator;
 const PlaygroundCompileError =
     Allocator.Error ||
     fmt.FormatAstError ||
-    eval.test_helpers.TestHelperError ||
+    eval.Inspected.Error ||
     check.CheckedArtifact.CompileTimeFinalizer.Error ||
     error{
         ErrFinalizingHTMLWriter,
@@ -971,7 +971,7 @@ fn buildReplModuleSource(
 }
 
 const ReplCompiledModule = struct {
-    lowered: eval.test_helpers.LoweredProgram,
+    lowered: eval.Inspected.LoweredProgram,
 
     fn deinit(self: *@This()) void {
         self.lowered.deinit(allocator);
@@ -1060,7 +1060,7 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
     errdefer root_artifact.deinitRetainingModuleEnv(allocator);
 
     var import_artifacts = [_]check.CheckedArtifact.CheckedModuleArtifact{builtin_artifact};
-    const lowered = try eval.test_helpers.lowerCheckedModuleSetToLir(allocator, @as(std.Io, undefined), &root_artifact, &import_artifacts, .u32);
+    const lowered = try eval.Inspected.lowerCheckedModuleSetToLir(allocator, @as(std.Io, undefined), &root_artifact, &import_artifacts, .u32);
 
     root_artifact.deinitRetainingModuleEnv(allocator);
     import_artifacts[0].deinitRetainingModuleEnv(allocator);
@@ -1073,7 +1073,7 @@ fn hasBlockingReports(reports: std.array_list.Managed(reporting.Report)) bool {
     for (reports.items) |report| {
         switch (report.severity) {
             .runtime_error, .fatal => return true,
-            .info, .warning => {},
+            .warning => {},
         }
     }
     return false;
@@ -1193,7 +1193,7 @@ fn runReplExpression(
     };
     defer compiled.deinit();
 
-    const output = eval.test_helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered) catch |err| {
+    const output = eval.Inspected.lirInterpreterInspectedStr(allocator, &compiled.lowered) catch |err| {
         try writeReplStaticError(response_buffer, @errorName(err), .interpreter);
         return;
     };
@@ -1238,12 +1238,7 @@ fn compileSource(source: []const u8, module_name: []const u8) PlaygroundCompileE
     return compileSourceWithValidation(source, module_name, .checking);
 }
 
-const SourceValidationMode = enum {
-    checking,
-    explicit_roots,
-};
-
-fn compileSourceWithValidation(source: []const u8, module_name: []const u8, validation_mode: SourceValidationMode) PlaygroundCompileError!CompilerStageData {
+fn compileSourceWithValidation(source: []const u8, module_name: []const u8, validation_mode: Can.Validation) PlaygroundCompileError!CompilerStageData {
     // Handle empty input gracefully to prevent crashes
     if (source.len == 0) {
         // Return empty compiler stage data for completely empty input
@@ -1423,6 +1418,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
         },
+        .validation = validation_mode,
     });
     defer czer.deinit();
 
@@ -1433,16 +1429,10 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
         return err;
     };
 
-    switch (validation_mode) {
-        .checking => czer.validateForChecking() catch |err| {
-            logDebug("compileSource: validateForChecking failed: {}\n", .{err});
-            return err;
-        },
-        .explicit_roots => czer.validateForExplicitRoots() catch |err| {
-            logDebug("compileSource: validateForExplicitRoots failed: {}\n", .{err});
-            return err;
-        },
-    }
+    czer.runValidation() catch |err| {
+        logDebug("compileSource: validation failed: {}\n", .{err});
+        return err;
+    };
     logDebug("compileSource: Canonicalization complete\n", .{});
 
     // Copy the modified AST back into the main result to ensure state consistency
@@ -1885,13 +1875,13 @@ fn argLayoutsForProc(
 }
 
 fn buildEvaluateTestsHtml(data: CompilerStageData) PlaygroundEvaluateTestsError![]u8 {
-    var resources = try eval.test_helpers.parseAndCanonicalizeProgramPublishedRoots(
+    var resources = try eval.Inspected.parseAndCanonicalizeProgramPublishedRoots(
         allocator,
         .module,
         data.module_env.common.source,
         &.{},
     );
-    defer eval.test_helpers.cleanupParseAndCanonical(allocator, resources);
+    defer eval.Inspected.cleanupParseAndCanonical(allocator, resources);
 
     const test_roots = try collectPlaygroundTestRootRequests(allocator, &resources.checked_artifact);
     defer allocator.free(test_roots);
@@ -1929,10 +1919,11 @@ fn buildEvaluateTestsHtml(data: CompilerStageData) PlaygroundEvaluateTestsError!
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
-    var interpreter = try eval.LirInterpreter.init(
+    var interpreter = try eval.LirInterpreter.initWithBoxyTables(
         allocator,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
+        eval.LirInterpreter.BoxyTables.fromResult(&lowered.lir_result),
         runtime_env.get_ops(),
         .preserve,
     );
@@ -2234,7 +2225,6 @@ fn countDiagnostics(reports: []reporting.Report) struct { errors: u32, warnings:
     var warnings: u32 = 0;
     for (reports) |report| {
         switch (report.severity) {
-            .info => {},
             .warning => warnings += 1,
             .runtime_error, .fatal => errors += 1,
         }
@@ -2262,7 +2252,6 @@ fn extractDiagnosticsFromReports(
         const message = try report.addOwnedString(report.title);
         for (@constCast(message)) |*c| c.* = std.ascii.toUpper(c.*);
         const diagnostic_severity = switch (report.severity) {
-            .info => DiagnosticSeverity.info,
             .warning => DiagnosticSeverity.warning,
             .runtime_error => DiagnosticSeverity.@"error",
             .fatal => DiagnosticSeverity.@"error",

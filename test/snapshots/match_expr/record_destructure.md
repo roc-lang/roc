@@ -14,15 +14,13 @@ match ... {
 # EXPECTED
 UNCONDITIONAL CONDITION - record_destructure.md:1:7:1:10
 # PROBLEMS
+── ● unconditional condition ───────────────────────── record_destructure.md:1:7
 
-┌─────────────────────────┐
-│ UNCONDITIONAL CONDITION ├─ This match value is known at compile time, so ───┐
-└┬────────────────────────┘  this match will always inspect the same value.   │
- │                                                                            │
- │  match ... {                                                               │
- │        ‾‾‾                                                                 │
- └───────────────────────────────────────────────── record_destructure.md:1:7 ┘
+This match value is known at compile time, so this match will always inspect
+the same value.
 
+match ... {
+      ^^^
 
 # TOKENS
 ~~~zig
@@ -102,12 +100,12 @@ match ... {
 								(p-assign (ident "name"))))
 						(s-let
 							(p-assign (ident "#interp_1"))
-							(e-dispatch-call (method "to_str") (constraint-fn-var 241)
+							(e-dispatch-call (method "to_str") (constraint-fn-var 255)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "age"))))
 								(args)))
-						(e-interpolation (constraint-fn-var 260) (dispatcher-var 19)
+						(e-interpolation (constraint-fn-var 274) (dispatcher-var 19)
 							(first
 								(e-literal (string "")))
 							(parts
@@ -142,7 +140,7 @@ match ... {
 							(p-assign (ident "#interp_3"))
 							(e-lookup-local
 								(p-assign (ident "name"))))
-						(e-interpolation (constraint-fn-var 281) (dispatcher-var 41)
+						(e-interpolation (constraint-fn-var 301) (dispatcher-var 41)
 							(first
 								(e-literal (string "")))
 							(parts

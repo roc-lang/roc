@@ -195,6 +195,7 @@ fn payloadFor(comptime tag: std.meta.Tag(DocumentElement)) ?[]const u8 {
         .source_code_region => "value payload",
         .source_code_with_underlines => "alpha payload",
         .source_code_multi_region => "multi payload",
+        .source_location => "location.roc",
         .line_break, .indent, .space, .horizontal_rule, .annotation_start, .annotation_end => null,
     };
 }
@@ -252,6 +253,10 @@ fn addElementVariant(comptime tag: std.meta.Tag(DocumentElement), doc: *Document
                 .{ .start_line = 1, .start_column = 1, .end_line = 1, .end_column = 6, .annotation = .error_highlight },
             },
             "corpus.roc",
+        ),
+        .source_location => try doc.addSourceLocation(
+            .{ .start_line_idx = 2, .start_col_idx = 4, .end_line_idx = 2, .end_col_idx = 4 },
+            "location.roc",
         ),
     }
 }
@@ -399,6 +404,12 @@ fn buildPinnedFixture(gpa: Allocator) Allocator.Error!Document {
     try doc.addLineBreak();
     try doc.addIndent(1);
     try doc.addAnnotated("main", .symbol);
+    try doc.addText(" (");
+    try doc.addSourceLocation(
+        .{ .start_line_idx = 0, .start_col_idx = 4, .end_line_idx = 0, .end_col_idx = 9 },
+        "pin.roc",
+    );
+    try doc.addText("):");
     try doc.addLineBreak();
     try doc.addSourceRegion(
         .{ .start_line_idx = 0, .start_col_idx = 4, .end_line_idx = 0, .end_col_idx = 9 },
@@ -420,8 +431,7 @@ test "byte-identity pins per render target" {
 
     try testing.expectEqualStrings(
         "Expected _Str_ but got **U64**.\n" ++
-            "    `main`\n" ++
-            "**pin.roc:1:5:1:10:**\n" ++
+            "    `main` (pin.roc:1:5):\n" ++
             "```roc\nx = magic 42\n```\n" ++
             "    ^^^^^\n",
         outputs.markdown,
@@ -429,15 +439,15 @@ test "byte-identity pins per render target" {
 
     try testing.expectEqualStrings(
         "Expected Str but got U64.\n" ++
-            "  main\n" ++
-            "pin.roc:1:5:1:10: x = magic 42\n",
+            "  main (pin.roc:1:5):\n" ++
+            "x = magic 42\n",
         outputs.lsp,
     );
 
     try testing.expectEqualStrings(
         "Expected <span class=\"type\">Str</span> but got <span class=\"error\">U64</span>.<br>\n" ++
-            "&nbsp;&nbsp;&nbsp;&nbsp;<span class=\"symbol\">main</span><br>\n" ++
-            "<div class=\"source-region\"><span class=\"filename\">pin.roc:1:5:1:10:</span> " ++
+            "&nbsp;&nbsp;&nbsp;&nbsp;<span class=\"symbol\">main</span> (<span class=\"source-location\"><span class=\"filename\">pin.roc</span>:1:5</span>):<br>\n" ++
+            "<div class=\"source-region\">" ++
             "<pre class=\"error\">x = magic 42</pre></div>",
         outputs.html,
     );
@@ -449,21 +459,16 @@ test "byte-identity pins per render target" {
     const cyan = "\x1b[36m";
     try testing.expectEqualStrings(
         "Expected " ++ blue ++ "Str" ++ rst ++ " but got " ++ red ++ "U64" ++ rst ++ ".\n" ++
-            "    " ++ cyan ++ "main" ++ rst ++ "\n" ++
-            " " ++ sec ++ " ┌" ++ ("─" ** 65) ++ " " ++ rst ++ "pin.roc" ++ sec ++ ":1:5\n" ++ rst ++
-            " " ++ sec ++ " │\n" ++ rst ++
+            "    " ++ cyan ++ "main" ++ rst ++ " (" ++ cyan ++ "pin.roc" ++ sec ++ ":1:5" ++ rst ++ "):\n" ++
             sec ++ "1 │ " ++ rst ++ red ++ "x = magic 42" ++ rst ++ "\n" ++
             sec ++ "  │ " ++ rst ++ "    " ++ red ++ "^^^^^" ++ rst ++ "\n",
         outputs.terminal_ansi,
     );
 
-    // The no-color terminal is the same layout with backticks marking the
-    // code span in place of color.
+    // The no-color terminal is the same visible text without ANSI markup.
     try testing.expectEqualStrings(
         "Expected Str but got U64.\n" ++
-            "    `main`\n" ++
-            "  ┌" ++ ("─" ** 65) ++ " pin.roc:1:5\n" ++
-            "  │\n" ++
+            "    main (pin.roc:1:5):\n" ++
             "1 │ x = magic 42\n" ++
             "  │     ^^^^^\n",
         outputs.terminal_plain,

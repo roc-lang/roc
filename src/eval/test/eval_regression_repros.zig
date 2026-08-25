@@ -39,6 +39,39 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "[1, 2, 3, 1, 2, 3]" },
     },
     .{
+        .name = "regression: Dict uses a custom nominal key hash method",
+        .source_kind = .module,
+        .source =
+        \\import KeyMod
+        \\
+        \\main = match (KeyMod.Key.parse("en-US"), KeyMod.Key.parse("EN-us")) {
+        \\    (Ok(stored), Ok(lookup)) => Dict.single(stored, "found").get(lookup)
+        \\    _ => Err(KeyNotFound)
+        \\}
+        ,
+        .imports = &.{.{
+            .name = "KeyMod",
+            .source =
+            \\Key :: { raw : Str }.{
+            \\    make : Str -> Key
+            \\    make = |raw| Key.{ raw }
+            \\    parse : Str -> Try(Key, [Invalid])
+            \\    parse = |raw| Ok(Key.{ raw })
+            \\    is_eq : Key, Key -> Bool
+            \\    is_eq = |left, right| ascii_lower(left.raw) == ascii_lower(right.raw)
+            \\    to_hash : Key, Hasher -> Hasher
+            \\    to_hash = |key, hasher| Str.to_hash(ascii_lower(key.raw), hasher)
+            \\}
+            \\
+            \\ascii_lower : Str -> Str
+            \\ascii_lower = |input|
+            \\    Str.from_utf8_lossy(Str.to_utf8(input).map(|byte|
+            \\        if byte >= 65 and byte <= 90 { byte + 32 } else { byte }))
+            ,
+        }},
+        .expected = .{ .inspect_str = "Ok(\"found\")" },
+    },
+    .{
         .name = "regression B004: polymorphic function inside tuple constant is concretely sealed",
         .source_kind = .module,
         .source =
@@ -688,6 +721,151 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "0" },
     },
     .{
+        .name = "regression: dictionary thunk preserves a dynamic erased return descriptor",
+        .source_kind = .module,
+        .source =
+        \\Generator(a) : U64 -> { value : a, state : U64 }
+        \\
+        \\list : Generator(a), U64 -> Generator(List(a))
+        \\list = |generator, length| {
+        \\    |state| {
+        \\        var $state = state
+        \\        var $result = List.with_capacity(length)
+        \\
+        \\        for _ in 0..<length {
+        \\            { value: item, state: $state } = generator($state)
+        \\            $result = $result.append(item)
+        \\        }
+        \\
+        \\        { value: $result, state: $state }
+        \\    }
+        \\}
+        \\
+        \\main = {
+        \\    generator : Generator(U64)
+        \\    generator = |state| { value: state, state: state + 1 }
+        \\
+        \\    list(generator, 3)(0.U64).value
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[0, 1, 2]" },
+    },
+    .{
+        .name = "regression: concrete tag field keeps its source descriptor at a dynamic boundary",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Request",
+            .source =
+            \\Request :: {
+            \\    timeout_ms : [TimeoutMilliseconds(U64), NoTimeout],
+            \\}.{
+            \\    new : Request
+            \\    new = { timeout_ms: NoTimeout }
+            \\    with_timeout : Request, [TimeoutMilliseconds(U64), NoTimeout] -> Request
+            \\    with_timeout = |req, timeout_ms| { ..req, timeout_ms }
+            \\    timeout : Request -> [TimeoutMilliseconds(U64), NoTimeout]
+            \\    timeout = |req| req.timeout_ms
+            \\}
+            ,
+        }},
+        .source =
+        \\import Request
+        \\main = {
+        \\    request = Request.new.with_timeout(TimeoutMilliseconds(250))
+        \\    request.timeout()
+        \\}
+        ,
+        .expected = .{ .inspect_str = "TimeoutMilliseconds(250)" },
+    },
+    .{
+        .name = "regression: imported from_quote conversion restores its finalized constant",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Path",
+            .source =
+            \\Path := [Utf8(Str)].{
+            \\    from_quote : Str -> Try(Path, [BadQuotedBytes(Str)])
+            \\    from_quote = |str| Ok(Utf8(str))
+            \\}
+            ,
+        }},
+        .source =
+        \\import Path
+        \\main : Path.Path
+        \\main = "config.txt"
+        ,
+        .expected = .{ .inspect_str = "Utf8(\"config.txt\")" },
+    },
+    .{
+        .name = "regression: imported polymorphic from_quote lowers its generated operand",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Make",
+            .source =
+            \\Make := [].{
+            \\    make : {} -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
+            \\    make = |_| "Roc"
+            \\}
+            ,
+        }},
+        .source =
+        \\import Make
+        \\Tag := [Tag(Str)].{
+        \\    from_quote : Str -> Try(Tag, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Tag(str))
+        \\}
+        \\main : Tag
+        \\main = Make.make({})
+        ,
+        .expected = .{ .inspect_str = "Tag(\"Roc\")" },
+    },
+    .{
+        .name = "regression: imported polymorphic from_numeral lowers its generated operand",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Make",
+            .source =
+            \\Make := [].{
+            \\    make : {} -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+            \\    make = |_| 42
+            \\}
+            ,
+        }},
+        .source =
+        \\import Make
+        \\Tally := [Tally(U64)].{
+        \\    from_numeral : Numeral -> Try(Tally, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| Ok(Tally(numeral.digits_before_pt().len()))
+        \\}
+        \\main : Tally
+        \\main = Make.make({})
+        ,
+        .expected = .{ .inspect_str = "Tally(1)" },
+    },
+    .{
+        .name = "regression: imported polymorphic interpolation preserves its iterator item descriptor",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Make",
+            .source =
+            \\Make := [].{
+            \\    make : Str -> a where [a.from_interpolation : Str, Iter((Str, Str)) -> a]
+            \\    make = |name| "hello ${name}!"
+            \\}
+            ,
+        }},
+        .source =
+        \\import Make
+        \\Greeting := [Greeting(Str)].{
+        \\    from_interpolation : Str, Iter((Str, Str)) -> Greeting
+        \\    from_interpolation = |first, rest| Greeting(rest.fold(first, |acc, (value, segment)| acc.concat(value).concat(segment)))
+        \\}
+        \\main : Greeting
+        \\main = Make.make("Roc")
+        ,
+        .expected = .{ .inspect_str = "Greeting(\"hello Roc!\")" },
+    },
+    .{
         // #9700: a match with many fixed-length list patterns must lower to LIR
         // whose size is linear in the patterns, not exponential. Each list
         // branch shares one miss target, so this compiles quickly; before the
@@ -725,5 +903,21 @@ pub const tests = [_]TestCase{
         \\main = to_instruction(Str.to_utf8("UUC"))
         ,
         .expected = .{ .inspect_str = "Ok(3)" },
+    },
+    .{
+        // A local function returning a two-member lambda set is instantiated at
+        // its uses, so its declaration owns an evidence scope that carries the
+        // members' dispatch requirements. Checking records that instantiation
+        // whatever rank the definition's pattern var settles at.
+        .name = "regression: local function returning a two-member lambda set dispatches both members",
+        .source =
+        \\{
+        \\    pick = |flag| if flag { |x| x + 1.I64 } else { |x| x * 2.I64 }
+        \\    f = pick(True)
+        \\    g = pick(False)
+        \\    (f(10.I64), g(10.I64))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(11, 20)" },
     },
 };

@@ -31,29 +31,25 @@ main! = |_| {
 UNUSED VARIABLE - unused_vars_simple.md:4:19:4:20
 UNDERSCORE VARIABLE USED - unused_vars_simple.md:7:28:7:34
 # PROBLEMS
+── ● unused variable ──────────────────────────────── unused_vars_simple.md:4:19
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `x` is defined here and then never used. ───────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  unused_regular = |x| 42                                                   │
- │                    ‾                                                       │
- └──────────────────────────────────────────────── unused_vars_simple.md:4:19 ┘
+Variable x is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like `_x` to
-    suppress this warning.
+unused_regular = |x| 42
+                  ^
 
+If you don't need this variable, prefix it with an underscore like _x to
+suppress this warning.
 
-┌──────────────────────────┐
-│ UNDERSCORE VARIABLE USED ├─ Variable `_value` is prefixed with an ──────────┐
-└┬─────────────────────────┘  underscore but is actually used.                │
- │                                                                            │
- │  used_underscore = |_value| _value                                         │
- │                             ‾‾‾‾‾‾                                         │
- └──────────────────────────────────────────────── unused_vars_simple.md:7:28 ┘
+── ● underscore variable used ─────────────────────── unused_vars_simple.md:7:28
 
-    Variables prefixed with `_` are intended to be unused. Remove the
-    underscore prefix: `value`.
+Variable _value is prefixed with an underscore but is actually used.
+
+used_underscore = |_value| _value
+                           ^^^^^^
+
+Variables prefixed with _ are intended to be unused. Remove the underscore
+prefix: value.
 
 # TOKENS
 ~~~zig
@@ -198,7 +194,7 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "number")))
-			(e-dispatch-call (method "plus") (constraint-fn-var 267)
+			(e-dispatch-call (method "plus") (constraint-fn-var 277)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "number"))))
@@ -212,33 +208,33 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "a"))
-					(e-call (constraint-fn-var 281)
+					(e-call (constraint-fn-var 295)
 						(e-lookup-local
 							(p-assign (ident "unused_regular")))
 						(e-num (value "5"))))
 				(s-let
 					(p-assign (ident "b"))
-					(e-call (constraint-fn-var 291)
+					(e-call (constraint-fn-var 305)
 						(e-lookup-local
 							(p-assign (ident "used_underscore")))
 						(e-num (value "10"))))
 				(s-let
 					(p-assign (ident "c"))
-					(e-call (constraint-fn-var 304)
+					(e-call (constraint-fn-var 322)
 						(e-lookup-local
 							(p-assign (ident "unused_underscore")))
 						(e-num (value "15"))))
 				(s-let
 					(p-assign (ident "d"))
-					(e-call (constraint-fn-var 318)
+					(e-call (constraint-fn-var 340)
 						(e-lookup-local
 							(p-assign (ident "used_regular")))
 						(e-num (value "20"))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 323)
+				(e-dispatch-call (method "plus") (constraint-fn-var 345)
 					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 321)
+						(e-dispatch-call (method "plus") (constraint-fn-var 343)
 							(receiver
-								(e-dispatch-call (method "plus") (constraint-fn-var 319)
+								(e-dispatch-call (method "plus") (constraint-fn-var 341)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "a"))))

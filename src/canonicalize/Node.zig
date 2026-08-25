@@ -69,6 +69,7 @@ pub const Tag = enum {
     record_field,
     record_destruct,
     expr_field_access,
+    field_access_segment,
     expr_method_call,
     expr_dispatch_call,
     expr_interpolation,
@@ -140,6 +141,7 @@ pub const Tag = enum {
     ty_tuple,
     ty_record,
     ty_record_field,
+    ty_record_field_defaulted,
     ty_fn,
     ty_parens,
     ty_lookup_external,
@@ -210,6 +212,7 @@ pub const Tag = enum {
     diag_erroneous_value_expr,
     diag_qualified_ident_does_not_exist,
     diag_invalid_top_level_statement,
+    diag_invalid_associated_statement,
     diag_expr_not_canonicalized,
     diag_invalid_string_interpolation,
     diag_unreachable_string_pattern_capture,
@@ -226,6 +229,8 @@ pub const Tag = enum {
     diag_where_alias_constraint_not_on_receiver,
     diag_open_ext_not_allowed_in_type_decl,
     diag_unnamed_field_not_allowed_in_structural_record,
+    diag_optional_field_cannot_have_default,
+    diag_record_default_not_literal,
     diag_type_module_missing_matching_type,
     diag_type_module_has_alias_not_nominal,
     diag_default_app_missing_main,
@@ -284,6 +289,7 @@ pub const Tag = enum {
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
     diag_range_op_chained,
+    diag_unnamed_field_cannot_have_default,
 };
 
 /// Typed payload union for accessing node data in a type-safe manner.
@@ -343,6 +349,7 @@ pub const Payload = extern union {
     expr_num_from_numeral: ExprNumFromNumeral,
     expr_string: ExprString,
     expr_field_access: ExprFieldAccess,
+    field_access_segment: FieldAccessSegment,
     expr_method_call: ExprMethodCall,
     expr_dispatch_call: ExprDispatchCall,
     expr_interpolation: ExprInterpolation,
@@ -424,6 +431,7 @@ pub const Payload = extern union {
     diag_two_enums: DiagTwoEnums,
     type_header: TypeHeader,
     ty_record_field: TyRecordField,
+    ty_record_field_defaulted: TyRecordFieldDefaulted,
     exposed_item: ExposedItem,
     if_branch: IfBranch,
     type_var_slot: TypeVarSlot,
@@ -704,8 +712,14 @@ pub const Payload = extern union {
 
     pub const ExprFieldAccess = extern struct {
         receiver: u32,
-        field_name: u32,
-        field_name_region_span2_idx: u32,
+        segments_start: u32,
+        segments_len: u32,
+    };
+
+    pub const FieldAccessSegment = extern struct {
+        name: u32,
+        mode: u8,
+        _padding: [7]u8 = .{ 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const ExprMethodCall = extern struct {
@@ -857,7 +871,8 @@ pub const Payload = extern union {
     /// expr_anno_only: annotation-only expression
     pub const ExprAnnoOnly = extern struct {
         ident: u32,
-        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        kind: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     /// expr_derived_method: compiler-derived associated method marker
@@ -1195,8 +1210,18 @@ pub const Payload = extern union {
     pub const TyRecordField = extern struct {
         name: u32,
         ty: u32,
+        is_optional: bool = false,
         is_unnamed: bool = false,
-        _padding: [3]u8 = .{ 0, 0, 0 },
+        _padding: [2]u8 = .{ 0, 0 },
+    };
+
+    /// A DEFAULTED record-annotation field (`a : U8 ?? 10`): never optional,
+    /// never unnamed (both rejected at canonicalization), so the third word
+    /// carries the canonicalized default expression instead of flags.
+    pub const TyRecordFieldDefaulted = extern struct {
+        name: u32,
+        ty: u32,
+        default_value: u32,
     };
 
     pub const ExposedItem = extern struct {
@@ -1219,6 +1244,10 @@ pub const Payload = extern union {
     // Compile-time size verification
     comptime {
         std.debug.assert(@sizeOf(Payload) == 16);
+        // Access mode occupies padding that was already present on the segment
+        // payload; flattened field-access paths must not increase the per-node
+        // footprint.
+        std.debug.assert(@sizeOf(FieldAccessSegment) == 12);
         // anno + where_span2_idx (2 x u32) + 4 bool flags. The four bools fill
         // the trailing 4 bytes exactly (no padding); assert the size so a stray
         // field can't silently grow it.

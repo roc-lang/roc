@@ -2,8 +2,8 @@
 //!
 //! Fully checked Roc lowers each safety decision into ordinary LIR: a bounds
 //! test is a comparison feeding a switch whose failing arm produces the error
-//! value, and overflow-checked arithmetic is a `*_checked` low-level op that
-//! the backends expand into an overflow branch plus a crash. When a dominating
+//! value, and integer arithmetic carries an explicit behavior family member
+//! that the backends implement directly. When a dominating
 //! branch already implies a check cannot fail (a decode loop's margin test
 //! `cursor + 16 <= len` implies every eight-byte read at `cursor` is in
 //! bounds), the check is pure overhead on every iteration.
@@ -12,14 +12,14 @@
 //!
 //! - a comparison whose outcome is implied becomes a constant `Bool` tag
 //! - a switch on a constant condition becomes its surviving branch
-//! - a checked arithmetic op that cannot overflow becomes its wrapping form
+//! - an arithmetic op proved exact becomes `*_proven_cannot_overflow`
 //!
 //! Anything the prover cannot justify keeps its checks, so the failure mode of
 //! a weak proof is missing speedup, never unsoundness.
 //!
 //! Facts come from three sources. A branch edge asserts its condition: inside
 //! the taken arm of `switch` on `a <= b`, that ordering holds. The
-//! continuation of a surviving `*_checked` op asserts exactness: control only
+//! continuation of a surviving `*_crash_on_overflow` op asserts exactness: control only
 //! reaches it when the operation did not wrap, so its result equals the
 //! mathematical sum, which is precisely the no-overflow knowledge that plain
 //! wrapping ops cannot carry. Bit operations assert constant ranges: masking
@@ -61,6 +61,7 @@ const layout_mod = @import("layout");
 const LIR = core.LIR;
 const LirStore = core.LirStore;
 const CheckedArithmetic = core.CheckedArithmetic;
+const BodyClone = @import("body_clone.zig");
 const GuardedList = LirStore.GuardedList;
 const CFStmtId = LIR.CFStmtId;
 const LocalId = LIR.LocalId;
@@ -119,10 +120,38 @@ const Pred = struct {
     b: NodeId,
 };
 
+/// The arithmetic question that defined a Bool local. Its false switch edge
+/// proves that the matching wrapping operation is exact on that path.
+const OverflowPred = struct {
+    operation: CheckedArithmetic.Operation,
+    lhs: NodeId,
+    rhs: NodeId,
+    operand_layout: layout_mod.Idx,
+    predicate_stmt: CFStmtId,
+};
+
+/// A false overflow-predicate edge that proves matching arithmetic exact.
+const NoOverflowFact = struct {
+    predicate: OverflowPred,
+    switch_stmt: CFStmtId,
+    edge_head: CFStmtId,
+};
+
+/// A same-sign constant checked chain whose defining statement can be
+/// combined with the immediately following checked operation.
+const ArithmeticChain = struct {
+    operation: CheckedArithmetic.Operation,
+    base: LocalId,
+    constant: i128,
+    stmt: CFStmtId,
+};
+
 /// Symbolic knowledge about one local at one program point.
 const Binding = struct {
     node: NodeId,
     pred: ?Pred = null,
+    overflow_pred: ?OverflowPred = null,
+    arithmetic_chain: ?ArithmeticChain = null,
 };
 
 /// Where an ordering fact's justification lives.
@@ -142,6 +171,11 @@ const Fact = struct {
     origin: FactOrigin,
 };
 
+const EdgeFact = union(enum) {
+    ordering: Fact,
+    no_overflow: NoOverflowFact,
+};
+
 /// Saved path-environment entry for backtracking.
 const Undo = struct {
     local: LocalId,
@@ -152,9 +186,10 @@ const Undo = struct {
 const Frame = struct {
     stmt: CFStmtId,
     facts_len: usize,
+    no_overflow_facts_len: usize,
     undo_len: usize,
-    /// Ordering fact asserted by the branch edge leading here, if any.
-    edge_fact: ?Fact,
+    /// Path fact asserted by the branch edge leading here, if any.
+    edge_fact: ?EdgeFact,
 };
 
 /// One jump statement and its target, collected during the pre-scan.
@@ -163,14 +198,16 @@ const JumpRecord = struct {
     stmt: CFStmtId,
 };
 
-/// Debug-only record of one applied rewrite: the statement changed, the
-/// root-level claim its proof established, and the path facts available when
-/// it was proven. Certified independently at the end of the round.
+const ProofClaim = union(enum) {
+    ordering: struct { a: NodeId, b: NodeId, m: i128 },
+    no_overflow: NoOverflowFact,
+};
+
+/// Debug-only record of one applied rewrite and the path claim that justified
+/// it. Certified independently at the end of the round.
 const ProofRecord = struct {
     stmt: CFStmtId,
-    claim_a: NodeId,
-    claim_b: NodeId,
-    claim_m: i128,
+    claim: ProofClaim,
     facts_start: u32,
     facts_len: u32,
 };
@@ -284,11 +321,6 @@ const MergeState = struct {
     /// the values it relates.
     entry_captures: u32,
     entry_facts: std.ArrayList(Fact),
-    /// Value meet of the path environment over the entry edges alone. A
-    /// local the body subtree never assigns holds its entry value at every
-    /// head arrival, so the body can be seeded with it even though the
-    /// fact-free first walk of the back edge could never re-derive it.
-    entry_env: std.ArrayList(EnvMeet),
 };
 
 /// One endpoint of a cross-round persisted fact, in round-stable form.
@@ -342,6 +374,7 @@ const Pass = struct {
     // Per-proc, per-round state. Reset by `resetRound`.
     nodes: std.ArrayList(Node),
     facts: std.ArrayList(Fact),
+    no_overflow_facts: std.ArrayList(NoOverflowFact),
     global_env: collections.DenseMap(LocalId, Binding),
     path_env: collections.DenseMap(LocalId, Binding),
     undo: std.ArrayList(Undo),
@@ -357,17 +390,6 @@ const Pass = struct {
     joins_in_order: std.ArrayList(CFStmtId),
     jump_records: std.ArrayList(JumpRecord),
     merge_states: collections.DenseMap(CFStmtId, MergeState),
-    /// Locals assigned anywhere in a join body's statement subtree, cached
-    /// per body head within a round. Statement folds change the subtree, so
-    /// the cache resets with the round.
-    body_assigned: collections.DenseMap(CFStmtId, std.AutoHashMapUnmanaged(u32, void)),
-    body_assigned_scan: std.ArrayList(CFStmtId),
-    body_assigned_seen: std.AutoHashMapUnmanaged(u32, void),
-    /// Region head that was being walked when each region was first
-    /// enqueued: the lexical nesting of join bodies. Edge classification at
-    /// a merge asks whether the arriving walk is nested anywhere inside the
-    /// merge head's own region, not merely whether it is the innermost one.
-    region_parents: collections.DenseMap(CFStmtId, CFStmtId),
     body_joins: collections.DenseMap(CFStmtId, JoinPointId),
     len_roots: collections.DenseMap(NodeId, LocalId),
     value_roots: collections.DenseMap(NodeId, LocalId),
@@ -408,7 +430,8 @@ const Pass = struct {
     // Debug-only certification state; unused (and empty) in release builds.
     proof_records: std.ArrayList(ProofRecord),
     proof_facts: std.ArrayList(Fact),
-    last_claim: ?struct { a: NodeId, b: NodeId, m: i128 },
+    last_claim: ?ProofClaim,
+    read_counts: ?BodyClone.ReadCounts,
 
     fn init(store: *LirStore, layouts: *const layout_mod.Store) Pass {
         const allocator = store.allocator;
@@ -418,6 +441,7 @@ const Pass = struct {
             .allocator = allocator,
             .nodes = .empty,
             .facts = .empty,
+            .no_overflow_facts = .empty,
             .global_env = collections.DenseMap(LocalId, Binding).init(allocator),
             .path_env = collections.DenseMap(LocalId, Binding).init(allocator),
             .undo = .empty,
@@ -433,10 +457,6 @@ const Pass = struct {
             .joins_in_order = .empty,
             .jump_records = .empty,
             .merge_states = collections.DenseMap(CFStmtId, MergeState).init(allocator),
-            .body_assigned = collections.DenseMap(CFStmtId, std.AutoHashMapUnmanaged(u32, void)).init(allocator),
-            .body_assigned_scan = .empty,
-            .body_assigned_seen = .empty,
-            .region_parents = collections.DenseMap(CFStmtId, CFStmtId).init(allocator),
             .body_joins = collections.DenseMap(CFStmtId, JoinPointId).init(allocator),
             .len_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
             .value_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
@@ -457,12 +477,14 @@ const Pass = struct {
             .proof_records = .empty,
             .proof_facts = .empty,
             .last_claim = null,
+            .read_counts = null,
         };
     }
 
     fn deinit(self: *Pass) void {
         self.nodes.deinit(self.allocator);
         self.facts.deinit(self.allocator);
+        self.no_overflow_facts.deinit(self.allocator);
         self.global_env.deinit();
         self.path_env.deinit();
         self.undo.deinit(self.allocator);
@@ -479,11 +501,6 @@ const Pass = struct {
         self.jump_records.deinit(self.allocator);
         self.clearMergeStates();
         self.merge_states.deinit();
-        self.clearBodyAssigned();
-        self.body_assigned.deinit();
-        self.body_assigned_scan.deinit(self.allocator);
-        self.body_assigned_seen.deinit(self.allocator);
-        self.region_parents.deinit();
         self.body_joins.deinit();
         self.len_roots.deinit();
         self.value_roots.deinit();
@@ -497,11 +514,13 @@ const Pass = struct {
         self.query_best.deinit();
         self.proof_records.deinit(self.allocator);
         self.proof_facts.deinit(self.allocator);
+        if (self.read_counts) |*counts| counts.deinit();
     }
 
     fn resetRound(self: *Pass) void {
         self.nodes.clearRetainingCapacity();
         self.facts.clearRetainingCapacity();
+        self.no_overflow_facts.clearRetainingCapacity();
         self.global_facts.clearRetainingCapacity();
         self.field_values.clearRetainingCapacity();
         self.global_env.clearRetainingCapacity();
@@ -519,8 +538,6 @@ const Pass = struct {
         self.joins_in_order.clearRetainingCapacity();
         self.jump_records.clearRetainingCapacity();
         self.clearMergeStates();
-        self.clearBodyAssigned();
-        self.region_parents.clearRetainingCapacity();
         self.body_joins.clearRetainingCapacity();
         self.len_roots.clearRetainingCapacity();
         self.value_roots.clearRetainingCapacity();
@@ -704,7 +721,7 @@ const Pass = struct {
         const ra = self.rootOf(a);
         const rb = self.rootOf(b);
         const m = k + self.offLoOf(b) - self.offHiOf(a);
-        if (builtin.mode == .Debug) self.last_claim = .{ .a = ra, .b = rb, .m = m };
+        if (builtin.mode == .Debug) self.last_claim = .{ .ordering = .{ .a = ra, .b = rb, .m = m } };
         if (ra == rb) return m >= 0;
 
         // Reach rb from ra along fact edges with accumulated slack <= m.
@@ -804,8 +821,9 @@ const Pass = struct {
         try self.bind(target, .{ .node = node });
     }
 
-    fn rewindTo(self: *Pass, facts_len: usize, undo_len: usize) ResourceError!void {
+    fn rewindTo(self: *Pass, facts_len: usize, no_overflow_facts_len: usize, undo_len: usize) ResourceError!void {
         self.facts.shrinkRetainingCapacity(facts_len);
+        self.no_overflow_facts.shrinkRetainingCapacity(no_overflow_facts_len);
         while (self.undo.items.len > undo_len) {
             const entry = self.undo.pop().?;
             if (entry.prev) |prev| {
@@ -819,6 +837,9 @@ const Pass = struct {
     // Pre-scan: predecessor counts, jump counts, and assignment counts.
 
     fn prescanProc(self: *Pass, proc: LIR.LirProcSpec) ResourceError!void {
+        if (self.read_counts) |*counts| counts.deinit();
+        self.read_counts = null;
+        self.read_counts = if (proc.body) |body| try BodyClone.countReachableReads(self.store, body) else null;
         const args = self.store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(args)) |i| {
             try self.bumpAssign(GuardedList.at(args, i));
@@ -874,6 +895,50 @@ const Pass = struct {
                     try self.bumpAssign(s.target);
                     try self.edgeTo(s.next);
                 },
+                .assign_boxy_desc_ref => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
+                .assign_boxy_dict_ref => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
+                .assign_boxy_box => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
+                .assign_boxy_reuse_box => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
+                .assign_boxy_unbox => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
+                .assign_boxy_adapt => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
+                .assign_boxy_inspect => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
+                .assign_boxy_eq => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
+                .assign_boxy_tag => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
+                .assign_boxy_tag_payload => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
+                .assign_call_dict => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
                 .store_struct => |s| {
                     try self.bumpAssign(s.dest);
                     try self.edgeTo(s.next);
@@ -908,6 +973,10 @@ const Pass = struct {
                     try self.edgeTo(s.uninitialized_branch);
                 },
                 .str_match => |s| {
+                    try self.edgeTo(s.on_match);
+                    try self.edgeTo(s.on_miss);
+                },
+                .boxy_tag_match => |s| {
                     try self.edgeTo(s.on_match);
                     try self.edgeTo(s.on_miss);
                 },
@@ -977,92 +1046,8 @@ const Pass = struct {
             state.facts.deinit(self.allocator);
             state.env.deinit(self.allocator);
             state.entry_facts.deinit(self.allocator);
-            state.entry_env.deinit(self.allocator);
         }
         self.merge_states.clearRetainingCapacity();
-    }
-
-    fn clearBodyAssigned(self: *Pass) void {
-        var it = self.body_assigned.valueIterator();
-        while (it.next()) |set| set.deinit(self.allocator);
-        self.body_assigned.clearRetainingCapacity();
-    }
-
-    /// Locals assigned anywhere forward-reachable from `head`, following
-    /// jumps into their target join bodies. An iteration can leave the
-    /// body's lexical subtree through a jump and still return to the head,
-    /// so only full forward reachability soundly over-approximates the
-    /// assignments between two head arrivals; the over-reach into post-loop
-    /// code merely forgoes some seeds.
-    fn bodyAssignedLocals(self: *Pass, head: CFStmtId) ResourceError!*const std.AutoHashMapUnmanaged(u32, void) {
-        if (self.body_assigned.get(head) != null) return self.body_assigned.getPtr(head).?;
-        var set = std.AutoHashMapUnmanaged(u32, void).empty;
-        errdefer set.deinit(self.allocator);
-        self.body_assigned_scan.clearRetainingCapacity();
-        self.body_assigned_seen.clearRetainingCapacity();
-        try self.body_assigned_scan.append(self.allocator, head);
-        while (self.body_assigned_scan.pop()) |current| {
-            const seen = try self.body_assigned_seen.getOrPut(self.allocator, @intFromEnum(current));
-            if (seen.found_existing) continue;
-            switch (self.store.getCFStmt(current)) {
-                inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local => |stmt| {
-                    try set.put(self.allocator, @intFromEnum(stmt.target), {});
-                    try self.body_assigned_scan.append(self.allocator, stmt.next);
-                },
-                inline .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| try self.body_assigned_scan.append(self.allocator, stmt.next),
-                .switch_stmt => |stmt| {
-                    const branches = self.store.getCFSwitchBranches(stmt.branches);
-                    for (0..GuardedList.borrowLen(branches)) |i| {
-                        try self.body_assigned_scan.append(self.allocator, GuardedList.at(branches, i).body);
-                    }
-                    try self.body_assigned_scan.append(self.allocator, stmt.default_branch);
-                    if (stmt.continuation) |continuation| try self.body_assigned_scan.append(self.allocator, continuation);
-                },
-                .switch_initialized_payload => |stmt| {
-                    try self.body_assigned_scan.append(self.allocator, stmt.initialized_branch);
-                    try self.body_assigned_scan.append(self.allocator, stmt.uninitialized_branch);
-                },
-                .str_match => |stmt| {
-                    const steps = self.store.getStrMatchSteps(stmt.steps);
-                    for (0..GuardedList.borrowLen(steps)) |i| {
-                        switch (GuardedList.at(steps, i).capture) {
-                            .discard => {},
-                            .view => |view_local| try set.put(self.allocator, @intFromEnum(view_local), {}),
-                        }
-                    }
-                    try self.body_assigned_scan.append(self.allocator, stmt.on_match);
-                    try self.body_assigned_scan.append(self.allocator, stmt.on_miss);
-                },
-                .str_match_set => |stmt| {
-                    const arms = self.store.getStrMatchArms(stmt.arms);
-                    for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                        const arm = GuardedList.at(arms, arm_index);
-                        const steps = self.store.getStrMatchSteps(arm.steps);
-                        for (0..GuardedList.borrowLen(steps)) |i| {
-                            switch (GuardedList.at(steps, i).capture) {
-                                .discard => {},
-                                .view => |view_local| try set.put(self.allocator, @intFromEnum(view_local), {}),
-                            }
-                        }
-                        try self.body_assigned_scan.append(self.allocator, arm.on_match);
-                    }
-                    try self.body_assigned_scan.append(self.allocator, stmt.on_miss);
-                },
-                .join => |stmt| {
-                    try self.body_assigned_scan.append(self.allocator, stmt.body);
-                    try self.body_assigned_scan.append(self.allocator, stmt.remainder);
-                },
-                .jump => |stmt| {
-                    if (self.join_stmts.get(stmt.target)) |join_stmt| {
-                        const join = self.store.getCFStmt(join_stmt).join;
-                        try self.body_assigned_scan.append(self.allocator, join.body);
-                    }
-                },
-                .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-            }
-        }
-        try self.body_assigned.put(head, set);
-        return self.body_assigned.getPtr(head).?;
     }
 
     /// A binding is worth carrying through a merge when it says something a
@@ -1087,48 +1072,17 @@ const Pass = struct {
     fn captureMergeEdge(self: *Pass, head: CFStmtId) ResourceError!void {
         const entry = try self.merge_states.getOrPut(head);
         if (!entry.found_existing) {
-            entry.value_ptr.* = .{ .captures = 0, .facts = .empty, .env = .empty, .entry_captures = 0, .entry_facts = .empty, .entry_env = .empty };
+            entry.value_ptr.* = .{ .captures = 0, .facts = .empty, .env = .empty, .entry_captures = 0, .entry_facts = .empty };
         }
         const state = entry.value_ptr;
 
-        // An edge arriving from outside the merge head's region is an entry
-        // edge; its facts meet separately so loop-invariant relations
-        // survive the back edge's inability to derive them before its
-        // region is seeded.
-        if (!self.walkIsWithin(head)) {
+        // An edge arriving from another region is an entry edge; its facts
+        // meet separately so loop-invariant relations survive the back
+        // edge's inability to derive them before its region is seeded.
+        if (self.current_region != head) {
             if (state.entry_captures == 0) {
                 try state.entry_facts.appendSlice(self.allocator, self.facts.items);
-                var entry_it = self.path_env.iterator();
-                while (entry_it.next()) |kv| {
-                    if (state.entry_env.items.len >= merge_env_cap) break;
-                    if (!self.captureWorthy(kv.value_ptr.node)) continue;
-                    const node = self.nodes.items[kv.value_ptr.node];
-                    try state.entry_env.append(self.allocator, .{
-                        .local = kv.key_ptr.*,
-                        .root = node.root,
-                        .off_lo = node.off_lo,
-                        .off_hi = node.off_hi,
-                        .valid = true,
-                        .bounds = .{},
-                        .len_bounds = .{},
-                        .len_bounds_any = .{},
-                    });
-                }
             } else {
-                for (state.entry_env.items) |*meet| {
-                    if (!meet.valid) continue;
-                    const binding = self.path_env.get(meet.local) orelse {
-                        meet.valid = false;
-                        continue;
-                    };
-                    const node = self.nodes.items[binding.node];
-                    if (node.root == meet.root) {
-                        meet.off_lo = @min(meet.off_lo, node.off_lo);
-                        meet.off_hi = @max(meet.off_hi, node.off_hi);
-                    } else {
-                        meet.valid = false;
-                    }
-                }
                 var keep_entry: usize = 0;
                 for (state.entry_facts.items) |fact| {
                     for (self.facts.items) |mine| {
@@ -1280,28 +1234,6 @@ const Pass = struct {
                     const params = self.store.getLocalSpan(join.params);
                     for (0..GuardedList.borrowLen(params)) |i| {
                         try self.seedLoopParam(join_id, GuardedList.at(params, i));
-                    }
-                }
-                // A local every entry edge binds compatibly and the body
-                // subtree never assigns holds its entry value at every head
-                // arrival; the back edge could never re-derive it before
-                // its own region is seeded, so seed it from the entry meet.
-                if (state) |st| {
-                    if (st.entry_captures > 0 and st.entry_env.items.len > 0) {
-                        const assigned = try self.bodyAssignedLocals(head);
-                        for (st.entry_env.items) |meet| {
-                            if (!meet.valid) continue;
-                            if (assigned.contains(@intFromEnum(meet.local))) continue;
-                            if (self.lookup(meet.local) != null) continue;
-                            const node = (try self.addNode(.{
-                                .root = meet.root,
-                                .off_lo = meet.off_lo,
-                                .off_hi = meet.off_hi,
-                                .lo = 0,
-                                .hi = 0,
-                            })) orelse continue;
-                            try self.bind(meet.local, .{ .node = node });
-                        }
                     }
                 }
                 return;
@@ -1891,6 +1823,18 @@ const Pass = struct {
                 .jump,
                 .ret,
                 .crash,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
                 => continue,
             };
             const params = self.store.getLocalSpan(join.params);
@@ -1933,6 +1877,18 @@ const Pass = struct {
                 .jump,
                 .ret,
                 .crash,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
                 => continue,
             };
             if (body_switch.cond != param) continue;
@@ -2008,6 +1964,18 @@ const Pass = struct {
                     .join,
                     .ret,
                     .crash,
+                    .assign_boxy_desc_ref,
+                    .assign_boxy_dict_ref,
+                    .assign_boxy_box,
+                    .assign_boxy_reuse_box,
+                    .assign_boxy_unbox,
+                    .assign_boxy_adapt,
+                    .assign_boxy_inspect,
+                    .assign_boxy_eq,
+                    .assign_boxy_tag,
+                    .assign_boxy_tag_payload,
+                    .boxy_tag_match,
+                    .assign_call_dict,
                     => continue,
                 }
                 const true_jump = try self.store.addCFStmt(.{ .jump = .{ .target = true_id } });
@@ -2040,9 +2008,7 @@ const Pass = struct {
         try self.proof_facts.appendSlice(self.allocator, self.facts.items);
         try self.proof_records.append(self.allocator, .{
             .stmt = stmt,
-            .claim_a = claim.a,
-            .claim_b = claim.b,
-            .claim_m = claim.m,
+            .claim = claim,
             .facts_start = start,
             .facts_len = @intCast(self.facts.items.len),
         });
@@ -2076,11 +2042,25 @@ const Pass = struct {
                     .meet => {},
                 }
             }
-            if (!RangeProveCertify.implies(self.allocator, facts, self.nodes.items, record.claim_a, record.claim_b, record.claim_m)) {
-                std.debug.panic(
-                    "range_prove certification failed: claim at s{d} does not follow from its facts",
-                    .{@intFromEnum(record.stmt)},
-                );
+            switch (record.claim) {
+                .ordering => |claim| {
+                    if (!RangeProveCertify.implies(self.allocator, facts, self.nodes.items, claim.a, claim.b, claim.m)) {
+                        std.debug.panic(
+                            "range_prove certification failed: claim at s{d} does not follow from its facts",
+                            .{@intFromEnum(record.stmt)},
+                        );
+                    }
+                },
+                .no_overflow => |claim| {
+                    if (!doms.dominates(claim.edge_head, record.stmt) or
+                        !RangeProveCertify.isFalseOverflowEdge(self.store, claim))
+                    {
+                        std.debug.panic(
+                            "range_prove certification failed: overflow claim at s{d} does not follow from its false predicate edge",
+                            .{@intFromEnum(record.stmt)},
+                        );
+                    }
+                },
             }
         }
     }
@@ -2116,23 +2096,6 @@ const Pass = struct {
         if (self.region_seen.contains(head)) return;
         try self.region_seen.put(head, {});
         try self.regions.append(self.allocator, head);
-        if (self.current_region) |parent| {
-            try self.region_parents.put(head, parent);
-        }
-    }
-
-    /// Whether the walk is currently inside `head`'s region, directly or
-    /// through any chain of nested join-body regions. A loop's back edge
-    /// often sits inside a nested merge region (a `??` default's join, say),
-    /// and it is still a back edge of the enclosing loop.
-    fn walkIsWithin(self: *const Pass, head: CFStmtId) bool {
-        var cursor = self.current_region orelse return false;
-        var remaining = self.regions.items.len + 1;
-        while (remaining > 0) : (remaining -= 1) {
-            if (cursor == head) return true;
-            cursor = self.region_parents.get(cursor) orelse return false;
-        }
-        return false;
     }
 
     fn walkRegions(self: *Pass, body: CFStmtId) ResourceError!void {
@@ -2159,12 +2122,14 @@ const Pass = struct {
             self.path_env.clearRetainingCapacity();
             self.undo.clearRetainingCapacity();
             self.facts.clearRetainingCapacity();
+            self.no_overflow_facts.clearRetainingCapacity();
             self.frames.clearRetainingCapacity();
             try self.facts.appendSlice(self.allocator, self.global_facts.items);
             try self.seedFromMerge(head);
             try self.frames.append(self.allocator, .{
                 .stmt = head,
                 .facts_len = self.facts.items.len,
+                .no_overflow_facts_len = self.no_overflow_facts.items.len,
                 .undo_len = self.undo.items.len,
                 .edge_fact = null,
             });
@@ -2174,8 +2139,11 @@ const Pass = struct {
 
     fn walkRegion(self: *Pass, head: CFStmtId) ResourceError!void {
         while (self.frames.pop()) |frame| {
-            try self.rewindTo(frame.facts_len, frame.undo_len);
-            if (frame.edge_fact) |fact| try self.addFact(fact);
+            try self.rewindTo(frame.facts_len, frame.no_overflow_facts_len, frame.undo_len);
+            if (frame.edge_fact) |fact| switch (fact) {
+                .ordering => |ordering| try self.addFact(ordering),
+                .no_overflow => |no_overflow| try self.no_overflow_facts.append(self.allocator, no_overflow),
+            };
 
             var current = frame.stmt;
             walk: while (true) {
@@ -2195,7 +2163,13 @@ const Pass = struct {
                         switch (s.op) {
                             .local => |src| {
                                 if (try self.valueOf(src)) |node| {
-                                    try self.bind(s.target, .{ .node = node, .pred = if (self.lookup(src)) |b| b.pred else null });
+                                    const source_binding = self.lookup(src);
+                                    try self.bind(s.target, .{
+                                        .node = node,
+                                        .pred = if (source_binding) |b| b.pred else null,
+                                        .overflow_pred = if (source_binding) |b| b.overflow_pred else null,
+                                        .arithmetic_chain = if (source_binding) |b| b.arithmetic_chain else null,
+                                    });
                                 } else {
                                     try self.bindFresh(s.target);
                                 }
@@ -2231,12 +2205,19 @@ const Pass = struct {
                         // place; `s` is a pre-rewrite copy, so its `next`
                         // stays valid either way.
                         try self.modelLowLevel(current, s);
+                        if (std.meta.activeTag(self.store.getCFStmt(current)) == .crash) break :walk;
                         current = s.next;
                     },
                     .set_local => |s| {
                         try self.visited.put(current, {});
                         if (try self.valueOf(s.value)) |node| {
-                            try self.bind(s.target, .{ .node = node, .pred = if (self.lookup(s.value)) |b| b.pred else null });
+                            const source_binding = self.lookup(s.value);
+                            try self.bind(s.target, .{
+                                .node = node,
+                                .pred = if (source_binding) |b| b.pred else null,
+                                .overflow_pred = if (source_binding) |b| b.overflow_pred else null,
+                                .arithmetic_chain = if (source_binding) |b| b.arithmetic_chain else null,
+                            });
                         } else {
                             try self.bindFresh(s.target);
                         }
@@ -2258,6 +2239,61 @@ const Pass = struct {
                         current = s.next;
                     },
                     .assign_packed_erased_fn => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_desc_ref => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_dict_ref => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_box => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_reuse_box => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_unbox => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_adapt => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_inspect => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_eq => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_tag => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_tag_payload => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_call_dict => |s| {
                         try self.visited.put(current, {});
                         try self.bindFresh(s.target);
                         current = s.next;
@@ -2332,6 +2368,12 @@ const Pass = struct {
                         try self.pushFrame(s.on_miss, null);
                         break :walk;
                     },
+                    .boxy_tag_match => |s| {
+                        try self.visited.put(current, {});
+                        try self.pushFrame(s.on_match, null);
+                        try self.pushFrame(s.on_miss, null);
+                        break :walk;
+                    },
                     .str_match_set => |s| {
                         try self.visited.put(current, {});
                         const arms = self.store.getStrMatchArms(s.arms);
@@ -2375,10 +2417,11 @@ const Pass = struct {
         }
     }
 
-    fn pushFrame(self: *Pass, stmt: CFStmtId, edge_fact: ?Fact) ResourceError!void {
+    fn pushFrame(self: *Pass, stmt: CFStmtId, edge_fact: ?EdgeFact) ResourceError!void {
         try self.frames.append(self.allocator, .{
             .stmt = stmt,
             .facts_len = self.facts.items.len,
+            .no_overflow_facts_len = self.no_overflow_facts.items.len,
             .undo_len = self.undo.items.len,
             .edge_fact = edge_fact,
         });
@@ -2388,35 +2431,47 @@ const Pass = struct {
     /// edges: the `1` arm asserts it and the `0`/default arm asserts its
     /// negation.
     fn pushSwitchArms(self: *Pass, s: anytype, switch_stmt: CFStmtId) ResourceError!void {
-        const pred: ?Pred = if (self.lookup(s.cond)) |binding| binding.pred else null;
+        const binding = self.lookup(s.cond);
         const cond_is_bool = self.localLayout(s.cond) == .bool;
 
         const branches = self.store.getCFSwitchBranches(s.branches);
         const branch_count = GuardedList.borrowLen(branches);
 
-        var default_fact: ?Fact = null;
-        if (pred != null and cond_is_bool and branch_count == 1) {
+        var default_fact: ?EdgeFact = null;
+        if (binding != null and cond_is_bool and branch_count == 1) {
             const only = GuardedList.at(branches, 0);
             if (only.value == 1) {
-                default_fact = self.predFact(pred.?, false, switch_stmt);
+                default_fact = self.boolEdgeFact(binding.?, false, switch_stmt, s.default_branch);
             } else if (only.value == 0) {
-                default_fact = self.predFact(pred.?, true, switch_stmt);
+                default_fact = self.boolEdgeFact(binding.?, true, switch_stmt, s.default_branch);
             }
         }
         try self.pushFrame(s.default_branch, default_fact);
 
         for (0..branch_count) |i| {
             const branch = GuardedList.at(branches, i);
-            var edge_fact: ?Fact = null;
-            if (pred != null and cond_is_bool) {
+            var edge_fact: ?EdgeFact = null;
+            if (binding != null and cond_is_bool) {
                 if (branch.value == 1) {
-                    edge_fact = self.predFact(pred.?, true, switch_stmt);
+                    edge_fact = self.boolEdgeFact(binding.?, true, switch_stmt, branch.body);
                 } else if (branch.value == 0) {
-                    edge_fact = self.predFact(pred.?, false, switch_stmt);
+                    edge_fact = self.boolEdgeFact(binding.?, false, switch_stmt, branch.body);
                 }
             }
             try self.pushFrame(branch.body, edge_fact);
         }
+    }
+
+    fn boolEdgeFact(self: *const Pass, binding: Binding, holds: bool, switch_stmt: CFStmtId, edge_head: CFStmtId) ?EdgeFact {
+        if (binding.pred) |pred| return .{ .ordering = self.predFact(pred, holds, switch_stmt) };
+        if (!holds) {
+            if (binding.overflow_pred) |overflow_pred| return .{ .no_overflow = .{
+                .predicate = overflow_pred,
+                .switch_stmt = switch_stmt,
+                .edge_head = edge_head,
+            } };
+        }
+        return null;
     }
 
     /// Ordering fact asserted when a comparison holds (or fails, for the
@@ -2472,7 +2527,7 @@ const Pass = struct {
         const literal: ?i128 = switch (value) {
             .i64_literal => |lit| if (lit.value >= 0) lit.value else null,
             .i128_literal => |lit| if (lit.value >= 0) lit.value else null,
-            .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => null,
+            .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => null,
         };
         if (literal) |v| {
             if (trackedIntMax(self.localLayout(target)) != null) {
@@ -2496,13 +2551,6 @@ const Pass = struct {
                     if (try self.valueOf(list_local)) |list_node| {
                         const root = self.rootOf(list_node);
                         if (self.len_terms.get(root)) |len_node| {
-                            // A term synthesized before any read (a merge
-                            // meet's, say) has no stable base yet; this read
-                            // names one, so facts about the term can persist
-                            // into loop bodies.
-                            if (self.len_roots.get(len_node) == null and self.isSingleAssign(list_local)) {
-                                try self.len_roots.put(len_node, list_local);
-                            }
                             try self.bind(s.target, .{ .node = len_node });
                             return;
                         }
@@ -2519,16 +2567,24 @@ const Pass = struct {
                 }
                 try self.bindFresh(s.target);
             },
+            .list_capacity => {
+                // A list's capacity is a non-negative count with no tighter
+                // statically known bound.
+                try self.bindFresh(s.target);
+            },
             .list_set, .list_set_in_place_unsafe => {
                 // Replacing one element preserves the list's length on every
-                // continuing path. A list term names nothing but its length,
-                // so the result is the same term: a loop that sets through a
-                // carried list then meets the same term on both edges, and
-                // the length the loop was entered under survives the merge.
+                // continuing path, so the result shares the input's length
+                // term.
                 if (arg_count == 3) {
                     if (try self.valueOf(GuardedList.at(args, 0))) |in_node| {
-                        try self.bind(s.target, .{ .node = in_node });
-                        return;
+                        if (self.len_terms.get(self.rootOf(in_node))) |len_term| {
+                            if (try self.unknownFor(self.localLayout(s.target))) |out_node| {
+                                try self.len_terms.put(out_node, len_term);
+                                try self.bind(s.target, .{ .node = out_node });
+                                return;
+                            }
+                        }
                     }
                 }
                 try self.bindFresh(s.target);
@@ -2536,23 +2592,19 @@ const Pass = struct {
             .num_is_lt, .num_is_lte, .num_is_gt, .num_is_gte => {
                 try self.modelCompare(stmt, s, args, arg_count);
             },
-            .num_plus_checked, .num_minus_checked => {
-                try self.modelCheckedArith(stmt, s, args, arg_count);
-            },
-            .num_plus => {
-                if (try self.wrapAddExact(args, arg_count, self.localLayout(s.target))) |node| {
-                    try self.bind(s.target, .{ .node = node });
-                } else {
-                    try self.bindFresh(s.target);
-                }
-            },
-            .num_minus => {
-                if (try self.wrapSubExact(args, arg_count)) |node| {
-                    try self.bind(s.target, .{ .node = node });
-                } else {
-                    try self.bindFresh(s.target);
-                }
-            },
+            .num_int_add_wrap,
+            .num_int_add_crash_on_overflow,
+            .num_int_add_overflows,
+            .num_int_add_proven_cannot_overflow,
+            .num_int_sub_wrap,
+            .num_int_sub_crash_on_overflow,
+            .num_int_sub_overflows,
+            .num_int_sub_proven_cannot_overflow,
+            .num_int_mul_wrap,
+            .num_int_mul_crash_on_overflow,
+            .num_int_mul_overflows,
+            .num_int_mul_proven_cannot_overflow,
+            => try self.modelFamilyArith(stmt, s, args, arg_count),
             .num_bitwise_and => {
                 var mask: ?i128 = null;
                 if (arg_count == 2) {
@@ -2591,36 +2643,6 @@ const Pass = struct {
                     }
                     try self.bind(s.target, .{ .node = node });
                     return;
-                }
-                try self.bindFresh(s.target);
-            },
-            .num_times, .num_times_wrap, .num_times_checked => {
-                // A multiply by a non-negative constant whose product range
-                // fits the operand type cannot wrap, so every variant is the
-                // exact product and its range is the operand's scaled.
-                if (arg_count == 2) {
-                    if (try self.mulConstExact(args, self.localLayout(s.target))) |node| {
-                        try self.bind(s.target, .{ .node = node });
-                        return;
-                    }
-                }
-                try self.bindFresh(s.target);
-            },
-            .u8_to_u16,
-            .u8_to_u32,
-            .u8_to_u64,
-            .u16_to_u32,
-            .u16_to_u64,
-            .u32_to_u64,
-            => {
-                // A widening between tracked unsigned types is the identity on
-                // the value, so the result is the same term: everything already
-                // proven about the operand keeps holding after the widening.
-                if (arg_count == 1) {
-                    if (try self.valueOf(GuardedList.at(args, 0))) |node| {
-                        try self.bind(s.target, .{ .node = node });
-                        return;
-                    }
                 }
                 try self.bindFresh(s.target);
             },
@@ -2750,8 +2772,10 @@ const Pass = struct {
             .num_negate,
             .num_abs,
             .num_abs_diff,
-            .num_plus_wrap,
-            .num_minus_wrap,
+            .num_float_add,
+            .num_float_sub,
+            .num_float_mul,
+            .dec_mul,
             .num_div_by,
             .num_div_by_checked,
             .num_div_trunc_by,
@@ -2864,6 +2888,9 @@ const Pass = struct {
             .u8_to_i32,
             .u8_to_i64,
             .u8_to_i128,
+            .u8_to_u16,
+            .u8_to_u32,
+            .u8_to_u64,
             .u8_to_u128,
             .u8_to_f32,
             .u8_to_f64,
@@ -2894,6 +2921,8 @@ const Pass = struct {
             .u16_to_i128,
             .u16_to_u8_wrap,
             .u16_to_u8_try,
+            .u16_to_u32,
+            .u16_to_u64,
             .u16_to_u128,
             .u16_to_f32,
             .u16_to_f64,
@@ -2928,6 +2957,7 @@ const Pass = struct {
             .u32_to_u8_try,
             .u32_to_u16_wrap,
             .u32_to_u16_try,
+            .u32_to_u64,
             .u32_to_u128,
             .u32_to_f32,
             .u32_to_f64,
@@ -3084,7 +3114,6 @@ const Pass = struct {
             .dec_to_i64_trunc,
             .dec_to_i64_try_unsafe,
             .dec_to_i128_trunc,
-            .dec_to_i128_try_unsafe,
             .dec_to_u8_trunc,
             .dec_to_u8_try_unsafe,
             .dec_to_u16_trunc,
@@ -3100,6 +3129,7 @@ const Pass = struct {
             .dec_to_f64,
             .box_box,
             .box_unbox,
+            .box_unbox_borrowed,
             .box_prepare_update,
             .erased_capture_load,
             .ptr_alloca,
@@ -3110,6 +3140,7 @@ const Pass = struct {
             .compare,
             .crash,
             => try self.bindFresh(s.target),
+            .num_plus, .num_minus, .num_times => unreachable,
         }
     }
 
@@ -3187,9 +3218,15 @@ const Pass = struct {
         try self.bind(s.target, .{ .node = bool_node, .pred = .{ .op = op, .a = a, .b = b } });
     }
 
-    fn modelCheckedArith(self: *Pass, stmt: CFStmtId, s: anytype, args: anytype, arg_count: usize) ResourceError!void {
-        const target_layout = self.localLayout(s.target);
-        const max = trackedIntMax(target_layout);
+    const ArithmeticProof = struct {
+        proven: bool = false,
+        result: ?NodeId = null,
+    };
+
+    fn modelFamilyArith(self: *Pass, stmt: CFStmtId, s: anytype, args: anytype, arg_count: usize) ResourceError!void {
+        const entry = CheckedArithmetic.classify(s.op) orelse unreachable;
+        const operand_layout = if (arg_count > 0) self.localLayout(GuardedList.at(args, 0)) else self.localLayout(s.target);
+        const max = trackedIntMax(operand_layout);
         if (arg_count != 2 or max == null) {
             try self.bindFresh(s.target);
             return;
@@ -3203,87 +3240,309 @@ const Pass = struct {
             return;
         };
 
-        var provable = false;
-        var result: ?NodeId = null;
-        if (s.op == .num_plus_checked) {
-            if (self.constValueOf(rhs)) |c| {
-                if (c >= 0) {
-                    // Never wraps when lhs stays at most max - c.
-                    if (try self.constNode(max.? - c)) |limit| {
-                        provable = try self.proveLe(lhs, limit, 0);
-                    }
-                    // Control past a surviving checked add proves the sum
-                    // is exact regardless of whether it can be rewritten.
-                    result = try self.derived(lhs, c);
-                }
-            } else if (self.constValueOf(lhs)) |c| {
-                if (c >= 0) {
-                    if (try self.constNode(max.? - c)) |limit| {
-                        provable = try self.proveLe(rhs, limit, 0);
-                    }
-                    result = try self.derived(rhs, c);
-                }
-            }
-        } else if (s.op == .num_minus_checked) {
-            // Never wraps when rhs stays at most lhs.
-            provable = try self.proveLe(rhs, lhs, 0);
-            // Control past a surviving checked subtract proves the
-            // difference is exact, so the result stays on lhs's root
-            // with a window widened by rhs's absolute bounds.
-            const rhs_lo = self.absLoOf(rhs);
-            const rhs_hi = self.absHiOf(rhs);
-            if (rhs_lo >= 0) {
-                result = try self.derivedRange(lhs, -rhs_hi, -rhs_lo);
-            }
-        } else unreachable;
+        if (try self.foldSameSignConstantChain(stmt, s, args, entry, lhs, rhs, operand_layout, max.?)) return;
 
-        if (provable) {
+        var proof = try self.proveFamilyNoOverflow(entry.operation, lhs, rhs, operand_layout);
+        if (!proof.proven) {
+            if (self.pathNoOverflowFact(entry.operation, lhs, rhs, operand_layout)) |fact| {
+                if (builtin.mode == .Debug) self.last_claim = .{ .no_overflow = fact };
+                proof = .{
+                    .proven = true,
+                    .result = try self.survivingFamilyResult(entry.operation, lhs, rhs),
+                };
+            }
+        }
+        const always_overflows = self.familyAlwaysOverflows(entry.operation, lhs, rhs, max.?);
+
+        if (entry.mode == .crash_on_overflow and always_overflows) {
+            try self.rewriteAsArithmeticCrash(stmt, entry.operation);
+            return;
+        }
+
+        if (entry.mode == .overflows) {
+            if ((proof.proven or always_overflows) and self.live_pending) {
+                self.deferred_rewrites = true;
+            } else if (proof.proven or always_overflows) {
+                const truth: u16 = @intFromBool(always_overflows);
+                self.store.getCFStmtPtr(stmt).* = .{ .assign_tag = .{
+                    .target = s.target,
+                    .variant_index = truth,
+                    .discriminant = truth,
+                    .payload = null,
+                    .next = s.next,
+                } };
+                self.rewrites += 1;
+                if (try self.constNode(truth)) |node| {
+                    try self.bind(s.target, .{ .node = node });
+                } else {
+                    try self.bindFresh(s.target);
+                }
+                return;
+            }
+
+            const bool_node = (try self.freshRoot(0, 1)) orelse return self.bindFresh(s.target);
+            try self.bind(s.target, .{ .node = bool_node, .overflow_pred = .{
+                .operation = entry.operation,
+                .lhs = lhs,
+                .rhs = rhs,
+                .operand_layout = operand_layout,
+                .predicate_stmt = stmt,
+            } });
+            return;
+        }
+
+        if (proof.proven and entry.mode != .proven_cannot_overflow) {
             if (self.live_pending) {
                 self.deferred_rewrites = true;
-            } else if (CheckedArithmetic.uncheckedOp(s.op)) |unchecked| {
+            } else if (CheckedArithmetic.provenForm(s.op)) |proven| {
                 try self.recordProof(stmt);
                 const ptr = &self.store.getCFStmtPtr(stmt).assign_low_level;
-                ptr.op = unchecked;
-                ptr.rc_effect = unchecked.rcEffect();
+                ptr.op = proven;
+                ptr.rc_effect = proven.rcEffect();
                 self.rewrites += 1;
             }
         }
 
-        if (result) |node| {
-            try self.bind(s.target, .{ .node = node });
-        } else {
-            try self.bindFresh(s.target);
+        var result = proof.result;
+        if (result == null and entry.mode == .crash_on_overflow) {
+            // Continuing past a surviving checked operation proves its result
+            // exact even if its input ranges did not prove safety beforehand.
+            result = try self.survivingFamilyResult(entry.operation, lhs, rhs);
         }
+        const result_node = result orelse (try self.unknownFor(self.localLayout(s.target)) orelse return);
+        try self.bind(s.target, .{
+            .node = result_node,
+            .arithmetic_chain = if (entry.mode == .crash_on_overflow and !proof.proven)
+                self.constantArithmeticChain(stmt, entry.operation, args, lhs, rhs)
+            else
+                null,
+        });
     }
 
-    /// Exact node for a wrapping add proven not to wrap, or null.
-    fn wrapAddExact(self: *Pass, args: anytype, arg_count: usize, target_layout: layout_mod.Idx) ResourceError!?NodeId {
-        const max = trackedIntMax(target_layout) orelse return null;
-        if (arg_count != 2) return null;
-        const lhs = (try self.valueOf(GuardedList.at(args, 0))) orelse return null;
-        const rhs = (try self.valueOf(GuardedList.at(args, 1))) orelse return null;
-        if (self.constValueOf(rhs)) |c| {
-            if (c >= 0) {
-                if (try self.constNode(max - c)) |limit| {
-                    if (try self.proveLe(lhs, limit, 0)) return try self.derived(lhs, c);
-                }
-            }
+    fn constantArithmeticChain(
+        self: *const Pass,
+        stmt: CFStmtId,
+        operation: CheckedArithmetic.Operation,
+        args: anytype,
+        lhs: NodeId,
+        rhs: NodeId,
+    ) ?ArithmeticChain {
+        return switch (operation) {
+            .add => if (self.constValueOf(rhs)) |constant|
+                .{ .operation = .add, .base = GuardedList.at(args, 0), .constant = constant, .stmt = stmt }
+            else if (self.constValueOf(lhs)) |constant|
+                .{ .operation = .add, .base = GuardedList.at(args, 1), .constant = constant, .stmt = stmt }
+            else
+                null,
+            .sub => if (self.constValueOf(rhs)) |constant|
+                .{ .operation = .sub, .base = GuardedList.at(args, 0), .constant = constant, .stmt = stmt }
+            else
+                null,
+            .mul => null,
+        };
+    }
+
+    fn foldSameSignConstantChain(
+        self: *Pass,
+        stmt: CFStmtId,
+        s: anytype,
+        args: anytype,
+        entry: CheckedArithmetic.FamilyEntry,
+        lhs: NodeId,
+        rhs: NodeId,
+        operand_layout: layout_mod.Idx,
+        max: i128,
+    ) ResourceError!bool {
+        if (entry.mode != .crash_on_overflow or (entry.operation != .add and entry.operation != .sub)) return false;
+
+        var inner_local: LocalId = undefined;
+        var outer_constant_local: LocalId = undefined;
+        var outer_constant: i128 = undefined;
+        if (entry.operation == .add) {
+            if (self.constValueOf(rhs)) |constant| {
+                inner_local = GuardedList.at(args, 0);
+                outer_constant_local = GuardedList.at(args, 1);
+                outer_constant = constant;
+            } else if (self.constValueOf(lhs)) |constant| {
+                inner_local = GuardedList.at(args, 1);
+                outer_constant_local = GuardedList.at(args, 0);
+                outer_constant = constant;
+            } else return false;
+        } else {
+            outer_constant = self.constValueOf(rhs) orelse return false;
+            inner_local = GuardedList.at(args, 0);
+            outer_constant_local = GuardedList.at(args, 1);
         }
-        if (self.constValueOf(lhs)) |c| {
-            if (c >= 0) {
-                if (try self.constNode(max - c)) |limit| {
-                    if (try self.proveLe(rhs, limit, 0)) return try self.derived(rhs, c);
-                }
-            }
+        if (outer_constant < 0 or outer_constant > max) return false;
+
+        const chain = (self.lookup(inner_local) orelse return false).arithmetic_chain orelse return false;
+        if (chain.operation != entry.operation or chain.constant < 0 or chain.constant > max) return false;
+
+        const inner_stmt = self.store.getCFStmt(chain.stmt);
+        if (std.meta.activeTag(inner_stmt) != .assign_low_level) return false;
+        const inner = inner_stmt.assign_low_level;
+        if (inner.target != inner_local) return false;
+        const outer_literal_stmt = self.literalDefinitionOnPath(inner.next, stmt, outer_constant_local) orelse return false;
+        const read_counts = self.read_counts orelse return false;
+        if (read_counts.get(inner_local) != 1 or read_counts.get(outer_constant_local) != 1) return false;
+        const inner_entry = CheckedArithmetic.classify(inner.op) orelse return false;
+        if (inner_entry.operation != entry.operation or inner_entry.mode != .crash_on_overflow) return false;
+
+        const wrapping_op = CheckedArithmetic.member(entry.operation, .wrap);
+        self.store.getCFStmtPtr(chain.stmt).assign_low_level.op = wrapping_op;
+        self.store.getCFStmtPtr(chain.stmt).assign_low_level.rc_effect = wrapping_op.rcEffect();
+
+        if (outer_constant > max - chain.constant) {
+            try self.rewriteAsArithmeticCrash(stmt, entry.operation);
+            return true;
+        }
+        const combined_constant = chain.constant + outer_constant;
+        self.store.getCFStmtPtr(outer_literal_stmt).assign_literal.value = .{
+            .i128_literal = .{ .value = combined_constant, .layout_idx = operand_layout },
+        };
+        const combined_args = try self.store.addLocalSpan(&.{ chain.base, outer_constant_local });
+        self.store.getCFStmtPtr(stmt).assign_low_level.args = combined_args;
+        self.rewrites += 1;
+
+        const result = (try self.survivingFamilyResult(entry.operation, lhs, rhs)) orelse
+            (try self.unknownFor(self.localLayout(s.target)) orelse return true);
+        try self.bind(s.target, .{ .node = result, .arithmetic_chain = .{
+            .operation = entry.operation,
+            .base = chain.base,
+            .constant = combined_constant,
+            .stmt = stmt,
+        } });
+        return true;
+    }
+
+    fn literalDefinitionOnPath(self: *const Pass, start: CFStmtId, target: CFStmtId, local: LocalId) ?CFStmtId {
+        var current = start;
+        var remaining = self.store.cfStmtCount();
+        var definition: ?CFStmtId = null;
+        while (remaining > 0) : (remaining -= 1) {
+            if (current == target) return definition;
+            const stmt = self.store.getCFStmt(current);
+            if (std.meta.activeTag(stmt) != .assign_literal) return null;
+            const literal = stmt.assign_literal;
+            if (literal.target == local) definition = current;
+            current = literal.next;
         }
         return null;
     }
 
-    /// Bounded node for a constant multiply proven not to wrap, or null.
-    fn mulConstExact(self: *Pass, args: anytype, target_layout: layout_mod.Idx) ResourceError!?NodeId {
+    fn proveFamilyNoOverflow(
+        self: *Pass,
+        operation: CheckedArithmetic.Operation,
+        lhs: NodeId,
+        rhs: NodeId,
+        operand_layout: layout_mod.Idx,
+    ) ResourceError!ArithmeticProof {
+        if (builtin.mode == .Debug) self.last_claim = null;
+        const max = trackedIntMax(operand_layout) orelse return .{};
+        const lhs_lo = self.absLoOf(lhs);
+        const lhs_hi = self.absHiOf(lhs);
+        const rhs_lo = self.absLoOf(rhs);
+        const rhs_hi = self.absHiOf(rhs);
+
+        switch (operation) {
+            .add => {
+                // This numeric proof handles two dynamic unsigned operands
+                // without allocating a symbolic limit node.
+                if (lhs_lo >= 0 and rhs_lo >= 0 and rhs_hi <= max and lhs_hi <= max - rhs_hi) {
+                    const result = if (self.constValueOf(rhs)) |c|
+                        try self.derived(lhs, c)
+                    else if (self.constValueOf(lhs)) |c|
+                        try self.derived(rhs, c)
+                    else
+                        try self.freshRoot(lhs_lo + rhs_lo, lhs_hi + rhs_hi);
+                    return .{ .proven = result != null, .result = result };
+                }
+
+                if (self.constValueOf(rhs)) |c| {
+                    if (c >= 0 and c <= max) {
+                        if (try self.constNode(max - c)) |limit| {
+                            if (try self.proveLe(lhs, limit, 0)) return .{ .proven = true, .result = try self.derived(lhs, c) };
+                        }
+                    }
+                } else if (self.constValueOf(lhs)) |c| {
+                    if (c >= 0 and c <= max) {
+                        if (try self.constNode(max - c)) |limit| {
+                            if (try self.proveLe(rhs, limit, 0)) return .{ .proven = true, .result = try self.derived(rhs, c) };
+                        }
+                    }
+                }
+            },
+            .sub => {
+                if (lhs_lo >= rhs_hi or try self.proveLe(rhs, lhs, 0)) {
+                    const result = if (rhs_lo >= 0) try self.derivedRange(lhs, -rhs_hi, -rhs_lo) else null;
+                    return .{ .proven = result != null, .result = result };
+                }
+            },
+            .mul => {
+                const result = try self.mulConstExactNodes(lhs, rhs, operand_layout);
+                return .{ .proven = result != null, .result = result };
+            },
+        }
+        return .{};
+    }
+
+    fn pathNoOverflowFact(
+        self: *const Pass,
+        operation: CheckedArithmetic.Operation,
+        lhs: NodeId,
+        rhs: NodeId,
+        operand_layout: layout_mod.Idx,
+    ) ?NoOverflowFact {
+        var i = self.no_overflow_facts.items.len;
+        while (i > 0) {
+            i -= 1;
+            const fact = self.no_overflow_facts.items[i];
+            const predicate = fact.predicate;
+            if (predicate.operation != operation or predicate.operand_layout != operand_layout) continue;
+            if (predicate.lhs == lhs and predicate.rhs == rhs) return fact;
+            if ((operation == .add or operation == .mul) and predicate.lhs == rhs and predicate.rhs == lhs) return fact;
+        }
+        return null;
+    }
+
+    fn survivingFamilyResult(self: *Pass, operation: CheckedArithmetic.Operation, lhs: NodeId, rhs: NodeId) ResourceError!?NodeId {
+        return switch (operation) {
+            .add => if (self.constValueOf(rhs)) |c|
+                try self.derived(lhs, c)
+            else if (self.constValueOf(lhs)) |c|
+                try self.derived(rhs, c)
+            else
+                null,
+            .sub => blk: {
+                const rhs_lo = self.absLoOf(rhs);
+                const rhs_hi = self.absHiOf(rhs);
+                break :blk if (rhs_lo >= 0) try self.derivedRange(lhs, -rhs_hi, -rhs_lo) else null;
+            },
+            .mul => null,
+        };
+    }
+
+    fn familyAlwaysOverflows(self: *const Pass, operation: CheckedArithmetic.Operation, lhs: NodeId, rhs: NodeId, max: i128) bool {
+        const a = self.constValueOf(lhs) orelse return false;
+        const b = self.constValueOf(rhs) orelse return false;
+        return switch (operation) {
+            .add => b > max or a > max - b,
+            .sub => a < b,
+            .mul => b != 0 and a > @divTrunc(max, b),
+        };
+    }
+
+    fn rewriteAsArithmeticCrash(self: *Pass, stmt: CFStmtId, operation: CheckedArithmetic.Operation) ResourceError!void {
+        const op = CheckedArithmetic.member(operation, .crash_on_overflow);
+        const message = CheckedArithmetic.overflowMessage(op) orelse unreachable;
+        self.store.getCFStmtPtr(stmt).* = .{ .crash = .{
+            .msg = .{ .literal = try self.store.insertString(message) },
+        } };
+        self.rewrites += 1;
+    }
+
+    fn mulConstExactNodes(self: *Pass, lhs: NodeId, rhs: NodeId, target_layout: layout_mod.Idx) ResourceError!?NodeId {
         const max = trackedIntMax(target_layout) orelse return null;
-        const lhs = (try self.valueOf(GuardedList.at(args, 0))) orelse return null;
-        const rhs = (try self.valueOf(GuardedList.at(args, 1))) orelse return null;
         var factor: i128 = undefined;
         var operand: NodeId = undefined;
         if (self.constValueOf(rhs)) |c| {
@@ -3299,18 +3558,6 @@ const Pass = struct {
         if (lo < 0) return null;
         if (factor != 0 and hi > @divTrunc(max, factor)) return null;
         return try self.freshRoot(lo * factor, hi * factor);
-    }
-
-    /// Bounded node for a wrapping subtract proven not to wrap, or null.
-    fn wrapSubExact(self: *Pass, args: anytype, arg_count: usize) ResourceError!?NodeId {
-        if (arg_count != 2) return null;
-        const lhs = (try self.valueOf(GuardedList.at(args, 0))) orelse return null;
-        const rhs = (try self.valueOf(GuardedList.at(args, 1))) orelse return null;
-        const rhs_lo = self.absLoOf(rhs);
-        const rhs_hi = self.absHiOf(rhs);
-        if (rhs_lo < 0) return null;
-        if (!try self.proveLe(rhs, lhs, 0)) return null;
-        return try self.derivedRange(lhs, -rhs_hi, -rhs_lo);
     }
 };
 
@@ -3385,6 +3632,17 @@ const RangeProveCertify = struct {
                 .assign_list => |t| try list.append(allocator, t.next),
                 .assign_struct => |t| try list.append(allocator, t.next),
                 .assign_tag => |t| try list.append(allocator, t.next),
+                .assign_boxy_desc_ref => |t| try list.append(allocator, t.next),
+                .assign_boxy_dict_ref => |t| try list.append(allocator, t.next),
+                .assign_boxy_box => |t| try list.append(allocator, t.next),
+                .assign_boxy_reuse_box => |t| try list.append(allocator, t.next),
+                .assign_boxy_unbox => |t| try list.append(allocator, t.next),
+                .assign_boxy_adapt => |t| try list.append(allocator, t.next),
+                .assign_boxy_inspect => |t| try list.append(allocator, t.next),
+                .assign_boxy_eq => |t| try list.append(allocator, t.next),
+                .assign_boxy_tag => |t| try list.append(allocator, t.next),
+                .assign_boxy_tag_payload => |t| try list.append(allocator, t.next),
+                .assign_call_dict => |t| try list.append(allocator, t.next),
                 .store_struct => |t| try list.append(allocator, t.next),
                 .store_tag => |t| try list.append(allocator, t.next),
                 .set_local => |t| try list.append(allocator, t.next),
@@ -3407,6 +3665,10 @@ const RangeProveCertify = struct {
                     try list.append(allocator, t.uninitialized_branch);
                 },
                 .str_match => |t| {
+                    try list.append(allocator, t.on_match);
+                    try list.append(allocator, t.on_miss);
+                },
+                .boxy_tag_match => |t| {
                     try list.append(allocator, t.on_match);
                     try list.append(allocator, t.on_miss);
                 },
@@ -3433,6 +3695,31 @@ const RangeProveCertify = struct {
             for (owned) |succ| try stack.append(allocator, succ);
         }
         return graph;
+    }
+
+    /// Verify that the recorded edge is the False arm of the recorded
+    /// overflow predicate's Bool switch.
+    fn isFalseOverflowEdge(store: *const LirStore, fact: NoOverflowFact) bool {
+        const predicate_stmt = store.getCFStmt(fact.predicate.predicate_stmt);
+        if (std.meta.activeTag(predicate_stmt) != .assign_low_level) return false;
+        const predicate = predicate_stmt.assign_low_level;
+        const entry = CheckedArithmetic.classify(predicate.op) orelse return false;
+        if (entry.mode != .overflows or entry.operation != fact.predicate.operation) return false;
+
+        const switch_stmt = store.getCFStmt(fact.switch_stmt);
+        if (std.meta.activeTag(switch_stmt) != .switch_stmt) return false;
+        const bool_switch = switch_stmt.switch_stmt;
+        if (bool_switch.cond != predicate.target) return false;
+
+        const branches = store.getCFSwitchBranches(bool_switch.branches);
+        const branch_count = GuardedList.borrowLen(branches);
+        for (0..branch_count) |index| {
+            const branch = GuardedList.at(branches, index);
+            if (branch.value == 0 and branch.body == fact.edge_head) return true;
+        }
+        return branch_count == 1 and
+            GuardedList.at(branches, 0).value == 1 and
+            bool_switch.default_branch == fact.edge_head;
     }
 
     /// Re-derive `value(ra) <= value(rb) + m` from the snapshot facts and the

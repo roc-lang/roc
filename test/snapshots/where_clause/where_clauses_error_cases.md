@@ -31,192 +31,163 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:6:1:7:10
 UNBOUND WHERE RECEIVER - where_clauses_error_cases.md:11:10:11:27
 DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
 # PROBLEMS
+── ✗ expected constraint type ──────────────── where_clauses_error_cases.md:3:10
 
-┌──────────────────────────┐
-│ EXPECTED CONSTRAINT TYPE ├─ I was parsing a `where` method constraint, ─────┐
-└┬─────────────────────────┘  and I expected `:` before the method type.      │
- │                                                                            │
- │  where [a.method -> b]                                                     │
- │         ‾                                                                  │
- └───────────────────────────────────────── where_clauses_error_cases.md:3:10 ┘
+I was parsing a `where` method constraint, and I expected `:` before the method
+type.
 
-    Method constraints use a colon between the method name and its type.
+where [a.method -> b]
+       ^
 
-    For example:
-        where [a.hash : a -> U64]
+Method constraints use a colon between the method name and its type.
 
-    I found `a` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+For example:
+    where [a.hash : a -> U64]
 
+I found a here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-┌───────────────────────────┐
-│ EXPECTED WHERE CLAUSE END ├─ I was parsing a `where` clause, and I ─────────┐
-└┬──────────────────────────┘  expected `]`.                                  │
- │                                                                            │
- │  where [a.method -> b]                                                     │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
- └────────────────────────────────────────── where_clauses_error_cases.md:3:3 ┘
+── ✗ expected where clause end ──────────────── where_clauses_error_cases.md:3:3
 
-    Close the where constraint list after the final constraint.
+I was parsing a `where` clause, and I expected `]`.
 
-    For example:
-        where [a.hash : a -> U64]
+where [a.method -> b]
+^^^^^^^^^^^^^^^^^^
 
-    I found `where [a.method ->` here.
-    That word is reserved by Roc, so it cannot be used as a name in this
-    position.
+Close the where constraint list after the final constraint.
 
+For example:
+    where [a.hash : a -> U64]
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  where [a.method -> b]                                                     │
- │                     ‾                                                      │
- └───────────────────────────────────────── where_clauses_error_cases.md:3:22 ┘
+I found where [a.method -> here.
+That word is reserved by Roc, so it cannot be used as a name in this position.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ──────────────────── where_clauses_error_cases.md:3:22
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `b` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+where [a.method -> b]
+                   ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  where [a.method -> b]                                                     │
- │                      ‾                                                     │
- └───────────────────────────────────────── where_clauses_error_cases.md:3:23 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found b here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ──────────────────── where_clauses_error_cases.md:3:23
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I was parsing a statement, and this token cannot start a statement here.
 
+where [a.method -> b]
+                    ^
 
-┌───────────────────────────┐
-│ EXPECTED WHERE CONSTRAINT ├─ I was parsing a `where` clause, and I ─────────┐
-└┬──────────────────────────┘  expected at least one constraint.              │
- │                                                                            │
- │  where []                                                                  │
- │  ‾‾‾‾‾‾‾                                                                   │
- └────────────────────────────────────────── where_clauses_error_cases.md:7:3 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Remove the empty `where` clause or add a constraint inside the brackets.
+For example:
+    answer = 42
 
-    For example:
-        where [a.hash : a -> U64]
+I found ] here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    I found `where [` here.
-    That word is reserved by Roc, so it cannot be used as a name in this
-    position.
+── ✗ expected where constraint ──────────────── where_clauses_error_cases.md:7:3
 
+I was parsing a `where` clause, and I expected at least one constraint.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  where []                                                                  │
- │         ‾                                                                  │
- └───────────────────────────────────────── where_clauses_error_cases.md:7:10 ┘
+where []
+^^^^^^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Remove the empty where clause or add a constraint inside the brackets.
 
-    For example:
-        answer = 42
+For example:
+    where [a.hash : a -> U64]
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I found where [ here.
+That word is reserved by Roc, so it cannot be used as a name in this position.
 
+── ✗ unexpected statement ──────────────────── where_clauses_error_cases.md:7:10
 
-┌────────────────────────┐
-│ MALFORMED WHERE CLAUSE ├─ This where clause could not be parsed correctly. ─┐
-└┬───────────────────────┘                                                    │
- │                                                                            │
- │  where [a.method -> b]                                                     │
- │         ‾‾‾‾‾‾‾‾‾‾‾                                                        │
- └───────────────────────────────────────── where_clauses_error_cases.md:3:10 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Check the syntax of your where clause.
+where []
+       ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌────────────────────────┐
-│ MALFORMED WHERE CLAUSE ├─ This where clause could not be parsed correctly. ─┐
-└┬───────────────────────┘                                                    │
- │                                                                            │
- │  where []                                                                  │
- │  ‾‾‾‾‾‾‾                                                                   │
- └────────────────────────────────────────── where_clauses_error_cases.md:7:3 ┘
+For example:
+    answer = 42
 
-    Check the syntax of your where clause.
+I found ] here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
+── ✗ malformed where clause ────────────────── where_clauses_error_cases.md:3:10
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  broken_fn1 : a -> b                                                       │
- │    where [a.method -> b]                                                   │
- │                                                                            │
- └────────────────────────────────────────── where_clauses_error_cases.md:2:1 ┘
+This where clause could not be parsed correctly.
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+where [a.method -> b]
+       ^^^^^^^^^^^
 
+Check the syntax of your where clause.
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  broken_fn2 : a -> b                                                       │
- │    where []                                                                │
- │                                                                            │
- └────────────────────────────────────────── where_clauses_error_cases.md:6:1 ┘
+── ✗ malformed where clause ─────────────────── where_clauses_error_cases.md:7:3
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+This where clause could not be parsed correctly.
 
+where []
+^^^^^^^
 
-┌────────────────────────┐
-│ UNBOUND WHERE RECEIVER ├─ The type variable `c` is not introduced by this ──┐
-└┬───────────────────────┘  annotation's type or a connected method           │
- │                          constraint, so this where clause cannot add the   │
- │                          `method` method to it.                            │
- │                                                                            │
- │  where [c.method : c -> d]                                                 │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
- └──────────────────────────────────────── where_clauses_error_cases.md:11:10 ┘
+Check the syntax of your where clause.
 
-    A where clause receiver must be introduced by the annotation's type, or by
-    the method type of a receiver that is already connected to the annotation.
-    Connect `c` to the annotation, or remove this constraint.
+── ● declaration has no value ───────────────── where_clauses_error_cases.md:2:1
 
+This declaration has a type annotation but no implementation.
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  broken_fn3 : a -> b                                                       │
- │    where [c.method : c -> d]                                               │
- │                                                                            │
- └───────────────────────────────────────── where_clauses_error_cases.md:10:1 ┘
+broken_fn1 : a -> b
+  where [a.method -> b]
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+── ● declaration has no value ───────────────── where_clauses_error_cases.md:6:1
+
+This declaration has a type annotation but no implementation.
+
+broken_fn2 : a -> b
+  where []
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+── ✗ unbound where receiver ───────────────── where_clauses_error_cases.md:11:10
+
+The type variable c is not introduced by this annotation's type or a connected
+method constraint, so this where clause cannot add the method method to it.
+
+where [c.method : c -> d]
+       ^^^^^^^^^^^^^^^^^
+
+A where clause receiver must be introduced by the annotation's type, or by the
+method type of a receiver that is already connected to the annotation. Connect
+c to the annotation, or remove this constraint.
+
+── ● declaration has no value ──────────────── where_clauses_error_cases.md:10:1
+
+This declaration has a type annotation but no implementation.
+
+broken_fn3 : a -> b
+  where [c.method : c -> d]
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 
 # TOKENS
 ~~~zig
@@ -297,7 +268,7 @@ broken_fn3 : a -> b
 				(malformed))))
 	(d-let
 		(p-assign (ident "broken_fn3"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))

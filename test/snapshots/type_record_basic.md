@@ -15,28 +15,23 @@ main! = |_| getName({namee: "luke", age:21})
 # EXPECTED
 TYPE MISMATCH - type_record_basic.md:6:13:6:13
 # PROBLEMS
+── ✗ type mismatch ─────────────────────────────────── type_record_basic.md:6:21
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The first argument being passed to this function has the ──┐
-└┬──────────────┘  wrong type.                                                │
- │                                                                            │
- │  main! = |_| getName({namee: "luke", age:21})                              │
- │                      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                               │
- └───────────────────────────────────────────────── type_record_basic.md:6:21 ┘
+The first argument being passed to this function has the wrong type.
 
-    This argument has the type:
+main! = |_| getName({namee: "luke", age:21})
+                    ^^^^^^^^^^^^^^^^^^^^^^^
 
-        { age: a, namee: b }
-          where [
-            a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-            b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),
-          ]
+This argument has the type:
 
-    But `getName` needs the first argument to be:
+    { age: U64, namee: a }
+      where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
 
-        { age: U64, name: Str }
+But getName needs the first argument to be:
 
-    Hint: Maybe `namee` should be `name`?
+    { age: U64, name: Str }
+
+Hint: Maybe namee should be name?
 
 # TOKENS
 ~~~zig

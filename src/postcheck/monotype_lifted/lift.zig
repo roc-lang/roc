@@ -36,6 +36,7 @@ pub fn run(
     var typed_locals = owned.typed_locals.takeArrayList();
     var stmt_ids = owned.stmt_ids.takeArrayList();
     var field_exprs = owned.field_exprs.takeArrayList();
+    var field_access_segments = owned.field_access_segments.takeArrayList();
     var fn_def_captures = owned.fn_def_captures.takeArrayList();
     var capture_operands = owned.capture_operands.takeArrayList();
     var record_destructs = owned.record_destructs.takeArrayList();
@@ -78,6 +79,7 @@ pub fn run(
         typed_locals,
         stmt_ids,
         field_exprs,
+        field_access_segments,
         fn_def_captures,
         capture_operands,
         record_destructs,
@@ -113,6 +115,7 @@ pub fn run(
     typed_locals = undefined;
     stmt_ids = undefined;
     field_exprs = undefined;
+    field_access_segments = undefined;
     fn_def_captures = undefined;
     capture_operands = undefined;
     record_destructs = undefined;
@@ -174,6 +177,7 @@ fn movedMonoView(source: *const Mono.Program, moved: *const Ast.Program) Mono.Pr
         .typed_locals = moved_view.typed_locals,
         .stmt_ids = moved_view.stmt_ids,
         .field_exprs = moved_view.field_exprs,
+        .field_access_segments = moved_view.field_access_segments,
         .fn_def_captures = moved_view.fn_def_captures,
         .capture_operands = moved_view.capture_operands,
         .record_destructs = moved_view.record_destructs,
@@ -2401,6 +2405,7 @@ fn initCaptureTestProgram(allocator: Allocator) Ast.Program {
         .empty, // typed_locals
         .empty, // stmt_ids
         .empty, // field_exprs
+        .empty, // field_access_segments
         .empty, // fn_def_captures
         .empty, // capture_operands
         .empty, // record_destructs
@@ -2479,6 +2484,7 @@ test "checkCaptureInvariants accepts a well-formed capture and catches a corrupt
         .empty, // typed_locals
         .empty, // stmt_ids
         .empty, // field_exprs
+        .empty, // field_access_segments
         .empty, // fn_def_captures
         .empty, // capture_operands
         .empty, // record_destructs
@@ -2555,6 +2561,7 @@ test "capture finalization supplies the caller's active binder local" {
         .empty, // typed_locals
         .empty, // stmt_ids
         .empty, // field_exprs
+        .empty, // field_access_segments
         .empty, // fn_def_captures
         .empty, // capture_operands
         .empty, // record_destructs
