@@ -4217,6 +4217,34 @@ test/cli/JsonTagUnionProtocol.roc (issue #10418's unannotated
 rejected—test/cli/ParserOpenTagUnion.roc (a parser whose result annotation
 has a named rigid extension remains a missing-method error).
 
+### Derived Structural Codec Record-Row Closure
+
+A compiler-derived structural record codec owns the exact set of fields it
+reads or writes. A record inferred only from use sites can retain an
+unconstrained flexible extension after all of those uses have been checked.
+Once codec dispatch has deferred that record through constraint quiescence and
+no pending literal can add information, the checker closes that flexible
+extension to the empty record through ordinary unification and validates the
+codec against the complete closed row. Parser and encoder derivation use the
+same rule.
+
+Eligibility follows every concrete record extension and remains unresolved at
+a flexible tail, so generated-codec evidence is never frozen against a partial
+row. The rule does not close a bare flexible shape before a record exists, an
+extension with a pending literal, or a rigid named extension. A polymorphic
+open record can contain fields for which no codec was checked, so its derived
+codec dispatch is rejected.
+
+Both sides are pinned by tests: accepted—
+test/cli/JsonParseInferredRecord.roc (a parser record inferred from field uses
+closes at quiescence), the issue #10824 tests in
+src/check/test/issue_10824_test.zig (an inferred encoder row closes after its
+known field use), and test/cli/issue_10824_generated_codec_contract/app.roc (an
+encoder contract waits for a platform model row to close before freezing all
+of its field calls); rejected—the issue #10824 tests in
+src/check/test/issue_10824_test.zig (parser and encoder dispatch both reject a
+named rigid record extension).
+
 ### Derived Parser Required-Field Error Composition
 
 A compiler-derived structural record parser, rather than its input-format
@@ -5229,6 +5257,11 @@ Other solved-graph mutations:
   (above). Once structural parser eligibility has selected a known tag union,
   its unconstrained flexible extension closes to the empty tag union through
   ordinary unification; rigid extensions remain rejected.
+- `closeRecordRowForDerivedParse` / `closeRecordRowForDerivedEncode`—policy:
+  Derived Structural Codec Record-Row Closure (above). After derived codec
+  dispatch reaches quiescence, a record inferred from use sites closes its
+  unconstrained flexible extension to the empty record through ordinary
+  unification; rigid extensions remain rejected.
 - `constrainDerivedParserRequiredFieldError`—policy: Derived Parser
   Required-Field Error Composition (above). A structural probe of derived
   record fields gates ordinary unification of the parser's shared error row
@@ -8712,6 +8745,140 @@ descriptor also remains unsplit: scalarization may not replace its `assign_ref`
 field reads with local aliases unless it also introduces and initializes a
 matching descriptor parameter for every resulting field local.
 
+## Integer Arithmetic Operations
+
+Integer addition, subtraction, and multiplication each exist as a family of
+distinct LIR operations rather than a single operation whose meaning depends on
+context. A single `num_plus` would have to serve floating-point addition, a
+wrapping add a program may depend on, an add a range proof showed cannot
+overflow, and compiler-synthesized index arithmetic. Those cases carry opposite
+optimization licences, so collapsing them forces every backend to assume the
+weakest one.
+
+For each of add, sub, and mul the family is:
+
+- `num_int_add_wrap` produces the sum and wraps on overflow. The programmer
+  asked for wrapping and may depend on it.
+- `num_int_add_crash_on_overflow` produces the sum and crashes on overflow.
+  This is what plain `+` becomes.
+- `num_int_add_overflows` produces a `Bool` answering whether the addition
+  would overflow. It performs no addition of its own.
+- `num_int_add_proven_cannot_overflow` produces the sum, carrying a proof that
+  overflow cannot occur. Only this member licenses a backend to assert
+  no-wraparound to its optimizer.
+
+`num_float_add`, `num_float_sub`, and `num_float_mul` are separate operations
+with no variants. IEEE-754 overflow is defined: the result becomes an infinity
+and a sticky flag is set. Floats never wrap and never trap, so there is no
+checked, wrapping, or proven distinction to draw, and the numeric builtins
+correspondingly offer no `_try`, `_wrap`, or `_saturated` forms on `F32` and
+`F64`. Fast-math flags are the float analogue of no-wraparound assertions; they
+change results and are not enabled.
+
+The names state what happens rather than using "checked", which fails to
+distinguish three members that all check. `_overflows` is present tense because
+it asks about a hypothetical addition rather than reporting on one that ran.
+
+### Plain arithmetic always crashes on overflow
+
+Plain `+`, `-`, and `*` on integers crash on overflow at every optimization
+level. This is not a debug-build behavior that relaxes under optimization: the
+lowering that commits source arithmetic to a LIR operation receives the operand
+layout and nothing else, so the policy cannot vary by optimization level. What
+varies is only how many of those checks the range prover discharges.
+
+### Committing source arithmetic
+
+`num_plus`, `num_minus`, and `num_times` survive as source-policy markers
+emitted by canonicalization, where the operand layout is not yet committed. A
+single lowering step maps them to a family member using the layout: a float
+layout selects the float operation and an integer layout selects
+`crash_on_overflow`. These markers never reach a LIR pass or a backend.
+
+Explicit `_wrap` builtins are integer-only, so their target is already known at
+canonicalization and they map directly to the corresponding `wrap` family
+member. Compiler-synthesized wrapping arithmetic whose concrete layout is
+already known does the same. The lowering step is the choke point only for the
+polymorphic source-policy operations.
+
+The overflow predicate needs no such marker. It is integer-only and has exactly
+one form, so there is no policy for the lowering step to decide, and it maps
+directly.
+
+### The predicate is a separate operation, not a paired result
+
+Hardware computes an overflow flag as part of every add; obtaining it costs
+nothing. The natural encoding would be one operation returning both the sum and
+the flag, mirroring the LLVM intrinsics. LIR does not express that: a low-level
+assignment has a single destination local and there is no struct field-read
+statement, so a paired result would require a two-field struct local that risks
+being spilled to memory.
+
+Splitting them costs nothing. Computing the wrapping sum and the overflow
+predicate as independent operations over the same operands produces identical
+machine code, because the backend merges them. So the predicate stands alone as
+a pure question about its operands, and the higher-level forms compose from it:
+
+- `plus_try` is the predicate, then `Err(Overflow)` or `Ok(wrapping sum)`.
+- `plus_saturated` is the predicate, then a limit or the wrapping sum, which
+  compiles to a conditional select rather than a branch.
+- `plus` is `crash_on_overflow`.
+
+Writing these in terms of the predicate keeps them in builtin Roc source, where
+they are readable, without paying to re-derive overflow. Deriving it by hand
+instead costs a comparison, a branch, and a redundant overflow check on the
+addition that follows; for multiplication it costs a hardware division.
+
+### Only the range prover mints the proven form
+
+`num_int_add_proven_cannot_overflow` and its siblings are the one place in the
+family where an incorrect claim produces undefined behavior rather than a wrong
+answer, because they assert no-wraparound to the backend optimizer. They are
+minted exclusively by the range prover, which proves the result stays in range
+before rewriting. Source lowering never produces them, and neither does any
+other pass.
+
+This rule binds compiler-synthesized arithmetic too. A LIR pass that constructs
+an add directly emits the wrapping member and leaves the proof to the prover,
+even where the arithmetic is safe by construction. A hand-asserted proof at a
+synthesis site is a claim that decays as the surrounding pass changes, and its
+failure mode is undefined behavior rather than a detectably wrong result. The
+range prover proves the result stays in range or the operation remains checked.
+
+Under a debug build the interpreter evaluates the proven forms in a wider type
+and panics if one actually overflows, so every evaluation test doubles as an
+audit of the prover's claims.
+
+### What the prover does with the family
+
+Proving that overflow is impossible benefits every member. A crashing operation
+loses its crash path. The predicate folds to a constant, which then folds the
+branch that consumed it and collapses the surrounding `Try` or select entirely.
+A wrapping operation becomes the proven form, which is sound because a
+mathematical result that provably fits in the type makes wrapping and
+non-wrapping addition compute identical bits.
+
+One asymmetry is deliberate and worth recording. A surviving crash-on-overflow
+operation pays for itself even when no proof is found: control reaching the
+next statement is itself proof that the sum is exact, and later bounds checks
+consume that exact result range. A wrapping operation offers no such assumption,
+because no crash justifies it. Hand-writing `_wrap` in hot code therefore forfeits
+something plain `+` provides, and doing so has measurably cost throughput.
+
+### Dec
+
+`Dec` is fixed-point over an `i128`. Its addition and subtraction are plain
+`i128` arithmetic and join the integer family, despite the family name saying
+integer, because that is precisely what they are at the machine level. `Dec`
+multiplication requires rescaling, so it remains its own `dec_mul` operation.
+
+### Division and shifts
+
+Division, remainder, modulo, negation, and absolute value keep their existing
+checked forms. Their overflow shape differs—the most negative value divided
+by negative one, and division by zero—and they are not part of this family.
+Shift operations do not yet assert no-wraparound where it would be provable.
+
 ## ARC Borrow Inference
 
 ARC insertion computes a whole-program borrows-with-lifetimes solution over
@@ -9224,7 +9391,13 @@ statement scan.
 Join ownership is a must-property. Each reachable jump site contributes a
 state that can only shrink; a join summary maintains their running
 intersection incrementally, and recomputes the body keep-set from that exact
-meet plus the join parameters. A site contribution that shrinks without
+meet plus the join parameters the back edges rebind. A parameter counts as
+freshly owned in the body only when every arrival hands it a new unit: back
+edges are excluded from the general meet because they conform at emission by
+releasing down to the keep, but a parameter a back edge leaves alone re-enters
+the body still holding the value the previous iteration released, so the back
+edges maintain their own shrinking meet over the parameters and the body keep
+places only what survives it. A site contribution that shrinks without
 changing the global meet cannot schedule downstream work. Each loop identity
 records whether its solved rows consumed any keep bits. A keep change that
 supplied no boundary bits schedules no liveness work.
@@ -9550,7 +9723,13 @@ ownership places. The place graph is solved to a fixpoint, so a nested read
 chain such as tag payload to struct field keeps the root aggregate's unit key.
 If the final read result binds owned, that read moves the unit only when the
 root unit is present and the ownership place has no later RC-bearing use on
-that path; otherwise it retains exactly as an ordinary read would. A pure
+that path; otherwise it retains exactly as an ordinary read would. This use
+query is definition-sensitive: a `set_local` that writes the root ends the
+current place definition after its value operand is read. Uses reached through
+the following jump belong to the newly written join value and cannot keep the
+previous definition alive. Conversely, reaching an implicit `loop_continue`
+or `loop_break` without such a rebind keeps the current definition live across
+the loop boundary. A pure
 same-value alias followed only by non-refcounted field reads is
 representation-only: an inline struct's scalar bytes remain available after
 its stored RC units move or are released, so such reads do not keep the
@@ -10844,6 +11023,22 @@ chooses the output kind; `roc build` produces what the platform declares for
 the selected target, and there is no `--no-link` style flag. `--target` and
 `--output` (the output path) remain per-build choices.
 
+Windows C runtime ABI is part of target identity. `x64win` and `arm64win`
+(plus their `v1` twins) retain the existing MSVC meaning. `x64mingw` and
+`arm64mingw` (plus `x64v1mingw` and `arm64v1mingw`) select the GNU Windows
+ABI. The compiler carries that distinction through the target query, LLVM
+triple, builtin objects, platform-input directory, and final link. It never
+classifies a COFF input as MSVC or MinGW from its container format, symbols,
+or linker failures.
+
+An MSVC target uses the Windows SDK and MSVC runtime discovered for that
+target. A MinGW target does not discover or add MSVC inputs. It uses LLD's
+MinGW mode and links only the startup objects, runtime archives, and import
+libraries declared explicitly by the platform target, together with Roc's
+generated objects. This lets a platform provide a cgo host and its matching
+MinGW runtime without either the compiler or linker reconstructing the host's
+ABI from the archive.
+
 ```text
 targets: {
     inputs_dir: "targets/",
@@ -11969,9 +12164,12 @@ provides it. Where a target needs a fixup or emulation, the doc says so.
 Competitive codecs need the scalar side of the language to hold up too; the
 known gaps, deliberately excluded from the SIMD effort, are:
 
-- wrapping scalar arithmetic does not exist, and plain `+`/`-`/`*` are
-  checked (crash-on-overflow) even at `--opt=speed`, which also blocks
-  auto-vectorization of reductions—#10300;
+- plain `+`/`-`/`*` crash on overflow at every optimization level, which is
+  intended, but the surviving checks block auto-vectorization of reductions
+  where the range prover cannot discharge them—#10300. Wrapping arithmetic is
+available as `plus_wrap`/`minus_wrap`/`times_wrap`, though reaching for it
+forfeits the exact result range a surviving check supplies (see
+  "Integer Arithmetic Operations");
 - `for`/`Iter` loops carry per-item step calls and refcount traffic
   that the equivalent `while` loop does not—#10301;
 - no scalar rotate, byte-swap, or unaligned multi-byte loads from

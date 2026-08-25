@@ -1422,7 +1422,9 @@ const Solver = struct {
                     try work.append(self.allocator, self.program.types.spanItem(items, index));
                 },
                 .record => |fields| for (0..fields.count()) |index| {
-                    try work.append(self.allocator, self.program.types.fieldItem(fields, index).ty);
+                    const field = self.program.types.fieldItem(fields, index);
+                    try work.append(self.allocator, field.ty);
+                    if (field.value_ty) |value_ty| try work.append(self.allocator, value_ty);
                 },
                 .tag_union => |tags| for (0..tags.count()) |tag_index| {
                     const tag = self.program.types.tagItem(tags, tag_index);

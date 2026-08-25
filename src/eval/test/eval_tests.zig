@@ -5952,6 +5952,61 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(True, True, True, True, True, True, True, True, True, True)" },
     },
     .{
+        .name = "inspect: overflow predicates return Bool across scalar and composite widths",
+        .source =
+        \\{
+        \\    u8 = |a, b| (a.plus_overflows(b), a.minus_overflows(b), a.times_overflows(b))
+        \\    i8 = |a, b| (a.plus_overflows(b), a.minus_overflows(b), a.times_overflows(b))
+        \\    u64 = |a, b| (a.plus_overflows(b), a.minus_overflows(b), a.times_overflows(b))
+        \\    i64 = |a, b| (a.plus_overflows(b), a.minus_overflows(b), a.times_overflows(b))
+        \\    u128 = |a, b| (a.plus_overflows(b), a.minus_overflows(b), a.times_overflows(b))
+        \\    i128 = |a, b| (a.plus_overflows(b), a.minus_overflows(b), a.times_overflows(b))
+        \\    (
+        \\        u8(U8.highest, 2), u8(3, 2),
+        \\        i8(I8.highest, 2), i8(I8.lowest, 1), i8(I8.lowest, -1),
+        \\        u64(U64.highest, 2), u64(3, 2),
+        \\        i64(I64.highest, 2), i64(I64.lowest, 1), i64(I64.lowest, -1),
+        \\        u128(U128.highest, 2), u128(3, 2),
+        \\        i128(I128.highest, 2), i128(I128.lowest, 1), i128(I128.lowest, -1),
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "((True, False, True), (False, False, False), (True, False, True), (False, True, False), (True, False, True), (True, False, True), (False, False, False), (True, False, True), (False, True, False), (True, False, True), (True, False, True), (False, False, False), (True, False, True), (False, True, False), (True, False, True))" },
+    },
+    .{
+        .name = "inspect: integer saturating arithmetic covers every width and direction",
+        .source =
+        \\(
+        \\    U8.plus_saturated(U8.highest, 1) == U8.highest and U8.minus_saturated(0, 1) == 0 and U8.times_saturated(U8.highest, 2) == U8.highest,
+        \\    I8.plus_saturated(I8.highest, 1) == I8.highest and I8.plus_saturated(I8.lowest, -1) == I8.lowest and I8.minus_saturated(I8.lowest, 1) == I8.lowest and I8.minus_saturated(I8.highest, -1) == I8.highest and I8.times_saturated(I8.highest, 2) == I8.highest and I8.times_saturated(I8.lowest, 2) == I8.lowest and I8.times_saturated(I8.lowest, -1) == I8.highest,
+        \\    U16.plus_saturated(U16.highest, 1) == U16.highest and U16.minus_saturated(0, 1) == 0 and U16.times_saturated(U16.highest, 2) == U16.highest,
+        \\    I16.plus_saturated(I16.highest, 1) == I16.highest and I16.plus_saturated(I16.lowest, -1) == I16.lowest and I16.minus_saturated(I16.lowest, 1) == I16.lowest and I16.minus_saturated(I16.highest, -1) == I16.highest and I16.times_saturated(I16.highest, 2) == I16.highest and I16.times_saturated(I16.lowest, 2) == I16.lowest and I16.times_saturated(I16.lowest, -1) == I16.highest,
+        \\    U32.plus_saturated(U32.highest, 1) == U32.highest and U32.minus_saturated(0, 1) == 0 and U32.times_saturated(U32.highest, 2) == U32.highest,
+        \\    I32.plus_saturated(I32.highest, 1) == I32.highest and I32.plus_saturated(I32.lowest, -1) == I32.lowest and I32.minus_saturated(I32.lowest, 1) == I32.lowest and I32.minus_saturated(I32.highest, -1) == I32.highest and I32.times_saturated(I32.highest, 2) == I32.highest and I32.times_saturated(I32.lowest, 2) == I32.lowest and I32.times_saturated(I32.lowest, -1) == I32.highest,
+        \\    U64.plus_saturated(U64.highest, 1) == U64.highest and U64.minus_saturated(0, 1) == 0 and U64.times_saturated(U64.highest, 2) == U64.highest,
+        \\    I64.plus_saturated(I64.highest, 1) == I64.highest and I64.plus_saturated(I64.lowest, -1) == I64.lowest and I64.minus_saturated(I64.lowest, 1) == I64.lowest and I64.minus_saturated(I64.highest, -1) == I64.highest and I64.times_saturated(I64.highest, 2) == I64.highest and I64.times_saturated(I64.lowest, 2) == I64.lowest and I64.times_saturated(I64.lowest, -1) == I64.highest,
+        \\    U128.plus_saturated(U128.highest, 1) == U128.highest and U128.minus_saturated(0, 1) == 0 and U128.times_saturated(U128.highest, 2) == U128.highest,
+        \\    I128.plus_saturated(I128.highest, 1) == I128.highest and I128.plus_saturated(I128.lowest, -1) == I128.lowest and I128.minus_saturated(I128.lowest, 1) == I128.lowest and I128.minus_saturated(I128.highest, -1) == I128.highest and I128.times_saturated(I128.highest, 2) == I128.highest and I128.times_saturated(I128.lowest, 2) == I128.lowest and I128.times_saturated(I128.lowest, -1) == I128.highest,
+        \\)
+        ,
+        .expected = .{ .inspect_str = "(True, True, True, True, True, True, True, True, True, True)" },
+    },
+    .{
+        .name = "inspect: Dec saturating arithmetic preserves fixed-point bounds",
+        .source =
+        \\(
+        \\    Dec.plus_saturated(Dec.highest, 1.0) == Dec.highest,
+        \\    Dec.plus_saturated(Dec.lowest, -1.0) == Dec.lowest,
+        \\    Dec.minus_saturated(Dec.lowest, 1.0) == Dec.lowest,
+        \\    Dec.minus_saturated(Dec.highest, -1.0) == Dec.highest,
+        \\    Dec.times_saturated(Dec.highest, 2.0) == Dec.highest,
+        \\    Dec.times_saturated(Dec.lowest, 2.0) == Dec.lowest,
+        \\    Dec.plus_saturated(1.5, 2.5) == 4.0,
+        \\)
+        ,
+        .expected = .{ .inspect_str = "(True, True, True, True, True, True, True)" },
+    },
+    .{
         .name = "inspect: Dec try arithmetic returns overflow without crashing or wrapping",
         .source =
         \\(
@@ -6297,6 +6352,56 @@ const core_tests = [_]TestCase{
     .{
         .name = "crash: Dec multiply overflow crashes on every backend",
         .source = "100000000000000000000.0 * 100.0.Dec",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "crash: U8 plain add overflows",
+        .source = "U8.highest + 1",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "crash: I8 plain add overflows",
+        .source = "I8.highest + 1",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "crash: U16 plain add overflows",
+        .source = "U16.highest + 1",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "crash: I16 plain add overflows",
+        .source = "I16.highest + 1",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "crash: U32 plain add overflows",
+        .source = "U32.highest + 1",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "crash: I32 plain add overflows",
+        .source = "I32.highest + 1",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "crash: U64 plain add overflows",
+        .source = "U64.highest + 1",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "crash: I64 plain add overflows",
+        .source = "I64.highest + 1",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "crash: U128 plain add overflows",
+        .source = "U128.highest + 1",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "crash: I128 plain add overflows",
+        .source = "I128.highest + 1",
         .expected = .{ .crash = {} },
     },
     .{

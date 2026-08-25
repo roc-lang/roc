@@ -26,13 +26,14 @@ match_extension = |bytes, a_start, b_start| {
 	var $a = lo
 
 	while True {
-		x = match U64.from_le_bytes(bytes, $a) {
+		# Check the later position first so its bounds check governs both reads.
+		y = match U64.from_le_bytes(bytes, $a.plus_wrap(delta)) {
 			Ok(v) => v
 			Err(_) => {
 				break
 			}
 		}
-		y = match U64.from_le_bytes(bytes, $a.plus_wrap(delta)) {
+		x = match U64.from_le_bytes(bytes, $a) {
 			Ok(v) => v
 			Err(_) => {
 				break
@@ -48,13 +49,13 @@ match_extension = |bytes, a_start, b_start| {
 
 	# Fewer than eight bytes left at one of the positions; finish by byte.
 	while True {
-		p = match bytes.get($a) {
+		q = match bytes.get($a.plus_wrap(delta)) {
 			Ok(v) => v
 			Err(_) => {
 				break
 			}
 		}
-		q = match bytes.get($a.plus_wrap(delta)) {
+		p = match bytes.get($a) {
 			Ok(v) => v
 			Err(_) => {
 				break
