@@ -378,6 +378,151 @@ pub fn localIdLessThan(_: void, a: LocalId, b: LocalId) bool {
     return @intFromEnum(a) < @intFromEnum(b);
 }
 
+/// The body of a proc these passes may rewrite, or null when the proc has no
+/// body of its own to clone: a hosted proc's implementation comes from the
+/// host, and a non-Roc ABI proc's calling convention is fixed by its boundary.
+pub fn rewritableProcBody(store: *const LirStore, proc_id: LIR.LirProcSpecId) ?CFStmtId {
+    const proc = store.getProcSpec(proc_id);
+    if (proc.hosted != null or proc.abi != .roc) return null;
+    return proc.body;
+}
+
+/// Every statement reachable from a proc body, visited exactly once. Shared
+/// join targets are reached through whichever predecessor arrives first.
+pub const ReachableStmts = struct {
+    store: *LirStore,
+    work: std.ArrayList(CFStmtId),
+    visited: collections.DenseMap(CFStmtId, void),
+
+    /// Start a walk rooted at `body`.
+    pub fn init(store: *LirStore, body: CFStmtId) Allocator.Error!ReachableStmts {
+        var work = std.ArrayList(CFStmtId).empty;
+        errdefer work.deinit(store.allocator);
+        try work.append(store.allocator, body);
+        return .{
+            .store = store,
+            .work = work,
+            .visited = collections.DenseMap(CFStmtId, void).init(store.allocator),
+        };
+    }
+
+    /// Release the walk's scratch storage.
+    pub fn deinit(self: *ReachableStmts) void {
+        self.work.deinit(self.store.allocator);
+        self.visited.deinit();
+    }
+
+    /// The next unvisited statement, or null when the walk is done.
+    pub fn next(self: *ReachableStmts) Allocator.Error!?CFStmtId {
+        while (self.work.pop()) |stmt_id| {
+            const entry = try self.visited.getOrPut(stmt_id);
+            if (entry.found_existing) continue;
+            try appendSuccessors(self.store, &self.work, stmt_id);
+            return stmt_id;
+        }
+        return null;
+    }
+};
+
+/// Whether every local in `chain` has exactly one read across the proc.
+///
+/// This is the soundness guard for fusing a call with the statement that
+/// consumes its result: the result is aliased or consumed exactly once, each
+/// alias feeds the next link exactly once, and the final value is the matched
+/// consumer's only reader. Any extra read means the fusion would orphan a
+/// still-live local, so both fusion passes must ask exactly this question.
+pub fn chainIsSingleUse(store: *LirStore, proc_body: CFStmtId, chain: []const LocalId) Allocator.Error!bool {
+    var reads = try countReachableReads(store, proc_body);
+    defer reads.deinit();
+    for (chain) |local| {
+        if (reads.get(local) != 1) return false;
+    }
+    return true;
+}
+
+/// What a cloned call variant adds to the proc it was cloned from.
+pub const CallVariantSpec = struct {
+    /// Locals prepended to the variant's argument list, ahead of the source
+    /// proc's own arguments. The fused call passes these at the call site.
+    leading_args: []const LocalId,
+    /// Locals the variant's frame needs that are neither its arguments nor
+    /// created by cloning the body.
+    extra_frame_locals: []const LocalId = &.{},
+    /// The variant's return layout, which the rewritten returns produce.
+    ret_layout: layout_mod.Idx,
+};
+
+/// Clone `source` into an internal variant whose returns are rewritten by
+/// `rewriter` and whose arguments are `spec.leading_args` followed by the
+/// source's own. The source proc is left untouched; callers cache the result
+/// so one variant serves every fused call site.
+pub fn cloneCallVariant(
+    comptime Rewriter: type,
+    store: *LirStore,
+    source: LIR.LirProcSpecId,
+    rewriter: Rewriter,
+    spec: CallVariantSpec,
+) Allocator.Error!LIR.LirProcSpecId {
+    const source_spec = store.getProcSpec(source);
+    const source_body = source_spec.body orelse
+        @panic("call-variant clone reached a proc with no body");
+    const source_args = store.getLocalSpan(source_spec.args);
+
+    var variant_args = try std.ArrayList(LocalId).initCapacity(
+        store.allocator,
+        source_args.len + spec.leading_args.len,
+    );
+    defer variant_args.deinit(store.allocator);
+    variant_args.appendSliceAssumeCapacity(spec.leading_args);
+
+    for (0..source_args.len) |index| {
+        const source_arg = GuardedList.at(source_args, index);
+        const arg = try store.addLocal(.{ .layout_idx = store.getLocal(source_arg).layout_idx });
+        variant_args.appendAssumeCapacity(arg);
+    }
+
+    var cloner = try BodyCloner(Rewriter).init(store, rewriter);
+    defer cloner.deinit();
+
+    for (0..source_args.len) |index| {
+        const source_arg = GuardedList.at(source_args, index);
+        cloner.local_map[@intFromEnum(source_arg)] = variant_args.items[index + spec.leading_args.len];
+    }
+
+    try cloner.new_locals.appendSlice(store.allocator, variant_args.items);
+    try cloner.new_locals.appendSlice(store.allocator, spec.extra_frame_locals);
+
+    const source_frame = store.getLocalSpan(source_spec.frame_locals);
+    for (0..source_frame.len) |index| {
+        _ = try cloner.mapLocal(GuardedList.at(source_frame, index));
+    }
+
+    const body = try cloner.cloneStmt(source_body);
+    const erased_reuse_arg = if (source_spec.erased_reuse_arg) |source_arg|
+        try cloner.mapLocal(source_arg)
+    else
+        null;
+
+    var frame_locals = try std.ArrayList(LocalId).initCapacity(store.allocator, cloner.new_locals.items.len);
+    defer frame_locals.deinit(store.allocator);
+    frame_locals.appendSliceAssumeCapacity(cloner.new_locals.items);
+    std.mem.sort(LocalId, frame_locals.items, {}, localIdLessThan);
+    const unique_len = uniqueSortedLocals(frame_locals.items);
+
+    const variant = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(variant_args.items),
+        .erased_reuse_arg = erased_reuse_arg,
+        .frame_locals = try store.addLocalSpan(frame_locals.items[0..unique_len]),
+        .body = body,
+        .ret_layout = spec.ret_layout,
+        .abi = .roc,
+    });
+    try store.copyProcDebugInfo(variant, source);
+
+    return variant;
+}
+
 /// Clone a source proc body into fresh statements and locals, delegating return
 /// handling to `Rewriter`.
 ///
@@ -887,4 +1032,111 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             return local;
         }
     };
+}
+
+test "chainIsSingleUse rejects an extra read of any link" {
+    // The soundness guard both fusion passes depend on: a chain link read more
+    // than once means the fusion would orphan a still-live local. Each case
+    // below is one shape that must be refused, and one that must be allowed.
+    const gpa = std.testing.allocator;
+    var store = LirStore.init(gpa);
+    defer store.deinit();
+
+    const a = try store.addLocal(.{ .layout_idx = .str });
+    const b = try store.addLocal(.{ .layout_idx = .str });
+    const unit = try store.addLocal(.{ .layout_idx = .zst });
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = b } });
+    const alias = try store.addCFStmt(.{ .assign_ref = .{
+        .target = b,
+        .op = .{ .local = a },
+        .next = ret,
+    } });
+
+    // `a` is read once (by the alias) and `b` once (by the return).
+    try std.testing.expect(try chainIsSingleUse(&store, alias, &.{ a, b }));
+
+    // A second read of the head link refuses the chain.
+    const extra_head = try store.addCFStmt(.{ .assign_ref = .{
+        .target = unit,
+        .op = .{ .local = a },
+        .next = alias,
+    } });
+    try std.testing.expect(!try chainIsSingleUse(&store, extra_head, &.{ a, b }));
+
+    // A second read of the tail link refuses it just the same.
+    const extra_tail = try store.addCFStmt(.{ .assign_ref = .{
+        .target = unit,
+        .op = .{ .local = b },
+        .next = alias,
+    } });
+    try std.testing.expect(!try chainIsSingleUse(&store, extra_tail, &.{ a, b }));
+
+    // A local with no reads at all is not "exactly one" either.
+    const unread = try store.addLocal(.{ .layout_idx = .str });
+    try std.testing.expect(!try chainIsSingleUse(&store, alias, &.{unread}));
+}
+
+test "rewritableProcBody refuses procs whose body is not the compiler's to clone" {
+    const gpa = std.testing.allocator;
+    var store = LirStore.init(gpa);
+    defer store.deinit();
+
+    const unit = try store.addLocal(.{ .layout_idx = .zst });
+    const body = try store.addCFStmt(.{ .ret = .{ .value = unit } });
+
+    const roc_proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{}),
+        .frame_locals = try store.addLocalSpan(&.{unit}),
+        .body = body,
+        .ret_layout = .zst,
+        .abi = .roc,
+    });
+    try std.testing.expectEqual(body, rewritableProcBody(&store, roc_proc).?);
+
+    const bodyless = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{}),
+        .frame_locals = try store.addLocalSpan(&.{}),
+        .body = null,
+        .ret_layout = .zst,
+        .abi = .roc,
+    });
+    try std.testing.expect(rewritableProcBody(&store, bodyless) == null);
+
+    const erased = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{}),
+        .frame_locals = try store.addLocalSpan(&.{unit}),
+        .body = body,
+        .ret_layout = .zst,
+        .abi = .erased_callable,
+    });
+    try std.testing.expect(rewritableProcBody(&store, erased) == null);
+}
+
+test "call-result fusion machinery has one definition" {
+    // `return_slot` and `str_append` are the same pass with different consumer
+    // matches. The walk, the liveness guard, and the variant clone live here so
+    // a fix to any of them cannot land on one pass and miss the other.
+    const sources = [_][]const u8{
+        @embedFile("return_slot.zig"),
+        @embedFile("str_append.zig"),
+        @embedFile("box_reuse.zig"),
+    };
+    const shared = [_][]const u8{
+        "fn chainIsSingleUse(",
+        "fn cloneCallVariant(",
+        "fn rewritableProcBody(",
+    };
+    for (sources) |source| {
+        for (shared) |decl| {
+            try std.testing.expect(std.mem.find(u8, source, decl) == null);
+        }
+    }
+    const own = @embedFile("body_clone.zig");
+    for (shared) |decl| {
+        try std.testing.expect(std.mem.find(u8, own, decl) != null);
+    }
 }

@@ -9351,7 +9351,13 @@ statement scan.
 Join ownership is a must-property. Each reachable jump site contributes a
 state that can only shrink; a join summary maintains their running
 intersection incrementally, and recomputes the body keep-set from that exact
-meet plus the join parameters. A site contribution that shrinks without
+meet plus the join parameters the back edges rebind. A parameter counts as
+freshly owned in the body only when every arrival hands it a new unit: back
+edges are excluded from the general meet because they conform at emission by
+releasing down to the keep, but a parameter a back edge leaves alone re-enters
+the body still holding the value the previous iteration released, so the back
+edges maintain their own shrinking meet over the parameters and the body keep
+places only what survives it. A site contribution that shrinks without
 changing the global meet cannot schedule downstream work. Each loop identity
 records whether its solved rows consumed any keep bits. A keep change that
 supplied no boundary bits schedules no liveness work.
@@ -9677,7 +9683,13 @@ ownership places. The place graph is solved to a fixpoint, so a nested read
 chain such as tag payload to struct field keeps the root aggregate's unit key.
 If the final read result binds owned, that read moves the unit only when the
 root unit is present and the ownership place has no later RC-bearing use on
-that path; otherwise it retains exactly as an ordinary read would. A pure
+that path; otherwise it retains exactly as an ordinary read would. This use
+query is definition-sensitive: a `set_local` that writes the root ends the
+current place definition after its value operand is read. Uses reached through
+the following jump belong to the newly written join value and cannot keep the
+previous definition alive. Conversely, reaching an implicit `loop_continue`
+or `loop_break` without such a rebind keeps the current definition live across
+the loop boundary. A pure
 same-value alias followed only by non-refcounted field reads is
 representation-only: an inline struct's scalar bytes remain available after
 its stored RC units move or are released, so such reads do not keep the
