@@ -827,13 +827,13 @@ fn autoImportedTypeUsesCompilerBuiltinImport(info: AutoImportedType) bool {
     };
 }
 
-/// Whether `qualified_name` reaches an internal builtin type through the builtin
-/// auto-import named by `root_ident`, as opposed to a user type that happens to
-/// share the name.
-fn namesInternalBuiltinType(self: *Self, root_ident: Ident.Idx, qualified_name: []const u8) bool {
-    const imported = self.lookupAvailableModuleEnv(root_ident) orelse return false;
-    if (!autoImportedTypeUsesCompilerBuiltinImport(imported)) return false;
-    return CIR.builtinTypeIsInternal(qualified_name);
+/// Return the exact internal builtin family reached through the compiler-owned
+/// auto-import named by `root_ident`. A user type that shares the same text has
+/// no internal family.
+fn internalBuiltinTypeKind(self: *Self, root_ident: Ident.Idx, qualified_name: []const u8) ?CIR.InternalBuiltinTypeKind {
+    const imported = self.lookupAvailableModuleEnv(root_ident) orelse return null;
+    if (!autoImportedTypeUsesCompilerBuiltinImport(imported)) return null;
+    return CIR.internalBuiltinTypeKind(qualified_name);
 }
 
 fn isSourceTagIdent(self: *const Self, ident: Ident.Idx) bool {
@@ -19575,10 +19575,11 @@ fn canonicalizeTypeAnnoBasicType(
                     return anno_idx;
                 }
 
-                if (self.namesInternalBuiltinType(first_qualifier_ident, self.env.getIdent(qualified_name_ident))) {
+                if (self.internalBuiltinTypeKind(first_qualifier_ident, self.env.getIdent(qualified_name_ident))) |kind| {
                     return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .internal_builtin_type = .{
                         .parent_name = first_qualifier_ident,
                         .nested_name = type_name_ident,
+                        .kind = kind,
                         .region = region,
                     } });
                 }
@@ -19608,10 +19609,11 @@ fn canonicalizeTypeAnnoBasicType(
             // Module is not in current scope - but check if it's a type name first
             if (try self.scopeLookupTypeBinding(module_alias)) |_| {
                 // This is in scope as a type/value, but doesn't expose the nested type being requested
-                if (self.namesInternalBuiltinType(module_alias, self.env.getIdent(qualified_name_ident))) {
+                if (self.internalBuiltinTypeKind(module_alias, self.env.getIdent(qualified_name_ident))) |kind| {
                     return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .internal_builtin_type = .{
                         .parent_name = module_alias,
                         .nested_name = type_name_ident,
+                        .kind = kind,
                         .region = region,
                     } });
                 }

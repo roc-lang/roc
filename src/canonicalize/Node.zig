@@ -426,6 +426,7 @@ pub const Payload = extern union {
     diag_single_value: DiagSingleValue,
     diag_two_idents: DiagTwoIdents,
     diag_three_idents: DiagThreeIdents,
+    diag_internal_builtin_type: DiagInternalBuiltinType,
     diag_ident_with_region: DiagIdentWithRegion,
     diag_two_idents_extra: DiagTwoIdentsExtra,
     diag_single_ident_extra: DiagSingleIdentExtra,
@@ -1168,6 +1169,13 @@ pub const Payload = extern union {
         ident1: u32, // @bitCast(Ident.Idx)
         ident2: u32, // @bitCast(Ident.Idx)
         ident3: u32, // @bitCast(Ident.Idx)
+    };
+
+    /// Internal builtin type diagnostic with its exact codec family.
+    pub const DiagInternalBuiltinType = extern struct {
+        parent_name: u32, // @bitCast(Ident.Idx)
+        nested_name: u32, // @bitCast(Ident.Idx)
+        kind: u32, // @intFromEnum(Diagnostic.InternalBuiltinTypeKind)
     };
 
     /// Diagnostics with an identifier and inline region offsets.

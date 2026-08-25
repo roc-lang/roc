@@ -5,3 +5,6 @@ json_state = todo
 
 header_state : Encoding.HttpHeaderState
 header_state = todo
+
+header_nested : Encoding.HttpHeaderState.SomeNested
+header_nested = todo

@@ -28,6 +28,12 @@ pub const DeclaredTypeKind = enum(u8) {
     }
 };
 
+/// Public codec family that owns an otherwise unnameable builtin state type.
+pub const InternalBuiltinTypeKind = enum(u8) {
+    json,
+    http_header,
+};
+
 /// Different types of diagnostic errors
 pub const Diagnostic = union(enum) {
     not_implemented: struct {
@@ -258,6 +264,7 @@ pub const Diagnostic = union(enum) {
     internal_builtin_type: struct {
         parent_name: Ident.Idx,
         nested_name: Ident.Idx,
+        kind: InternalBuiltinTypeKind,
         region: Region,
     },
     nested_value_not_found: struct {

@@ -165,10 +165,7 @@ pub const BuiltinTypeLookup = union(enum) {
 };
 
 /// Public codec family that owns an otherwise unnameable builtin state type.
-pub const InternalBuiltinTypeKind = enum {
-    json,
-    http_header,
-};
+pub const InternalBuiltinTypeKind = @import("Diagnostic.zig").InternalBuiltinTypeKind;
 
 /// Static registry entry describing one builtin type that the compiler needs by index.
 pub const BuiltinTypeSpec = struct {
