@@ -9268,13 +9268,13 @@ const Builder = struct {
         requested_fn_ty: Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
         const hosted_try = capability orelse return null;
-        if (self.sameMonoType(declared_fn_ty, requested_fn_ty)) return null;
+        if (try self.sameMonoType(declared_fn_ty, requested_fn_ty)) return null;
         const declared = self.functionShape(declared_fn_ty, "hosted declared type was not a function");
         const requested = self.functionShape(requested_fn_ty, "hosted requested type was not a function");
-        if (self.sameMonoType(declared.ret, requested.ret)) return null;
+        if (try self.sameMonoType(declared.ret, requested.ret)) return null;
 
-        const declared_try = self.hostedTryInfoOrNull(hosted_try, declared.ret) orelse return null;
-        const requested_try = self.hostedTryInfoOrNull(hosted_try, requested.ret) orelse return null;
+        const declared_try = (try self.hostedTryInfoOrNull(hosted_try, declared.ret)) orelse return null;
+        const requested_try = (try self.hostedTryInfoOrNull(hosted_try, requested.ret)) orelse return null;
 
         const declared_args = self.program.types.span(declared.args);
         const requested_args = self.program.types.span(requested.args);
@@ -9334,7 +9334,7 @@ const Builder = struct {
             const arg = GuardedList.at(adapter_args, index);
             const source_arg_ty = GuardedList.at(source_args, index);
             const target_arg_ty = GuardedList.at(target_args, index);
-            if (!self.sameMonoType(arg.ty, source_arg_ty) or !self.sameMonoType(arg.ty, target_arg_ty)) {
+            if (!try self.sameMonoType(arg.ty, source_arg_ty) or !try self.sameMonoType(arg.ty, target_arg_ty)) {
                 Common.invariant("hosted Try adapter argument type differed from source or target function type");
             }
             call_args[index] = try self.localExpr(arg.local, arg.ty);
@@ -9357,14 +9357,14 @@ const Builder = struct {
         source_try_ty: Type.TypeId,
         target_try_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        if (self.sameMonoType(source_try_ty, target_try_ty)) return source_expr;
+        if (try self.sameMonoType(source_try_ty, target_try_ty)) return source_expr;
 
-        const source_info = self.hostedTryInfo(capability, source_try_ty);
-        const target_info = self.hostedTryInfo(capability, target_try_ty);
-        if (!self.sameMonoType(source_info.ok_ty, target_info.ok_ty)) {
+        const source_info = try self.hostedTryInfo(capability, source_try_ty);
+        const target_info = try self.hostedTryInfo(capability, target_try_ty);
+        if (!try self.sameMonoType(source_info.ok_ty, target_info.ok_ty)) {
             Common.invariant("Try adapter changed Ok type");
         }
-        if (!self.errorRowIsIncludedIn(source_info.err_ty, target_info.err_ty)) {
+        if (!try self.errorRowIsIncludedIn(source_info.err_ty, target_info.err_ty)) {
             Common.invariant("Try adapter error row was not included in target row");
         }
 
@@ -9403,7 +9403,7 @@ const Builder = struct {
         source_err_ty: Type.TypeId,
         target_err_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        if (self.sameMonoType(source_err_ty, target_err_ty)) return source_expr;
+        if (try self.sameMonoType(source_err_ty, target_err_ty)) return source_expr;
 
         const source_tags = self.tagUnionTags(source_err_ty);
         if (source_tags.len == 0) {
@@ -9431,7 +9431,7 @@ const Builder = struct {
             for (0..source_payload_tys.len) |payload_index| {
                 const source_payload_ty = GuardedList.at(source_payload_tys, payload_index);
                 const target_payload_ty = GuardedList.at(target_payload_tys, payload_index);
-                if (!self.sameMonoType(source_payload_ty, target_payload_ty)) {
+                if (!try self.sameMonoType(source_payload_ty, target_payload_ty)) {
                     Common.invariant("Try adapter error tag payload type differed in target row");
                 }
                 const local = try self.program.addLocal(self.symbols.fresh(), source_payload_ty);
@@ -9454,12 +9454,12 @@ const Builder = struct {
     }
 
     fn hostedTryOkExpr(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId, value_expr: Ast.ExprId) Allocator.Error!Ast.ExprId {
-        const info = self.hostedTryInfo(capability, try_ty);
+        const info = try self.hostedTryInfo(capability, try_ty);
         return try self.tagValueExpr(try_ty, info.ok_tag, &[_]Ast.ExprId{value_expr});
     }
 
     fn hostedTryErrExpr(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId, err_expr: Ast.ExprId) Allocator.Error!Ast.ExprId {
-        const info = self.hostedTryInfo(capability, try_ty);
+        const info = try self.hostedTryInfo(capability, try_ty);
         return try self.tagValueExpr(try_ty, info.err_tag, &[_]Ast.ExprId{err_expr});
     }
 
@@ -9483,12 +9483,12 @@ const Builder = struct {
         return tag_expr;
     }
 
-    fn hostedTryInfo(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId) HostedTryInfo {
-        return self.hostedTryInfoOrNull(capability, try_ty) orelse
+    fn hostedTryInfo(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId) Allocator.Error!HostedTryInfo {
+        return (try self.hostedTryInfoOrNull(capability, try_ty)) orelse
             Common.invariant("hosted Try capability did not match its Monotype result");
     }
 
-    fn hostedTryInfoOrNull(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId) ?HostedTryInfo {
+    fn hostedTryInfoOrNull(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId) Allocator.Error!?HostedTryInfo {
         const named = switch (self.program.types.get(try_ty)) {
             .named => |named| named,
             .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
@@ -9512,8 +9512,8 @@ const Builder = struct {
         const args = self.program.types.span(named.args);
         const ok_ty = GuardedList.at(args, capability.ok_type_arg_index);
         const err_ty = GuardedList.at(args, capability.err_type_arg_index);
-        if (!self.sameMonoType(ok_ty, GuardedList.at(ok_payloads, 0)) or
-            !self.sameMonoType(err_ty, GuardedList.at(err_payloads, 0)))
+        if (!try self.sameMonoType(ok_ty, GuardedList.at(ok_payloads, 0)) or
+            !try self.sameMonoType(err_ty, GuardedList.at(err_payloads, 0)))
         {
             Common.invariant("hosted Try capability payload mapping disagreed with its nominal arguments");
         }
@@ -9593,8 +9593,8 @@ const Builder = struct {
         } });
     }
 
-    fn errorRowIsIncludedIn(self: *Builder, source_err_ty: Type.TypeId, target_err_ty: Type.TypeId) bool {
-        if (self.sameMonoType(source_err_ty, target_err_ty)) return true;
+    fn errorRowIsIncludedIn(self: *Builder, source_err_ty: Type.TypeId, target_err_ty: Type.TypeId) Allocator.Error!bool {
+        if (try self.sameMonoType(source_err_ty, target_err_ty)) return true;
         const source_tags = self.tagUnionTags(source_err_ty);
         for (0..source_tags.len) |index| {
             const source_tag = GuardedList.at(source_tags, index);
@@ -9605,7 +9605,7 @@ const Builder = struct {
             for (0..source_payloads.len) |payload_index| {
                 const source_payload = GuardedList.at(source_payloads, payload_index);
                 const target_payload = GuardedList.at(target_payloads, payload_index);
-                if (!self.sameMonoType(source_payload, target_payload)) return false;
+                if (!try self.sameMonoType(source_payload, target_payload)) return false;
             }
         }
         return true;
@@ -9641,11 +9641,15 @@ const Builder = struct {
         };
     }
 
-    fn sameMonoType(self: *Builder, a: Type.TypeId, b: Type.TypeId) bool {
+    /// Whether two Monotypes describe the same type. This is the structural
+    /// `typeEql` relation rather than a stored-identity digest comparison:
+    /// checking may present one unified type both alias-wrapped and unwrapped
+    /// (a nominal's type argument can keep an alias name that the backing
+    /// row's payload resolved away), and a digest keeps aliases opaque, so
+    /// digest equality would report such equal types as different.
+    fn sameMonoType(self: *Builder, a: Type.TypeId, b: Type.TypeId) Allocator.Error!bool {
         if (a == b) return true;
-        const a_digest = self.program.types.typeDigest(&self.program.names, a);
-        const b_digest = self.program.types.typeDigest(&self.program.names, b);
-        return std.mem.eql(u8, a_digest.bytes[0..], b_digest.bytes[0..]);
+        return try self.program.types.typeEql(&self.program.names, a, b);
     }
 };
 
@@ -25498,7 +25502,7 @@ const BodyContext = struct {
         if (!self.sameType(source_ret_info.ok_ty, target_ret_info.ok_ty)) {
             Common.invariant("custom parser result Ok type differed from derived parser result Ok type");
         }
-        if (!self.builder.errorRowIsIncludedIn(source_ret_info.err_ty, target_ret_info.err_ty)) {
+        if (!try self.builder.errorRowIsIncludedIn(source_ret_info.err_ty, target_ret_info.err_ty)) {
             Common.invariant("custom parser error row was not included in derived parser error row");
         }
         const parse_ok_fields = switch (self.builder.shapeContent(source_ret_info.ok_ty)) {
@@ -25547,7 +25551,7 @@ const BodyContext = struct {
         if (!self.sameType(source_info.ok_ty, target_info.ok_ty)) {
             Common.invariant("parser Try error-row injection changed the Ok type");
         }
-        if (!self.builder.errorRowIsIncludedIn(source_info.err_ty, target_info.err_ty)) {
+        if (!try self.builder.errorRowIsIncludedIn(source_info.err_ty, target_info.err_ty)) {
             Common.invariant("parser Try error-row injection source was not included in target");
         }
 
@@ -50861,17 +50865,17 @@ test "hosted Try adapter narrows requested private representations by declared l
     const source = builder.functionShape(source_fn, "test source was not a function");
     const source_args = program.types.span(source.args);
     try std.testing.expectEqual(@as(usize, 1), source_args.len);
-    try std.testing.expect(builder.sameMonoType(GuardedList.at(source_args, 0), private_box));
-    const source_try = builder.hostedTryInfo(capability, source.ret);
-    try std.testing.expect(builder.sameMonoType(source_try.ok_ty, private_box));
+    try std.testing.expect(try builder.sameMonoType(GuardedList.at(source_args, 0), private_box));
+    const source_try = try builder.hostedTryInfo(capability, source.ret);
+    try std.testing.expect(try builder.sameMonoType(source_try.ok_ty, private_box));
     const source_err_tags = builder.tagUnionTags(source_try.err_ty);
     try std.testing.expectEqual(@as(usize, 1), source_err_tags.len);
     const source_host_err = GuardedList.at(source_err_tags, 0);
     try std.testing.expectEqual(host_err, source_host_err.name);
     const source_payloads = program.types.span(source_host_err.payloads);
     try std.testing.expectEqual(@as(usize, 1), source_payloads.len);
-    try std.testing.expect(builder.sameMonoType(GuardedList.at(source_payloads, 0), private_opaque));
-    try std.testing.expect(builder.errorRowIsIncludedIn(source_try.err_ty, requested_err));
+    try std.testing.expect(try builder.sameMonoType(GuardedList.at(source_payloads, 0), private_opaque));
+    try std.testing.expect(try builder.errorRowIsIncludedIn(source_try.err_ty, requested_err));
 
     const impostor_def = Type.TypeDef{
         .module = module_identity,
@@ -50889,6 +50893,125 @@ test "hosted Try adapter narrows requested private representations by declared l
         @as(?Type.TypeId, null),
         try builder.hostedTryAdapterSourceType(capability, impostor_declared_fn, impostor_requested_fn),
     );
+}
+
+test "hosted Try info accepts alias-wrapped nominal arguments over unwrapped backing payloads" {
+    // Regression test: checking may present one unified type both
+    // alias-wrapped and unwrapped—a hosted declaration like basic-cli's
+    // `cmd_exec_output! : Cmd => Try(CmdOutputSuccess, [NonZeroExitCode(CmdOutputFailure), ..])`
+    // lowered with the `Try` nominal's error argument still naming the
+    // `CmdOutputFailure` alias while the backing row's payload had resolved
+    // it to its record. Recognizing the capability mapping must use type
+    // equality (alias-transparent), not stored-identity digests, or lowering
+    // dies with "hosted Try capability payload mapping disagreed with its
+    // nominal arguments".
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator);
+    defer program.deinit();
+
+    var builder: Builder = undefined;
+    builder.allocator = allocator;
+    builder.program = &program;
+
+    const module_identity = try program.names.internModuleIdentity(&([_]u8{0xB2} ** 32));
+    const try_def = Type.TypeDef{
+        .module = module_identity,
+        .type_name = try program.names.internTypeName("Try"),
+    };
+    const failure_alias_def = Type.TypeDef{
+        .module = module_identity,
+        .type_name = try program.names.internTypeName("HostFailure"),
+    };
+    const try_named = Type.NamedType{ .module = .{}, .ty = @enumFromInt(1) };
+    const failure_named = Type.NamedType{ .module = .{}, .ty = @enumFromInt(2) };
+
+    const i64_ty = try program.types.add(.{ .primitive = .i64 });
+    const str_ty = try program.types.add(.{ .primitive = .str });
+
+    const failure_record = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &.{.{
+        .name = try program.names.internRecordFieldLabel("exit_code"),
+        .ty = i64_ty,
+        .default = null,
+    }}) });
+    const failure_alias = try program.types.add(.{ .named = .{
+        .named_type = failure_named,
+        .def = failure_alias_def,
+        .kind = .alias,
+        .args = .empty(),
+        .backing = .{ .ty = failure_record, .use = .inspectable },
+    } });
+
+    const host_err = try program.names.internTagLabel("HostErr");
+    const caller_err = try program.names.internTagLabel("CallerErr");
+    const err_row_with_alias = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{.{
+        .name = host_err,
+        .checked_name = host_err,
+        .payloads = try program.types.addSpan(&.{failure_alias}),
+    }}) });
+    const err_row_bare = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{.{
+        .name = host_err,
+        .checked_name = host_err,
+        .payloads = try program.types.addSpan(&.{failure_record}),
+    }}) });
+
+    const ok_name = try program.names.internTagLabel("Ok");
+    const err_name = try program.names.internTagLabel("Err");
+    const capability = HostedTryAdapterCapability{
+        .def = try_def,
+        .ok_tag = ok_name,
+        .err_tag = err_name,
+        .ok_type_arg_index = 0,
+        .err_type_arg_index = 1,
+    };
+    const declared_backing = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{
+        .{
+            .name = ok_name,
+            .checked_name = ok_name,
+            .payloads = try program.types.addSpan(&.{str_ty}),
+        },
+        .{
+            .name = err_name,
+            .checked_name = err_name,
+            .payloads = try program.types.addSpan(&.{err_row_bare}),
+        },
+    }) });
+    const declared_try = try program.types.add(.{ .named = .{
+        .named_type = try_named,
+        .def = try_def,
+        .kind = .nominal,
+        .args = try program.types.addSpan(&.{ str_ty, err_row_with_alias }),
+        .backing = .{ .ty = declared_backing, .use = .inspectable },
+    } });
+
+    try std.testing.expect(try builder.sameMonoType(failure_alias, failure_record));
+    const declared_info = (try builder.hostedTryInfoOrNull(capability, declared_try)) orelse
+        return error.TestExpectedEqual;
+    try std.testing.expect(try builder.sameMonoType(declared_info.err_ty, err_row_bare));
+
+    // A request that widens the declared error row must still produce an
+    // adapter source type from the alias-carrying declared type.
+    const requested_err = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{
+        .{
+            .name = host_err,
+            .checked_name = host_err,
+            .payloads = try program.types.addSpan(&.{failure_record}),
+        },
+        .{
+            .name = caller_err,
+            .checked_name = caller_err,
+            .payloads = try program.types.addSpan(&.{str_ty}),
+        },
+    }) });
+    const requested_try = try builder.hostedTryTypeLike(capability, declared_try, str_ty, requested_err);
+    const declared_fn = try builder.closedFunctionType(&.{i64_ty}, declared_try);
+    const requested_fn = try builder.closedFunctionType(&.{i64_ty}, requested_try);
+    const source_fn = (try builder.hostedTryAdapterSourceType(capability, declared_fn, requested_fn)) orelse
+        return error.TestExpectedEqual;
+    const source = builder.functionShape(source_fn, "test source was not a function");
+    const source_try = try builder.hostedTryInfo(capability, source.ret);
+    const source_err_tags = builder.tagUnionTags(source_try.err_ty);
+    try std.testing.expectEqual(@as(usize, 1), source_err_tags.len);
+    try std.testing.expectEqual(host_err, GuardedList.at(source_err_tags, 0).name);
 }
 
 test "hosted extern boundary admits only the declared host ABI type" {
