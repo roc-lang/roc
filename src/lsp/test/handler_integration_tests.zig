@@ -335,6 +335,7 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "references handler respects shadowing", .run = referencesHandlerRespectsShadowing },
     .{ .name = "inlay hints show inferred types and skip annotated bindings", .run = inlayHintsShowInferredTypes },
     .{ .name = "inlay hints stay within the requested range and truncate long types", .run = inlayHintsRespectRangeAndLength },
+    .{ .name = "inlay hints survive an out-of-range end line", .run = inlayHintsSurviveOutOfRangeEndLine },
     .{ .name = "the name on an annotation is a usable starting point", .run = annotationNameResolvesLikeAnyOccurrence },
     .{ .name = "positions are UTF-16 code units, not bytes", .run = positionsUseUtf16CodeUnits },
     .{ .name = "rename refuses a declaration that is not a plain name", .run = renameRefusesNonIsolatedDeclaration },
@@ -1608,6 +1609,55 @@ pub fn inlayHintsRespectRangeAndLength() integration_spec.SpecError!void {
     try std.testing.expect(std.mem.endsWith(u8, label, "…"));
     // ": " + at most 56 bytes of type + the three bytes of "…".
     try std.testing.expect(label.len <= 2 + 56 + 3);
+}
+
+/// Verifies a range whose end line is past the document does not crash.
+///
+/// The line range comes straight from the client, and widening it to a byte
+/// span adds one to the end line. At the u32 maximum that addition overflowed
+/// before any bounds check, which panics in a safety-enabled build.
+pub fn inlayHintsSurviveOutOfRangeEndLine() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "inlay_overflow.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\main = {{
+        \\    text = "roc"
+        \\    text
+        \\}}
+    , .{platform_path});
+    defer allocator.free(source);
+
+    // 4294967295 is the largest line a u32 position can name.
+    const overflowing = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/inlayHint","params":{{"textDocument":{{"uri":"{s}"}},"range":{{"start":{{"line":0,"character":0}},"end":{{"line":4294967295,"character":0}}}}}}}}
+    , .{fixture.uri});
+    defer allocator.free(overflowing);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{overflowing});
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    // The server answers, and the range is clamped to the end of the document,
+    // so the binding inside the block is still reported.
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const hints = try response.result();
+    try std.testing.expect(hints == .array);
+    const label = try hintLabelAt(hints, 3, 8) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(": Str", label);
 }
 
 /// Verifies goto definition locates a local variable definition.

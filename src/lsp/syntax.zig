@@ -3029,8 +3029,12 @@ pub const SyntaxChecker = struct {
         // The request names whole lines; widen to the byte span they cover.
         const start_offset = pos.positionToOffset(module_env, start_line, 0) orelse return null;
         const line_starts = module_env.getLineStartsAll();
-        const end_offset: u32 = if (end_line + 1 < line_starts.len)
-            line_starts[end_line + 1]
+
+        // `end_line` is whatever the client sent, so widen before adding one:
+        // a u32 maximum would otherwise overflow ahead of the bounds check.
+        const line_after_end: usize = @as(usize, end_line) + 1;
+        const end_offset: u32 = if (line_after_end < line_starts.len)
+            line_starts[line_after_end]
         else
             @intCast(module_env.common.source.len);
 
