@@ -1088,12 +1088,23 @@ const Pass = struct {
     /// `head` without following jumps: reassignments a loop iteration could
     /// perform. Jump targets either re-enter this subtree through their
     /// declarations (nested joins, already reachable) or leave it entirely.
-    fn bodyAssignedLocals(self: *Pass, head: CFStmtId) ResourceError!*const std.AutoHashMapUnmanaged(u32, void) {
+    /// Null when the subtree can hand control to code outside itself and get
+    /// it back — a jump to a join declared elsewhere, or a loop edge leaving
+    /// the region. That code may reassign anything, so no local of this body
+    /// can be called unassigned.
+    fn bodyAssignedLocals(self: *Pass, head: CFStmtId, own_join: u32) ResourceError!?*const std.AutoHashMapUnmanaged(u32, void) {
         if (self.body_assigned.get(head) != null) return self.body_assigned.getPtr(head).?;
         var set = std.AutoHashMapUnmanaged(u32, void).empty;
         errdefer set.deinit(self.allocator);
         self.body_assigned_scan.clearRetainingCapacity();
         self.body_assigned_seen.clearRetainingCapacity();
+        var declared_joins = std.AutoHashMapUnmanaged(u32, void).empty;
+        defer declared_joins.deinit(self.allocator);
+        // The back edge re-enters the very body being scanned.
+        try declared_joins.put(self.allocator, own_join, {});
+        var jump_targets = std.AutoHashMapUnmanaged(u32, void).empty;
+        defer jump_targets.deinit(self.allocator);
+        var leaves_region = false;
         try self.body_assigned_scan.append(self.allocator, head);
         while (self.body_assigned_scan.pop()) |current| {
             const seen = try self.body_assigned_seen.getOrPut(self.allocator, @intFromEnum(current));
@@ -1113,6 +1124,9 @@ const Pass = struct {
                     if (stmt.continuation) |continuation| try self.body_assigned_scan.append(self.allocator, continuation);
                 },
                 .switch_initialized_payload => |stmt| {
+                    // The initialized edge binds the payload, so an iteration
+                    // that takes it reassigns that local.
+                    try set.put(self.allocator, @intFromEnum(stmt.payload), {});
                     try self.body_assigned_scan.append(self.allocator, stmt.initialized_branch);
                     try self.body_assigned_scan.append(self.allocator, stmt.uninitialized_branch);
                 },
@@ -1147,11 +1161,27 @@ const Pass = struct {
                     try self.body_assigned_scan.append(self.allocator, stmt.on_miss);
                 },
                 .join => |stmt| {
+                    try declared_joins.put(self.allocator, @intFromEnum(stmt.id), {});
                     try self.body_assigned_scan.append(self.allocator, stmt.body);
                     try self.body_assigned_scan.append(self.allocator, stmt.remainder);
                 },
-                .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+                .jump => |stmt| try jump_targets.put(self.allocator, @intFromEnum(stmt.target), {}),
+                .loop_continue, .loop_break => leaves_region = true,
+                .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => {},
             }
+        }
+        if (!leaves_region) {
+            var it = jump_targets.keyIterator();
+            while (it.next()) |target| {
+                if (!declared_joins.contains(target.*)) {
+                    leaves_region = true;
+                    break;
+                }
+            }
+        }
+        if (leaves_region) {
+            set.deinit(self.allocator);
+            return null;
         }
         try self.body_assigned.put(head, set);
         return self.body_assigned.getPtr(head).?;
@@ -1379,8 +1409,8 @@ const Pass = struct {
                 // arrival; the back edge could never re-derive it before
                 // its own region is seeded, so seed it from the entry meet.
                 if (state) |st| {
-                    if (st.entry_captures > 0 and st.entry_env.items.len > 0) {
-                        const assigned = try self.bodyAssignedLocals(head);
+                    if (st.entry_captures > 0 and st.entry_env.items.len > 0) seed: {
+                        const assigned = (try self.bodyAssignedLocals(head, @intFromEnum(join_id))) orelse break :seed;
                         for (st.entry_env.items) |meet| {
                             if (!meet.valid) continue;
                             if (assigned.contains(@intFromEnum(meet.local))) continue;
