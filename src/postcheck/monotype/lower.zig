@@ -2219,6 +2219,28 @@ const Builder = struct {
     /// builder.
     evidence_arena: std.heap.ArenaAllocator,
 
+    /// The store this scope emits restored const expressions into.
+    fn constEmit(self: *Builder) *Ast.Program {
+        return self.program;
+    }
+
+    /// The type-store owner the shared const restoration queries.
+    fn constBuilder(self: *Builder) *Builder {
+        return self;
+    }
+
+    /// This scope's expression-data type for restored const values.
+    const ConstExprData = Ast.ExprData;
+    const ConstExprId = Ast.ExprId;
+    const ConstExprSpan = Ast.Span(Ast.ExprId);
+    const ConstFieldExpr = Ast.FieldExpr;
+    const ConstFieldExprSpan = Ast.Span(Ast.FieldExpr);
+
+    /// This scope's mapping from a stored scalar to expression data.
+    fn constScalarData(_: *Builder, scalar: checked.ConstScalar) ConstExprData {
+        return restoreScalar(scalar);
+    }
+
     fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program, options: Options) Builder {
         const counters = options.specialization_counters orelse
             if (options.diagnostics) |diagnostics| &diagnostics.specialization else null;
@@ -4678,7 +4700,7 @@ const Builder = struct {
         const fields = switch (self.shapeContent(ty)) {
             .record => |span| self.program.types.fieldSpan(span),
             .zst => return null,
-            _ => return null,
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => return null,
         };
         for (0..GuardedList.borrowLen(fields)) |index| {
             const field = GuardedList.at(fields, index);
@@ -7694,6 +7716,19 @@ const Builder = struct {
         return try self.exprDependsOnFreeLocalInner(expr, target, &bound, &active_fns);
     }
 
+    /// Drop `locals` from the bound set, innermost first, undoing one
+    /// scope's worth of `bindPatLocals`.
+    fn removeBoundLocals(
+        bound: *collections.DenseMap(Ast.LocalId, void),
+        locals: []const Ast.LocalId,
+    ) void {
+        var index = locals.len;
+        while (index > 0) {
+            index -= 1;
+            _ = bound.remove(locals[index]);
+        }
+    }
+
     fn exprDependsOnFreeLocalInner(
         self: *Builder,
         expr_id: Ast.ExprId,
@@ -8062,17 +8097,6 @@ const Builder = struct {
                     if (step.capture) |capture| try self.bindPatLocals(capture, bound, added);
                 }
             },
-        }
-    }
-
-    fn removeBoundLocals(
-        bound: *collections.DenseMap(Ast.LocalId, void),
-        locals: []const Ast.LocalId,
-    ) void {
-        var index = locals.len;
-        while (index > 0) {
-            index -= 1;
-            _ = bound.remove(locals[index]);
         }
     }
 
@@ -8564,157 +8588,10 @@ const Builder = struct {
             },
             .pending, .zst, .scalar, .str, .list, .box, .crash => {},
         }
-        const data = try self.restoreConstData(store_view, type_view, value, ty, static_data_const_locator);
+        const data = try constRestoreData(self, store_view, type_view, value, ty, static_data_const_locator);
         const expr = try self.program.addExpr(.{ .ty = ty, .data = data });
         if (static_data_const_locator == null) try self.const_expr_cache.put(address, expr);
         return expr;
-    }
-
-    fn restoreConstData(
-        self: *Builder,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        value: checked.ConstValue,
-        ty: Type.TypeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!Ast.ExprData {
-        return switch (value) {
-            .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
-            .zst => .unit,
-            .scalar => |scalar| restoreScalar(scalar),
-            .str => |str| .{ .str_lit = try self.program.addStringView(
-                store_view.const_store.blobData(str.data),
-                str.offset,
-                str.len,
-            ) },
-            .crash => |str| .{ .crash = try self.program.addStringView(
-                store_view.const_store.blobData(str.data),
-                str.offset,
-                str.len,
-            ) },
-            .list => |list| try self.restoreConstListData(store_view, type_view, ty, list, static_data_const_locator),
-            .box => |payload| blk: {
-                const child = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, payload, self.constBoxPayloadType(ty), static_data_const_locator);
-                break :blk .{ .low_level = .{
-                    .op = .box_box,
-                    .args = try self.program.addExprSpan(&.{child}),
-                } };
-            },
-            .tuple => |items| .{ .tuple = try self.restoreConstTuple(store_view, type_view, ty, items, static_data_const_locator) },
-            .record => |items| .{ .record = try self.restoreConstRecord(store_view, type_view, ty, items, static_data_const_locator) },
-            .tag => |tag| .{ .tag = .{
-                .name = try self.program.names.internTagLabel(tag.tag_name),
-                .payloads = try self.restoreConstTagPayloads(store_view, type_view, ty, tag, static_data_const_locator),
-            } },
-            .nominal => |nominal| .{ .nominal = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, nominal.backing, self.namedBackingType(ty) orelse ty, static_data_const_locator) },
-            .fn_value => Common.invariant("ConstStore function value must be restored as an expression"),
-        };
-    }
-
-    fn restoreConstList(
-        self: *Builder,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        ty: Type.TypeId,
-        items: []const checked.ConstNodeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!Ast.Span(Ast.ExprId) {
-        const elem_ty = self.constListElemType(ty);
-        const lowered = try self.allocator.alloc(Ast.ExprId, items.len);
-        defer self.allocator.free(lowered);
-        for (items, 0..) |item, index| {
-            lowered[index] = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, elem_ty, static_data_const_locator);
-        }
-        return try self.program.addExprSpan(lowered);
-    }
-
-    fn restoreConstListData(
-        self: *Builder,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        ty: Type.TypeId,
-        list: checked.ConstList,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!Ast.ExprData {
-        return switch (list) {
-            .nodes => |items| .{ .list = try self.restoreConstList(store_view, type_view, ty, items, static_data_const_locator) },
-            .scalar_bytes => |scalar_bytes| .{ .bytes_lit = .{
-                .literal = try self.program.addStringView(
-                    store_view.const_store.blobData(scalar_bytes.bytes.data),
-                    scalar_bytes.bytes.offset,
-                    scalar_bytes.bytes.len,
-                ),
-                .len = scalar_bytes.len,
-                .element = scalar_bytes.element,
-            } },
-        };
-    }
-
-    fn restoreConstTuple(
-        self: *Builder,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        ty: Type.TypeId,
-        items: []const checked.ConstNodeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!Ast.Span(Ast.ExprId) {
-        const item_span = self.tupleItemSpan(ty);
-        const item_count: usize = @intCast(item_span.len);
-        if (item_count != items.len) Common.invariant("ConstStore tuple length differs from checked type");
-        const lowered = try self.allocator.alloc(Ast.ExprId, items.len);
-        defer self.allocator.free(lowered);
-        for (items, 0..) |item, index| {
-            const item_tys = self.program.types.span(item_span);
-            const item_ty = GuardedList.at(item_tys, index);
-            lowered[index] = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, item_ty, static_data_const_locator);
-        }
-        return try self.program.addExprSpan(lowered);
-    }
-
-    fn restoreConstRecord(
-        self: *Builder,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        ty: Type.TypeId,
-        items: []const checked.ConstNodeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!Ast.Span(Ast.FieldExpr) {
-        const field_span = self.recordFieldsSpan(ty);
-        const field_count: usize = @intCast(field_span.len);
-        if (field_count != items.len) Common.invariant("ConstStore record length differs from checked type");
-        const lowered = try self.allocator.alloc(Ast.FieldExpr, items.len);
-        defer self.allocator.free(lowered);
-        for (items, 0..) |item, index| {
-            const fields = self.program.types.fieldSpan(field_span);
-            const field = GuardedList.at(fields, index);
-            lowered[index] = .{
-                .name = field.name,
-                .value = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, field.ty, static_data_const_locator),
-            };
-        }
-        return try self.program.addFieldExprSpan(lowered);
-    }
-
-    fn restoreConstTagPayloads(
-        self: *Builder,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        ty: Type.TypeId,
-        tag: anytype,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!Ast.Span(Ast.ExprId) {
-        const mono_tag_name = try self.program.names.internTagLabel(tag.tag_name);
-        const payload_span = self.tagPayloadSpan(ty, mono_tag_name);
-        const payload_count: usize = @intCast(payload_span.len);
-        if (payload_count != tag.payloads.len) Common.invariant("ConstStore tag payload count differs from checked type");
-        const lowered = try self.allocator.alloc(Ast.ExprId, tag.payloads.len);
-        defer self.allocator.free(lowered);
-        for (tag.payloads, 0..) |payload, index| {
-            const payload_tys = self.program.types.span(payload_span);
-            const payload_ty = GuardedList.at(payload_tys, index);
-            lowered[index] = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, payload, payload_ty, static_data_const_locator);
-        }
-        return try self.program.addExprSpan(lowered);
     }
 
     fn constListElemType(self: *Builder, ty: Type.TypeId) Type.TypeId {
@@ -8733,229 +8610,6 @@ const Builder = struct {
 
     fn constRecordFields(self: *Builder, ty: Type.TypeId) Type.StoreSpanBorrow(Type.Field, "fields") {
         return self.program.types.fieldSpan(self.recordFieldsSpan(ty));
-    }
-
-    fn inspectCall(self: *Builder, value: Ast.ExprId, value_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        if (try self.typeIsProvenUninhabited(value_ty)) {
-            return try self.uninhabitedInspect(value, str_ty);
-        }
-
-        const def_id = try self.inspectDefForType(value_ty, str_ty);
-        const fn_ty = try self.oneArgFnType(value_ty, str_ty);
-        const callee = try self.program.addExpr(.{
-            .ty = fn_ty,
-            .data = .{ .def_ref = def_id },
-        });
-        const args = [_]Ast.ExprId{value};
-        return try self.program.addExpr(.{
-            .ty = str_ty,
-            .data = .{ .call_value = .{
-                .callee = callee,
-                .args = try self.program.addExprSpan(&args),
-            } },
-        });
-    }
-
-    fn uninhabitedInspect(self: *Builder, value: Ast.ExprId, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        return try self.program.addExpr(.{
-            .ty = str_ty,
-            .data = .{ .match_ = .{
-                .scrutinee = value,
-                .branches = try self.program.addBranchSpan(&.{}),
-            } },
-        });
-    }
-
-    fn inspectDefForType(self: *Builder, value_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!Ast.DefId {
-        const address = GeneratedHelperDefAddress{
-            .value_ty = @intFromEnum(value_ty),
-            .result_ty = @intFromEnum(str_ty),
-        };
-        if (self.inspect_defs.get(address)) |entry| return entry.id();
-
-        const def_id = try self.program.addDef(undefined);
-        try self.inspect_defs.put(address, .{ .reserved = def_id });
-
-        const arg_local = try self.program.addLocal(self.symbols.fresh(), value_ty);
-        const arg_expr = try self.localExpr(arg_local, value_ty);
-        const body = try self.inspectBody(arg_expr, value_ty, value_ty, str_ty);
-
-        const args = try self.program.addTypedLocalSpan(&.{.{ .local = arg_local, .ty = value_ty }});
-        self.program.setDef(def_id, .{
-            .symbol = self.symbols.fresh(),
-            .fn_def = null,
-            .args = args,
-            .body = .{ .roc = body },
-            .ret = str_ty,
-        });
-        try self.inspect_defs.put(address, .{ .ready = def_id });
-        return def_id;
-    }
-
-    fn inspectBody(
-        self: *Builder,
-        value: Ast.ExprId,
-        value_ty: Type.TypeId,
-        shape_ty: Type.TypeId,
-        str_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        return switch (self.program.types.get(shape_ty)) {
-            .primitive => |primitive| try self.primitiveInspect(value, primitive, str_ty),
-            .named => |named| blk: {
-                if (named.builtin_owner) |owner| {
-                    switch (owner) {
-                        .list => break :blk try self.inspectList(value, self.singleTypeArg(named.args, "List"), str_ty),
-                        .box => {},
-                        _ => {},
-                    }
-                }
-                if (try self.toInspectCall(value, value_ty, str_ty)) |method_call| break :blk method_call;
-                const backing = named.backing orelse Common.invariant("Str.inspect reached opaque named type without checked inspect authority");
-                if (backing.use != .inspectable) {
-                    break :blk try self.stringExpr("<opaque>", str_ty);
-                }
-                break :blk try self.inspectBody(value, value_ty, backing.ty, str_ty);
-            },
-            .record => |fields| try self.inspectRecord(value, self.program.types.fieldSpan(fields), str_ty),
-            .tuple => |items| try self.inspectTuple(value, self.program.types.span(items), str_ty),
-            .tag_union => |tags| try self.inspectTagUnion(value, value_ty, self.program.types.tagSpan(tags), str_ty),
-            .list => |elem_ty| try self.inspectList(value, elem_ty, str_ty),
-            .func, .erased => try self.stringExpr("<function>", str_ty),
-            .zst => try self.stringExpr("{}", str_ty),
-            .box => |elem_ty| blk: {
-                const unboxed = try self.lowLevelExpr(.box_unbox, &.{value}, elem_ty);
-                var out = try self.stringExpr("Box(", str_ty);
-                out = try self.concatExpr(out, try self.inspectCall(unboxed, elem_ty, str_ty), str_ty);
-                break :blk try self.concatExpr(out, try self.stringExpr(")", str_ty), str_ty);
-            },
-        };
-    }
-
-    fn toInspectCall(self: *Builder, value: Ast.ExprId, value_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!?Ast.ExprId {
-        const owner = methodOwnerFromType(&self.program.types, value_ty) orelse return null;
-        const lookup = self.lookupMethodTargetByName(owner, "to_inspect") orelse return null;
-        const procedure = switch (lookup.target.kind) {
-            .procedure => |procedure| procedure,
-            .structural, .local_proc => return null,
-        };
-        const template = procedure.template;
-
-        const graph = try self.createGraph();
-        defer graph.destroy();
-        const saved_graph = self.active_graph;
-        const saved_body_draft = self.active_body_draft;
-        self.active_graph = graph;
-        defer self.active_graph = saved_graph;
-        var body_draft = BodyDraftStore.init(self.allocator);
-        self.active_body_draft = &body_draft;
-        defer self.active_body_draft = saved_body_draft;
-        defer body_draft.deinit();
-        var target_ctx = try BodyContext.initWithMethodScope(self.allocator, self, lookup.view, moduleView(self.root_view), template, graph, &body_draft);
-        defer target_ctx.deinit();
-        const callable_node = try target_ctx.instantiateTargetCallNodeFromMonoArgs(lookup.target.callable_ty, &.{value_ty}, str_ty);
-        try graph.freezeRelations();
-        const callable_mono_ty = try graph.sealNode(callable_node);
-        const callee_def = try self.lowerTemplateWithMono(
-            template,
-            moduleView(self.root_view),
-            lookup.target.callable_ty,
-            lookup.view.types.rootKey(lookup.target.callable_ty),
-            callable_mono_ty,
-            &.{},
-            .independent_roots,
-            .count,
-            null,
-            null,
-            null,
-        );
-
-        const args = [_]Ast.ExprId{value};
-        const call = try self.program.addExpr(.{ .ty = str_ty, .data = .{ .call_proc = .{
-            .callee = Ast.localProcCallee(self.defFnId(callee_def)),
-            .args = try self.program.addExprSpan(&args),
-        } } });
-        return call;
-    }
-
-    fn primitiveInspect(self: *Builder, value: Ast.ExprId, primitive: Type.Primitive, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        const args = [_]Ast.ExprId{value};
-        return try self.lowLevelExpr(primitiveInspectLowLevelOp(primitive), &args, str_ty);
-    }
-
-    fn inspectTuple(self: *Builder, value: Ast.ExprId, items: anytype, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        if (items.len == 0) return try self.stringExpr("()", str_ty);
-        const stable_items = try GuardedList.dupe(self.allocator, Type.TypeId, items);
-        defer self.allocator.free(stable_items);
-
-        var out = try self.stringExpr("(", str_ty);
-        for (stable_items, 0..) |item_ty, i| {
-            if (i != 0) out = try self.concatExpr(out, try self.stringExpr(", ", str_ty), str_ty);
-            const item = try self.program.addExpr(.{
-                .ty = item_ty,
-                .data = .{ .tuple_access = .{ .tuple = value, .elem_index = @intCast(i) } },
-            });
-            out = try self.concatExpr(out, try self.inspectCall(item, item_ty, str_ty), str_ty);
-        }
-        return try self.concatExpr(out, try self.stringExpr(")", str_ty), str_ty);
-    }
-
-    fn inspectRecord(self: *Builder, value: Ast.ExprId, fields: anytype, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        if (fields.len == 0) return try self.stringExpr("{}", str_ty);
-        const stable_fields = try GuardedList.dupe(self.allocator, Type.Field, fields);
-        defer self.allocator.free(stable_fields);
-
-        var out = try self.stringExpr("{ ", str_ty);
-        for (stable_fields, 0..) |field, i| {
-            if (i != 0) out = try self.concatExpr(out, try self.stringExpr(", ", str_ty), str_ty);
-            out = try self.concatExpr(out, try self.stringExpr(self.program.names.recordFieldLabelText(field.name), str_ty), str_ty);
-            out = try self.concatExpr(out, try self.stringExpr(": ", str_ty), str_ty);
-            const field_value = try self.program.addExpr(.{
-                .ty = field.ty,
-                .data = .{ .field_access = .{
-                    .receiver = value,
-                    .segments = try self.program.addFieldAccessSegmentSpan(&.{.{ .field = field.name }}),
-                } },
-            });
-            out = try self.concatExpr(out, try self.inspectFieldSlot(field_value, field.ty, str_ty), str_ty);
-        }
-        return try self.concatExpr(out, try self.stringExpr(" }", str_ty), str_ty);
-    }
-
-    /// Render one record field's slot. An inline (required/defaulted) slot
-    /// renders as the value itself. An optional field's tagged slot never
-    /// leaks its #Missing/#Present encoding: a present slot renders its
-    /// payload exactly as a required field's value would, and a missing
-    /// slot renders the literal `<missing>` marker.
-    fn inspectFieldSlot(self: *Builder, slot_value: Ast.ExprId, slot_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        const slot = self.optionalFieldSlot(slot_ty) orelse
-            return try self.inspectCall(slot_value, slot_ty, str_ty);
-
-        const payload_local = try self.program.addLocal(self.symbols.fresh(), slot.payload_ty);
-        const payload_pat = try self.bindPat(payload_local, slot.payload_ty);
-        const present_pat = try self.program.addPat(.{ .ty = slot_ty, .data = .{ .tag = .{
-            .name = slot.present_tag.name,
-            .payloads = try self.program.addPatSpan(&.{payload_pat}),
-        } } });
-        const present_body = try self.inspectCall(
-            try self.localExpr(payload_local, slot.payload_ty),
-            slot.payload_ty,
-            str_ty,
-        );
-
-        const missing_pat = try self.program.addPat(.{ .ty = slot_ty, .data = .{ .tag = .{
-            .name = slot.missing_tag.name,
-            .payloads = try self.program.addPatSpan(&.{}),
-        } } });
-        const missing_body = try self.stringExpr(optional_field_missing_render, str_ty);
-
-        const branches = [_]Ast.Branch{
-            .{ .pat = present_pat, .body = present_body },
-            .{ .pat = missing_pat, .body = missing_body },
-        };
-        return try self.program.addExpr(.{ .ty = str_ty, .data = .{ .match_ = .{
-            .scrutinee = slot_value,
-            .branches = try self.program.addBranchSpan(&branches),
-        } } });
     }
 
     fn typeIsProvenUninhabited(self: *Builder, ty: Type.TypeId) Allocator.Error!bool {
@@ -9021,153 +8675,6 @@ const Builder = struct {
         };
     }
 
-    fn inspectTagUnion(self: *Builder, value: Ast.ExprId, value_ty: Type.TypeId, tags: anytype, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        if (tags.len == 0) {
-            return try self.uninhabitedInspect(value, str_ty);
-        }
-        const stable_tags = try GuardedList.dupe(self.allocator, Type.Tag, tags);
-        defer self.allocator.free(stable_tags);
-
-        var branches = std.ArrayList(Ast.Branch).empty;
-        defer branches.deinit(self.allocator);
-
-        for (stable_tags) |tag| {
-            const payload_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.program.types.span(tag.payloads));
-            defer self.allocator.free(payload_tys);
-            var tag_is_uninhabited = false;
-            for (payload_tys) |payload_ty| {
-                if (try self.typeIsProvenUninhabited(payload_ty)) {
-                    tag_is_uninhabited = true;
-                    break;
-                }
-            }
-            if (tag_is_uninhabited) continue;
-            const payload_pats = try self.allocator.alloc(Ast.PatId, payload_tys.len);
-            defer self.allocator.free(payload_pats);
-            const payload_exprs = try self.allocator.alloc(Ast.ExprId, payload_tys.len);
-            defer self.allocator.free(payload_exprs);
-
-            for (payload_tys, 0..) |payload_ty, payload_i| {
-                const local = try self.program.addLocal(self.symbols.fresh(), payload_ty);
-                payload_pats[payload_i] = try self.program.addPat(.{ .ty = payload_ty, .data = .{ .bind = local } });
-                payload_exprs[payload_i] = try self.localExpr(local, payload_ty);
-            }
-
-            const pat = try self.program.addPat(.{
-                .ty = value_ty,
-                .data = .{ .tag = .{
-                    .name = tag.name,
-                    .payloads = try self.program.addPatSpan(payload_pats),
-                } },
-            });
-            try branches.append(self.allocator, .{
-                .pat = pat,
-                .body = try self.inspectTagBody(tag.name, payload_exprs, payload_tys, str_ty),
-            });
-        }
-        if (branches.items.len == 0) return try self.uninhabitedInspect(value, str_ty);
-
-        return try self.program.addExpr(.{
-            .ty = str_ty,
-            .data = .{ .match_ = .{
-                .scrutinee = value,
-                .branches = try self.program.addBranchSpan(branches.items),
-            } },
-        });
-    }
-
-    fn inspectTagBody(
-        self: *Builder,
-        name: names.TagNameId,
-        payload_exprs: []const Ast.ExprId,
-        payload_tys: []const Type.TypeId,
-        str_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        var out = try self.stringExpr(self.program.names.tagLabelText(name), str_ty);
-        if (payload_exprs.len == 0) return out;
-        out = try self.concatExpr(out, try self.stringExpr("(", str_ty), str_ty);
-        for (payload_exprs, payload_tys, 0..) |payload_expr, payload_ty, i| {
-            if (i != 0) out = try self.concatExpr(out, try self.stringExpr(", ", str_ty), str_ty);
-            out = try self.concatExpr(out, try self.inspectCall(payload_expr, payload_ty, str_ty), str_ty);
-        }
-        return try self.concatExpr(out, try self.stringExpr(")", str_ty), str_ty);
-    }
-
-    fn inspectList(self: *Builder, value: Ast.ExprId, elem_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        if (try self.typeIsProvenUninhabited(elem_ty)) return try self.stringExpr("[]", str_ty);
-        const u64_ty = try self.primitiveType(.u64);
-        const bool_ty = try self.primitiveType(.bool);
-
-        const len_local = try self.program.addLocal(self.symbols.fresh(), u64_ty);
-        const len_pat = try self.bindPat(len_local, u64_ty);
-        const len_value = try self.lowLevelExpr(.list_len, &.{value}, u64_ty);
-        const len_expr = try self.localExpr(len_local, u64_ty);
-
-        const index_local = try self.program.addLocal(self.symbols.fresh(), u64_ty);
-        const out_local = try self.program.addLocal(self.symbols.fresh(), str_ty);
-        const index_expr = try self.localExpr(index_local, u64_ty);
-        const out_expr = try self.localExpr(out_local, str_ty);
-
-        const done_cond = try self.lowLevelExpr(.num_is_eq, &.{ index_expr, len_expr }, bool_ty);
-        const finish = try self.program.addExpr(.{
-            .ty = str_ty,
-            .data = .{ .break_ = try self.concatExpr(out_expr, try self.stringExpr("]", str_ty), str_ty) },
-        });
-        const step = try self.inspectListStep(value, elem_ty, str_ty, index_local, out_local);
-        const body = try self.ifExpr(done_cond, finish, step, str_ty);
-
-        const params = [_]Ast.TypedLocal{
-            .{ .local = index_local, .ty = u64_ty },
-            .{ .local = out_local, .ty = str_ty },
-        };
-        const initial_values = [_]Ast.ExprId{
-            try self.intLiteralExpr(0, u64_ty),
-            try self.stringExpr("[", str_ty),
-        };
-        const loop = try self.program.addExpr(.{
-            .ty = str_ty,
-            .data = .{ .loop_ = .{
-                .params = try self.program.addTypedLocalSpan(&params),
-                .initial_values = try self.program.addExprSpan(&initial_values),
-                .body = body,
-            } },
-        });
-        return try self.program.addExpr(.{
-            .ty = str_ty,
-            .data = .{ .let_ = .{
-                .bind = len_pat,
-                .value = len_value,
-                .rest = loop,
-            } },
-        });
-    }
-
-    fn inspectListStep(
-        self: *Builder,
-        list_value: Ast.ExprId,
-        elem_ty: Type.TypeId,
-        str_ty: Type.TypeId,
-        index_local: Ast.LocalId,
-        out_local: Ast.LocalId,
-    ) Allocator.Error!Ast.ExprId {
-        const u64_ty = try self.primitiveType(.u64);
-        const bool_ty = try self.primitiveType(.bool);
-        const index_expr = try self.localExpr(index_local, u64_ty);
-        const out_expr = try self.localExpr(out_local, str_ty);
-
-        const first_cond = try self.lowLevelExpr(.num_is_eq, &.{ index_expr, try self.intLiteralExpr(0, u64_ty) }, bool_ty);
-        const sep = try self.ifExpr(first_cond, try self.stringExpr("", str_ty), try self.stringExpr(", ", str_ty), str_ty);
-        const elem = try self.lowLevelExpr(.list_get_unsafe, &.{ list_value, index_expr }, elem_ty);
-        const elem_str = try self.inspectCall(elem, elem_ty, str_ty);
-        const with_sep = try self.concatExpr(out_expr, sep, str_ty);
-        const next_out = try self.concatExpr(with_sep, elem_str, str_ty);
-        const next_index = try self.lowLevelExpr(.num_plus, &.{ index_expr, try self.intLiteralExpr(1, u64_ty) }, u64_ty);
-        return try self.program.addExpr(.{
-            .ty = str_ty,
-            .data = .{ .continue_ = .{ .values = try self.program.addExprSpan(&.{ next_index, next_out }) } },
-        });
-    }
-
     fn primitiveType(self: *Builder, primitive: Type.Primitive) Allocator.Error!Type.TypeId {
         return switch (primitive) {
             .u64 => blk: {
@@ -9186,13 +8693,6 @@ const Builder = struct {
         };
     }
 
-    fn functionTypeFromMonoArgs(self: *Builder, arg_tys: []const Type.TypeId, ret_ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        if (self.active_graph != null) {
-            Common.invariant("active Monotype body lowering must build function types through BodyContext graph-node helpers");
-        }
-        return try self.closedFunctionType(arg_tys, ret_ty);
-    }
-
     /// Intern a function from children that have already been sealed. This is
     /// used during draft finalization, where the active graph remains present
     /// but the supplied TypeIds are durable rather than active snapshots.
@@ -9201,10 +8701,6 @@ const Builder = struct {
             .args = try self.program.types.addSpan(arg_tys),
             .ret = ret_ty,
         } });
-    }
-
-    fn oneArgFnType(self: *Builder, arg_ty: Type.TypeId, ret_ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        return try self.functionTypeFromMonoArgs(&.{arg_ty}, ret_ty);
     }
 
     fn singleTypeArg(self: *Builder, span: Type.Span, comptime owner: []const u8) Type.TypeId {
@@ -9219,45 +8715,6 @@ const Builder = struct {
 
     fn bindPat(self: *Builder, local: Ast.LocalId, ty: Type.TypeId) Allocator.Error!Ast.PatId {
         return try self.program.addPat(.{ .ty = ty, .data = .{ .bind = local } });
-    }
-
-    fn stringExpr(self: *Builder, text: []const u8, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        return try self.program.addExpr(.{
-            .ty = str_ty,
-            .data = .{ .str_lit = try self.program.addStringLiteral(text) },
-        });
-    }
-
-    fn intLiteralExpr(self: *Builder, value: u64, ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        return try self.program.addExpr(.{
-            .ty = ty,
-            .data = .{ .int_lit = unsignedIntLiteral(value) },
-        });
-    }
-
-    fn lowLevelExpr(self: *Builder, op: can.CIR.Expr.LowLevel, args: []const Ast.ExprId, ret_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        return try self.program.addExpr(.{
-            .ty = ret_ty,
-            .data = .{ .low_level = .{
-                .op = op,
-                .args = try self.program.addExprSpan(args),
-            } },
-        });
-    }
-
-    fn concatExpr(self: *Builder, left: Ast.ExprId, right: Ast.ExprId, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        return try self.lowLevelExpr(.str_concat, &.{ left, right }, str_ty);
-    }
-
-    fn ifExpr(self: *Builder, cond: Ast.ExprId, then_expr: Ast.ExprId, else_expr: Ast.ExprId, ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        const branches = [_]Ast.IfBranch{.{ .cond = cond, .body = then_expr }};
-        return try self.program.addExpr(.{
-            .ty = ty,
-            .data = .{ .if_ = .{
-                .branches = try self.program.addIfBranchSpan(&branches),
-                .final_else = else_expr,
-            } },
-        });
     }
 
     const HostedTryInfo = struct {
@@ -13365,6 +12822,28 @@ const BodyContext = struct {
         }
     };
 
+    /// The store this scope emits restored const expressions into.
+    fn constEmit(self: *BodyContext) *BodyContext {
+        return self;
+    }
+
+    /// The type-store owner the shared const restoration queries.
+    fn constBuilder(self: *BodyContext) *Builder {
+        return self.builder;
+    }
+
+    /// This scope's expression-data type for restored const values.
+    const ConstExprData = BodyExprData;
+    const ConstExprId = DraftExprId;
+    const ConstExprSpan = DraftSpan(DraftExprId);
+    const ConstFieldExpr = DraftFieldExpr;
+    const ConstFieldExprSpan = DraftSpan(DraftFieldExpr);
+
+    /// This scope's mapping from a stored scalar to expression data.
+    fn constScalarData(_: *BodyContext, scalar: checked.ConstScalar) ConstExprData {
+        return restoreScalarBody(scalar);
+    }
+
     fn parserPlanKey(self: *BodyContext, shape_ty: Type.TypeId) names.TypeDigest {
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
         hasher.update("roc.parser_precomputed_record");
@@ -14889,7 +14368,7 @@ const BodyContext = struct {
 
     fn primitiveInspect(self: *BodyContext, value: DraftExprId, primitive: Type.Primitive, str_ty: Type.TypeId) Allocator.Error!DraftExprId {
         const args = [_]DraftExprId{value};
-        return try self.lowLevelExpr(primitiveInspectLowLevelOp(primitive), &args, str_ty);
+        return try self.lowLevelExpr(Common.primitiveInspectLowLevelOp(primitive), &args, str_ty);
     }
 
     fn inspectTuple(self: *BodyContext, value: DraftExprId, items: anytype, str_ty: Type.TypeId) Allocator.Error!DraftExprId {
@@ -29288,7 +28767,7 @@ const BodyContext = struct {
             .fn_value => |fn_id| try self.restoreConstFn(store_view, fn_id, ty, static_data_const_locator),
             .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .nominal => try self.addExpr(.{
                 .ty = ty,
-                .data = try self.restoreConstData(store_view, type_view, value, ty, static_data_const_locator),
+                .data = try constRestoreData(self, store_view, type_view, value, ty, static_data_const_locator),
             }),
         };
         const materialized = try self.finishConstNodeBinding(store_view, node, representation, cell, lowered);
@@ -29677,165 +29156,16 @@ const BodyContext = struct {
         return try self.addExprSpan(lowered);
     }
 
-    fn restoreConstData(
-        self: *BodyContext,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        value: checked.ConstValue,
-        ty: Type.TypeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!BodyExprData {
-        return switch (value) {
-            .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
-            .zst => .unit,
-            .scalar => |scalar| restoreScalarBody(scalar),
-            .str => |str| .{ .str_lit = try self.addStringView(
-                store_view.const_store.blobData(str.data),
-                str.offset,
-                str.len,
-            ) },
-            .crash => |str| .{ .crash = try self.addStringView(
-                store_view.const_store.blobData(str.data),
-                str.offset,
-                str.len,
-            ) },
-            .list => |list| try self.restoreConstListData(store_view, type_view, ty, list, static_data_const_locator),
-            .box => |payload| blk: {
-                const child = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, payload, self.constBoxPayloadType(ty), static_data_const_locator);
-                break :blk .{ .low_level = .{
-                    .op = .box_box,
-                    .args = try self.addExprSpan(&.{child}),
-                } };
-            },
-            .tuple => |items| .{ .tuple = try self.restoreConstTuple(store_view, type_view, ty, items, static_data_const_locator) },
-            .record => |items| .{ .record = try self.restoreConstRecord(store_view, type_view, ty, items, static_data_const_locator) },
-            .tag => |tag| .{ .tag = .{
-                .name = try self.builder.program.names.internTagLabel(tag.tag_name),
-                .payloads = try self.restoreConstTagPayloads(store_view, type_view, ty, tag, static_data_const_locator),
-            } },
-            .nominal => |nominal| .{ .nominal = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, nominal.backing, self.builder.namedBackingType(ty) orelse ty, static_data_const_locator) },
-            .fn_value => Common.invariant("ConstStore function value must be restored as an expression"),
-        };
-    }
-
-    fn restoreConstList(
-        self: *BodyContext,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        ty: Type.TypeId,
-        items: []const checked.ConstNodeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!DraftSpan(DraftExprId) {
-        const elem_ty = self.constListElemType(ty);
-        const lowered = try self.allocator.alloc(DraftExprId, items.len);
-        defer self.allocator.free(lowered);
-        for (items, 0..) |item, index| {
-            lowered[index] = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, elem_ty, static_data_const_locator);
-        }
-        return try self.addExprSpan(lowered);
-    }
-
-    fn restoreConstListData(
-        self: *BodyContext,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        ty: Type.TypeId,
-        list: checked.ConstList,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!BodyExprData {
-        return switch (list) {
-            .nodes => |items| .{ .list = try self.restoreConstList(store_view, type_view, ty, items, static_data_const_locator) },
-            .scalar_bytes => |scalar_bytes| .{ .bytes_lit = .{
-                .literal = try self.addStringView(
-                    store_view.const_store.blobData(scalar_bytes.bytes.data),
-                    scalar_bytes.bytes.offset,
-                    scalar_bytes.bytes.len,
-                ),
-                .len = scalar_bytes.len,
-                .element = scalar_bytes.element,
-            } },
-        };
-    }
-
-    fn restoreConstTuple(
-        self: *BodyContext,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        ty: Type.TypeId,
-        items: []const checked.ConstNodeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!DraftSpan(DraftExprId) {
-        const item_span = self.builder.tupleItemSpan(ty);
-        const item_count: usize = @intCast(item_span.len);
-        if (item_count != items.len) Common.invariant("ConstStore tuple length differs from checked type");
-        const lowered = try self.allocator.alloc(DraftExprId, items.len);
-        defer self.allocator.free(lowered);
-        for (items, 0..) |item, index| {
-            const item_tys = self.builder.program.types.span(item_span);
-            const item_ty = GuardedList.at(item_tys, index);
-            lowered[index] = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, item_ty, static_data_const_locator);
-        }
-        return try self.addExprSpan(lowered);
-    }
-
-    fn restoreConstRecord(
-        self: *BodyContext,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        ty: Type.TypeId,
-        items: []const checked.ConstNodeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!DraftSpan(DraftFieldExpr) {
-        const field_span = self.builder.recordFieldsSpan(ty);
-        const field_count: usize = @intCast(field_span.len);
-        if (field_count != items.len) Common.invariant("ConstStore record length differs from checked type");
-        const lowered = try self.allocator.alloc(DraftFieldExpr, items.len);
-        defer self.allocator.free(lowered);
-        for (items, 0..) |item, index| {
-            const fields = self.builder.program.types.fieldSpan(field_span);
-            const field = GuardedList.at(fields, index);
-            lowered[index] = .{
-                .name = field.name,
-                .value = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, field.ty, static_data_const_locator),
-            };
-        }
-        return try self.addFieldExprSpan(lowered);
-    }
-
-    fn restoreConstTagPayloads(
-        self: *BodyContext,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        ty: Type.TypeId,
-        tag: anytype,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!DraftSpan(DraftExprId) {
-        const mono_tag_name = try self.builder.program.names.internTagLabel(tag.tag_name);
-        const payload_span = self.builder.tagPayloadSpan(ty, mono_tag_name);
-        const payload_count: usize = @intCast(payload_span.len);
-        if (payload_count != tag.payloads.len) Common.invariant("ConstStore tag payload count differs from checked type");
-        const lowered = try self.allocator.alloc(DraftExprId, tag.payloads.len);
-        defer self.allocator.free(lowered);
-        for (tag.payloads, 0..) |payload, index| {
-            const payload_tys = self.builder.program.types.span(payload_span);
-            const payload_ty = GuardedList.at(payload_tys, index);
-            lowered[index] = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, payload, payload_ty, static_data_const_locator);
-        }
-        return try self.addExprSpan(lowered);
-    }
-
+    /// Forwards to the scope that owns the type store; the query itself
+    /// has one implementation.
     fn constListElemType(self: *BodyContext, ty: Type.TypeId) Type.TypeId {
-        return switch (self.builder.shapeContent(ty)) {
-            .list => |elem| elem,
-            .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => Common.invariant("ConstStore list restored with a non-list monotype"),
-        };
+        return self.builder.constListElemType(ty);
     }
 
+    /// Forwards to the scope that owns the type store; the query itself
+    /// has one implementation.
     fn constBoxPayloadType(self: *BodyContext, ty: Type.TypeId) Type.TypeId {
-        return switch (self.builder.shapeContent(ty)) {
-            .box => |payload| payload,
-            .primitive, .named, .record, .tuple, .tag_union, .list, .func, .erased, .zst => Common.invariant("ConstStore box restored with a non-box monotype"),
-        };
+        return self.builder.constBoxPayloadType(ty);
     }
 
     fn lowerConstCaptureType(
@@ -30045,8 +29375,10 @@ const BodyContext = struct {
         };
     }
 
+    /// Forwards to the scope that owns the type store; the query itself
+    /// has one implementation.
     fn constRecordFields(self: *BodyContext, ty: Type.TypeId) Type.StoreSpanBorrow(Type.Field, "fields") {
-        return self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(ty));
+        return self.builder.constRecordFields(ty);
     }
 
     fn restoreConstFnAtNode(
@@ -30108,9 +29440,11 @@ const BodyContext = struct {
                 static_data_const_locator,
             );
         }
-        const restored_fn = try self.restoreConstFnTemplateAtNode(
+        const restored_fn = try self.restoreConstFnTemplateAt(
             fn_value,
             fn_def,
+            fn_value.source_fn_ty,
+            fn_value.source_fn_key,
             retained_evidence,
             request_fn_node,
         );
@@ -30120,10 +29454,19 @@ const BodyContext = struct {
         );
     }
 
-    fn restoreConstFnTemplateAtNode(
+    /// Restore a compile-time function value's template into a draft target.
+    ///
+    /// The two call sites take their source function type and key from
+    /// different places: one from the stored `ConstFn`, one from the
+    /// `FnTemplate` being specialized. Both travel as explicit arguments
+    /// rather than being read off whichever record the caller happened to
+    /// hold, because that choice is the caller's and not this function's.
+    fn restoreConstFnTemplateAt(
         self: *BodyContext,
         fn_value: check.ConstStore.ConstFn,
         fn_def: Ast.FnDef,
+        source_fn_ty: checked.CheckedTypeId,
+        source_fn_key: names.TypeDigest,
         retained_evidence: EvidenceChain,
         request_fn_node: NodeId,
     ) Allocator.Error!DraftFnTarget {
@@ -30151,8 +29494,8 @@ const BodyContext = struct {
                     &fn_ctx,
                     checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def),
                     nested,
-                    fn_value.source_fn_ty,
-                    fn_value.source_fn_key,
+                    source_fn_ty,
+                    source_fn_key,
                     request_fn_node,
                     &.{},
                     fn_ctx.evidence,
@@ -30163,8 +29506,8 @@ const BodyContext = struct {
             .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => try self.requireLocalDraftSlot(try self.builder.lowerDraftTemplateFromContext(
                 self,
                 templateForConstFnDef(fn_value.fn_def),
-                fn_value.source_fn_ty,
-                fn_value.source_fn_key,
+                source_fn_ty,
+                source_fn_key,
                 request_fn_node,
                 retained_evidence.vector,
                 .resolved,
@@ -30365,56 +29708,18 @@ const BodyContext = struct {
             return try self.restoreCapturingConstFn(store_view, fn_value, template, ty, retained_evidence, static_data_const_locator);
         }
         const request_fn_node = try self.activeNodeFromType(ty);
-        const restored_fn = try self.restoreConstFnTemplate(fn_value, template, retained_evidence, request_fn_node);
+        const restored_fn = try self.restoreConstFnTemplateAt(
+            fn_value,
+            template.fn_def,
+            template.source_fn_ty,
+            template.source_fn_key,
+            retained_evidence,
+            request_fn_node,
+        );
         return try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(request_fn_node),
             .{ .fn_def = .{ .fn_id = restored_fn } },
         );
-    }
-
-    fn restoreConstFnTemplate(
-        self: *BodyContext,
-        fn_value: check.ConstStore.ConstFn,
-        template: Ast.FnTemplate,
-        retained_evidence: EvidenceChain,
-        request_fn_node: NodeId,
-    ) Allocator.Error!DraftFnTarget {
-        return switch (template.fn_def) {
-            .nested => |nested| {
-                const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
-                var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, ownerTemplateForConstFnDef(fn_value.fn_def), self.graph, self.draft);
-                fn_ctx.evidence = retained_evidence;
-                fn_ctx.inheritFrozenEmissionContext(self);
-                defer fn_ctx.deinit();
-                try fn_ctx.inheritActiveConstBinding(self);
-                try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
-                fn_ctx.current_fn_key = nested.context_fn_key;
-                const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, nested.context_fn_key);
-                defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
-                return try self.builder.lowerDraftNestedFromContext(
-                    &fn_ctx,
-                    checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def),
-                    nested,
-                    template.source_fn_ty,
-                    template.source_fn_key,
-                    request_fn_node,
-                    &.{},
-                    fn_ctx.evidence,
-                    null,
-                    .exact_graph,
-                );
-            },
-            .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => try self.requireLocalDraftSlot(try self.builder.lowerDraftTemplateFromContext(
-                self,
-                templateForConstFnDef(fn_value.fn_def),
-                template.source_fn_ty,
-                template.source_fn_key,
-                request_fn_node,
-                retained_evidence.vector,
-                .resolved,
-                .independent_roots,
-            )),
-        };
     }
 
     fn restoreCapturingConstFn(
@@ -31996,17 +31301,10 @@ const BodyContext = struct {
         Common.invariant("expected record field id was absent from monotype type");
     }
 
+    /// Forwards to the scope that owns the type store; the query itself
+    /// has one implementation.
     fn recordFieldByTextOptional(self: *BodyContext, ty: Type.TypeId, text: []const u8) ?Type.Field {
-        const fields = switch (self.builder.shapeContent(ty)) {
-            .record => |span| self.builder.program.types.fieldSpan(span),
-            .zst => return null,
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => return null,
-        };
-        for (0..GuardedList.borrowLen(fields)) |index| {
-            const field = GuardedList.at(fields, index);
-            if (Ident.textEql(self.builder.program.names.recordFieldLabelText(field.name), text)) return field;
-        }
-        return null;
+        return self.builder.recordFieldByTextOptional(ty, text);
     }
 
     fn iterItemType(self: *BodyContext, ty: Type.TypeId) Type.TypeId {
@@ -35130,11 +34428,10 @@ const BodyContext = struct {
         };
     }
 
+    /// Forwards to the scope that owns the type store; the query itself
+    /// has one implementation.
     fn typeHasBuiltinOwner(self: *BodyContext, ty: Type.TypeId, owner: static_dispatch.BuiltinOwner) bool {
-        return switch (methodOwnerFromType(&self.builder.program.types, ty) orelse return false) {
-            .builtin => |actual| actual == owner,
-            .nominal => false,
-        };
+        return self.builder.typeHasBuiltinOwner(ty, owner);
     }
 
     fn setPayloadType(self: *BodyContext, ty: Type.TypeId) ?Type.TypeId {
@@ -36453,7 +35750,7 @@ const BodyContext = struct {
     ) ?static_dispatch.MethodOwner {
         return switch (self.graph.content(node)) {
             .redirect => unreachable,
-            .primitive => |primitive| .{ .builtin = builtinOwnerFromPrimitive(primitive) },
+            .primitive => |primitive| .{ .builtin = checked.builtinOwnerForPrimitive(primitive) },
             .list => .{ .builtin = .list },
             .box => .{ .builtin = .box },
             .named => |named| if (named.builtin_owner) |owner|
@@ -50213,6 +49510,183 @@ fn moduleViewIdentityMatches(view: ModuleView, origin_hash: *const [32]u8) bool 
     return base.ModuleIdentity.eql(&view.module_identity.stable_hash, origin_hash);
 }
 
+/// Restore a `ConstStore` value into one lowering scope's expression data.
+///
+/// `Builder` and `BodyContext` emit into different stores and different
+/// expression-data types, but the restoration itself is one set of rules:
+/// which const shapes map to which expression forms, plus the length
+/// invariants relating a stored aggregate to its checked type. `restorer` is
+/// scope is emitting; it supplies its own store through `constEmit()`, its data
+/// type through `ConstExprData`, its scalar mapping through `constScalarData`,
+/// the type-store queries through `constBuilder()`, and the recursive descent
+/// through `restoreConstNodeAtTypeWithStaticRoot`, which genuinely differs
+/// between the two.
+fn constRestoreData(
+    restorer: anytype,
+    store_view: ModuleView,
+    type_view: ModuleView,
+    value: checked.ConstValue,
+    ty: Type.TypeId,
+    static_data_const_locator: ?checked.ConstLocator,
+) Allocator.Error!@TypeOf(restorer.*).ConstExprData {
+    const emit = restorer.constEmit();
+    return switch (value) {
+        .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
+        .zst => .unit,
+        .scalar => |scalar| restorer.constScalarData(scalar),
+        .str => |str| .{ .str_lit = try emit.addStringView(
+            store_view.const_store.blobData(str.data),
+            str.offset,
+            str.len,
+        ) },
+        .crash => |str| .{ .crash = try emit.addStringView(
+            store_view.const_store.blobData(str.data),
+            str.offset,
+            str.len,
+        ) },
+        .box => |node| blk: {
+            const child = try restorer.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, node, restorer.constBoxPayloadType(ty), static_data_const_locator);
+            break :blk .{ .low_level = .{
+                .op = .box_box,
+                .args = try emit.addExprSpan(&.{child}),
+            } };
+        },
+        .list => |list| try constRestoreListData(restorer, store_view, type_view, ty, list, static_data_const_locator),
+        .tuple => |items| .{ .tuple = try constRestoreTuple(restorer, store_view, type_view, ty, items, static_data_const_locator) },
+        .record => |items| .{ .record = try constRestoreRecord(restorer, store_view, type_view, ty, items, static_data_const_locator) },
+        .tag => |tag| .{ .tag = .{
+            .name = try restorer.constBuilder().program.names.internTagLabel(tag.tag_name),
+            .payloads = try constRestoreTagPayloads(restorer, store_view, type_view, ty, tag, static_data_const_locator),
+        } },
+        .nominal => |nominal| .{ .nominal = try restorer.restoreConstNodeAtTypeWithStaticRoot(
+            store_view,
+            type_view,
+            nominal.backing,
+            restorer.constBuilder().namedBackingType(ty) orelse ty,
+            static_data_const_locator,
+        ) },
+        .fn_value => Common.invariant("ConstStore function value must be restored as an expression"),
+    };
+}
+
+/// Restore a stored list, which is either restored nodes or packed scalar bytes.
+fn constRestoreListData(
+    restorer: anytype,
+    store_view: ModuleView,
+    type_view: ModuleView,
+    ty: Type.TypeId,
+    list: checked.ConstList,
+    static_data_const_locator: ?checked.ConstLocator,
+) Allocator.Error!@TypeOf(restorer.*).ConstExprData {
+    return switch (list) {
+        .nodes => |items| .{ .list = try constRestoreList(restorer, store_view, type_view, ty, items, static_data_const_locator) },
+        .scalar_bytes => |scalar_bytes| .{ .bytes_lit = .{
+            .literal = try restorer.constEmit().addStringView(
+                store_view.const_store.blobData(scalar_bytes.bytes.data),
+                scalar_bytes.bytes.offset,
+                scalar_bytes.bytes.len,
+            ),
+            .len = scalar_bytes.len,
+            .element = scalar_bytes.element,
+        } },
+    };
+}
+
+/// Restore each element of a stored list at the checked element type.
+fn constRestoreList(
+    restorer: anytype,
+    store_view: ModuleView,
+    type_view: ModuleView,
+    ty: Type.TypeId,
+    items: []const checked.ConstNodeId,
+    static_data_const_locator: ?checked.ConstLocator,
+) Allocator.Error!@TypeOf(restorer.*).ConstExprSpan {
+    const Emitted = @TypeOf(restorer.*).ConstExprId;
+    const elem_ty = restorer.constListElemType(ty);
+    const lowered = try restorer.allocator.alloc(Emitted, items.len);
+    defer restorer.allocator.free(lowered);
+    for (items, 0..) |item, index| {
+        lowered[index] = try restorer.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, elem_ty, static_data_const_locator);
+    }
+    return try restorer.constEmit().addExprSpan(lowered);
+}
+
+/// Restore each element of a stored tuple at its checked element type.
+fn constRestoreTuple(
+    restorer: anytype,
+    store_view: ModuleView,
+    type_view: ModuleView,
+    ty: Type.TypeId,
+    items: []const checked.ConstNodeId,
+    static_data_const_locator: ?checked.ConstLocator,
+) Allocator.Error!@TypeOf(restorer.*).ConstExprSpan {
+    const Emitted = @TypeOf(restorer.*).ConstExprId;
+    const builder = restorer.constBuilder();
+    const item_span = builder.tupleItemSpan(ty);
+    const item_count: usize = @intCast(item_span.len);
+    if (item_count != items.len) Common.invariant("ConstStore tuple length differs from checked type");
+    const lowered = try restorer.allocator.alloc(Emitted, items.len);
+    defer restorer.allocator.free(lowered);
+    for (items, 0..) |item, index| {
+        const item_tys = builder.program.types.span(item_span);
+        const item_ty = GuardedList.at(item_tys, index);
+        lowered[index] = try restorer.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, item_ty, static_data_const_locator);
+    }
+    return try restorer.constEmit().addExprSpan(lowered);
+}
+
+/// Restore each field of a stored record at its checked field type.
+fn constRestoreRecord(
+    restorer: anytype,
+    store_view: ModuleView,
+    type_view: ModuleView,
+    ty: Type.TypeId,
+    items: []const checked.ConstNodeId,
+    static_data_const_locator: ?checked.ConstLocator,
+) Allocator.Error!@TypeOf(restorer.*).ConstFieldExprSpan {
+    const Field = @TypeOf(restorer.*).ConstFieldExpr;
+    const builder = restorer.constBuilder();
+    const field_span = builder.recordFieldsSpan(ty);
+    const field_count: usize = @intCast(field_span.len);
+    if (field_count != items.len) Common.invariant("ConstStore record length differs from checked type");
+    const lowered = try restorer.allocator.alloc(Field, items.len);
+    defer restorer.allocator.free(lowered);
+    for (items, 0..) |item, index| {
+        const fields = builder.program.types.fieldSpan(field_span);
+        const field = GuardedList.at(fields, index);
+        lowered[index] = .{
+            .name = field.name,
+            .value = try restorer.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, field.ty, static_data_const_locator),
+        };
+    }
+    return try restorer.constEmit().addFieldExprSpan(lowered);
+}
+
+/// Restore each payload of a stored tag at its checked payload type.
+fn constRestoreTagPayloads(
+    restorer: anytype,
+    store_view: ModuleView,
+    type_view: ModuleView,
+    ty: Type.TypeId,
+    tag: anytype,
+    static_data_const_locator: ?checked.ConstLocator,
+) Allocator.Error!@TypeOf(restorer.*).ConstExprSpan {
+    const Emitted = @TypeOf(restorer.*).ConstExprId;
+    const builder = restorer.constBuilder();
+    const mono_tag_name = try builder.program.names.internTagLabel(tag.tag_name);
+    const payload_span = builder.tagPayloadSpan(ty, mono_tag_name);
+    const payload_count: usize = @intCast(payload_span.len);
+    if (payload_count != tag.payloads.len) Common.invariant("ConstStore tag payload count differs from checked type");
+    const lowered = try restorer.allocator.alloc(Emitted, tag.payloads.len);
+    defer restorer.allocator.free(lowered);
+    for (tag.payloads, 0..) |payload, index| {
+        const payload_tys = builder.program.types.span(payload_span);
+        const payload_ty = GuardedList.at(payload_tys, index);
+        lowered[index] = try restorer.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, payload, payload_ty, static_data_const_locator);
+    }
+    return try restorer.constEmit().addExprSpan(lowered);
+}
+
 fn restoreScalar(scalar: checked.ConstScalar) Ast.ExprData {
     return switch (scalar) {
         .i8 => |value| .{ .int_lit = signedIntLiteral(value) },
@@ -50556,34 +50030,6 @@ fn instRecordFieldLessThan(
     return name_store.recordFieldLabelTextLessThan(lhs.name, rhs.name);
 }
 
-fn builtinOwnerFromPrimitive(primitive: Type.Primitive) static_dispatch.BuiltinOwner {
-    return switch (primitive) {
-        .bool => .bool,
-        .str => .str,
-        .u8 => .u8,
-        .i8 => .i8,
-        .u16 => .u16,
-        .i16 => .i16,
-        .u32 => .u32,
-        .i32 => .i32,
-        .u64 => .u64,
-        .i64 => .i64,
-        .u128 => .u128,
-        .i128 => .i128,
-        .f32 => .f32,
-        .f64 => .f64,
-        .dec => .dec,
-        .u8x16 => .u8x16,
-        .i8x16 => .i8x16,
-        .u16x8 => .u16x8,
-        .i16x8 => .i16x8,
-        .u32x4 => .u32x4,
-        .i32x4 => .i32x4,
-        .u64x2 => .u64x2,
-        .i64x2 => .i64x2,
-    };
-}
-
 fn nominalHasDeclarationBacking(nominal: checked.CheckedNominalType) bool {
     return switch (nominal.representation) {
         .opaque_without_backing => false,
@@ -50652,27 +50098,6 @@ fn builtinOwner(builtin: ?checked.CheckedBuiltinNominal) ?static_dispatch.Builti
         .crypto_sha256_hasher => .crypto_sha256_hasher,
         .crypto_blake3_digest => .crypto_blake3_digest,
         .crypto_blake3_hasher => .crypto_blake3_hasher,
-    };
-}
-
-fn primitiveInspectLowLevelOp(primitive: Type.Primitive) can.CIR.Expr.LowLevel {
-    return switch (primitive) {
-        .str => .str_inspect,
-        .u8 => .u8_to_str,
-        .i8 => .i8_to_str,
-        .u16 => .u16_to_str,
-        .i16 => .i16_to_str,
-        .u32 => .u32_to_str,
-        .i32 => .i32_to_str,
-        .u64 => .u64_to_str,
-        .i64 => .i64_to_str,
-        .u128 => .u128_to_str,
-        .i128 => .i128_to_str,
-        .f32 => .f32_to_str,
-        .f64 => .f64_to_str,
-        .dec => .dec_to_str,
-        .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => Common.invariant("SIMD inspect must lower through its explicit Builtin body"),
-        .bool => Common.invariant("Bool must lower as an ordinary tag union before Str.inspect"),
     };
 }
 

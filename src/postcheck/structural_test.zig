@@ -1449,6 +1449,211 @@ test "direct LIR verification consumes producer-owned specialization identities"
     try expectContains(direct_lower, "different types for an exact function specialization");
 }
 
+fn countDefinitions(source: []const u8, decl: []const u8) usize {
+    var count: usize = 0;
+    var rest = source;
+    while (std.mem.find(u8, rest, decl)) |index| {
+        count += 1;
+        rest = rest[index + decl.len ..];
+    }
+    return count;
+}
+
+test "each primitive mapping has exactly one definition" {
+    // `MonoType.Primitive` is an alias of `checked.CheckedPrimitive`
+    // (monotype/type.zig), so nothing in the type system stops a consumer from
+    // writing a second switch over the same 24 members. These tables are the
+    // single source of truth; a copy would let two lowering paths decide a
+    // layout, hasher op, or inspect op differently for the same primitive.
+    const sources = [_][]const u8{
+        @embedFile("common.zig"),
+        @embedFile("monotype/type.zig"),
+        @embedFile("monotype/lower.zig"),
+        @embedFile("solved_lir_lower.zig"),
+        @embedFile("boxy/lower.zig"),
+        @embedFile("boxy/plan.zig"),
+        @embedFile("boxy/layouts.zig"),
+    };
+    const single_definition = [_][]const u8{
+        "fn primitiveLayout(",
+        "fn primitiveInspectLowLevelOp(",
+        "fn hasherWriteOp(",
+    };
+    for (single_definition) |decl| {
+        var total: usize = 0;
+        for (sources) |source| total += countDefinitions(source, decl);
+        try std.testing.expectEqual(@as(usize, 1), total);
+    }
+    try expectContains(@embedFile("common.zig"), "pub fn primitiveLayout(");
+    try expectContains(@embedFile("common.zig"), "pub fn primitiveInspectLowLevelOp(");
+    try expectContains(@embedFile("common.zig"), "pub fn hasherWriteOp(");
+
+    // The primitive-to-owner table lives beside `CheckedPrimitive` itself, so
+    // post-check holds no definition of it at all and consumes the checked one.
+    for (sources) |source| {
+        try expectNotContains(source, "fn builtinOwnerForPrimitive(");
+        try expectNotContains(source, "fn builtinOwnerFromPrimitive(");
+    }
+    const owner_fn = @typeInfo(@TypeOf(check.CheckedModule.builtinOwnerForPrimitive)).@"fn";
+    try std.testing.expect(owner_fn.params.len == 1);
+    try std.testing.expect(owner_fn.params[0].type.? == check.CheckedModule.CheckedPrimitive);
+    try std.testing.expect(owner_fn.return_type.? == check.StaticDispatchRegistry.BuiltinOwner);
+}
+
+test "boxy representation queries have one definition on the plan" {
+    // Boxy planning decides an unwrap, a descriptor argument, or a dictionary
+    // argument by asking these; Boxy lowering emits that decision by asking the
+    // same ones. A second copy lets the two disagree about the program they are
+    // both describing, which is how the planner's
+    // `repSubtreeHasDescriptorInOtherChildren` carve-out came to be absent from
+    // both lowering copies. Every consumer goes through `Plan.RepQuery` /
+    // `Plan.NamedRepQuery`; none re-derives.
+    const consumers = [_][]const u8{
+        @embedFile("boxy/lower.zig"),
+        @embedFile("boxy/layouts.zig"),
+    };
+    const shared = [_][]const u8{
+        "repSubtreeHasDescriptor",
+        "repSubtreeHasDescriptorInner",
+        "repSubtreeHasDescriptorInOtherChildren",
+        "repSubtreeHasDictionary",
+        "repSubtreeHasDictionaryInner",
+        "repSubtreeHasDictionaryInOtherChildren",
+        "repSubtreeContainsRep",
+        "repSubtreeContainsRepInner",
+        "structuralWrapperBackingRep",
+        "descriptorArgumentIdentityRep",
+        "dictionaryArgumentIdentityRep",
+        "workerChildCanMatchUnwrappedCallRep",
+        "workerChildCanMatchUnwrappedCallRepForDictionaries",
+        "functionChildren",
+        "functionIdentityRep",
+        "requiredSingleChild",
+        "sameChildRoleKind",
+        "childRolesMatch",
+        "findMatchingChildByRole",
+        "findMatchingChildBySourceType",
+        "findMatchingDictionaryChildBySourceType",
+        "findMatchingTagPayloadInRep",
+        "findMatchingTagPayloadInRowExtension",
+        "findMatchingTagPayloadInRowExtensionInner",
+        "recordFieldNameMatches",
+        "tagLabelNameMatches",
+    };
+    const plan_source = @embedFile("boxy/plan.zig");
+    inline for (shared) |name| {
+        const decl = "fn " ++ name ++ "(";
+        for (consumers) |source| {
+            try std.testing.expectEqual(@as(usize, 0), countDefinitions(source, decl));
+        }
+        try std.testing.expectEqual(@as(usize, 1), countDefinitions(plan_source, decl));
+    }
+
+    // The exact-role and same-kind role comparisons are different predicates
+    // and must not collapse into each other: `sameChildRoleKind` answers false
+    // for every role carrying a payload.
+    try expectContains(plan_source, "pub fn sameChildRoleKind(");
+    try expectNotContains(plan_source, "fn sameChildRole(");
+}
+
+test "boxy stage tests share one set of checked-type fixtures" {
+    const sources = [_][]const u8{
+        @embedFile("boxy/lower.zig"),
+        @embedFile("boxy/plan.zig"),
+        @embedFile("boxy/layouts.zig"),
+    };
+    for (sources) |source| {
+        try expectNotContains(source, "fn builtinNominal(");
+        try expectNotContains(source, "fn fixtureTableIndex(");
+    }
+    try expectContains(@embedFile("boxy/test_fixtures.zig"), "pub fn builtinNominal(");
+    try expectContains(@embedFile("boxy/test_fixtures.zig"), "pub fn tableIndex(");
+}
+
+test "one pattern walk collects bound locals" {
+    // The lift pass's bound-set scan, its capture graph builder, and
+    // SpecConstr's body-local scope all walk a pattern for the locals it binds.
+    // They differ only in what they do at a binding site, never in which
+    // positions bind, so the walk lives once on the lifted AST. Three copies
+    // could come to disagree about a position (whether a list rest pattern
+    // binds, say) and only one of them would be right.
+    const consumers = [_][]const u8{
+        @embedFile("monotype_lifted/lift.zig"),
+        @embedFile("monotype_lifted/spec_constr.zig"),
+    };
+    for (consumers) |source| {
+        try expectNotContains(source, "fn forEachBoundLocal(");
+        // Each consumer keeps only a thin `bindPat` that names its binder.
+        try expectContains(source, "forEachBoundLocal(");
+    }
+    try expectContains(@embedFile("monotype_lifted/ast.zig"), "pub fn forEachBoundLocal(");
+}
+
+test "the match compiler's stated consumers are its actual consumers" {
+    // `match_tree.zig` and `mod.zig` both claimed this compiler was "shared by
+    // both LIR lowerers". It is not: `.boxy` folds match branches into a
+    // sequential chain of its own. A doc comment asserting a sharing invariant
+    // that does not hold is worse than none, because the next reader budgets
+    // for one match semantics and there are two. This pins the claim to the
+    // imports, so whichever way the gap closes, the comment has to move with it.
+    const boxy_uses_it = std.mem.find(u8, @embedFile("boxy/lower.zig"), "match_tree") != null;
+    const header = @embedFile("match_tree.zig");
+    const mod_source = @embedFile("mod.zig");
+    if (boxy_uses_it) {
+        try expectNotContains(header, "does not consume this yet");
+        try expectNotContains(mod_source, "does not use it yet");
+    } else {
+        try expectContains(header, "does not consume this yet");
+        try expectContains(mod_source, "does not use it yet");
+        try expectContains(@embedFile("solved_lir_lower.zig"), "match_tree.Compiler(");
+    }
+}
+
+test "post-check IR stores append spans through one implementation" {
+    // All three post-check IRs address their flat side tables the same way, and
+    // the append that produces a span was written out once per table per store
+    // (33 copies of the same three lines). It lives in `Common` now, so a change
+    // to how spans are allocated cannot land on one table and miss the rest.
+    const stores = [_][]const u8{
+        @embedFile("monotype/ast.zig"),
+        @embedFile("monotype_lifted/ast.zig"),
+        @embedFile("lambda_mono/ast.zig"),
+    };
+    for (stores) |source| {
+        // The hand-written form these replaced. Its absence is the invariant.
+        try expectNotContains(source, "const start: u32 = @intCast(self.expr_ids.len());");
+        try expectContains(source, "Common.appendSpan(");
+    }
+    try expectContains(@embedFile("common.zig"), "pub fn appendSpan(");
+    try expectContains(@embedFile("common.zig"), "pub fn appendNonemptySpan(");
+}
+
+test "const restoration has one implementation per shape" {
+    // `Builder` and `BodyContext` emit into different stores and different
+    // expression-data types, but which const shape maps to which expression
+    // form, and the length invariants relating a stored aggregate to its
+    // checked type, are one set of rules. Two copies could come to disagree
+    // about, say, whether a stored record's length is checked against the
+    // checked type at all.
+    const source = @embedFile("monotype/lower.zig");
+    const shapes = [_][]const u8{
+        "constRestoreData",
+        "constRestoreListData",
+        "constRestoreList",
+        "constRestoreTuple",
+        "constRestoreRecord",
+        "constRestoreTagPayloads",
+    };
+    inline for (shapes) |name| {
+        try std.testing.expectEqual(@as(usize, 1), countDefinitions(source, "fn " ++ name ++ "("));
+    }
+    // The scope-local copies these replaced must not come back.
+    try expectNotContains(source, "    fn restoreConstData(");
+    try expectNotContains(source, "    fn restoreConstRecord(");
+    try expectNotContains(source, "    fn restoreConstTuple(");
+    try expectNotContains(source, "    fn restoreConstTagPayloads(");
+}
+
 test "post-check invariant helper is failure-only" {
     const fn_info = @typeInfo(@TypeOf(Common.invariant)).@"fn";
     try std.testing.expect(fn_info.return_type.? == noreturn);

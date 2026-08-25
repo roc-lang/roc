@@ -3,11 +3,54 @@
 const std = @import("std");
 const base = @import("base");
 const check = @import("check");
+const layout = @import("layout");
 const lir_core = @import("lir_core");
-const MonoType = @import("monotype/type.zig");
 
 const checked = check.CheckedModule;
 const LIR = lir_core.LIR;
+
+/// Span into one of a post-check IR's flat side tables.
+///
+/// The three post-check IRs all address their side tables the same way, so the
+/// type and the append that produces it live here rather than once per store.
+pub fn Span(comptime _: type) type {
+    return extern struct {
+        start: u32,
+        len: u32,
+
+        pub fn empty() @This() {
+            return .{ .start = 0, .len = 0 };
+        }
+    };
+}
+
+/// Append `values` to a flat side table and return the span addressing them.
+/// `list` is any table exposing `len()` and `appendSlice(allocator, values)`.
+pub fn appendSpan(
+    comptime T: type,
+    list: anytype,
+    allocator: std.mem.Allocator,
+    values: []const T,
+) std.mem.Allocator.Error!Span(T) {
+    const start: u32 = @intCast(list.len());
+    try list.appendSlice(allocator, values);
+    return .{ .start = start, .len = @intCast(values.len) };
+}
+
+/// `appendSpan` for a table whose spans are never empty. An empty span there
+/// would read as "no children" at every consumer, which is a different shape
+/// from the one the producer meant, so it fails as an invariant rather than
+/// being stored.
+pub fn appendNonemptySpan(
+    comptime T: type,
+    list: anytype,
+    allocator: std.mem.Allocator,
+    values: []const T,
+    comptime message: []const u8,
+) std.mem.Allocator.Error!Span(T) {
+    if (values.len == 0) invariant(message);
+    return try appendSpan(T, list, allocator, values);
+}
 
 /// Resource failure while converting checked module data toward LIR.
 pub const LowerError = std.mem.Allocator.Error;
@@ -98,10 +141,69 @@ pub const ErasedFnsId = enum(u32) { _ };
 /// Stage-local capture slot id.
 pub const CaptureSlotId = enum(u32) { _ };
 
-/// The `Builtin.Hasher.write_*` low-level op that feeds a primitive scalar of
-/// the given monotype into a Hasher. Aggregate types are decomposed in Monotype
-/// lowering, so only primitive leaves ever reach direct hash lowering.
-pub fn hasherWriteOp(primitive: MonoType.Primitive) LIR.LowLevel {
+/// The storage layout of a primitive. This is the single source of truth
+/// shared by every post-check layout producer; call it rather than writing a
+/// second switch over `CheckedPrimitive`.
+pub fn primitiveLayout(primitive: checked.CheckedPrimitive) layout.Idx {
+    return switch (primitive) {
+        .bool => .bool,
+        .str => .str,
+        .u8 => .u8,
+        .i8 => .i8,
+        .u16 => .u16,
+        .i16 => .i16,
+        .u32 => .u32,
+        .i32 => .i32,
+        .u64 => .u64,
+        .i64 => .i64,
+        .u128 => .u128,
+        .i128 => .i128,
+        .f32 => .f32,
+        .f64 => .f64,
+        .dec => .dec,
+        .u8x16 => .u8x16,
+        .i8x16 => .i8x16,
+        .u16x8 => .u16x8,
+        .i16x8 => .i16x8,
+        .u32x4 => .u32x4,
+        .i32x4 => .i32x4,
+        .u64x2 => .u64x2,
+        .i64x2 => .i64x2,
+    };
+}
+
+/// The low-level op that renders a primitive scalar as a `Str`. This is the
+/// single source of truth shared by every post-check inspect lowering; call it
+/// rather than writing a second switch over `CheckedPrimitive`. Bool renders
+/// through ordinary tag-union inspect and the SIMD vectors render through their
+/// explicit `Builtin` bodies, so neither reaches this table.
+pub fn primitiveInspectLowLevelOp(primitive: checked.CheckedPrimitive) LIR.LowLevel {
+    return switch (primitive) {
+        .str => .str_inspect,
+        .u8 => .u8_to_str,
+        .i8 => .i8_to_str,
+        .u16 => .u16_to_str,
+        .i16 => .i16_to_str,
+        .u32 => .u32_to_str,
+        .i32 => .i32_to_str,
+        .u64 => .u64_to_str,
+        .i64 => .i64_to_str,
+        .u128 => .u128_to_str,
+        .i128 => .i128_to_str,
+        .f32 => .f32_to_str,
+        .f64 => .f64_to_str,
+        .dec => .dec_to_str,
+        .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => invariant("SIMD inspect must lower through its explicit Builtin body"),
+        .bool => invariant("Bool must lower as an ordinary tag union before Str.inspect"),
+    };
+}
+
+/// The `Builtin.Hasher.write_*` low-level op that feeds a primitive scalar into
+/// a Hasher. Aggregate types are decomposed before direct hash lowering, so only
+/// primitive leaves ever reach this table. This is the single source of truth
+/// shared by every post-check hash lowering; call it rather than writing a
+/// second switch over `CheckedPrimitive`.
+pub fn hasherWriteOp(primitive: checked.CheckedPrimitive) LIR.LowLevel {
     return switch (primitive) {
         .bool => .hasher_write_bool,
         .str => .hasher_write_str,
