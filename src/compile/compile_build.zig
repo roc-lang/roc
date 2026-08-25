@@ -2397,6 +2397,21 @@ pub const BuildEnv = struct {
         return pkg.getModule(root_id);
     }
 
+    /// How the build reached the package a module belongs to. `roc test` runs
+    /// the `expect`s the developer wrote and skips the ones that arrived with
+    /// a dependency, so the origin has to travel alongside each module.
+    pub const PackageOrigin = enum {
+        /// The package the `roc test` source argument explicitly selected,
+        /// including a bundle URL or installed shorthand.
+        root,
+        /// A dependency the root reaches through filesystem paths alone.
+        local_path_dependency,
+        /// Downloaded from a URL, or reached only by way of a fetched package.
+        fetched,
+        /// Embedded in the compiler, such as the default platform.
+        compiler_owned,
+    };
+
     /// Information about a compiled module, ready for serialization.
     /// All pointers reference data owned by the BuildEnv/Coordinator.
     pub const CompiledModuleInfo = struct {
@@ -2410,6 +2425,8 @@ pub const BuildEnv = struct {
         source: []const u8,
         /// Package name this module belongs to
         package_name: []const u8,
+        /// How the build reached this module's package.
+        package_origin: PackageOrigin,
         /// True if this is the platform's main.roc
         is_platform_main: bool,
         /// True if this is the app module
@@ -2500,6 +2517,56 @@ pub const BuildEnv = struct {
         return true;
     }
 
+    /// The explicitly requested root package and the dependencies it reaches
+    /// through filesystem paths alone, keyed by package identity. Keys borrow
+    /// the names stored in `self.packages`.
+    ///
+    /// The requested root is included even when its identity is a bundle URL.
+    /// After that root, the walk stops at every downloaded package and every
+    /// compiler-owned platform, because a path dependency declared inside a
+    /// fetched dependency arrived by download too and must not inherit the
+    /// root's ownership.
+    fn collectTestOwnedPackages(
+        self: *BuildEnv,
+        allocator: Allocator,
+    ) Allocator.Error!std.StringHashMapUnmanaged(void) {
+        var reached: std.StringHashMapUnmanaged(void) = .{};
+        errdefer reached.deinit(allocator);
+
+        const root_name = self.discovered_pkg_name orelse return reached;
+        if (compiler_platforms.fromIdentity(root_name) != null) return reached;
+
+        var frontier: std.ArrayList([]const u8) = .empty;
+        defer frontier.deinit(allocator);
+
+        try reached.put(allocator, root_name, {});
+        try frontier.append(allocator, root_name);
+
+        var next: usize = 0;
+        while (next < frontier.items.len) : (next += 1) {
+            const pkg = self.packages.getPtr(frontier.items[next]) orelse continue;
+            var shorthand_it = pkg.shorthands.iterator();
+            while (shorthand_it.next()) |shorthand| {
+                const target = shorthand.value_ptr.name;
+                if (reached.contains(target)) continue;
+                if (!self.isLocalPathPackage(target)) continue;
+                const key = (self.packages.getKeyPtr(target) orelse continue).*;
+                try reached.put(allocator, key, {});
+                try frontier.append(allocator, key);
+            }
+        }
+
+        return reached;
+    }
+
+    /// Whether this package's own source is a filesystem path the developer
+    /// could edit, ignoring how the build arrived at it.
+    fn isLocalPathPackage(self: *BuildEnv, name: []const u8) bool {
+        if (compiler_platforms.fromIdentity(name) != null) return false;
+        const pkg = self.packages.getPtr(name) orelse return false;
+        return pkg.url == null;
+    }
+
     pub fn getCompiledModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]CompiledModuleInfo {
         const coord = self.coordinator orelse {
             std.debug.panic("build env invariant violated: compiled modules requested before coordinator initialization", .{});
@@ -2507,6 +2574,10 @@ pub const BuildEnv = struct {
 
         var modules = std.ArrayList(CompiledModuleInfo).empty;
         errdefer modules.deinit(allocator);
+
+        var test_owned_packages = try self.collectTestOwnedPackages(allocator);
+        defer test_owned_packages.deinit(allocator);
+        const root_name = self.discovered_pkg_name;
 
         var pkg_it = coord.packages.iterator();
         while (pkg_it.next()) |entry| {
@@ -2517,6 +2588,14 @@ pub const BuildEnv = struct {
             const pkg_ptr = self.packages.getPtr(pkg_name);
             const is_platform_pkg = pkg_ptr != null and pkg_ptr.?.kind == .platform;
             const is_app_pkg = pkg_ptr != null and (pkg_ptr.?.kind == .app or pkg_ptr.?.kind == .default_app);
+            const package_origin: PackageOrigin = if (compiler_platforms.fromIdentity(pkg_name) != null)
+                .compiler_owned
+            else if (root_name != null and std.mem.eql(u8, pkg_name, root_name.?))
+                .root
+            else if (test_owned_packages.contains(pkg_name))
+                .local_path_dependency
+            else
+                .fetched;
 
             for (coord_pkg.modules.items, 0..) |*mod, mod_idx| {
                 const semantic = mod.semanticData() orelse continue;
@@ -2531,6 +2610,7 @@ pub const BuildEnv = struct {
                     .semantic = semantic,
                     .source = semantic.env.common.source,
                     .package_name = pkg_name,
+                    .package_origin = package_origin,
                     .is_platform_main = is_platform_main,
                     .is_app = is_app,
                     .is_platform_sibling = is_platform_sibling,
