@@ -8974,7 +8974,7 @@ and its moves to the absence of both at a final owned occurrence.
 
 ### Resources Over Layouts
 
-A local participates in inference iff its layout contains refcounted data
+A storage-owning local participates in inference iff its layout contains refcounted data
 (`layoutContainsRefcounted`). `erased_box` makes Boxy dynamic ownership
 explicit in the committed layout; the attached descriptor supplies the
 payload resource shape and allocation ABI. Each participating local owns one
@@ -8988,6 +8988,14 @@ resource per rc node reachable in its committed layout or dynamic descriptor:
 - one resource per refcounted payload position of each `tag_union` variant
 - the captures resource of a `closure` / `erased_callable`
 - the top-level and payload resources described by a boxy `TypeDesc`
+
+An `erased_capture_load` target whose aggregate contains an `erased_box` is
+explicitly a borrowed view into the executing callable's capture allocation.
+The committed aggregate layout identifies the dynamic fields it may project,
+but the view has no aggregate descriptor for emitting descriptor-driven RC.
+ARC excludes that target from the emission resource table and includes it in
+the solver-only borrow-anchor table, where projected dynamic fields keep the
+callable allocation live through their uses.
 
 Rc positions are interned per `layout.Idx` as a stage-local place table. The
 place graph is finite: committed layouts guard every recursive occurrence

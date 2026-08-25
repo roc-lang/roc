@@ -297,7 +297,13 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     defer solution.deinit();
     inserter.solution = &solution;
 
-    var dismantles = try arc_dismantle.compute(store.allocator, store, layouts, &solution);
+    var dismantles = try arc_dismantle.compute(
+        store.allocator,
+        store,
+        layouts,
+        local_contains_refcounted,
+        &solution,
+    );
     defer dismantles.deinit();
     inserter.dismantles = &dismantles;
 
@@ -558,6 +564,27 @@ fn computeLocalContainsRefcounted(
         const local_id: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
         const local = store.getLocal(local_id);
         contains[index] = layouts.layoutContainsRefcounted(layouts.getLayout(local.layout_idx));
+    }
+    // An `erased_capture_load` whose aggregate contains descriptor-driven
+    // fields is an explicit borrowed view into the executing callable's capture
+    // allocation. The view has no aggregate descriptor of its own, so it cannot
+    // use a layout-driven concrete helper. Keep it out of emission;
+    // `computeBorrowAnchorRefcounted` adds it back to the solver domain so its
+    // projected fields remain tied to the callable.
+    var visited = std.AutoHashMap(layout_mod.Idx, void).init(allocator);
+    defer visited.deinit();
+    var stack = std.ArrayList(layout_mod.Idx).empty;
+    defer stack.deinit(allocator);
+    for (0..store.cfStmtCount()) |stmt_index| {
+        const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt == .assign_low_level and stmt.assign_low_level.op == .erased_capture_load) {
+            const target = stmt.assign_low_level.target;
+            const target_layout = store.getLocal(target).layout_idx;
+            if (try layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) {
+                contains[@intFromEnum(target)] = false;
+            }
+        }
     }
 
     var changed = true;
