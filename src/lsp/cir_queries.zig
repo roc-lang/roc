@@ -736,19 +736,76 @@ pub fn collectDeclarationRegions(
     return results;
 }
 
+/// Whether an annotation's name token covers the given offset.
+fn annotationNameContains(store: *const NodeStore, anno_idx: CIR.Annotation.Idx, offset: u32) bool {
+    const name_region = store.getAnnotation(anno_idx).name_region orelse return false;
+    return regionContainsOffset(name_region, offset);
+}
+
+/// Context for finding the binding whose block-level annotation names an offset.
+const FindAnnotationNameContext = struct {
+    store: *const NodeStore,
+    target_offset: u32,
+    result: ?CIR.Pattern.Idx = null,
+
+    fn visitStmtPre(ctx: *FindAnnotationNameContext, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
+        const pattern_idx = statementPattern(stmt) orelse return .continue_traversal;
+        const anno_idx = statementAnnotation(stmt) orelse return .continue_traversal;
+        if (annotationNameContains(ctx.store, anno_idx, ctx.target_offset)) {
+            ctx.result = pattern_idx;
+            return .stop;
+        }
+        return .continue_traversal;
+    }
+};
+
+/// Find the binding whose type annotation writes its name at the given offset.
+///
+/// The name on a merged annotation is not a CIR node, only a region recorded on
+/// `Annotation`, so neither the pattern walk nor the lookup walk can reach it.
+/// Without this the token can be rewritten by a rename but cannot start one.
+fn findPatternByAnnotationName(module_env: *ModuleEnv, offset: u32) ?CIR.Pattern.Idx {
+    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        const anno_idx = def.annotation orelse continue;
+        if (annotationNameContains(&module_env.store, anno_idx, offset)) return def.pattern;
+    }
+
+    var ctx = FindAnnotationNameContext{
+        .store = &module_env.store,
+        .target_offset = offset,
+    };
+    var visitor = CirVisitor(FindAnnotationNameContext).init(&ctx, .{
+        .visit_stmt_pre = FindAnnotationNameContext.visitStmtPre,
+    });
+
+    for (defs_slice) |def_idx| {
+        visitor.walkExpr(&module_env.store, module_env.store.getDef(def_idx).expr);
+        if (visitor.stopped) break;
+    }
+    if (!visitor.stopped) {
+        visitor.walkModule(&module_env.store, module_env.all_statements);
+    }
+
+    return ctx.result;
+}
+
 /// Resolve the symbol at the given offset to the pattern that defines it.
 ///
-/// The cursor can sit on either end of a binding: on the defining pattern
-/// itself, or on an `e_lookup_local` that references it. Both ends resolve to
-/// the same `Pattern.Idx`, which is the identity `collectLookupReferences`
-/// expects, so callers that need every occurrence of a symbol must go through
-/// here rather than through `findPatternAtOffset` alone.
+/// The cursor can sit on any occurrence of a binding: the defining pattern,
+/// the name written on its type annotation, or an `e_lookup_local` that
+/// references it. All three resolve to the same `Pattern.Idx`, which is the
+/// identity `collectLookupReferences` expects, so callers that need every
+/// occurrence of a symbol must go through here rather than through
+/// `findPatternAtOffset` alone.
 ///
 /// Returns null when the offset names something other than a local binding
 /// (an external lookup, a record field, a keyword). Callers must treat that as
 /// "no symbol here" and must not widen the query by matching identifier text.
 pub fn resolveSymbolAtOffset(module_env: *ModuleEnv, offset: u32) ?CIR.Pattern.Idx {
     if (findPatternAtOffset(module_env, offset)) |pattern_idx| return pattern_idx;
+    if (findPatternByAnnotationName(module_env, offset)) |pattern_idx| return pattern_idx;
 
     const lookup = findLookupAtOffset(module_env, offset) orelse return null;
     return switch (lookup) {

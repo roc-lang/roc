@@ -295,6 +295,7 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "prepare rename reports the occurrence under the cursor", .run = prepareRenameReportsOccurrenceUnderCursor },
     .{ .name = "references handler honours includeDeclaration", .run = referencesHandlerHonoursIncludeDeclaration },
     .{ .name = "references handler respects shadowing", .run = referencesHandlerRespectsShadowing },
+    .{ .name = "the name on an annotation is a usable starting point", .run = annotationNameResolvesLikeAnyOccurrence },
     .{ .name = "definition handler finds local variable definition", .run = definitionHandlerFindsLocalVariableDefinition },
     .{ .name = "definition handler returns null for undefined symbol", .run = definitionHandlerReturnsNullForUndefinedSymbol },
     .{ .name = "hover handler handles type annotation request", .run = hoverHandlerReturnsTypeInfoForTypeAnnotation },
@@ -1215,6 +1216,87 @@ pub fn referencesHandlerRespectsShadowing() integration_spec.SpecError!void {
     var nothing = try responseById(allocator, responses, 3);
     defer nothing.deinit();
     try std.testing.expect((try nothing.result()) == .null);
+}
+
+/// Verifies the name written on a type annotation can start an operation, not
+/// just be swept up by one.
+///
+/// That token is not a CIR node; it exists only as `Annotation.name_region`. It
+/// was already rewritten by a rename that started elsewhere, but asking from it
+/// answered nothing, so putting the cursor on it and pressing rename did not
+/// work.
+pub fn annotationNameResolvesLikeAnyOccurrence() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "annotation_start.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\double : I64 -> I64
+        \\double = |n| n * 2
+        \\
+        \\main = double(21)
+    , .{platform_path});
+    defer allocator.free(source);
+
+    // Every request below starts on the `double` written on the annotation line.
+    const references = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/references","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":3}},"context":{{"includeDeclaration":true}}}}}}
+    , .{fixture.uri});
+    defer allocator.free(references);
+    const prepare = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/prepareRename","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":3}}}}}}
+    , .{fixture.uri});
+    defer allocator.free(prepare);
+    const rename = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":4,"method":"textDocument/rename","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":3}},"newName":"triple"}}}}
+    , .{fixture.uri});
+    defer allocator.free(rename);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{ references, prepare, rename });
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    // The annotation name, the binding, and the call site.
+    var found = try responseById(allocator, responses, 2);
+    defer found.deinit();
+    const locations = try found.result();
+    try std.testing.expect(locations == .array);
+    try std.testing.expectEqual(@as(usize, 3), locations.array.items.len);
+    try std.testing.expect(try hasLocation(locations, fixture.uri, 2, 0, 6));
+    try std.testing.expect(try hasLocation(locations, fixture.uri, 3, 0, 6));
+    try std.testing.expect(try hasLocation(locations, fixture.uri, 5, 7, 13));
+
+    // The editor prompts on the annotation name itself, since that is what was
+    // clicked.
+    var prepared = try responseById(allocator, responses, 3);
+    defer prepared.deinit();
+    const prepared_result = try prepared.result();
+    const placeholder = try objectField(prepared_result, "placeholder");
+    try std.testing.expect(placeholder == .string);
+    try std.testing.expectEqualStrings("double", placeholder.string);
+    const range = try objectField(prepared_result, "range");
+    try std.testing.expectEqual(@as(i64, 2), try integerField(try objectField(range, "start"), "line"));
+
+    // And the rewrite is the same one any other occurrence would have produced.
+    var renamed = try responseById(allocator, responses, 4);
+    defer renamed.deinit();
+    const edits = try workspaceEditsFor(try renamed.result(), fixture.uri);
+    try std.testing.expect(edits == .array);
+    try std.testing.expectEqual(@as(usize, 3), edits.array.items.len);
+    try std.testing.expect(try hasEdit(edits, 2, 0, 6, "triple"));
+    try std.testing.expect(try hasEdit(edits, 3, 0, 6, "triple"));
+    try std.testing.expect(try hasEdit(edits, 5, 7, 13, "triple"));
 }
 
 /// Verifies goto definition locates a local variable definition.
