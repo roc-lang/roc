@@ -3855,6 +3855,40 @@ fn expectReachableProcShapeFieldEqual(
     try std.testing.expectEqual(expected, actual);
 }
 
+// A loop-carried join param is only freshly owned inside the loop body when
+// every arrival to the join hands it a new unit. A record whose fields are
+// carried through a loop leaves the fields the back edge never rebinds holding
+// the value the entry edge produced, so releasing them in the body would run
+// one release per iteration against a value that only exists once. `state.b`
+// below is exactly such a field: the loop reads only `state.a`, and the back
+// edge rebinds only the counter and the accumulator.
+//
+// Regression: ARC placed every join param owned in the body keep unconditionally,
+// so the second iteration released an already-dead list. Debug builds catch this
+// as an `arc_certify` panic ("release of unbound local"); optimized builds
+// miscompiled into a use-after-free.
+test "ARC keeps a loop-invariant record field out of the loop body keep" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\State : { a : List(U64), b : List(U64) }
+        \\
+        \\count_from : State, U64, List(U64) -> List(U64)
+        \\count_from = |state, i, acc|
+        \\    if i == 0 acc else count_from(state, i - 1, List.append(acc, List.len(state.a)))
+        \\
+        \\main : U64
+        \\main = List.len(count_from({ a: [1, 2], b: [3, 4] }, 4, []))
+    ;
+
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    defer lowered.deinit(allocator);
+
+    // Both lists and the accumulator are released exactly once each. Before the
+    // fix the invariant field's release sat inside the loop body instead.
+    const decrefs = try reachableProcShapeFieldTotal(allocator, &lowered.lowered, "decref_count");
+    try std.testing.expectEqual(@as(usize, 3), decrefs);
+}
+
 // A producer-authored concrete iterator representation must survive ordinary
 // procedure returns and all supported static-dispatch invocation forms. Each
 // case below must reach `sum_it` (the debug-name sanity probe), avoid the public
