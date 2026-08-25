@@ -460,7 +460,8 @@ pub const WhereClause = union(enum) {
     /// Applies every constraint named by a where alias to `var_`.
     ///
     /// `alias` is the resolved reference to the where alias declaration—a
-    /// `lookup` when the alias takes no arguments and an `apply` when it does—/// so the checker never has to re-resolve the name.
+    /// `lookup` when the alias takes no arguments and an `apply` when it does—
+    /// so the checker never has to re-resolve the name.
     w_alias: struct {
         var_: TypeAnno.Idx,
         alias: TypeAnno.Idx,

@@ -5,7 +5,8 @@
 //! reported, and a reference is resolved to the binding it actually names
 //! rather than to matching text.
 //!
-//! Unlike rename this only reports, so it is not restricted to plain bindings—//! any pattern the cursor resolves to can have its uses listed.
+//! Unlike rename this only reports, so it is not restricted to plain bindings—
+//! any pattern the cursor resolves to can have its uses listed.
 //!
 //! Only the requested document is searched. A binding that other modules import
 //! will have uses this does not list, so an empty or short result is not proof
