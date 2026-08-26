@@ -10120,7 +10120,7 @@ choosing between a borrow and an owned move, the choice that keeps a
 mutation check-free becomes visible to the solver rather than a lucky
 outcome of emission order.
 
-### In-Place List.map
+### In-Place List Transforms
 
 `List.map` may overwrite a uniquely owned input list's buffer instead of
 allocating an output list when the input and output item representations are
@@ -10147,6 +10147,16 @@ the refcount only after all live ownership units are present; leaving the query
 on the original, unconsumed argument would allow ARC to move a preservation
 retain after that observation and incorrectly report a shared buffer as unique.
 
+`List.update` uses the same ownership-transfer protocol for its single selected
+item. After checking the index, it prepares the outer list and tests whether
+the allocation is reusable. A reusable list moves the selected item out of
+its slot, calls the updater with that owned value, and moves the result back
+into the vacated slot. This is what lets an updater mutate a uniquely owned
+refcounted item, such as an inner list, without a defensive copy. A shared
+outer list takes the ordinary checked replace path, which keeps the original
+list and selected item unchanged. Since `List.update` has the same item type
+on both sides, it needs no in-place representation cast.
+
 The runtime meaning of `list_map_can_reuse` is "uniquely owned and not a
 seamless slice"—a slice's buffer points into the middle of an allocation
 whose header bookkeeping covers the whole allocation, so a unique slice still
@@ -10160,14 +10170,17 @@ The in-place branch itself is dropped before it reaches LIR whenever the item
 representations are not interchangeable or the optimization is disabled
 (`TargetConfig.list_in_place_map`, on for `--opt=size`/`--opt=speed`, off for
 dev, interpreter, and compile-time evaluation), so ineligible map
-specializations never carry dead in-place machinery and dev builds lower
-exactly the copy loop. The fold uses the same representation-eligibility
-decision as the primitive. Different fully concrete types may keep the branch
-when their layouts are interchangeable; descriptor-bearing types may keep it
-only when their descriptor representation identity is the same. The debug
-Lambda Mono materializer runs before layout selection and cannot recompute that
-decision; instead, direct lowering records each statically resolved match site
-as explicit data and the verifier replays the record, so the two derivations
+and update specializations never carry dead in-place machinery and dev builds
+lower exactly the copy path. Both direct lowerers identify the compiler
+operation from producer IR and consume its typed numeral/wildcard arms; neither
+infers the site from source names or resulting LIR shape. The fold
+uses the same representation-eligibility decision as the primitive. Different
+fully concrete types may keep the branch when their layouts are
+interchangeable; descriptor-bearing types may keep it only when their
+descriptor representation identity is the same. The debug Lambda Mono
+materializer runs before layout selection and cannot recompute that decision;
+instead, direct lowering records each statically resolved match site as
+explicit data and the verifier replays the record, so the two derivations
 demand the same set of functions without the materializer ever consulting
 layouts. A wrong record can only misplace dead code, never a runtime check—the
 primitive's own lowering independently gates the runtime path—and a fold
