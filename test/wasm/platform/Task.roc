@@ -1,0 +1,3 @@
+Task := [].{
+    payload! : {} => Str
+}

@@ -20,6 +20,8 @@ const std = @import("std");
 const builtins = @import("builtins");
 const host_alloc = @import("host_alloc");
 
+pub const roc_host_call_mode: builtins.host_abi.HostCallMode = .extern_symbols;
+
 const shim_symbols = builtins.shim_symbols;
 
 const RocStr = builtins.str.RocStr;
@@ -125,6 +127,10 @@ export fn roc_fallible_str_ok() callconv(.c) FallibleStrResult {
         .payload = .{ .ok = RocStr.fromSliceSmall("ok") },
         .tag = .ok,
     };
+}
+
+export fn roc_task_payload() callconv(.c) RocStr {
+    return RocStr.fromSlice("zero,one,this field is long enough", undefined);
 }
 
 fn canaryBlob(comptime marker: []const u8) [4096]u8 {

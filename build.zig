@@ -4791,6 +4791,17 @@ pub fn build(b: *std.Build) void {
         build_wasm_hosted_try_widen_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_hosted_try_widen_app.step);
 
+        const build_wasm_issue_10958_app = b.addRunArtifact(roc_exe);
+        build_wasm_issue_10958_app.addArgs(&.{
+            "build",
+            "test/wasm/issue_10958_hosted_payload_decode_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/issue_10958_hosted_payload_decode_static_lib_app.wasm",
+        });
+        build_wasm_issue_10958_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_10958_app.step);
+
         const build_wasm_str_concat_join_app = b.addRunArtifact(roc_exe);
         build_wasm_str_concat_join_app.addArgs(&.{
             "build",
@@ -5020,6 +5031,19 @@ pub fn build(b: *std.Build) void {
             });
             run_wasm_hosted_try_widen_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_hosted_try_widen_test.step);
+
+            const run_wasm_issue_10958_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_issue_10958_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/issue_10958_hosted_payload_decode_static_lib_app.wasm",
+                "--expected",
+                "ok",
+                "--assert-alloc-balanced",
+                "--min-allocs",
+                "1",
+            });
+            run_wasm_issue_10958_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_10958_test.step);
 
             const run_wasm_str_concat_join_test = b.addRunArtifact(wasm_test_exe);
             run_wasm_str_concat_join_test.addArgs(&.{
