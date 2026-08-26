@@ -355,6 +355,9 @@ pub const BodyDiagnostics = struct {
     call_expressions: u64 = 0,
     dispatch_expressions: u64 = 0,
     deferred_template_requests: u64 = 0,
+    spec_jobs_enqueued: u64 = 0,
+    spec_jobs_executed: u64 = 0,
+    spec_jobs_skipped_ready: u64 = 0,
     cross_root_template_reuses: u64 = 0,
     caller_owned_template_bodies_lowered: u64 = 0,
     deferred_template_reuses: u64 = 0,
@@ -410,6 +413,10 @@ pub fn run(
     try builder.loadCandidateSpecializationShards();
     if (options.timing) |timing| timing.finish(setup_started_ns, .setup);
 
+    // Wave 1: roots in listed order, then the specialization queue. Each
+    // root remains a distinct job whose result lands in root order; symbolic
+    // requests discovered while roots seal are reserved immediately and their
+    // bodies drain afterward in deterministic dispatch order.
     const procedures_started_ns = if (options.timing) |timing| timing.start() else 0;
     if (options.timing) |timing| timing.startProcedureBreakdown();
     switch (roots.procedure_template_root_grouping) {
@@ -431,19 +438,26 @@ pub fn run(
             }
         },
     }
+    try builder.drainPendingSpecJobs();
     if (options.timing) |timing| timing.finishProcedureBreakdown();
     if (options.timing) |timing| timing.finish(procedures_started_ns, .procedure_specialization);
 
+    // Wave 2: layout requests lower types serially and discover no
+    // specializations, so the queue must still be empty afterward.
     const layouts_started_ns = if (options.timing) |timing| timing.start() else 0;
     for (roots.layout_requests) |checked_ty| {
         try builder.lowerLayoutRequest(checked_ty);
     }
+    builder.requirePendingSpecJobsDrained();
     if (options.timing) |timing| timing.finish(layouts_started_ns, .layout_requests);
 
+    // Wave 3: static-data restoration in listed order, then a second
+    // specialization queue drain for the template bodies it discovered.
     const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
     for (roots.static_data_requests) |request| {
         try builder.lowerStaticDataRequest(request);
     }
+    try builder.drainPendingSpecJobs();
     if (options.timing) |timing| timing.finish(static_data_started_ns, .static_data_requests);
 
     const finalization_started_ns = if (options.timing) |timing| timing.start() else 0;
@@ -1889,6 +1903,35 @@ const TemplateReservation = struct {
     symbol: Common.Symbol,
 };
 
+/// How a template specialization's body is produced once its identity is
+/// reserved. Callers that consume the callee's solved representation (roots,
+/// iterator-inline completion, restored constant functions, hosted adapter
+/// sources) lower the body immediately; a seal-time symbolic request only
+/// reserves the identity and queues the body for the scheduler's wave drain.
+const TemplateBodyScheduling = enum { immediate, queued };
+
+/// One reserved specialization whose body has not lowered yet, in the
+/// deterministic scheduler FIFO. Every field is durable for the builder's
+/// lifetime: evidence lives in the evidence arena, the requested type is
+/// sealed, and the reservation already owns its global ids, so the job
+/// outlives the requesting graph and draft.
+const PendingSpecJob = struct {
+    /// Logical enqueue order across the whole build. The inline executor
+    /// accepts jobs strictly in this order; a parallel executor later buffers
+    /// specialization-body outputs until their dispatch index is next.
+    dispatch_index: u64,
+    spec: Ast.SpecId,
+    reservation: TemplateReservation,
+    fn_template: Ast.FnTemplate,
+    template_ref: names.ProcTemplate,
+    method_scope: checked.ModuleId,
+    source_fn_ty: checked.CheckedTypeId,
+    source_fn_key: names.TypeDigest,
+    fn_ty: Type.TypeId,
+    evidence: []const SpecEvidence,
+    signature_relation: Ast.SignatureRelation,
+};
+
 /// One root body lowered into a shared root batch. Its checked type graph is
 /// still instantiated in a fresh scope; only the graph and draft stores are
 /// shared so an exact specialization discovered by an earlier root can be
@@ -2162,6 +2205,12 @@ const Builder = struct {
     /// owner remaps exactly these entries on commit and evicts exactly these
     /// on abort, so neither path scales with the whole cache.
     active_type_transaction_addresses: std.ArrayList(CheckedTypeAddress) = .empty,
+    /// Deterministic FIFO of reserved specializations awaiting body lowering.
+    /// Wave drains execute entries in dispatch order; an executing body may
+    /// append new entries, which the same drain then reaches.
+    pending_spec_jobs: std.ArrayList(PendingSpecJob) = .empty,
+    pending_spec_jobs_head: usize = 0,
+    next_spec_dispatch_index: u64 = 0,
     /// Exact constructor-keyed interning for parser result types synthesized
     /// after graph sealing. These types never mutate, so the reused ids are
     /// valid for the lifetime of the program builder.
@@ -2369,6 +2418,7 @@ const Builder = struct {
         self.lowered_templates.deinit();
         self.spec_store.deinit();
         self.uninhabited_type_cache.deinit();
+        self.pending_spec_jobs.deinit(self.allocator);
         self.active_type_transaction_addresses.deinit(self.allocator);
         self.generated_try_types.deinit();
         self.parse_result_ok_types.deinit();
@@ -3327,6 +3377,7 @@ const Builder = struct {
             null,
             null,
             root_batch,
+            .immediate,
         );
     }
 
@@ -3459,6 +3510,7 @@ const Builder = struct {
         precomputed_request_digest: ?names.TypeDigest,
         retained_topology: ?EvidenceChain,
         root_batch: ?*RootTemplateBatch,
+        body_scheduling: TemplateBodyScheduling,
     ) Allocator.Error!Ast.DefId {
         var lookup_timing_scope = ProcedureTimingScope.begin(self.timing, .lookup_reservation);
         defer lookup_timing_scope.end();
@@ -3507,7 +3559,38 @@ const Builder = struct {
                     self.promoteFnSignatureRelation(hit.fn_id, signature_relation);
                     return existing.def;
                 },
-                .reserved => Common.invariant("Monotype procedure specialization reached lowering with a reserved record"),
+                .reserved => {
+                    self.promoteFnSignatureRelation(hit.fn_id, signature_relation);
+                    switch (body_scheduling) {
+                        // A queued request reuses the reserved id; the body
+                        // is already owned by the queue.
+                        .queued => return existing.def,
+                        // An immediate caller consumes the callee's solved
+                        // representation, so it claims the queued body and
+                        // lowers it now with the reservation's own winning
+                        // seed. The queued job later observes the ready
+                        // record and is skipped instead of re-lowered.
+                        .immediate => {
+                            const job = self.pendingSpecJobFor(hit.fn_id) orelse
+                                Common.invariant("reserved Monotype specialization had no queued body to claim");
+                            self.spec_store.markLowering(job.spec);
+                            try self.completeTemplateReservation(
+                                job.reservation,
+                                job.fn_template,
+                                job.template_ref,
+                                self.moduleForId(job.method_scope),
+                                job.source_fn_ty,
+                                job.source_fn_key,
+                                job.fn_ty,
+                                job.evidence,
+                                null,
+                                job.signature_relation,
+                                null,
+                            );
+                            return existing.def;
+                        },
+                    }
+                },
             }
         } else {
             if (request_accounting == .count) self.count("template_misses");
@@ -3521,7 +3604,8 @@ const Builder = struct {
             fn_template.const_evidence_frame_head = stored_evidence.head;
         }
 
-        const reservation: TemplateReservation = blk: {
+        const ReservedSpec = struct { reservation: TemplateReservation, spec: Ast.SpecId };
+        const reserved: ReservedSpec = blk: {
             const symbol = self.symbols.fresh();
             try self.registerProcDebugNameForTemplate(symbol, view, template_ref);
             const fn_id = try self.program.addFn(fn_template);
@@ -3545,7 +3629,10 @@ const Builder = struct {
                 lower_fn_ty,
                 request_digest,
                 fn_id,
-                .lowering,
+                switch (body_scheduling) {
+                    .immediate => .lowering,
+                    .queued => .reserved,
+                },
             );
             try self.lowered_templates.put(fn_id, .{
                 .def = def_id,
@@ -3554,11 +3641,81 @@ const Builder = struct {
                 .topology = stored_source_topology,
             });
             break :blk .{
-                .def = def_id,
-                .fn_id = fn_id,
-                .symbol = symbol,
+                .reservation = .{
+                    .def = def_id,
+                    .fn_id = fn_id,
+                    .symbol = symbol,
+                },
+                .spec = spec,
             };
         };
+        const reservation = reserved.reservation;
+
+        switch (body_scheduling) {
+            .immediate => {},
+            .queued => {
+                if (root_batch != null) {
+                    Common.invariant("queued Monotype specialization request cannot join a root batch");
+                }
+                if (retained_topology != null) {
+                    Common.invariant("queued Monotype specialization request cannot carry a retained lexical topology");
+                }
+                self.countBodyDiagnostic("spec_jobs_enqueued");
+                const dispatch_index = self.next_spec_dispatch_index;
+                self.next_spec_dispatch_index += 1;
+                try self.pending_spec_jobs.append(self.allocator, .{
+                    .dispatch_index = dispatch_index,
+                    .spec = reserved.spec,
+                    .reservation = reservation,
+                    .fn_template = fn_template,
+                    .template_ref = template_ref,
+                    .method_scope = method_scope.key,
+                    .source_fn_ty = source_fn_ty,
+                    .source_fn_key = source_fn_key,
+                    .fn_ty = lower_fn_ty,
+                    .evidence = spec_evidence,
+                    .signature_relation = signature_relation,
+                });
+                return reservation.def;
+            },
+        }
+
+        try self.completeTemplateReservation(
+            reservation,
+            fn_template,
+            template_ref,
+            method_scope,
+            source_fn_ty,
+            source_fn_key,
+            lower_fn_ty,
+            spec_evidence,
+            retained_topology,
+            signature_relation,
+            root_batch,
+        );
+        return reservation.def;
+    }
+
+    /// Lower the body (or hosted completion) for a specialization whose
+    /// identity, ids, and seed are already reserved. Runs immediately for
+    /// direct callers and root batches, and from the scheduler's wave drain
+    /// for queued symbolic requests.
+    fn completeTemplateReservation(
+        self: *Builder,
+        reservation: TemplateReservation,
+        fn_template: Ast.FnTemplate,
+        template_ref: names.ProcTemplate,
+        method_scope: ModuleView,
+        source_fn_ty: checked.CheckedTypeId,
+        source_fn_key: names.TypeDigest,
+        lower_fn_ty: Type.TypeId,
+        spec_evidence: []const SpecEvidence,
+        retained_topology: ?EvidenceChain,
+        signature_relation: Ast.SignatureRelation,
+        root_batch: ?*RootTemplateBatch,
+    ) Allocator.Error!void {
+        const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
+        const template = view.templates.get(template_ref.template);
 
         switch (template.target) {
             .hosted => {
@@ -3605,6 +3762,7 @@ const Builder = struct {
                         null,
                         null,
                         null,
+                        .immediate,
                     );
                     const adapter_template = Ast.FnTemplate{
                         .fn_def = .{ .checked_generated = template_ref },
@@ -3633,7 +3791,7 @@ const Builder = struct {
                     });
                     self.program.setFnSource(reservation.fn_id, adapter_template);
                     try self.markTemplateReady(reservation.fn_id, lower_fn_ty);
-                    return reservation.def;
+                    return;
                 }
                 try self.requireHostedExternAtDeclaredAbi(
                     view,
@@ -3652,7 +3810,7 @@ const Builder = struct {
                 });
                 self.program.setFnSource(reservation.fn_id, hosted_fn_template);
                 try self.markTemplateReady(reservation.fn_id, lower_fn_ty);
-                return reservation.def;
+                return;
             },
             .roc,
             .intrinsic,
@@ -3678,7 +3836,7 @@ const Builder = struct {
                 signature_relation,
             );
             try batch.pending.append(self.allocator, pending);
-            return reservation.def;
+            return;
         }
 
         const graph = try self.createGraph();
@@ -3718,7 +3876,72 @@ const Builder = struct {
         var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
         defer completion_timing_scope.end();
         try self.finishReservedTemplateBody(pending, sealed.ids, sealed.root_ty.?);
-        return reservation.def;
+    }
+
+    /// The queued job whose reservation owns `fn_id`, or null when that body
+    /// has already been claimed and completed. Claims are rare (bounded by
+    /// iterator-inline occurrences), so a linear scan of the outstanding
+    /// window is cheaper than an index.
+    fn pendingSpecJobFor(self: *Builder, fn_id: Ast.FnId) ?PendingSpecJob {
+        for (self.pending_spec_jobs.items[self.pending_spec_jobs_head..]) |job| {
+            if (job.reservation.fn_id == fn_id) return job;
+        }
+        return null;
+    }
+
+    /// Execute queued specialization bodies in dispatch order until the wave
+    /// drains. Bodies executed here may enqueue further requests; those join
+    /// the same FIFO and are reached by this same loop, in enqueue order.
+    fn drainPendingSpecJobs(self: *Builder) Allocator.Error!void {
+        while (self.pending_spec_jobs_head < self.pending_spec_jobs.items.len) {
+            const job = self.pending_spec_jobs.items[self.pending_spec_jobs_head];
+            self.pending_spec_jobs_head += 1;
+            try self.executePendingSpecJob(job);
+        }
+        self.pending_spec_jobs.clearRetainingCapacity();
+        self.pending_spec_jobs_head = 0;
+    }
+
+    fn requirePendingSpecJobsDrained(self: *Builder) void {
+        if (self.pending_spec_jobs_head != self.pending_spec_jobs.items.len) {
+            Common.invariant("Monotype specialization queue was not drained at a wave boundary");
+        }
+    }
+
+    fn executePendingSpecJob(self: *Builder, job: PendingSpecJob) Allocator.Error!void {
+        if (self.active_graph != null) {
+            Common.invariant("Monotype specialization job executed during an active body draft");
+        }
+        switch (self.spec_store.recordStatus(job.spec)) {
+            // An immediate caller claimed and completed this reservation after
+            // it was queued; the queued duplicate is skipped, not re-lowered.
+            .ready => {
+                self.countBodyDiagnostic("spec_jobs_skipped_ready");
+                if (std.debug.runtime_safety) {
+                    const existing = self.lowered_templates.get(job.reservation.fn_id) orelse
+                        Common.invariant("completed Monotype specialization lost its lowering state");
+                    std.debug.assert(specEvidenceVectorEql(existing.evidence, job.evidence));
+                }
+                return;
+            },
+            .reserved => {},
+            .lowering => Common.invariant("queued Monotype specialization was already lowering at dispatch"),
+        }
+        self.countBodyDiagnostic("spec_jobs_executed");
+        self.spec_store.markLowering(job.spec);
+        try self.completeTemplateReservation(
+            job.reservation,
+            job.fn_template,
+            job.template_ref,
+            self.moduleForId(job.method_scope),
+            job.source_fn_ty,
+            job.source_fn_key,
+            job.fn_ty,
+            job.evidence,
+            null,
+            job.signature_relation,
+            null,
+        );
     }
 
     fn lowerReservedTemplateBodyIntoDraft(
@@ -5687,6 +5910,7 @@ const Builder = struct {
             null,
             null,
             null,
+            .immediate,
         );
         return .{ .local = self.defFnId(def) };
     }
@@ -5776,6 +6000,7 @@ const Builder = struct {
                     null,
                     retained,
                     null,
+                    .immediate,
                 );
                 return self.defFnId(def);
             },
@@ -7031,6 +7256,7 @@ const Builder = struct {
         body_draft: *BodyDraftStore,
         spec_index: usize,
         fn_ty: Type.TypeId,
+        body_scheduling: TemplateBodyScheduling,
     ) Allocator.Error!void {
         if (spec_index >= body_draft.template_specs.items.len) {
             Common.invariant("deferred template specialization index was outside the draft table");
@@ -7101,6 +7327,7 @@ const Builder = struct {
                 request_digest,
                 null,
                 null,
+                body_scheduling,
             );
             break :blk .{ .local = self.defFnId(def) };
         };
@@ -7126,7 +7353,9 @@ const Builder = struct {
             if (state != .deferred) continue;
             const request_fn_node = body_draft.template_specs.items[spec_index].request_fn_node;
             const fn_ty = try sealer.sealNode(request_fn_node);
-            try self.resolveDeferredTemplateSpecAtType(body_draft, spec_index, fn_ty);
+            // Seal-time requests are symbolic: they reserve the callee's id
+            // for call-site patching and queue the body for the wave drain.
+            try self.resolveDeferredTemplateSpecAtType(body_draft, spec_index, fn_ty, .queued);
         }
     }
 
@@ -28389,7 +28618,9 @@ const BodyContext = struct {
         if (!try self.graph.typeIsResolved(spec.request_fn_node)) return current_node;
 
         const request_fn_ty = try self.activeTypeFromNode(spec.request_fn_node);
-        try self.builder.resolveDeferredTemplateSpecAtType(self.draft, spec_index, request_fn_ty);
+        // Iterator-inline completion consumes the callee's solved private
+        // representation, so the body must lower now rather than queue.
+        try self.builder.resolveDeferredTemplateSpecAtType(self.draft, spec_index, request_fn_ty, .immediate);
         self.draft.template_specs.items[spec_index].eager_resolution = .{
             .request_fn_node = spec.request_fn_node,
             .fn_ty = request_fn_ty,

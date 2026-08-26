@@ -2048,6 +2048,101 @@ test "test roots share template work only when explicitly grouped" {
     try std.testing.expect(shared_diagnostics.body.cross_root_template_reuses > 0);
 }
 
+test "deferred specialization bodies queue once and drain at the wave boundary" {
+    const allocator = std.testing.allocator;
+    // Two isolated roots request the same identity(I64) specialization: the
+    // first symbolic request reserves and queues its body, the second reuses
+    // the reservation, and the Str request queues a distinct body. The wave
+    // drain then executes every queued body exactly once.
+    const source =
+        \\identity : a -> a
+        \\identity = |value| value
+        \\
+        \\expect identity(1) == 1
+        \\expect identity("shared") == "shared"
+        \\expect identity(2) == 2
+        \\
+        \\main = 0
+    ;
+
+    var diagnostics = MonoLower.Diagnostics{};
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .diagnostics = &diagnostics,
+        .root_selection = .test_expects,
+    });
+    defer lowered.deinit(allocator);
+
+    try std.testing.expect(diagnostics.body.spec_jobs_enqueued >= 2);
+    try std.testing.expectEqual(diagnostics.body.spec_jobs_enqueued, diagnostics.body.spec_jobs_executed);
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.body.spec_jobs_skipped_ready);
+    try std.testing.expect(diagnostics.body.deferred_template_reuses >= 1);
+}
+
+test "specialization scheduling is deterministic across repeat runs" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\add_twice : I64 -> I64
+        \\add_twice = |value| value + value
+        \\
+        \\pick : a, a -> a
+        \\pick = |first, _second| first
+        \\
+        \\expect add_twice(pick(3.I64, 4.I64)) == 6
+        \\expect pick("left", "right") == "left"
+        \\
+        \\main = 0
+    ;
+
+    var first_diagnostics = MonoLower.Diagnostics{};
+    var first = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .diagnostics = &first_diagnostics,
+        .root_selection = .test_expects,
+    });
+    defer first.deinit(allocator);
+
+    var second_diagnostics = MonoLower.Diagnostics{};
+    var second = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .diagnostics = &second_diagnostics,
+        .root_selection = .test_expects,
+    });
+    defer second.deinit(allocator);
+
+    // Same logical schedule: identical record order, ids, digests, and
+    // statuses, identical root order, and identical work counts.
+    const first_specs = first.mono.specsView();
+    const second_specs = second.mono.specsView();
+    try std.testing.expectEqual(first_specs.len, second_specs.len);
+    for (first_specs, second_specs) |lhs, rhs| {
+        try std.testing.expectEqual(lhs.fn_id, rhs.fn_id);
+        try std.testing.expectEqual(lhs.status, rhs.status);
+        try std.testing.expect(std.mem.eql(
+            u8,
+            lhs.identity.request_fn_ty_digest.bytes[0..],
+            rhs.identity.request_fn_ty_digest.bytes[0..],
+        ));
+        try std.testing.expect(std.mem.eql(
+            u8,
+            lhs.solved_fn_ty_digest.bytes[0..],
+            rhs.solved_fn_ty_digest.bytes[0..],
+        ));
+    }
+    const first_roots = first.mono.rootsView();
+    const second_roots = second.mono.rootsView();
+    try std.testing.expectEqual(first_roots.len, second_roots.len);
+    for (first_roots, second_roots) |lhs, rhs| {
+        try std.testing.expectEqual(lhs.def, rhs.def);
+    }
+    try std.testing.expectEqual(first.mono.fnCount(), second.mono.fnCount());
+    try std.testing.expectEqual(first.mono.defCount(), second.mono.defCount());
+    try std.testing.expectEqual(first.mono.exprCount(), second.mono.exprCount());
+    inline for (std.meta.fields(@TypeOf(first_diagnostics.body))) |field| {
+        try std.testing.expectEqual(
+            @field(first_diagnostics.body, field.name),
+            @field(second_diagnostics.body, field.name),
+        );
+    }
+}
+
 test "issue 10529 open Try chain with named local callback stays bounded" {
     const allocator = std.testing.allocator;
     const source =
