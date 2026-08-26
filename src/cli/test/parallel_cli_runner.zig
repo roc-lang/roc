@@ -216,6 +216,11 @@ const Stream = enum {
 const OutputNeedle = struct {
     stream: Stream,
     text: []const u8,
+    /// Set for prose that the report renderer word-wraps. The wrap point moves
+    /// with the length of the absolute paths a report embeds, so a phrase that
+    /// sits on one line locally can straddle a newline on another machine. When
+    /// set, each space in `text` matches any run of whitespace in the output.
+    wrapped: bool = false,
 };
 
 const OutputOccurrence = struct {
@@ -1029,6 +1034,9 @@ const subcommand_cases = [_]CliCase{
     // its target through an import, so no entry can reach the root and the
     // declaration is always missing from the section.
     .{ .id = 0, .suite = .subcommands, .name = "platform root hosted declaration reports without panic", .body = .{ .command = .{ .args = &.{ "build", "--no-cache", "--target=x64musl" }, .roc_file = "test/hosted-section-errors/platform_root_hosted_declaration/app.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "invalid hosted section" }, .{ .stream = .stderr, .text = "helper" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "did not say why" }, .{ .stream = .stderr, .text = "invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "package effect boundary: a package cannot depend on a platform", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/package-effect-boundary/platform_dependency/app.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "invalid package dependency" }, .{ .stream = .stderr, .text = "Only apps may depend on platforms.", .wrapped = true } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "package effect boundary: a package cannot gain builtin privileges by shipping a Builtin module", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/package-effect-boundary/builtin_module/app.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "reference has no value" }, .{ .stream = .stderr, .text = "declaration has no value" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "package effect boundary: a package header cannot declare a platform dependency", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/package-effect-boundary/platform_keyword_dependency/app.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "invalid package dependency" }, .{ .stream = .stderr, .text = "HeaderParseFailed" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     // A platform's own hosted declaration is named in its hosted section without
     // a module, since the platform cannot import itself.
     .{ .id = 0, .suite = .subcommands, .name = "platform root hosted declaration binds through an unqualified hosted entry", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/hosted-section-errors/platform_root_hosted_entry/platform/main.roc", .not_contains = &.{ .{ .stream = .stderr, .text = "invalid hosted section" }, .{ .stream = .stderr, .text = "panic" } } } } },
@@ -1426,6 +1434,7 @@ const subcommand_cases = [_]CliCase{
     // Repro for https://github.com/roc-lang/roc/issues/10888: record shapes
     // with the same field set at consecutive levels must retain nested codec metadata.
     .{ .id = 0, .suite = .subcommands, .name = "issue 10888: JSON parser retains metadata for repeated nested record fields", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/issue_10888_json_parse_repeated_nested_field.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10898: JSON parsing a nominal record does not publish its generated parser as an app root", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/cli/issue_10898_json_parse_nominal_record.roc", .exit = .not_panic, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test infers JSON record parser shape without record annotation", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/JsonParseInferredRecord.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test infers JSON article parser shape from use sites", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/JsonParseInferredArticle.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test preserves composed parser errors through a generic wrapper", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/JsonParseGenericWrapperErrors.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
@@ -1745,6 +1754,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test runs a headerless file whose only type does not match the file name", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/no_main_expects_with_type.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "nominal type declaration matching" }, .{ .stream = .stderr, .text = "main!" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check still requires main! on a headerless file with no matching type", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/no_main_expects_only.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{.{ .stream = .stderr, .text = "main!" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc run reports syntax errors, not a header error, when unbalanced parens hide main!", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/headerless_unbalanced_parens.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{.{ .stream = .stderr, .text = "expected closing brace" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "expected app header" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc run --opt=size reports syntax errors, not a header error, when unbalanced parens hide main!", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--no-cache" }, .roc_file = "test/cli/headerless_unbalanced_parens.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{.{ .stream = .stderr, .text = "expected closing brace" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "expected app header" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check issue 10599 nominal render module does not retain relocated type-store slices", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/fx/exhaustive_canvas_polygon_checker_crash/app.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "index out of bounds" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test eq on tag union with list payload does not panic", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/EqTagWithListPayload.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test draft sealing coverage for nested closures loops equality and hashing", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/DraftSealingCoverage.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant" }, .{ .stream = .stderr, .text = "panic" } } } } },
@@ -2623,12 +2633,12 @@ fn checkCommandExpectation(
         }
     }
     for (command.contains) |needle| {
-        if (std.mem.find(u8, streamBytes(result, needle.stream), needle.text) == null) {
+        if (!outputHasNeedle(streamBytes(result, needle.stream), needle)) {
             return std.fmt.allocPrint(allocator, "{s} did not contain expected text: {s}", .{ streamLabel(needle.stream), needle.text }) catch "missing expected output";
         }
     }
     for (command.not_contains) |needle| {
-        if (std.mem.find(u8, streamBytes(result, needle.stream), needle.text) != null) {
+        if (outputHasNeedle(streamBytes(result, needle.stream), needle)) {
             return std.fmt.allocPrint(allocator, "{s} contained forbidden text: {s}", .{ streamLabel(needle.stream), needle.text }) catch "forbidden output";
         }
     }
@@ -2646,7 +2656,7 @@ fn checkCommandExpectation(
     for (command.contains_any) |set| {
         var matched = false;
         for (set.needles) |needle| {
-            if (std.mem.find(u8, streamBytes(result, needle.stream), needle.text) != null) {
+            if (outputHasNeedle(streamBytes(result, needle.stream), needle)) {
                 matched = true;
                 break;
             }
@@ -2684,6 +2694,35 @@ fn checkExitExpectation(
         },
         .any => null,
     };
+}
+
+fn outputHasNeedle(haystack: []const u8, needle: OutputNeedle) bool {
+    if (!needle.wrapped) return std.mem.find(u8, haystack, needle.text) != null;
+    var start: usize = 0;
+    while (start <= haystack.len) : (start += 1) {
+        if (matchesWrappedAt(haystack, start, needle.text)) return true;
+    }
+    return false;
+}
+
+/// Match `text` against `haystack` at `start`, letting every space in `text`
+/// stand for one or more whitespace bytes so a word wrap cannot hide the phrase.
+fn matchesWrappedAt(haystack: []const u8, start: usize, text: []const u8) bool {
+    var pos = start;
+    var i: usize = 0;
+    while (i < text.len) {
+        if (text[i] == ' ') {
+            const run_start = pos;
+            while (pos < haystack.len and std.ascii.isWhitespace(haystack[pos])) pos += 1;
+            if (pos == run_start) return false;
+            i += 1;
+            continue;
+        }
+        if (pos >= haystack.len or haystack[pos] != text[i]) return false;
+        pos += 1;
+        i += 1;
+    }
+    return true;
 }
 
 fn streamBytes(result: std.process.RunResult, stream: Stream) []const u8 {
@@ -10311,6 +10350,27 @@ test "diagnostic summary detection ignores later diagnostic headers" {
 
     const summary_start = diagnosticSummaryStart(stderr) orelse return error.SummaryNotFound;
     try std.testing.expectEqualStrings("── 1 error and 0 warnings ─── app.roc\n── ✗ linker failed ──────────\nlinker problem", stderr[summary_start..]);
+}
+
+test "wrapped needles match report prose across a word wrap" {
+    const phrase = "Only apps may depend on platforms.";
+
+    // The wrap point moves with the length of the absolute path the report
+    // embeds, so the same sentence breaks in a different place per machine.
+    const wrapped_before = "which is a platform.\nOnly apps may depend on platforms.\n";
+    const wrapped_inside = "which is a platform. Only apps may depend on\nplatforms.\n";
+    const unwrapped = "which is a platform. Only apps may depend on platforms.\n";
+
+    for ([_][]const u8{ wrapped_before, wrapped_inside, unwrapped }) |stderr| {
+        try std.testing.expect(outputHasNeedle(stderr, .{ .stream = .stderr, .text = phrase, .wrapped = true }));
+    }
+
+    // Without the flag the match stays byte-exact, and a wrapped needle still
+    // has to see every word.
+    try std.testing.expect(!outputHasNeedle(wrapped_inside, .{ .stream = .stderr, .text = phrase }));
+    try std.testing.expect(!outputHasNeedle("Only apps may depend on apps.", .{ .stream = .stderr, .text = phrase, .wrapped = true }));
+    // A space in the needle must consume at least one whitespace byte.
+    try std.testing.expect(!outputHasNeedle("Onlyapps", .{ .stream = .stderr, .text = "Only apps", .wrapped = true }));
 }
 
 test "effectiveTimeoutMs extends default for glue suite only" {

@@ -2541,7 +2541,6 @@ pub fn generateModule(
         error.InvalidSection,
         error.InvalidVersion,
         error.MissingLinkingSection,
-        error.MissingRelocCode,
         error.Overflow,
         error.UnexpectedEnd,
         => wasmInvariantFmt("WASM/codegen invariant violated: invalid eval builtin object: {s}", .{@errorName(err)}),

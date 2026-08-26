@@ -46,11 +46,18 @@ const Allocator = std.mem.Allocator;
 pub const ScalarizeError = std.mem.Allocator.Error;
 
 /// Maximum scalarized field count per parameter; wider wrappers keep their
-/// shape (parameter spans stay small and LLVM gains little beyond this).
-const max_fields = 16;
+/// shape. This must comfortably exceed the loop-carried state of large
+/// hand-written loops: a loop whose state struct stays unscalarized pays a
+/// refcount round-trip per iteration on every refcounted field, and the
+/// materialized struct holds a second reference to each of them across the
+/// body's calls, turning every in-place list update into a copy.
+const max_fields = 64;
 
-/// Maximum nesting rounds; deeper than this means a degenerate wrapper tower.
-const max_rounds = 16;
+/// Backstop on scalarizations per proc; each round makes real progress (one
+/// parameter rewritten), so this only exists to bound a pass bug. It must
+/// comfortably exceed the number of loops a large hand-written proc can
+/// have, since every loop contributes one struct-typed join parameter.
+const max_rounds = 4096;
 
 /// Scalarizes eligible struct-typed join parameters across every proc in the
 /// store, repeating until no parameter qualifies.
@@ -74,17 +81,16 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ScalarizeError!vo
     };
     defer pass.deinit();
 
-    var rounds: usize = 0;
-    while (rounds < max_rounds) : (rounds += 1) {
-        var changed = false;
-        for (0..store.procSpecCount()) |proc_index| {
+    // Procs are independent (join parameters are proc-local), so each proc
+    // converges on its own before moving on; a proc that changes nothing is
+    // scanned exactly once instead of once per global round.
+    for (0..store.procSpecCount()) |proc_index| {
+        var rounds: usize = 0;
+        while (rounds < max_rounds) : (rounds += 1) {
             const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
-            const body = proc.body orelse continue;
-            if (try pass.scalarizeProc(@enumFromInt(@as(u32, @intCast(proc_index))), body)) {
-                changed = true;
-            }
+            const body = proc.body orelse break;
+            if (!try pass.scalarizeProc(@enumFromInt(@as(u32, @intCast(proc_index))), body)) break;
         }
-        if (!changed) break;
     }
 }
 

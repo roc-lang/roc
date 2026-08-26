@@ -964,8 +964,13 @@ fn globalDefIntroducesValueBinding(
     def_idx: CIR.Def.Idx,
 ) bool {
     const def = self.env.store.getDef(def_idx);
-    return self.env.store.getExpr(def.expr) != .e_anno_only or
-        self.topLevelDefIsSelected(selected_by_ident, def_idx);
+    const expr = self.env.store.getExpr(def.expr);
+    // A generated method marker authorizes a compiler-owned method-registry
+    // target; it never denotes a Roc value or procedure body of its own.
+    if (expr == .e_derived_method) return false;
+    // A superseded annotation has no binding, while an orphan annotation
+    // remains the selected valueless declaration for diagnostic recovery.
+    return expr != .e_anno_only or self.topLevelDefIsSelected(selected_by_ident, def_idx);
 }
 
 /// Register a method on its explicit owner declaration.
@@ -4658,7 +4663,7 @@ pub fn canonicalizeFile(
     for (self.scratch_global_value_defs.items) |def_idx| {
         const selected = self.topLevelDefIsSelected(&top_level_value_defs_by_ident, def_idx);
         if (!selected) top_level_value_defs_match_global = false;
-        if (self.env.store.getExpr(self.env.store.getDef(def_idx).expr) == .e_anno_only and !selected) {
+        if (!self.globalDefIntroducesValueBinding(&top_level_value_defs_by_ident, def_idx)) {
             value_binding_defs_match_global = false;
         }
     }
