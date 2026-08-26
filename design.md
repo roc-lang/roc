@@ -8959,6 +8959,136 @@ checked forms. Their overflow shape differs—the most negative value divided
 by negative one, and division by zero—and they are not part of this family.
 Shift operations do not yet assert no-wraparound where it would be provable.
 
+## Integer Arithmetic Operations
+
+Integer addition, subtraction, and multiplication each exist as a family of
+distinct LIR operations rather than a single operation whose meaning depends on
+context. A single `num_plus` would have to serve floating-point addition, a
+wrapping add a program may depend on, an add a range proof showed cannot
+overflow, and compiler-synthesized index arithmetic. Those cases carry opposite
+optimization licences, so collapsing them forces every backend to assume the
+weakest one.
+
+For each of add, sub, and mul the family is:
+
+- `num_int_add_wrap` produces the sum and wraps on overflow. The programmer
+  asked for wrapping and may depend on it.
+- `num_int_add_crash_on_overflow` produces the sum and crashes on overflow.
+  This is what plain `+` becomes.
+- `num_int_add_overflows` produces a `Bool` answering whether the addition
+  would overflow. It performs no addition of its own.
+- `num_int_add_proven_cannot_overflow` produces the sum, carrying a proof that
+  overflow cannot occur. Only this member licenses a backend to assert
+  no-wraparound to its optimizer.
+
+`num_float_add`, `num_float_sub`, and `num_float_mul` are separate operations
+with no variants. IEEE-754 overflow is defined: the result becomes an infinity
+and a sticky flag is set. Floats never wrap and never trap, so there is no
+checked, wrapping, or proven distinction to draw, and the numeric builtins
+correspondingly offer no `_try`, `_wrap`, or `_saturated` forms on `F32` and
+`F64`. Fast-math flags are the float analogue of no-wraparound assertions; they
+change results and are not enabled.
+
+The names state what happens rather than using "checked", which fails to
+distinguish three members that all check. `_overflows` is present tense because
+it asks about a hypothetical addition rather than reporting on one that ran.
+
+### Plain arithmetic always crashes on overflow
+
+Plain `+`, `-`, and `*` on integers crash on overflow at every optimization
+level. This is not a debug-build behavior that relaxes under optimization: the
+lowering that commits source arithmetic to a LIR operation receives the operand
+layout and nothing else, so the policy cannot vary by optimization level. What
+varies is only how many of those checks the range prover discharges.
+
+### Committing source arithmetic
+
+`num_plus`, `num_minus`, and `num_times` survive as source-policy markers
+emitted by canonicalization, where the operand layout is not yet committed. A
+single lowering step maps them to a family member using the layout: a float
+layout selects the float operation, an integer layout selects
+`crash_on_overflow`, and the explicit `_wrap` builtins select `wrap`. These
+markers never reach a LIR pass or a backend.
+
+The overflow predicate needs no such marker. It is integer-only and has exactly
+one form, so there is no policy for the lowering step to decide, and it maps
+directly.
+
+### The predicate is a separate operation, not a paired result
+
+Hardware computes an overflow flag as part of every add; obtaining it costs
+nothing. The natural encoding would be one operation returning both the sum and
+the flag, mirroring the LLVM intrinsics. LIR does not express that: a low-level
+assignment has a single destination local and there is no field read
+statement, so a paired result would require a two-field struct local that risks
+being spilled to memory.
+
+Splitting them costs nothing. Computing the wrapping sum and the overflow
+predicate as independent operations over the same operands produces identical
+machine code, because the backend merges them. So the predicate stands alone as
+a pure question about its operands, and the higher-level forms compose from it:
+
+- `plus_try` is the predicate, then `Err(Overflow)` or `Ok(wrapping sum)`.
+- `plus_saturated` is the predicate, then a limit or the wrapping sum, which
+  compiles to a conditional select rather than a branch.
+- `plus` is `crash_on_overflow`.
+
+Writing these in terms of the predicate keeps them in builtin Roc source, where
+they are readable, without paying to re-derive overflow. Deriving it by hand
+instead costs a comparison, a branch, and a redundant overflow check on the
+addition that follows; for multiplication it costs a hardware division.
+
+### Only the range prover mints the proven form
+
+`num_int_add_proven_cannot_overflow` and its siblings are the one place in the
+family where an incorrect claim produces undefined behavior rather than a wrong
+answer, because they assert no-wraparound to the backend optimizer. They are
+minted exclusively by the range prover, which proves that overflow is
+impossible before rewriting. Source lowering never produces them, and neither
+does any other pass.
+
+This rule binds compiler-synthesized arithmetic too. A LIR pass that constructs
+an add directly emits the wrapping member and leaves the proof to the prover,
+even where the arithmetic is safe by construction. A hand-asserted proof at a
+synthesis site is a claim that decays as the surrounding pass changes, and its
+failure mode is undefined behavior rather than a detectably wrong result. The
+range prover either proves overflow is impossible or does not perform the
+rewrite.
+
+Under a debug build the interpreter evaluates the proven forms in a wider type
+and panics if one actually overflows, so every evaluation test doubles as an
+audit of the prover's claims.
+
+### What the prover does with the family
+
+Proving that overflow is impossible benefits every member. A crashing operation
+loses its crash path. The predicate folds to a constant, which then folds the
+branch that consumed it and collapses the surrounding `Try` or select entirely.
+A wrapping operation becomes the proven form, which is sound because a
+mathematical result that provably fits in the type makes wrapping and
+non-wrapping addition compute identical bits.
+
+One asymmetry is deliberate and worth recording. A surviving crash-on-overflow
+operation pays for itself even when no proof is found: control reaching the
+next statement is itself proof that the sum is exact, and later bounds checks
+consume that exact-sum range. A wrapping operation offers no such assumption,
+because no crash justifies it. Hand-writing `_wrap` in hot code therefore forfeits
+something plain `+` provides, and doing so has measurably cost throughput.
+
+### Dec
+
+`Dec` is fixed-point over an `i128`. Its addition and subtraction are plain
+`i128` arithmetic and join the integer family, despite the family name saying
+integer, because that is precisely what they are at the machine level. `Dec`
+multiplication requires rescaling, so it remains its own operation.
+
+### Division and shifts
+
+Division, remainder, modulo, negation, and absolute value keep their existing
+checked forms. Their overflow shape differs—the most negative value divided
+by negative one, and division by zero—and they are not part of this family.
+Shift operations do not yet assert no-wraparound where it would be provable.
+
 ## ARC Borrow Inference
 
 ARC insertion computes a whole-program borrows-with-lifetimes solution over
@@ -10024,6 +10154,84 @@ normalization, a receipt that restores a spent field, and any merge that would
 have to union or guess ownership. Neither ARC nor certification consults a
 backend, mutation name, source pattern, or runtime uniqueness check to recover
 this ownership state.
+
+Tag unions dismantle by the same rules, with the variant folded into the
+field key. A union's claimable fields are (variant, field) pairs packed into
+the same 64-bit mask—variants in declaration order, each contributing its
+refcounted payload-struct fields in stored order, a non-struct payload
+contributing itself as its single field—an encoding both the analysis and
+the certifier derive from the union layout alone, and whose overflow simply
+leaves the union whole-released. Reads reach the fields through a
+`tag_payload_struct` view: a borrowed struct-payload view is a payload
+view—the variant-carrying analogue of a transparent alias—while a
+non-struct payload read is itself the read of the variant's single field. A
+discriminant read is no use at all beyond remembering its target: the tag
+word is disjoint from every stored unit, so it needs no ordering with takes.
+
+Takes cross joins. A join body is walked from a rebuilt state that has lost
+the walk-local variant knowledge of the jump that reached it, so a walk of
+the emitted residual dispatch would arrive at arms that are infeasible at
+runtime and unprovable in the walk. Carrying exclusions through join
+summaries would answer that, and would also multiply join groups on large
+specialized procedures. The certifier instead recovers them statically: a
+prepass over the fixed LIR computes, for each join declaration, the variant
+exclusions every enclosing discriminant switch arm imposes on the containers
+in scope there—a fixpoint over the control-flow shape alone, independent of
+any walk. Those exclusions reseed each rebuilt body state, and an arm they
+make total marks the path infeasible, which abandons it. Exclusions
+therefore stay walk-local, summaries stay free of them, and join groups
+stay unsplit.
+
+Variants make the exit-agreement rule path-sensitive where structs need none
+of it: a take of one variant's field lives inside that variant's match arm,
+and the exits reached through *other* arms must owe nothing for it. The
+dataflow therefore carries an excluded-variant set, refined at each switch
+on one of the container's remembered discriminant targets: an arm whose case
+value is some read variant's discriminant excludes every other read variant,
+and the default arm excludes each read variant whose discriminant is a
+listed case. An exit owes a variant's takes only while that variant is
+unexcluded, a read of an excluded variant keeps its field residual, and
+merges intersect the exclusions. Everything else—the may/must take
+dataflow, whole uses as borrows of every field, the single-definition spine
+—is unchanged.
+
+The death point of a dismantled union cannot name its variant statically, so
+its residual release dispatches at runtime: emission reads the discriminant
+fresh and switches on it, one arm per taken variant releasing exactly that
+variant's residual fields (through a fresh payload view for struct
+payloads), and a default arm holding the ordinary whole release for every
+variant the takes never addressed. Where the death point sits inside a
+matched arm—the common shape—the discriminant is a known constant there
+and the backend folds the dispatch back to straight-line code. Emission
+needs a discriminant scratch layout, taken from any single-definition
+discriminant read of the container; a union candidate without one keeps its
+whole release.
+
+Take-ness is explicit in the emitted LIR: emission bakes each resolved
+take decision onto its cloned read statement (a parameter-conditional take
+resolves against the emitting variant's demand vector), and the certifier
+consumes the stamp instead of re-deriving take-ness from refcount shapes.
+Only a stamped read carries a claim target, so a borrowed payload read can
+never be mistaken for a take however it crosses the control-flow graph—
+which is also what keeps certification affordable: claim targets and view
+provenance never enter join summaries, stamped takers settle their claims
+at the first quotient they cross and continue as ordinary owned values, and
+a fully claimed container hashes as unbound in walk digests so the two
+sides of a death point re-converge instead of forking. The union encoding
+is shared: a stamped read through a payload view claims the union container
+under the view's variant, claims must stay within one variant, and a fully
+dismantled union's unit is spent when its claims cover exactly the claimed
+variant's mask—sound because control reaches that spend only when the
+container holds that variant. What makes the emitted dispatch certifiable
+is variant knowledge per path: reading a variant's payload proves the
+container holds it (anything else is already undefined), switch arms on a
+discriminant refine it (resolved through single-definition pure-alias
+chains so the discriminant read and the payload reads meet on one container
+name), and a container's own claims pin its variant at any later switch. A
+path that excludes every variant of a live container is infeasible—the
+variant refinements and claim masks cannot describe any runtime value—and its
+walk ends vacuously, which is exactly what lets the residual switch's unmatched
+arms and the whole-release default coexist with claims on the matched path.
 
 ### Debug Borrow Certifier
 

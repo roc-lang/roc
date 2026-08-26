@@ -20,6 +20,7 @@ const LoopAppendPromote = @import("loop_append_promote.zig");
 const RangeProve = @import("range_prove.zig");
 const TagReachability = @import("tag_reachability.zig");
 const ReachableProcs = @import("reachable_procs.zig");
+const DebugPrint = @import("debug_print.zig");
 const LIR = core.LIR;
 const CheckedArithmetic = core.CheckedArithmetic;
 const LirImage = @import("lir_image.zig");
@@ -524,7 +525,7 @@ pub fn lowerCheckedModulesToLir(
         checkedModules(modules),
         rootRequests(roots, layout_requests, static_data_requests),
         .{
-            .proc_debug_names = target.proc_debug_names,
+            .proc_debug_names = target.proc_debug_names or LirDump.filter() != null,
             .specialization_cache = target.monotype_cache,
             .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
             .target_usize = target.target_usize,
@@ -598,7 +599,7 @@ pub fn lowerCheckedModulesToLir(
             .complete => .runtime,
             .checking_finalization => .comptime_zero,
         },
-        .proc_debug_names = target.proc_debug_names,
+        .proc_debug_names = target.proc_debug_names or LirDump.filter() != null,
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = roots.test_plan_metadata,
         .debug_materialized_out = target.debug_materialized_out,
@@ -646,6 +647,8 @@ fn finishLoweredOutput(
         .consume_dead_boxes = target.consume_dead_boxes,
     });
     if (target.timing) |timing| timing.finish(arc_started_ns, .arc);
+
+    try LirDump.run(&lowered.lir_result);
 
     if (roots.requests.len != 0 and lowered.lir_result.root_procs.items.len == 0) {
         checkedPipelineInvariant("explicit root set produced no LIR roots");
@@ -917,3 +920,39 @@ fn checkedPipelineInvariant(comptime message: []const u8) noreturn {
 test "checked pipeline declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
+
+/// Print the final LIR of every procedure whose debug name contains
+/// `ROC_LIR_DUMP`, for reading what the passes actually produced. Off unless
+/// the variable is set, and absent on targets without an environment.
+/// Printing the final LIR of selected procedures, for reading what the passes
+/// actually produced. Selected by comptime target so a build without an
+/// environment or a standard error stream carries none of it.
+const LirDump = if (builtin.os.tag == .freestanding) struct {
+    fn filter() ?[]const u8 {
+        return null;
+    }
+
+    fn run(_: *const LirProgram.Result) Allocator.Error!void {}
+} else struct {
+    fn filter() ?[]const u8 {
+        const raw = std.c.getenv("ROC_LIR_DUMP") orelse return null;
+        return std.mem.span(raw);
+    }
+
+    fn run(result: *const LirProgram.Result) Allocator.Error!void {
+        const name_filter = filter() orelse return;
+        const store = &result.store;
+        const layouts = &result.layouts;
+        for (0..store.procSpecCount()) |index| {
+            const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+            const name = store.procDebugName(proc_id) orelse continue;
+            if (name_filter.len != 0 and std.mem.find(u8, name, name_filter) == null) continue;
+            var buffer: std.Io.Writer.Allocating = .init(store.allocator);
+            defer buffer.deinit();
+            DebugPrint.writeProc(store.allocator, store, layouts, proc_id, &buffer.writer) catch |err| switch (err) {
+                error.OutOfMemory, error.WriteFailed => return error.OutOfMemory,
+            };
+            std.debug.print("=== LIR {s} (p{d}) ===\n{s}\n", .{ name, index, buffer.written() });
+        }
+    }
+};

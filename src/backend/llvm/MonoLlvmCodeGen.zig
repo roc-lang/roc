@@ -298,6 +298,10 @@ pub const MonoLlvmCodeGen = struct {
     /// Atomic helpers required by relocations in the separately emitted
     /// readonly static-data object.
     static_data_rc_helpers: []const layout.RcHelperKey = &.{},
+    /// Procedures a static-data object names by symbol. Only these need
+    /// external linkage under the symbol ABI; the rest stay internal so the
+    /// LLVM pipeline can see every call site and specialize across them.
+    static_data_procs: []const LirProcSpecId = &.{},
     boxy_capture_drop_helpers: std.AutoHashMap(u64, BoxyCaptureDropHelper),
     boxy_dict_thunks: std.AutoHashMap(u32, LlvmBuilder.Function.Index),
     join_points: std.AutoHashMap(u32, JoinInfo),
@@ -308,6 +312,12 @@ pub const MonoLlvmCodeGen = struct {
     loop_break_blocks: std.ArrayList(LlvmBuilder.Function.Block.Index),
     local_slots: []LocalSlot = &.{},
     deferred_str_captures: []?DeferredStrCapture = &.{},
+    /// Number of non-null entries in `deferred_str_captures`. Deferred
+    /// captures are rare, and several hooks run once per local write or once
+    /// per join; the count lets those hooks skip their whole-table scans in
+    /// the overwhelmingly common all-empty state, which otherwise turn
+    /// quadratic in a proc's local count.
+    deferred_str_capture_count: usize = 0,
     /// Indices of `deferred_str_captures` slots that may be non-null. The
     /// slot array spans every LIR local, so the clear-all and scan-all
     /// operations that run per jump and per call must touch only the handful
@@ -1606,7 +1616,7 @@ pub const MonoLlvmCodeGen = struct {
         const fn_ty = builder.fnType(.void, params, .normal) catch return error.OutOfMemory;
         const name = try self.procFunctionName(builder, proc_id, proc);
         const func = builder.addFunction(fn_ty, name, .default) catch return error.OutOfMemory;
-        func.setLinkage(if (self.proc_symbol_mode == .lir_symbol) .external else .internal, builder);
+        func.setLinkage(if (self.procNeedsExternalLinkage(proc_id)) .external else .internal, builder);
         var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
         defer attrs_wip.deinit(builder);
         try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
@@ -1630,6 +1640,11 @@ pub const MonoLlvmCodeGen = struct {
             if (param_index == ret_param_index) continue;
             try attrs_wip.addParamAttr(param_index, .@"noalias", builder);
         }
+        // The argument pack is only ever copied out of, and its address never
+        // outlives the call, so calls leave it unchanged and it can stay a
+        // caller-local object across them.
+        try attrs_wip.addParamAttr(ret_param_index + 1, .readonly, builder);
+        try attrs_wip.addParamAttr(ret_param_index + 1, .nocapture, builder);
         if (self.enable_default_platform_runtime or self.enable_default_platform_diagnostics) {
             if (self.enable_default_platform_runtime) {
                 try attrs_wip.addFnAttr(.{ .string = .{
@@ -1668,6 +1683,17 @@ pub const MonoLlvmCodeGen = struct {
         } }, builder);
     }
 
+    /// Whether an object outside this module can name this procedure. Only a
+    /// procedure a static-data relocation points at can; entrypoints reach
+    /// their procedure through a wrapper compiled into this same module.
+    fn procNeedsExternalLinkage(self: *const MonoLlvmCodeGen, proc_id: LirProcSpecId) bool {
+        if (self.proc_symbol_mode != .lir_symbol) return false;
+        for (self.static_data_procs) |referenced| {
+            if (referenced == proc_id) return true;
+        }
+        return false;
+    }
+
     fn procFunctionName(
         self: *MonoLlvmCodeGen,
         builder: *LlvmBuilder,
@@ -1701,6 +1727,7 @@ pub const MonoLlvmCodeGen = struct {
         const outer_ret_layout = self.current_ret_layout;
         const outer_slots = self.local_slots;
         const outer_deferred_str_captures = self.deferred_str_captures;
+        const outer_deferred_str_capture_count = self.deferred_str_capture_count;
         const outer_deferred_str_capture_actives = self.deferred_str_capture_actives;
         defer {
             self.deferred_str_capture_actives.deinit(self.allocator);
@@ -1718,6 +1745,7 @@ pub const MonoLlvmCodeGen = struct {
             self.current_ret_layout = outer_ret_layout;
             self.local_slots = outer_slots;
             self.deferred_str_captures = outer_deferred_str_captures;
+            self.deferred_str_capture_count = outer_deferred_str_capture_count;
         }
 
         self.join_points.clearRetainingCapacity();
@@ -7660,6 +7688,7 @@ pub const MonoLlvmCodeGen = struct {
         for (self.deferred_str_capture_actives.items) |index| {
             self.deferred_str_captures[index] = null;
         }
+        self.deferred_str_capture_count = 0;
         self.deferred_str_capture_actives.clearRetainingCapacity();
     }
 
@@ -7680,7 +7709,10 @@ pub const MonoLlvmCodeGen = struct {
 
     fn clearDeferredStrCapture(self: *MonoLlvmCodeGen, local: LocalId) void {
         if (self.deferred_str_captures.len == 0) return;
-        self.deferred_str_captures[@intFromEnum(local)] = null;
+        if (self.deferred_str_captures[@intFromEnum(local)] != null) {
+            self.deferred_str_captures[@intFromEnum(local)] = null;
+            self.deferred_str_capture_count -= 1;
+        }
     }
 
     fn materializeLocalIfDeferred(self: *MonoLlvmCodeGen, local: LocalId) Error!void {
@@ -7705,6 +7737,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn materializeAllDeferredStrCaptures(self: *MonoLlvmCodeGen) Error!void {
+        if (self.deferred_str_capture_count == 0) return;
         var index: usize = 0;
         while (index < self.deferred_str_capture_actives.items.len) : (index += 1) {
             const local_index = self.deferred_str_capture_actives.items[index];
@@ -7724,6 +7757,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn materializeDeferredCapturesUsingSource(self: *MonoLlvmCodeGen, source: LocalId) Error!void {
+        if (self.deferred_str_capture_count == 0) return;
         var index: usize = 0;
         while (index < self.deferred_str_capture_actives.items.len) : (index += 1) {
             const local_index = self.deferred_str_capture_actives.items[index];
@@ -7745,6 +7779,7 @@ pub const MonoLlvmCodeGen = struct {
         if (target != source) {
             try self.prepareLocalWrite(target);
             self.deferred_str_captures[@intFromEnum(target)] = capture;
+            self.deferred_str_capture_count += 1;
         }
         return true;
     }

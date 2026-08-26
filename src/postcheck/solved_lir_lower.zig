@@ -7470,11 +7470,30 @@ const Lowerer = struct {
         return true;
     }
 
+    /// Whether an operand's alias may be emitted after the operands that
+    /// follow it have been evaluated. Reading a local is order-independent:
+    /// Lifted locals are bound once, and the only thing that rebinds a join
+    /// parameter is a jump, which leaves the operand list rather than
+    /// returning to it. Placing such an alias next to its consumer instead of
+    /// ahead of a later operand's branching keeps its live range from
+    /// spanning that branch, which is what otherwise costs the value a
+    /// second ownership unit.
+    fn operandIsPlainLocalRead(self: *const Lowerer, expr_id: Lifted.ExprId) bool {
+        return self.solved.lifted.getExpr(expr_id).data == .local;
+    }
+
     fn prependExprs(self: *Lowerer, lowered: LoweredExprLocals, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         var current = next;
         var i = lowered.ids.len;
         while (i > 0) {
             i -= 1;
+            if (!self.operandIsPlainLocalRead(lowered.exprs[i])) continue;
+            current = try self.lowerExprInto(lowered.ids[i], lowered.exprs[i], current);
+        }
+        i = lowered.ids.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.operandIsPlainLocalRead(lowered.exprs[i])) continue;
             current = try self.lowerExprInto(lowered.ids[i], lowered.exprs[i], current);
         }
         return current;
@@ -7491,6 +7510,13 @@ const Lowerer = struct {
         var i = lowered.ids.len;
         while (i > 0) {
             i -= 1;
+            if (!self.operandIsPlainLocalRead(lowered.exprs[i])) continue;
+            current = try self.lowerExprIntoAtType(lowered.ids[i], lowered.exprs[i], tys[i], current);
+        }
+        i = lowered.ids.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.operandIsPlainLocalRead(lowered.exprs[i])) continue;
             current = try self.lowerExprIntoAtType(lowered.ids[i], lowered.exprs[i], tys[i], current);
         }
         return current;

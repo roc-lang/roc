@@ -9488,6 +9488,10 @@ fn compileLlvmAppObject(
     defer ctx.gpa.free(static_rc_helpers);
     codegen.static_data_rc_helpers = static_rc_helpers;
 
+    const static_data_procs = try backend.collectReferencedProcs(ctx.gpa, static_data_exports);
+    defer ctx.gpa.free(static_data_procs);
+    codegen.static_data_procs = static_data_procs;
+
     const llvm_entrypoints = try ctx.arena.alloc(llvm_codegen.MonoLlvmCodeGen.Entrypoint, entrypoints.len);
     for (entrypoints, 0..) |entrypoint, i| {
         llvm_entrypoints[i] = .{

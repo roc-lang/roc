@@ -4,6 +4,7 @@
 //! Seamless slice optimization reduces memory overhead for substring operations.
 const std = @import("std");
 
+const builtin = @import("builtin");
 const utils = @import("utils.zig");
 const UpdateMode = utils.UpdateMode;
 const TestEnv = utils.TestEnv;
@@ -322,7 +323,22 @@ pub const RocList = extern struct {
     /// allocation. Empty lists are vacuously exclusive because they have no
     /// allocation and no other possible owner.
     pub inline fn isExclusive(self: RocList, update_mode: UpdateMode, roc_ops: *RocOps) bool {
-        return update_mode == .InPlace or self.isUnique(roc_ops);
+        if (update_mode == .InPlace) {
+            // `.InPlace` is the compiler's claim that nothing else holds this
+            // allocation, and it is the one path where the count is never
+            // consulted. A wrong claim writes through a shared allocation and
+            // corrupts whatever else points at it, with nothing downstream able
+            // to notice. Debug builds hold the claim against the runtime truth
+            // so a mistaken proof fails a test instead of silently corrupting
+            // memory.
+            if (comptime builtin.mode == .Debug) {
+                if (!self.isUnique(roc_ops)) {
+                    roc_ops.crash("List written in place while another reference to it was live");
+                }
+            }
+            return true;
+        }
+        return self.isUnique(roc_ops);
     }
 
     /// Returns true when treating this value's allocation as exclusively owned
@@ -1041,6 +1057,21 @@ pub fn listAppendLeBytes(
     const count: usize = @intCast(count_u64);
     if (count == 0) return list;
     const original_len = list.len();
+
+    // A unique list with a full word of spare capacity takes one unaligned
+    // little-endian store and a length bump: the low `count` bytes become the
+    // appended data and the rest of the word lands in capacity slack, which
+    // nothing can observe. Bit-writer flushes hit this path on every call.
+    if (!list.isSeamlessSlice() and list.getCapacity() >= original_len + 8 and
+        list.isExclusive(update_mode, roc_ops))
+    {
+        if (list.bytes) |bytes| {
+            std.mem.writeInt(u64, bytes[original_len..][0..8], value, .little);
+            var output = list;
+            output.length = original_len + count;
+            return output;
+        }
+    }
 
     var output = listReserveForAppend(
         list,

@@ -5,6 +5,40 @@ const TestCase = @import("parallel_runner.zig").TestCase;
 /// Eval regression cases.
 pub const tests = [_]TestCase{
     .{
+        // One statement consuming the same list in two argument positions.
+        // Both consumes happen whenever the statement runs, so the value has
+        // two live references and the write must not land in place: doing so
+        // would rewrite the buffer being read from. No execution path has to
+        // be explored to know that, which is what makes this shape a hole for
+        // a uniqueness check that only reasons about paths between statements.
+        .name = "list concatenated with itself keeps both copies intact",
+        .source_kind = .module,
+        .source =
+        \\main : List(U64)
+        \\main = {
+        \\    xs = [1, 2, 3]
+        \\    List.concat(xs, xs)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3, 1, 2, 3]" },
+    },
+    .{
+        // The same shape with room to grow. Spare capacity is what makes an
+        // in-place concat physically possible, so a wrong uniqueness verdict
+        // corrupts the result here rather than being hidden by a reallocation.
+        .name = "list with spare capacity concatenated with itself keeps both copies intact",
+        .source_kind = .module,
+        .source =
+        \\main : List(U64)
+        \\main = {
+        \\    xs = List.with_capacity(16)
+        \\    ys = xs.append(1).append(2).append(3)
+        \\    List.concat(ys, ys)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3, 1, 2, 3]" },
+    },
+    .{
         .name = "regression: Dict uses a custom nominal key hash method",
         .source_kind = .module,
         .source =

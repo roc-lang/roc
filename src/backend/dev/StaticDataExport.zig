@@ -10,5 +10,6 @@ pub const StaticDataRelocation = static_data.StaticDataRelocation;
 pub const atomicRcHelperSymbolName = static_data.atomicRcHelperSymbolName;
 /// Shared collector for explicit static-data RC-helper requirements.
 pub const collectRequiredRcHelpers = static_data.collectRequiredRcHelpers;
+pub const collectReferencedProcs = static_data.collectReferencedProcs;
 /// Shared deterministic LIR procedure-symbol formatter.
 pub const procSymbolName = static_data.procSymbolName;
