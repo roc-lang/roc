@@ -9,7 +9,7 @@
 # accident while changing something that looks unrelated, and nothing else in
 # the test suite would notice.
 #
-# So this counts the instructions in the generated Roc procedures and fails if
+# So this counts the instructions in the generated Roc entrypoint and fails if
 # the number moves in either direction. A drop is as interesting as a rise: it
 # usually means the fixture stopped measuring what it was written to measure.
 #
@@ -55,8 +55,11 @@ cd "$repo_root"
 # Evaluating the later position first makes its bounds check govern both reads.
 # This keeps the fast loop to one bound branch per eight bytes when proven
 # no-wrap arithmetic gives LLVM stronger induction-variable facts.
+# Restoring internal linkage to procedures not named by static-data relocations
+# lets LLVM inline this fixture's procedure into its exported roc_main wrapper.
+# The arm64 count is unchanged; x64 includes two additional wrapper instructions.
 expectations=(
-    "x64musl:102"
+    "x64musl:104"
     "arm64musl:90"
 )
 
@@ -64,10 +67,13 @@ failed=0
 
 count_objdump_instructions() {
     objdump -d --no-show-raw-insn "$1" | awk '
-        /^[0-9a-f]+ <_?roc__proc/ { in_proc = 1; next }
+        /^[0-9a-f]+ <_?roc_main>/ { in_proc = 1; found = 1; next }
         /^[0-9a-f]+ </           { in_proc = 0 }
         in_proc && /^[[:space:]]+[0-9a-f]+:/ { count++ }
-        END { print count + 0 }
+        END {
+            if (!found) exit 1
+            print count + 0
+        }
     '
 }
 
@@ -87,11 +93,12 @@ for entry in "${expectations[@]}"; do
             else
                 # GNU objdump is commonly configured for only the host
                 # architecture. Every AArch64 instruction is four bytes, so
-                # exact procedure symbol sizes provide the target-independent
+                # the exact entrypoint symbol size provides the target-independent
                 # count on these hosts.
                 actual="$(readelf -sW "$tmp_dir/match-$target" | awk '
-                    $8 ~ /^_?roc__proc/ { bytes += $3 }
+                    $8 ~ /^_?roc_main$/ { bytes = $3; found = 1 }
                     END {
+                        if (!found) exit 1
                         if (bytes % 4 != 0) exit 1
                         print bytes / 4
                     }
@@ -121,14 +128,14 @@ if [ "$failed" -ne 0 ]; then
 Code generation for the match-extension loop changed. This is not automatically
 a bug, but it is worth understanding before updating the numbers above.
 
-To see what changed, build the fixture and disassemble the roc__proc symbols:
+To see what changed, build the fixture and disassemble the roc_main symbol:
 
     roc build --opt=speed --no-cache --target=<target> \
         --output=/tmp/match test/cli/match_extension_codegen.roc
     objdump -d --no-show-raw-insn /tmp/match
 
-For arm64musl on non-macOS hosts, `readelf -sW /tmp/match` reports procedure
-byte sizes; AArch64 instructions are four bytes each.
+For arm64musl on non-macOS hosts, `readelf -sW /tmp/match` reports the
+entrypoint byte size; AArch64 instructions are four bytes each.
 
 For why a given instruction is there, set `dump_llvm_artifacts` to true in
 src/cli/builder.zig to also get the optimized LLVM IR: that distinguishes a
