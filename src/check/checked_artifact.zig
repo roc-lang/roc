@@ -2389,21 +2389,16 @@ fn appendExposedAppProcedureRoots(
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
 ) Allocator.Error!void {
     const module_env = module.moduleEnvConst();
-    var exposed_iter = module_env.common.exposed_items.iterator();
-    while (exposed_iter.next()) |entry| {
-        const raw_node_idx = entry.target.valueDefNode() orelse continue;
-        if (raw_node_idx >= module.nodeCount()) {
-            checkedArtifactInvariant(
-                "checked artifact invariant violated: app exposed item {s} points at out-of-range node {d}",
-                .{ module_env.getIdent(@bitCast(entry.ident_idx)), raw_node_idx },
-            );
-        }
-        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
-        if (module.nodeTag(node_idx) != .def) continue;
-
-        const def_idx: CIR.Def.Idx = @enumFromInt(raw_node_idx);
+    // `exports` is canonicalization's exact app-header `provides` inventory.
+    // `common.exposed_items` is broader: it also publishes associated methods
+    // for module imports, including compiler-owned generated-method markers.
+    // Those methods are public API, but they are not app entrypoints.
+    for (module_env.store.sliceDefs(module_env.exports)) |def_idx| {
         const top_level = top_level_values.lookupByDef(def_idx) orelse {
-            checkedArtifactInvariant("app exposed value definition had no top-level value entry", .{});
+            checkedArtifactInvariant(
+                "app-provided definition {d} had no top-level value entry",
+                .{@intFromEnum(def_idx)},
+            );
         };
         const procedure_binding = switch (top_level.value) {
             .procedure_binding => |binding| binding,
@@ -19343,6 +19338,9 @@ pub const CheckedProcedureTemplateTable = struct {
 
         for (value_binding_defs) |def_idx| {
             const def = module.def(def_idx);
+            if (def.expr.data == .e_derived_method) {
+                checkedArtifactInvariant("generated method marker reached procedure-template publication", .{});
+            }
             if (!topLevelExprIsAlreadyProcedure(module, def_idx, def.expr.data)) continue;
 
             const export_name = if (def.patternName()) |name|
@@ -23756,6 +23754,9 @@ pub const CompileTimeRootTable = struct {
         const module_env = module.moduleEnvConst();
         for (value_binding_defs) |def_idx| {
             const def = module.def(def_idx);
+            if (def.expr.data == .e_derived_method) {
+                checkedArtifactInvariant("generated method marker reached compile-time-root publication", .{});
+            }
             if (topLevelDefSourceIdent(def) == null) continue;
             if (procedure_templates.lookupByDef(def_idx) != null) continue;
             // An annotation-only declaration has no value to evaluate; its
@@ -25263,6 +25264,9 @@ pub const TopLevelValueTable = struct {
 
         for (value_binding_defs) |def_idx| {
             const def = module.def(def_idx);
+            if (def.expr.data == .e_derived_method) {
+                checkedArtifactInvariant("generated method marker reached top-level-value publication", .{});
+            }
             const checked_pattern = checkedPatternIdForSource(checked_bodies, def.pattern.idx);
             const source_name = try topLevelDefSourceName(module, names, def) orelse continue;
             const source_ty = module.defType(def_idx);
