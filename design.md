@@ -1236,12 +1236,21 @@ Canonicalization also outputs two exact module-global value-definition lists.
 The selected-name list contains one definition for each source-visible value
 name, plus every global definition whose pattern has no single source name. The
 value-binding list contains every concrete shadowed definition by exact identity
-and excludes annotation-only declarations superseded by an implementation.
+and excludes annotation-only declarations superseded by an implementation and
+every `e_derived_method` marker. A derived marker authorizes the explicit
+generated target in the method registry; it does not name a Roc value or
+procedure body.
 Duplicate and superseded definitions remain in the complete definition list so
 checking can report and type-check them. Name-sensitive consumers use the
 selected-name list; checked value, procedure, and compile-time-root construction
 use the value-binding list. Neither repeats name deduplication or chooses a
 definition based on its expression shape.
+
+An app's runtime-entrypoint inventory is exactly the value definitions selected
+by its header `provides` list. The module-wide exposed-item table is broader: it
+also contains associated methods exported for imported method lookup. Checked
+root construction consumes the explicit header export-definition span and must
+not treat that broader public-API table as an entrypoint list.
 
 A platform header's hosted section is the complete list of functions the host
 supplies, and it is what gives each one its linker symbol and its host dispatch
