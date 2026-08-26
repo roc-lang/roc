@@ -587,7 +587,7 @@ const Builder = struct {
 
     fn dynamicStorageLayout(self: *Builder) Allocator.Error!layout.Idx {
         if (self.dynamic_storage_layout) |existing| return existing;
-        const idx = try self.store.insertLayout(layout.Layout.boxOfZst());
+        const idx = try self.store.insertErasedBox();
         self.dynamic_storage_layout = idx;
         return idx;
     }
@@ -866,7 +866,7 @@ test "boxy layout planner records dynamic worker boxes separately from storage l
 
     const rep_layout = layouts.rep_layouts[@intFromEnum(program.root_reps.items[0])].worker;
     try std.testing.expectEqual(std.meta.Tag(RuntimeLayout).dynamic_box, std.meta.activeTag(rep_layout));
-    try std.testing.expectEqual(layout.LayoutTag.box_of_zst, store.getLayout(rep_layout.layoutIdx()).tag);
+    try std.testing.expectEqual(layout.LayoutTag.erased_box, store.getLayout(rep_layout.layoutIdx()).tag);
     try std.testing.expect(rep_layout.descriptor() != null);
 }
 
@@ -893,7 +893,7 @@ test "boxy layout planner reuses dynamic storage for Box(a) worker layout" {
     defer layouts.deinit();
 
     const box_layouts = layouts.rep_layouts[@intFromEnum(program.root_reps.items[0])];
-    try std.testing.expectEqual(layout.LayoutTag.box_of_zst, store.getLayout(box_layouts.host.layoutIdx()).tag);
+    try std.testing.expectEqual(layout.LayoutTag.erased_box, store.getLayout(box_layouts.host.layoutIdx()).tag);
     try std.testing.expectEqual(std.meta.Tag(RuntimeLayout).dynamic_box, std.meta.activeTag(box_layouts.worker));
     try std.testing.expectEqual(box_layouts.host.layoutIdx(), box_layouts.worker.layoutIdx());
 }
@@ -996,7 +996,7 @@ test "boxy layout planner gives open tag descriptors a row-extension payload lay
 
     const rep_layouts = layouts.rep_layouts[@intFromEnum(program.root_reps.items[0])];
     try std.testing.expectEqual(std.meta.Tag(RuntimeLayout).dynamic_box, std.meta.activeTag(rep_layouts.worker));
-    try std.testing.expectEqual(layout.LayoutTag.box_of_zst, store.getLayout(rep_layouts.worker.layoutIdx()).tag);
+    try std.testing.expectEqual(layout.LayoutTag.erased_box, store.getLayout(rep_layouts.worker.layoutIdx()).tag);
 
     const payload_layout = rep_layouts.descriptor_payload_layout orelse return error.TestExpectedEqual;
     const tag_layout = store.getLayout(payload_layout);
@@ -1005,7 +1005,7 @@ test "boxy layout planner gives open tag descriptors a row-extension payload lay
     const info = store.getTagUnionInfo(tag_layout);
     try std.testing.expectEqual(@as(usize, 2), info.variants.len);
     try std.testing.expectEqual(layout.Idx.i64, info.variants.get(0).payload_layout);
-    try std.testing.expectEqual(layout.LayoutTag.box_of_zst, store.getLayout(info.variants.get(1).payload_layout).tag);
+    try std.testing.expectEqual(layout.LayoutTag.erased_box, store.getLayout(info.variants.get(1).payload_layout).tag);
 }
 
 test "boxy layout planner records private worker function arg and return layouts" {

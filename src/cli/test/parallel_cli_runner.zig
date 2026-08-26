@@ -1082,6 +1082,11 @@ const subcommand_cases = [_]CliCase{
     // Repro for https://github.com/roc-lang/roc/issues/10824: rank-1 platform
     // inference must retain the complete generated encoder contract after its row closes.
     .{ .id = 0, .suite = .subcommands, .name = "issue 10824: inferred platform model with custom codec checks cleanly", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10824_generated_codec_contract/app.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "checked generated codec contract was missing its subject method call" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    // Repro for https://github.com/roc-lang/roc/issues/10832: the list element
+    // contains an erased Box allocation even though its unresolved closure
+    // layout is otherwise non-refcounted, so list allocation and drop must use
+    // the same refcounted-element prefix.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10832: list drop preserves the allocation prefix for a nested erased Box", .backend = .dev, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_10832_nested_erased_box_list.roc", .exit = .success, .stdout_exact = "small\n", .not_contains = &.{ .{ .stream = .stderr, .text = "deallocated unknown pointer" }, .{ .stream = .stderr, .text = "panic" } } } } },
     // Repro for https://github.com/roc-lang/roc/issues/10303: mutually
     // recursive function-containing values must finish Monotype lowering.
     .{ .id = 0, .suite = .subcommands, .name = "issue 10303: mutually recursive function values check cleanly", .timeout_ms = 10_000, .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10303_recursive_function_values.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }} } } },

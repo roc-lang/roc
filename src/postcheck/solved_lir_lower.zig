@@ -3818,6 +3818,7 @@ const Lowerer = struct {
             => lhs.eql(rhs),
             .zst,
             .box_of_zst,
+            .erased_box,
             .list_of_zst,
             => true,
             .box,
@@ -9457,7 +9458,7 @@ const Lowerer = struct {
             .box => self.tagUnionPayloadLayout(tag_union_layout.getIdx(), variant_index),
             .box_of_zst => .zst,
             .zst, .scalar => .zst,
-            .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => Common.invariant("tag payload operation expected tag-union layout"),
+            .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => Common.invariant("tag payload operation expected tag-union layout"),
         };
     }
 
@@ -9478,7 +9479,7 @@ const Lowerer = struct {
         return switch (list_layout.tag) {
             .list => list_layout.getIdx(),
             .list_of_zst => .zst,
-            .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => Common.invariant("list expression target was not a list layout"),
+            .scalar, .box, .box_of_zst, .erased_box, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => Common.invariant("list expression target was not a list layout"),
         };
     }
 

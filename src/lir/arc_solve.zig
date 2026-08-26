@@ -366,9 +366,7 @@ pub fn computeLocalContainsRefcounted(
     for (0..local_count) |index| {
         const local_id: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
         const local = store.getLocal(local_id);
-        const boxy_desc = if (boxy_rc_descs.len == 0) local.boxy_desc else boxy_rc_descs[index];
-        contains[index] = layouts.layoutContainsRefcounted(layouts.getLayout(local.layout_idx)) or
-            (boxy_desc != null and layouts.layoutContainsRcErasedBox(layouts.getLayout(local.layout_idx)));
+        contains[index] = layouts.layoutContainsRefcounted(layouts.getLayout(local.layout_idx));
     }
 
     var changed = true;

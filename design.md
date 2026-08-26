@@ -5581,13 +5581,28 @@ captures follow the same rule. Boxy planning and lowering do not scan the
 checked type graph, infer a producer from the requested layout, or treat the
 checked use type as evidence for the stored bytes.
 
-`.boxy` represents an unknown type-variable value as one ordinary Roc box
-payload pointer. This is the same runtime shape as `Box(T)`: a nullable or
-non-null pointer-sized Roc value whose allocation stores the payload bytes and
-whose refcount lives immediately before the data pointer according to the
-ordinary Roc allocation layout. The type information needed to copy, drop,
-allocate, inspect, or dispatch on that payload is not stored in the value.
-It travels separately as explicit hidden data.
+`.boxy` represents an unknown type-variable value with the explicit
+pointer-sized `erased_box` layout. Its nullable or non-null Roc value points to
+an allocation that stores the payload bytes, with the refcount immediately
+before the data pointer according to the ordinary Roc allocation layout. The
+payload layout, allocation alignment, and whether the allocation embeds
+refcounted data come only from the value's explicit descriptor. The type
+information needed to copy, drop, allocate, inspect, or dispatch on that
+payload is not stored in the value; it travels separately as explicit hidden
+data.
+
+`erased_box` is distinct from the `box_of_zst` layout used for `Box({})`. `Box({})` is
+represented by a null pointer, owns no allocation, and is not refcounted. An
+`erased_box` is a refcounted layout even when its current descriptor names a
+zero-sized payload. Aggregates cache `contains_refcounted = true` when those
+layouts are committed, so
+`layoutContainsRefcounted` remains an O(1) query and list allocation-prefix
+selection never needs to search descriptors or recursively inspect layouts.
+Boxy planning separately computes `TypeRepresentation.contains_dynamic` as the
+planner output that marks when a representation transitively stores
+descriptor-defined dynamic data. Boxy lowering consumes that plan bit when
+deciding which locals and representation boundaries must carry a descriptor;
+committed layouts are not an input to that decision.
 
 Function values in `.boxy` use the erased callable representation. A function
 value is one Roc refcounted allocation whose data pointer is the function
@@ -9027,20 +9042,28 @@ and its moves to the absence of both at a final owned occurrence.
 
 ### Resources Over Layouts
 
-A local participates in inference iff its layout contains refcounted data
-(`layoutContainsRefcounted`) or its LIR layout is a boxy dynamic value whose
-descriptor says the value owns Roc-managed storage. Each participating local
-owns one resource per rc node reachable in its committed layout or dynamic
-descriptor:
+A storage-owning local participates in inference iff its layout contains refcounted data
+(`layoutContainsRefcounted`). `erased_box` makes Boxy dynamic ownership
+explicit in the committed layout; the attached descriptor supplies the
+payload resource shape and allocation ABI. Each participating local owns one
+resource per rc node reachable in its committed layout or dynamic descriptor:
 
 - the top-level value itself, when its layout is `str`, `list`, `list_of_zst`,
-  `box`, `box_of_zst`, or `erased_callable`
+  `box`, `erased_box`, or `erased_callable`
 - the item resource of a `list`
 - the payload resource of a `box`
 - one resource per refcounted field of a `struct_`
 - one resource per refcounted payload position of each `tag_union` variant
 - the captures resource of a `closure` / `erased_callable`
 - the top-level and payload resources described by a boxy `TypeDesc`
+
+An `erased_capture_load` target whose aggregate contains an `erased_box` is
+explicitly a borrowed view into the executing callable's capture allocation.
+The committed aggregate layout identifies the dynamic fields it may project,
+but the view has no aggregate descriptor for emitting descriptor-driven RC.
+ARC excludes that target from the emission resource table and includes it in
+the solver-only borrow-anchor table, where projected dynamic fields keep the
+callable allocation live through their uses.
 
 Rc positions are interned per `layout.Idx` as a stage-local place table. The
 place graph is finite: committed layouts guard every recursive occurrence
@@ -9051,10 +9074,10 @@ every unrolled occurrence, which matches the typing rule below that nested
 modes are uniform through an owning rc.
 
 Boxy dynamic places are interned per descriptor identity and dynamic position,
-not by value pointer. A dynamic value is pointer-sized at the LIR layout level,
-but its payload ownership graph is descriptor-defined. ARC consumes the
-descriptor reference emitted by boxy lowering; it never treats a pointer-sized
-dynamic value as a shallow pointer merely because the layout is one word.
+not by value pointer. A dynamic value has the pointer-sized `erased_box` LIR
+layout, but its payload ownership graph is descriptor-defined. ARC consumes the
+descriptor reference emitted by boxy lowering; it never treats an `erased_box`
+as a shallow pointer merely because the layout is one word.
 
 Nested resources carry two modes, following the paper's storage/access split:
 
@@ -10192,7 +10215,7 @@ stride, allocation alignment class, and refcounted-items header shape.
 Descriptor-governed items additionally require the same Boxy descriptor
 representation identity and therefore the same descriptor behavior. Two
 distinct dynamic types are not interchangeable merely because both commit to
-the same pointer-sized `box_of_zst` layout: their descriptors can require
+the same pointer-sized `erased_box` layout: their descriptors can require
 different payload layouts and RC header shapes. The hidden header in front of a
 list's data and the alignment handed to the allocator both derive from this
 explicit representation data, so reusing an allocation across incompatible

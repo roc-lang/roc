@@ -156,7 +156,7 @@ test "boxy abi Box payload descriptor projection accepts both descriptor convent
     var setup = try TestSetup.init(allocator);
     defer setup.deinit();
 
-    const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.erasedBox());
     const desc_refs = [_]LIR.BoxyDescRef{.{ .static = @enumFromInt(fixtureTableIndex(0)) }};
     const descs = [_]BoxyTypeDesc{
         .{ .payload_layout = .u64, .contains_refcounted = false },
@@ -368,7 +368,7 @@ test "boxy abi custom inspect preserves a full descriptor across a payload-shape
     try std.testing.expectEqualStrings("source descriptor", rendered.asSlice());
     rendered.decref(setup.env.get_ops());
 
-    const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.erasedBox());
     var boxed: usize = 0;
     var boxed_desc: ?*const BoxyTypeDesc = null;
     boxy_abi.roc_boxy_box(
@@ -406,7 +406,7 @@ test "boxy abi box and unbox round-trip a string payload with balanced refcounts
     };
     try setup.startRuntime(allocator, .{ .type_descs = &descs });
 
-    const box_layout = @intFromEnum(try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst()));
+    const box_layout = @intFromEnum(try setup.layouts.insertLayout(layout_mod.Layout.erasedBox()));
     const str_layout = @intFromEnum(layout_mod.Idx.str);
 
     // A heap string, so payload refcounts are observable.
@@ -513,7 +513,7 @@ test "boxy abi call result completes an erased source list descriptor from the c
     var setup = try TestSetup.init(allocator);
     defer setup.deinit();
 
-    const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.erasedBox());
     const source_list_layout = try setup.layouts.insertLayout(layout_mod.Layout.list(box_layout));
     const target_list_layout = try setup.layouts.insertLayout(layout_mod.Layout.list(.u64));
     const desc_refs = [_]LIR.BoxyDescRef{
@@ -762,7 +762,7 @@ test "boxy abi move adapter transfers unique boxed list elements" {
     var setup = try TestSetup.init(allocator);
     defer setup.deinit();
 
-    const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.erasedBox());
     const source_list_layout = try setup.layouts.insertLayout(layout_mod.Layout.list(box_layout));
     const target_list_layout = try setup.layouts.insertLayout(layout_mod.Layout.list(.u64));
     const desc_refs = [_]LIR.BoxyDescRef{
@@ -836,7 +836,7 @@ test "boxy abi move adapter releases tag payloads across differing discriminants
     const name_a = try setup.store.insertString("A");
     const name_b = try setup.store.insertString("B");
     const name_c = try setup.store.insertString("C");
-    const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.erasedBox());
     const source_union_layout = try setup.layouts.putTagUnion(&.{ .u64, box_layout });
     const target_union_layout = try setup.layouts.putTagUnion(&.{ .u64, .u64 });
     const payload_descs = [_]LirProgram.BoxyTagPayloadDesc{.{
@@ -937,7 +937,7 @@ test "boxy abi move adapter transfers a dynamic box into a target tag extension"
 
     const name_ok = try setup.store.insertString("Ok");
     const name_err = try setup.store.insertString("Err");
-    const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.erasedBox());
     const source_union_layout = try setup.layouts.putTagUnion(&.{.str});
     const target_union_layout = try setup.layouts.putTagUnion(&.{ .zst, box_layout });
     const payload_descs = [_]LirProgram.BoxyTagPayloadDesc{.{
@@ -1033,7 +1033,7 @@ test "boxy abi moved reboxed payload transfers a nested list allocation" {
     var setup = try TestSetup.init(allocator);
     defer setup.deinit();
 
-    const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.erasedBox());
     const list_str_layout = try setup.layouts.insertLayout(layout_mod.Layout.list(.str));
     const struct_box_layout = try setup.layouts.putStructFields(&.{.{ .index = 0, .layout = box_layout }});
     const desc_refs = [_]LIR.BoxyDescRef{
@@ -1132,7 +1132,7 @@ test "boxy abi copied recursive tag retains boxed children" {
 
     const leaf_name = try setup.store.insertString("Leaf");
     const node_name = try setup.store.insertString("Node");
-    const erased_box_layout = try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const erased_box_layout = try setup.layouts.insertLayout(layout_mod.Layout.erasedBox());
     const node_layout = try setup.layouts.putStructFields(&.{
         .{ .index = 0, .layout = erased_box_layout },
         .{ .index = 1, .layout = erased_box_layout },
@@ -1271,7 +1271,7 @@ test "boxy abi dynamic numeric literal encodes through the descriptor payload la
     };
     try setup.startRuntime(allocator, .{ .type_descs = &descs });
 
-    const box_layout = @intFromEnum(try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst()));
+    const box_layout = @intFromEnum(try setup.layouts.insertLayout(layout_mod.Layout.erasedBox()));
     const literal: i128 = 42;
 
     var boxed: usize = 0;
@@ -1298,7 +1298,7 @@ test "boxy abi dynamic numeric literal publishes its default scalar descriptor" 
     var setup = try TestSetup.init(allocator);
     defer setup.deinit();
 
-    const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.erasedBox());
     const descs = [_]BoxyTypeDesc{
         .{ .payload_layout = box_layout, .contains_refcounted = true },
     };
@@ -1341,7 +1341,7 @@ test "boxy abi unbox specializes a concrete tag descriptor before materializatio
 
     const name_err = try setup.store.insertString("Err");
     const name_ok = try setup.store.insertString("Ok");
-    const erased_box_layout = try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const erased_box_layout = try setup.layouts.insertLayout(layout_mod.Layout.erasedBox());
     const source_union_layout = try setup.layouts.putTagUnion(&.{erased_box_layout});
     const target_union_layout = try setup.layouts.putTagUnion(&.{ .zst, .u8 });
     const payload_descs = [_]LirProgram.BoxyTagPayloadDesc{
@@ -1478,7 +1478,7 @@ test "boxy abi tag construction, matching, and payload reads" {
         .tag_variants = &variants,
     });
 
-    const box_layout = @intFromEnum(try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst()));
+    const box_layout = @intFromEnum(try setup.layouts.insertLayout(layout_mod.Layout.erasedBox()));
     var payload: u64 = 7;
     var tagged: usize = 0;
     boxy_abi.roc_boxy_tag(
@@ -1568,7 +1568,7 @@ test "boxy abi copied tag payload owns its nested list" {
         setup.env.get_ops(),
     );
 
-    const box_layout = @intFromEnum(try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst()));
+    const box_layout = @intFromEnum(try setup.layouts.insertLayout(layout_mod.Layout.erasedBox()));
     var tagged: usize = 0;
     boxy_abi.roc_boxy_tag(
         @ptrCast(&tagged),
@@ -1613,14 +1613,14 @@ test "boxy abi descriptor copy materializes a template with local captures" {
 
     // Template descriptor 1 nests a frame-local descriptor reference (local
     // id 5); the copy binds it to descriptor 0.
-    const box_of_zst = try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const erased_box = try setup.layouts.insertLayout(layout_mod.Layout.erasedBox());
     const desc_refs = [_]LirProgram.BoxyDescRef{
         .{ .local = @enumFromInt(5) },
     };
     const descs = [_]BoxyTypeDesc{
         .{ .payload_layout = .u64, .contains_refcounted = false },
         .{
-            .payload_layout = box_of_zst,
+            .payload_layout = erased_box,
             .contains_refcounted = true,
             .nested_descs = .{ .start = 0, .len = 1 },
         },
@@ -1639,7 +1639,7 @@ test "boxy abi descriptor copy materializes a template with local captures" {
         1,
     );
     try std.testing.expect(copied != &descs[1]);
-    try std.testing.expectEqual(box_of_zst, copied.payload_layout);
+    try std.testing.expectEqual(erased_box, copied.payload_layout);
     try std.testing.expectEqual(@as(u32, 1), copied.nested_descs.len);
 
     // The nested slot resolves to the captured descriptor's shape through

@@ -334,6 +334,9 @@ const Analysis = struct {
     store: *const LirStore,
     layouts: *const layout_mod.Store,
     solution: *const arc_solve.Solution,
+    /// Exact ARC emission-resource classification produced before solving.
+    /// Dismantling may only claim units that the emitter can release.
+    rc_local: []const bool,
     state: []State,
     /// Root container local per transparent alias, `no_index` otherwise.
     alias_root: []u32,
@@ -388,9 +391,12 @@ const Analysis = struct {
     /// dismantling. Cheap, no allocation; the full per-candidate work only
     /// happens for locals that pass.
     fn passesGate(self: *Analysis, local: LIR.LocalId) bool {
+        const local_index = @intFromEnum(local);
+        if (local_index >= self.rc_local.len) dismantleInvariant("ARC dismantle resource table did not cover local");
+        if (!self.rc_local[local_index]) return false;
         const local_layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
         if (local_layout.tag != .struct_) return false;
-        if (self.solution.isBorrowed(local) and !self.is_param[@intFromEnum(local)]) return false;
+        if (self.solution.isBorrowed(local) and !self.is_param[local_index]) return false;
         if (self.solution.isJoinParam(local)) return false;
         if (self.solution.maybeUninitializedCondition(local) != null) return false;
 
@@ -662,8 +668,12 @@ pub fn compute(
     gpa: Allocator,
     store: *const LirStore,
     layouts: *const layout_mod.Store,
+    rc_local: []const bool,
     solution: *const arc_solve.Solution,
 ) Error!Dismantles {
+    if (rc_local.len != store.localCount()) {
+        dismantleInvariant("ARC dismantle resource table did not cover every local");
+    }
     // Proc parameters are defined by the proc entry rather than a statement;
     // remember each parameter's body so its spine has a start. A local that
     // parameterizes more than one proc spec never dismantles.
@@ -702,6 +712,7 @@ pub fn compute(
         .store = store,
         .layouts = layouts,
         .solution = solution,
+        .rc_local = rc_local,
         .state = try gpa.alloc(State, store.localCount()),
         .alias_root = try gpa.alloc(u32, store.localCount()),
         .candidates = .empty,
