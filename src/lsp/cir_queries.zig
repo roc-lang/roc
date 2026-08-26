@@ -1126,16 +1126,6 @@ pub fn collectLookupReferences(
     return results;
 }
 
-/// Collect the places that declare `target_pattern`.
-///
-/// That is the binding itself and, when it is annotated, the name written on
-/// its type annotation. The annotation name has no CIR node of its own—
-/// canonicalization merges a matching annotation into the def it annotates—
-/// so it is read from `Annotation.name_region`.
-///
-/// Kept separate from `collectLookupReferences` because LSP asks for the two
-/// separately: `textDocument/references` can be told to leave the declaration
-/// out.
 /// The source range of the name a pattern binds, or null when it cannot be
 /// pinned down exactly.
 ///
@@ -1178,6 +1168,16 @@ pub fn declarationNameRegion(module_env: *ModuleEnv, target_pattern: CIR.Pattern
     return null;
 }
 
+/// Collect the places that declare `target_pattern`.
+///
+/// That is the binding itself and, when it is annotated, the name written on
+/// its type annotation. The annotation name has no CIR node of its own—
+/// canonicalization merges a matching annotation into the def it annotates—
+/// so it is read from `Annotation.name_region`.
+///
+/// Kept separate from `collectLookupReferences` because LSP asks for the two
+/// separately: `textDocument/references` can be told to leave the declaration
+/// out.
 pub fn collectDeclarationRegions(
     module_env: *ModuleEnv,
     target_pattern: CIR.Pattern.Idx,
