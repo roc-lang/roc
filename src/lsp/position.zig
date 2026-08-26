@@ -137,16 +137,24 @@ pub fn utf16ColumnToByteOffset(line_text: []const u8, character: usize, landing:
     return it.i;
 }
 
+/// A line's text without its terminating EOL sequence.
+///
+/// LSP columns count within a line's content, which stops before the EOL, so
+/// both the `\n` and the `\r` of a `\r\n` pair are dropped.
+pub fn trimEol(slice: []const u8) []const u8 {
+    var trimmed = slice;
+    if (trimmed.len > 0 and trimmed[trimmed.len - 1] == '\n') trimmed = trimmed[0 .. trimmed.len - 1];
+    if (trimmed.len > 0 and trimmed[trimmed.len - 1] == '\r') trimmed = trimmed[0 .. trimmed.len - 1];
+    return trimmed;
+}
+
 /// The text of one line, without its terminating newline.
 pub fn lineText(source: []const u8, line_starts: []const u32, line: u32) ?[]const u8 {
     if (line >= line_starts.len) return null;
     const start = line_starts[line];
     if (start > source.len) return null;
     const end = if (line + 1 < line_starts.len) line_starts[line + 1] else @as(u32, @intCast(source.len));
-    var slice = source[start..@min(end, source.len)];
-    if (slice.len > 0 and slice[slice.len - 1] == '\n') slice = slice[0 .. slice.len - 1];
-    if (slice.len > 0 and slice[slice.len - 1] == '\r') slice = slice[0 .. slice.len - 1];
-    return slice;
+    return trimEol(source[start..@min(end, source.len)]);
 }
 
 /// Convert a byte offset into an LSP line/character position using cached line offsets.

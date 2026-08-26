@@ -136,9 +136,19 @@ pub const DocumentStore = struct {
             index = newline_index + 1;
         }
 
+        // Only this line, never the rest of the document. A newline is an
+        // ordinary code unit to the conversion below, so a `character` past the
+        // end of its line would otherwise resolve into a later line and the
+        // edit would swallow everything in between.
+        const line_end = if (std.mem.findScalarPos(u8, text, index, '\n')) |newline_index|
+            newline_index + 1
+        else
+            text.len;
+        const line_text = position.trimEol(text[index..line_end]);
+
         // The same conversion the query path uses, in its strict mode: an edit
         // applied at a miscounted position would corrupt the document.
-        const column = position.utf16ColumnToByteOffset(text[index..], character_utf16, .exact) orelse
+        const column = position.utf16ColumnToByteOffset(line_text, character_utf16, .exact) orelse
             return error.InvalidPosition;
         return index + column;
     }
