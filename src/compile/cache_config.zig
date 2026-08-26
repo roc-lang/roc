@@ -151,7 +151,9 @@ pub const Constants = struct {
     /// 64: Compile-time root selection rejects values containing callables.
     /// 65: A hosted entry written without a module resolves to the platform
     ///     module's own declaration.
-    pub const CACHE_VERSION = 65;
+    /// 66: Serialized canonicalization diagnostics retain the explicit codec
+    ///     family for internal builtin types.
+    pub const CACHE_VERSION = 66;
 };
 
 /// Configuration for the Roc cache system.
