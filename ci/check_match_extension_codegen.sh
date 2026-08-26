@@ -55,9 +55,13 @@ cd "$repo_root"
 # Evaluating the later position first makes its bounds check govern both reads.
 # This keeps the fast loop to one bound branch per eight bytes when proven
 # no-wrap arithmetic gives LLVM stronger induction-variable facts.
+# Exact single-use inlining before ARC raises the totals from 102 to 109 on
+# x64musl and from 90 to 96 on arm64musl. The additional instructions release
+# the owned root argument list after its length is read; they are outside the
+# pinned compare loop, whose generated instructions are unchanged.
 expectations=(
-    "x64musl:102"
-    "arm64musl:90"
+    "x64musl:109"
+    "arm64musl:96"
 )
 
 failed=0

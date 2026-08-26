@@ -8,6 +8,7 @@ const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
 const parse = @import("parse");
 const can = @import("can");
+const pos = @import("../position.zig");
 const AST = parse.AST;
 const TokenizedRegion = AST.TokenizedRegion;
 
@@ -156,10 +157,11 @@ fn freeSelectionRange(allocator: std.mem.Allocator, range: SelectionRange) void 
 /// Walks the AST to find all containing nodes (token, expression, statement, file).
 fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line: u32, character: u32) (Allocator.Error || error{ InvalidPosition, ParseFailed, NoRangeFound })!SelectionRange {
     // Build line offset table
-    const line_offsets = buildLineOffsets(source);
+    const line_offsets = try pos.buildLineOffsets(allocator, source);
+    defer line_offsets.deinit();
 
     // Convert position to offset
-    const target_offset = positionToOffset(line, character, &line_offsets) orelse return error.InvalidPosition;
+    const target_offset = line_offsets.offsetAt(line, character) orelse return error.InvalidPosition;
 
     // Parse to get AST
     var module_env = try can.ModuleEnv.init(allocator, source);
@@ -239,8 +241,8 @@ fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line:
         const parent_node = try allocator.create(SelectionRange);
         parent_node.* = .{
             .range = .{
-                .start = offsetToPosition(byte_range.start, &line_offsets),
-                .end = offsetToPosition(byte_range.end, &line_offsets),
+                .start = positionAt(byte_range.start, &line_offsets),
+                .end = positionAt(byte_range.end, &line_offsets),
             },
             .parent = current_parent,
         };
@@ -251,8 +253,8 @@ fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line:
     const innermost = unique_regions.items[0];
     return .{
         .range = .{
-            .start = offsetToPosition(innermost.start, &line_offsets),
-            .end = offsetToPosition(innermost.end, &line_offsets),
+            .start = positionAt(innermost.start, &line_offsets),
+            .end = positionAt(innermost.end, &line_offsets),
         },
         .parent = current_parent,
     };
@@ -515,41 +517,10 @@ fn collectContainingRegionsFromExpr(
     }
 }
 
-const LineOffsets = struct {
-    offsets: [4096]u32,
-    count: usize,
-};
-
-fn buildLineOffsets(source: []const u8) LineOffsets {
-    var result = LineOffsets{ .offsets = undefined, .count = 0 };
-    result.offsets[0] = 0;
-    result.count = 1;
-
-    for (source, 0..) |c, i| {
-        if (c == '\n' and result.count < 4096) {
-            result.offsets[result.count] = @intCast(i + 1);
-            result.count += 1;
-        }
-    }
-    return result;
-}
-
-fn positionToOffset(line: u32, character: u32, line_offsets: *const LineOffsets) ?u32 {
-    if (line >= line_offsets.count) return null;
-    return line_offsets.offsets[line] + character;
-}
-
-fn offsetToPosition(offset: u32, line_offsets: *const LineOffsets) Position {
-    var line: u32 = 0;
-    for (0..line_offsets.count) |i| {
-        if (line_offsets.offsets[i] > offset) break;
-        line = @intCast(i);
-    }
-    const line_start = line_offsets.offsets[line];
-    return .{
-        .line = line,
-        .character = offset - line_start,
-    };
+/// Convert a byte offset into this handler's position shape.
+fn positionAt(offset: u32, line_offsets: *const pos.LineOffsets) Position {
+    const converted = pos.offsetToPosition(offset, line_offsets);
+    return .{ .line = converted.line, .character = converted.character };
 }
 
 test "selection ranges preserve flat field access prefixes" {

@@ -124,6 +124,41 @@ fn stringField(value: std.json.Value, name: []const u8) integration_spec.SpecErr
     return field_value.string;
 }
 
+fn expectBuiltinDefinitionAtDeclaration(
+    allocator: std.mem.Allocator,
+    responses: [][]u8,
+    response_id: i64,
+    declaration: []const u8,
+) integration_spec.SpecError!void {
+    const declaration_offset = std.mem.find(u8, compiled_builtins.builtin_source, declaration) orelse
+        return error.TestUnexpectedResult;
+    if (std.mem.findPos(u8, compiled_builtins.builtin_source, declaration_offset + declaration.len, declaration) != null) {
+        return error.TestUnexpectedResult;
+    }
+
+    var expected_line: i64 = 0;
+    var expected_character: i64 = 0;
+    for (compiled_builtins.builtin_source[0..declaration_offset]) |byte| {
+        if (byte == '\n') {
+            expected_line += 1;
+            expected_character = 0;
+        } else {
+            expected_character += 1;
+        }
+    }
+
+    var response = try responseById(allocator, responses, response_id);
+    defer response.deinit();
+    const result = try response.result();
+    try std.testing.expect(result == .object);
+    const uri = try stringField(result, "uri");
+    try std.testing.expect(std.mem.endsWith(u8, uri, "Builtin.roc"));
+    const range = try objectField(result, "range");
+    const start = try objectField(range, "start");
+    try std.testing.expectEqual(expected_line, try integerField(start, "line"));
+    try std.testing.expectEqual(expected_character, try integerField(start, "character"));
+}
+
 fn expectRange(
     range: std.json.Value,
     start_line: i64,
@@ -1685,18 +1720,7 @@ pub fn definitionHandlerNavigatesToBuiltinTypeFromTypeAnnotation() integration_s
         allocator.free(responses);
     }
 
-    var response = try responseById(allocator, responses, 2);
-    defer response.deinit();
-    const result = try response.result();
-    try std.testing.expect(result == .object);
-    const uri = try stringField(result, "uri");
-    try std.testing.expect(std.mem.endsWith(u8, uri, "Builtin.roc"));
-    const range = try objectField(result, "range");
-    const start = try objectField(range, "start");
-    const start_line = try integerField(start, "line");
-    // Str is declared around line 2204 in Builtin.roc
-    try std.testing.expect(start_line > 0);
-    try std.testing.expectEqual(@as(i64, 2204), start_line);
+    try expectBuiltinDefinitionAtDeclaration(allocator, responses, 2, "Str :: [ProvidedByCompiler].{");
 }
 
 /// Verifies document symbols still work after a goto-definition request.
@@ -3120,75 +3144,16 @@ pub fn definitionHandlerNavigatesToBuiltinDeclarations() integration_spec.SpecEr
         allocator.free(responses);
     }
 
-    // Str.is_empty (id: 2) -> line 2219 (0-based)
-    {
-        var response = try responseById(allocator, responses, 2);
-        defer response.deinit();
-        const result = try response.result();
-        try std.testing.expect(result == .object);
-        const uri = try stringField(result, "uri");
-        try std.testing.expect(std.mem.endsWith(u8, uri, "Builtin.roc"));
-        const range = try objectField(result, "range");
-        const start = try objectField(range, "start");
-        const start_line = try integerField(start, "line");
-        try std.testing.expectEqual(@as(i64, 2219), start_line);
-    }
-
-    // List.is_empty (id: 3) -> line 3572 (0-based)
-    {
-        var response = try responseById(allocator, responses, 3);
-        defer response.deinit();
-        const result = try response.result();
-        try std.testing.expect(result == .object);
-        const uri = try stringField(result, "uri");
-        try std.testing.expect(std.mem.endsWith(u8, uri, "Builtin.roc"));
-        const range = try objectField(result, "range");
-        const start = try objectField(range, "start");
-        const start_line = try integerField(start, "line");
-        try std.testing.expectEqual(@as(i64, 3572), start_line);
-    }
-
-    // List.append (id: 4) -> line 3933 (0-based)
-    {
-        var response = try responseById(allocator, responses, 4);
-        defer response.deinit();
-        const result = try response.result();
-        try std.testing.expect(result == .object);
-        const uri = try stringField(result, "uri");
-        try std.testing.expect(std.mem.endsWith(u8, uri, "Builtin.roc"));
-        const range = try objectField(result, "range");
-        const start = try objectField(range, "start");
-        const start_line = try integerField(start, "line");
-        try std.testing.expectEqual(@as(i64, 3933), start_line);
-    }
-
-    // Dict.update (id: 5) -> line 6188 (0-based)
-    {
-        var response = try responseById(allocator, responses, 5);
-        defer response.deinit();
-        const result = try response.result();
-        try std.testing.expect(result == .object);
-        const uri = try stringField(result, "uri");
-        try std.testing.expect(std.mem.endsWith(u8, uri, "Builtin.roc"));
-        const range = try objectField(result, "range");
-        const start = try objectField(range, "start");
-        const start_line = try integerField(start, "line");
-        try std.testing.expectEqual(@as(i64, 6188), start_line);
-    }
-
-    // Dict prefix (id: 6) -> line 5542 (0-based)
-    {
-        var response = try responseById(allocator, responses, 6);
-        defer response.deinit();
-        const result = try response.result();
-        try std.testing.expect(result == .object);
-        const uri = try stringField(result, "uri");
-        try std.testing.expect(std.mem.endsWith(u8, uri, "Builtin.roc"));
-        const range = try objectField(result, "range");
-        const start = try objectField(range, "start");
-        const start_line = try integerField(start, "line");
-        try std.testing.expectEqual(@as(i64, 5542), start_line);
-    }
+    try expectBuiltinDefinitionAtDeclaration(allocator, responses, 2, "is_empty : Str -> Bool");
+    try expectBuiltinDefinitionAtDeclaration(allocator, responses, 3, "is_empty : List(_item) -> Bool");
+    try expectBuiltinDefinitionAtDeclaration(allocator, responses, 4, "append : List(a), a -> List(a)");
+    try expectBuiltinDefinitionAtDeclaration(
+        allocator,
+        responses,
+        5,
+        "update : Dict(k, v), k, (Try(v, [Missing]) -> Try(v, [Missing])) -> Dict(k, v)",
+    );
+    try expectBuiltinDefinitionAtDeclaration(allocator, responses, 6, "Dict(k, v) :: [");
 }
 
 /// Verifies that an ordinary workspace document whose path ends in Builtin.roc (e.g. MyBuiltin.roc)
