@@ -8899,7 +8899,7 @@ directly.
 Hardware computes an overflow flag as part of every add; obtaining it costs
 nothing. The natural encoding would be one operation returning both the sum and
 the flag, mirroring the LLVM intrinsics. LIR does not express that: a low-level
-assignment has a single destination local and there is no field-projection
+assignment has a single destination local and there is no field read
 statement, so a paired result would require a two-field struct local that risks
 being spilled to memory.
 
@@ -8923,16 +8923,17 @@ addition that follows; for multiplication it costs a hardware division.
 `num_int_add_proven_cannot_overflow` and its siblings are the one place in the
 family where an incorrect claim produces undefined behavior rather than a wrong
 answer, because they assert no-wraparound to the backend optimizer. They are
-minted exclusively by the range prover, which discharges a proof obligation
-before rewriting. Source lowering never produces them, and neither does any
-other pass.
+minted exclusively by the range prover, which proves that overflow is
+impossible before rewriting. Source lowering never produces them, and neither
+does any other pass.
 
 This rule binds compiler-synthesized arithmetic too. A LIR pass that constructs
 an add directly emits the wrapping member and leaves the proof to the prover,
 even where the arithmetic is safe by construction. A hand-asserted proof at a
 synthesis site is a claim that decays as the surrounding pass changes, and its
-failure mode is undefined behavior rather than a detectably wrong result. A
-proof obligation is discharged by the prover or it is not discharged at all.
+failure mode is undefined behavior rather than a detectably wrong result. The
+range prover either proves overflow is impossible or does not perform the
+rewrite.
 
 Under a debug build the interpreter evaluates the proven forms in a wider type
 and panics if one actually overflows, so every evaluation test doubles as an
@@ -8950,8 +8951,8 @@ non-wrapping addition compute identical bits.
 One asymmetry is deliberate and worth recording. A surviving crash-on-overflow
 operation pays for itself even when no proof is found: control reaching the
 next statement is itself proof that the sum is exact, and later bounds checks
-consume that fact. A wrapping operation offers no such assumption, because no
-crash justifies it. Hand-writing `_wrap` in hot code therefore forfeits
+consume that exact-sum range. A wrapping operation offers no such assumption,
+because no crash justifies it. Hand-writing `_wrap` in hot code therefore forfeits
 something plain `+` provides, and doing so has measurably cost throughput.
 
 ### Dec
@@ -10100,9 +10101,9 @@ discriminant refine it (resolved through single-definition pure-alias
 chains so the discriminant read and the payload reads meet on one container
 name), and a container's own claims pin its variant at any later switch. A
 path that excludes every variant of a live container is infeasible—the
-facts it accumulated cannot describe any runtime value—and its walk ends
-vacuously, which is exactly what lets the residual switch's unmatched arms
-and the whole-release default coexist with claims on the matched path.
+variant refinements and claim masks cannot describe any runtime value—and its
+walk ends vacuously, which is exactly what lets the residual switch's unmatched
+arms and the whole-release default coexist with claims on the matched path.
 
 ### Debug Borrow Certifier
 

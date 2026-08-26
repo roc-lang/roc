@@ -645,7 +645,7 @@ fn finishLoweredOutput(
     });
     if (target.timing) |timing| timing.finish(arc_started_ns, .arc);
 
-    LirDump.run(&lowered.lir_result);
+    try LirDump.run(&lowered.lir_result);
 
     if (roots.requests.len != 0 and lowered.lir_result.root_procs.items.len == 0) {
         checkedPipelineInvariant("explicit root set produced no LIR roots");
@@ -929,24 +929,26 @@ const LirDump = if (builtin.os.tag == .freestanding) struct {
         return null;
     }
 
-    fn run(_: *const LirProgram.Result) void {}
+    fn run(_: *const LirProgram.Result) Allocator.Error!void {}
 } else struct {
     fn filter() ?[]const u8 {
         const raw = std.c.getenv("ROC_LIR_DUMP") orelse return null;
         return std.mem.span(raw);
     }
 
-    fn run(result: *const LirProgram.Result) void {
+    fn run(result: *const LirProgram.Result) Allocator.Error!void {
         const name_filter = filter() orelse return;
         const store = &result.store;
         const layouts = &result.layouts;
         for (0..store.procSpecCount()) |index| {
             const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
             const name = store.procDebugName(proc_id) orelse continue;
-            if (name_filter.len != 0 and std.mem.indexOf(u8, name, name_filter) == null) continue;
+            if (name_filter.len != 0 and std.mem.find(u8, name, name_filter) == null) continue;
             var buffer: std.Io.Writer.Allocating = .init(store.allocator);
             defer buffer.deinit();
-            DebugPrint.writeProc(store.allocator, store, layouts, proc_id, &buffer.writer) catch continue;
+            DebugPrint.writeProc(store.allocator, store, layouts, proc_id, &buffer.writer) catch |err| switch (err) {
+                error.OutOfMemory, error.WriteFailed => return error.OutOfMemory,
+            };
             std.debug.print("=== LIR {s} (p{d}) ===\n{s}\n", .{ name, index, buffer.written() });
         }
     }
