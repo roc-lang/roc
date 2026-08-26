@@ -38,6 +38,14 @@ included; both count as the declaration. A client that omits the field gets ever
 Only the requested document is searched, so a short result is not proof that a symbol is unused
 across a project—see the cross-module note below.
 
+### Positions
+
+Positions are exchanged in UTF-16 code units, as the protocol specifies and as the server
+advertises with `positionEncoding`. `src/lsp/position.zig` owns the conversion in both
+directions, with an ASCII fast path, and the same helper backs the incremental edits in
+`document_store.zig` in a strict mode: a query rounds a column that lands inside a character
+to the nearest boundary, an edit refuses it.
+
 ### Rename
 
 Rename edits only the document it was asked about. It rewrites the binding, the name on

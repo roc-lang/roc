@@ -59,8 +59,8 @@ pub const LineInfo = struct {
     pub fn offsetFromPosition(self: *const LineInfo, pos: Position) ?u32 {
         if (pos.line >= self.line_starts.len) return null;
         const text = position.lineText(self.source, self.line_starts, pos.line) orelse return null;
-        const column = position.utf16ColumnToByteOffset(text, pos.character) orelse return null;
-        return self.line_starts[pos.line] + column;
+        const column = position.utf16ColumnToByteOffset(text, pos.character, .nearest) orelse return null;
+        return self.line_starts[pos.line] + @as(u32, @intCast(column));
     }
 
     /// Binary search to find which line contains the given offset.

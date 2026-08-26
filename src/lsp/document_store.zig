@@ -1,6 +1,7 @@
 //! Document storage for tracking open text documents in the LSP server.
 
 const std = @import("std");
+const position = @import("position.zig");
 const Allocator = std.mem.Allocator;
 
 /// Stores the latest contents of each open text document.
@@ -135,15 +136,10 @@ pub const DocumentStore = struct {
             index = newline_index + 1;
         }
 
-        var utf16_units: usize = 0;
-        var it = std.unicode.Utf8Iterator{ .bytes = text[index..], .i = 0 };
-        while (utf16_units < character_utf16) {
-            const slice = it.nextCodepointSlice() orelse return error.InvalidPosition;
-            const cp = std.unicode.utf8Decode(slice) catch return error.InvalidPosition;
-            utf16_units += if (cp <= 0xFFFF) 1 else 2;
-        }
-
-        if (utf16_units != character_utf16) return error.InvalidPosition;
-        return index + it.i;
+        // The same conversion the query path uses, in its strict mode: an edit
+        // applied at a miscounted position would corrupt the document.
+        const column = position.utf16ColumnToByteOffset(text[index..], character_utf16, .exact) orelse
+            return error.InvalidPosition;
+        return index + column;
     }
 };

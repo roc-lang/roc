@@ -102,28 +102,39 @@ pub fn byteOffsetToUtf16Column(line_text: []const u8, byte_offset: u32) u32 {
     return units;
 }
 
+/// How a column that does not land on a character boundary is treated.
+pub const Landing = enum {
+    /// Round to the start of the next character. A query asking about a caret
+    /// between surrogates still means the character it sits in.
+    nearest,
+    /// Reject it. Applying an edit at a position the client miscounted would
+    /// corrupt the document, so `didChange` insists on an exact landing.
+    exact,
+};
+
 /// The byte offset inside one line of a UTF-16 column.
 ///
-/// Returns null when the column runs past the end of the line. A column that
-/// falls inside a character resolves to the start of the next one, which is
-/// what an editor means when it puts the caret between surrogates.
-pub fn utf16ColumnToByteOffset(line_text: []const u8, character: u32) ?u32 {
+/// Returns null when the column runs past the end of the line, or, under
+/// `.exact`, when it falls inside a character.
+pub fn utf16ColumnToByteOffset(line_text: []const u8, character: usize, landing: Landing) ?usize {
     if (isAscii(line_text)) {
         if (character > line_text.len) return null;
         return character;
     }
 
-    var units: u32 = 0;
+    var units: usize = 0;
     var it = std.unicode.Utf8Iterator{ .bytes = line_text, .i = 0 };
     while (units < character) {
         const slice = it.nextCodepointSlice() orelse return null;
         const cp = std.unicode.utf8Decode(slice) catch {
-            units += @intCast(slice.len);
+            if (landing == .exact) return null;
+            units += slice.len;
             continue;
         };
-        units += if (cp <= 0xFFFF) 1 else 2;
+        units += if (cp <= 0xFFFF) @as(usize, 1) else 2;
     }
-    return @intCast(it.i);
+    if (landing == .exact and units != character) return null;
+    return it.i;
 }
 
 /// The text of one line, without its terminating newline.
@@ -160,6 +171,6 @@ pub fn positionToOffset(module_env: *ModuleEnv, line: u32, character: u32) ?u32 
     if (line >= line_starts.len) return null;
 
     const text = lineText(module_env.common.source, line_starts, line) orelse return null;
-    const column = utf16ColumnToByteOffset(text, character) orelse return null;
-    return line_starts[line] + column;
+    const column = utf16ColumnToByteOffset(text, character, .nearest) orelse return null;
+    return line_starts[line] + @as(u32, @intCast(column));
 }
