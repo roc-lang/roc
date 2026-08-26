@@ -11,6 +11,12 @@ const can = @import("can");
 
 /// One solved platform requirement, produced while checking an app root.
 pub const SolutionInput = struct {
+    pub const Outcome = enum {
+        pending,
+        success,
+        checked_error,
+    };
+
     /// Index of the requirement in the platform's requires clause. Equals the
     /// platform-side `PlatformRequiredDeclarationId` by construction: both are
     /// assigned positionally over the same `requires_types` list.
@@ -23,6 +29,11 @@ pub const SolutionInput = struct {
     /// Whether the platform declares this requirement at a function type
     /// (procedure value) rather than a non-function type (const value).
     is_function: bool,
+    /// Explicit checker verdict for this requirement. Rows are created before
+    /// their app definitions are checked, then finalized after all checker
+    /// error poisoning has completed. Artifact publication only consumes the
+    /// two final states.
+    outcome: Outcome = .pending,
     /// The requirement type's identity variables (flex/rigid), instantiated
     /// into the app's store, in canonical identity-slot order—the
     /// first-encounter order the canonical type key digest assigns

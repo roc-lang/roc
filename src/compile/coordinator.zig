@@ -5861,6 +5861,76 @@ test "app artifact records platform requirement solutions from checking" {
     );
 }
 
+fn writeErroneousFunctionRequirementFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
+    try tmp_dir.dir.createDirPath(std.testing.io, "app/.roc_error_platform");
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app/main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_error_platform/main.roc" }
+        \\
+        \\User := { id : U32, contact : [Email(Str)] }
+        \\
+        \\main! : {} -> Try({}, {})
+        \\main! = {
+        \\    user : User
+        \\    user = { id: 10, contain: Email("user@example.com") }
+        \\
+        \\    Ok({})
+        \\}
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app/.roc_error_platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {} { main! : {} -> Try({}, {}) }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_entry": entry }
+        \\
+        \\entry : {} -> Try({}, {})
+        \\entry = |_| main!({})
+        ,
+    });
+}
+
+test "erroneous function requirement publishes an explicit checked-error outcome" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try writeErroneousFunctionRequirementFixture(&tmp_dir);
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    const builtin_modules = try sharedBuiltinModules();
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        builtin_modules,
+        build_options.compiler_version,
+        null,
+        roc_ctx,
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    var arena_impl = base.SingleThreadArena.init(allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(coord.hasUserErrors());
+
+    const app_artifact = coord.appRootCheckedArtifact();
+    try std.testing.expectEqual(@as(usize, 0), app_artifact.platform_requirement_solutions.solutions.len);
+}
+
 fn writeAliasBackingRequirementFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
     try tmp_dir.dir.createDirPath(std.testing.io, "app/.roc_state_platform");
     try tmp_dir.dir.writeFile(std.testing.io, .{

@@ -2040,6 +2040,13 @@ sibling bindings, and a lookup at a checked-error index lowers to a runtime
 crash. There is no relation-less error fallback and no separate flow that
 "permits" user errors.
 
+Requirement rows may be allocated before their app definitions are checked, but
+they remain explicitly pending checker state until all definition checking and
+error poisoning has completed. The checker then stamps each row as successful
+or checked-error. `platformRequirementSolutionTableFromInputs` and
+`EvidencePass.run` consume that verdict directly; they never infer success by
+inspecting solved type shape or by comparing the eventual runtime value kind.
+
 A platform `provides` declaration must name a top-level value defined in the
 platform module. It cannot name a value from `requires` directly; a platform
 that wants to expose an app-provided value to its host defines an explicit
