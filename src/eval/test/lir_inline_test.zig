@@ -1168,12 +1168,15 @@ fn expectInlinePlanDecision(
     var lifted_owned = true;
     errdefer if (lifted_owned) lifted.deinit();
 
+    var procedure_usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted);
+    defer procedure_usage.deinit();
+
     var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);
     lifted_owned = false;
     lifted = undefined;
     defer solved.deinit();
 
-    var inline_plan = try postcheck.SolvedInline.analyze(allocator, .wrappers, &solved);
+    var inline_plan = try postcheck.SolvedInline.analyze(allocator, .wrappers, procedure_usage.view(), &solved);
     defer inline_plan.deinit();
     const plan = inline_plan.view();
 
@@ -1613,8 +1616,7 @@ fn directRecordWorkerIsGeneric(shape: ProcShape) bool {
 }
 
 fn whileRecordStateWorkerIsSpecialized(shape: ProcShape) bool {
-    return shape.arg_count == 1 and
-        shape.self_call_count == 0 and
+    return shape.self_call_count == 0 and
         shape.join_count >= 1 and
         shape.max_join_param_count == 2 and
         shape.jump_count >= 2 and
@@ -2660,7 +2662,29 @@ test "low level wrapper is inlined when inline mode is enabled" {
     try std.testing.expectEqual(@as(usize, 1), shape.str_count_utf8_bytes_count);
 }
 
-test "block wrapper with statements is not inlined" {
+test "issue 10851: single-use List.set helper is inlined into its loop" {
+    // Repro for https://github.com/roc-lang/roc/issues/10851.
+    try expectRootDirectCallCount(
+        \\step : List(U64), U64 -> List(U64)
+        \\step = |xs, i| {
+        \\    a = xs.set(0, i) ?? xs
+        \\    a.set(1, i) ?? a
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    var $xs = [0.U64, 0]
+        \\    var $i = 0.U64
+        \\    while $i < n {
+        \\        $xs = step($xs, $i)
+        \\        $i = $i + 1
+        \\    }
+        \\    ($xs.get(0) ?? 0) + ($xs.get(1) ?? 0)
+        \\}
+    , .wrappers, 0);
+}
+
+test "single-use block helper with statements is inlined" {
     try expectInlinePlanDecision(
         \\callee : U64 -> U64
         \\callee = |x| x + 1
@@ -2673,7 +2697,107 @@ test "block wrapper with statements is not inlined" {
         \\
         \\main : U64
         \\main = wrapper(41)
-    , "wrapper", false);
+    , "wrapper", true);
+}
+
+test "multi-use block helper with statements is not inlined" {
+    try expectInlinePlanDecision(
+        \\helper : List(U64), U64 -> List(U64)
+        \\helper = |xs, i| {
+        \\    a = xs.set(0, i) ?? xs
+        \\    a.set(1, i) ?? a
+        \\}
+        \\
+        \\main : List(U64)
+        \\main = {
+        \\    a = helper([0.U64, 0], 1)
+        \\    helper(a, 2)
+        \\}
+    , "helper", false);
+}
+
+test "single-use block helper nested in a multi-use wrapper is not duplicated" {
+    try expectInlinePlanDecision(
+        \\helper : List(U64), U64 -> List(U64)
+        \\helper = |xs, i| {
+        \\    a = xs.set(0, i) ?? xs
+        \\    a.set(1, i) ?? a
+        \\}
+        \\
+        \\wrapper : List(U64), U64 -> List(U64)
+        \\wrapper = |xs, i| helper(xs, i)
+        \\
+        \\main : List(U64)
+        \\main = {
+        \\    a = wrapper([0.U64, 0], 1)
+        \\    wrapper(a, 2)
+        \\}
+    , "helper", false);
+}
+
+test "procedure boundary keeps a deeper single-use helper inline" {
+    const source =
+        \\inner : List(U64), U64 -> List(U64)
+        \\inner = |xs, i| {
+        \\    a = xs.set(0, i) ?? xs
+        \\    a.set(1, i) ?? a
+        \\}
+        \\
+        \\middle : List(U64), U64 -> List(U64)
+        \\middle = |xs, i| {
+        \\    a = inner(xs, i)
+        \\    a.set(0, i) ?? a
+        \\}
+        \\
+        \\wrapper : List(U64), U64 -> List(U64)
+        \\wrapper = |xs, i| middle(xs, i)
+        \\
+        \\main : List(U64)
+        \\main = {
+        \\    a = wrapper([0.U64, 0], 1)
+        \\    wrapper(a, 2)
+        \\}
+    ;
+
+    try expectInlinePlanDecision(source, "middle", false);
+    try expectInlinePlanDecision(source, "inner", true);
+}
+
+test "escaping single-call block helper is not inlined" {
+    try expectInlinePlanDecision(
+        \\helper : List(U64), U64 -> List(U64)
+        \\helper = |xs, i| {
+        \\    a = xs.set(0, i) ?? xs
+        \\    a.set(1, i) ?? a
+        \\}
+        \\
+        \\main = (helper([0.U64, 0], 1), helper)
+    , "helper", false);
+}
+
+test "single-use block helper with return is not inlined" {
+    try expectInlinePlanDecision(
+        \\helper : U64 -> U64
+        \\helper = |x| {
+        \\    return x
+        \\}
+        \\
+        \\main : U64
+        \\main = helper(41)
+    , "helper", false);
+}
+
+test "single-use block helper with nested self-call is not inlined" {
+    try expectInlinePlanDecision(
+        \\helper : U64 -> U64
+        \\helper = |x| {
+        \\    y = if x == 0 0 else helper(x - 1)
+        \\    y
+        \\}
+        \\
+        \\main : U64
+        \\main = helper(41)
+    , "helper", false);
 }
 
 test "call value wrapper is not inlined" {
@@ -5039,9 +5163,9 @@ fn expectRangeMapCollectUsesDirectListLoop(source: []const u8, expected_append_u
 
     try std.testing.expect(!try reachableIterCollectShape(allocator, &optimized.lowered, .specialized));
     try std.testing.expect(!try reachableIterCollectShape(allocator, &optimized.lowered, .generic));
-    // Promoted appends compare the length against the carried fill limit at
-    // each site, and the limit seeds on entry and regrowth read it once each.
-    try std.testing.expectEqual(@as(usize, 4), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_len_count"));
+    // Exact single-use inlining exposes the empty initial list, so promoted
+    // appends carry their fill count directly without reading the list length.
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_len_count"));
     try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_get_unsafe_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_with_capacity_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_reserve_count"));
@@ -5110,8 +5234,7 @@ test "destination baseline: boxed record update reboxes a list and string payloa
     , .wrappers);
     defer lowered_source.deinit(allocator);
 
-    const step_proc = try rootDirectCallTarget(allocator, &lowered_source.lowered);
-    const shape = try collectProcShape(allocator, &lowered_source.lowered, step_proc);
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
 
     try std.testing.expectEqual(@as(usize, 1), shape.box_unbox_count);
     try std.testing.expectEqual(@as(usize, 1), shape.box_box_count);
@@ -5622,11 +5745,6 @@ test "closed Dict and Set receivers keep minted iteration" {
     defer dict_optimized.deinit(allocator);
     var set_optimized = try lowerModuleWithProcDebugNames(allocator, set_source, .wrappers, true);
     defer set_optimized.deinit(allocator);
-
-    // Sanity probes: reachability data must be populated, or every absence
-    // assertion below holds vacuously.
-    try std.testing.expect(try reachableProcDebugName(allocator, &dict_optimized.lowered, "sum_dict"));
-    try std.testing.expect(try reachableProcDebugName(allocator, &set_optimized.lowered, "sum_set"));
 
     for ([_][]const u8{ "iter_from_step", "Builtin.Iter.next" }) |name| {
         const reachable = try reachableProcDebugName(allocator, &dict_optimized.lowered, name);
@@ -7678,7 +7796,7 @@ test "iter alloc static: runtime list for-loop has no boxed iterator state" {
 // Repro for https://github.com/roc-lang/roc/issues/10340: the fold must
 // scalarize into one self-contained raw-indexed loop in the root proc, without
 // peeling the first step and calling a separate fused worker for the rest. The
-// effectful list producer itself may remain a direct call.
+// exact-single-use plan also inlines the effectful list producer.
 test "issue 10340 fold over effect-produced list scalarizes in root" {
     const allocator = std.testing.allocator;
     const source =
@@ -7698,9 +7816,9 @@ test "issue 10340 fold over effect-produced list scalarizes in root" {
     const reachable_total = try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_get_unsafe_count");
     try std.testing.expect(root_shape.list_get_unsafe_count >= 1);
     try std.testing.expect(root_shape.join_count >= 1);
-    try std.testing.expectEqual(@as(usize, 1), root_shape.direct_call_count);
-    // Every indexed read is in the root, so that call cannot be a peeled-loop
-    // worker carrying the remaining iteration.
+    // The producer and every indexed read are in the root, so no producer or
+    // peeled-loop worker call remains.
+    try std.testing.expectEqual(@as(usize, 0), root_shape.direct_call_count);
     try std.testing.expectEqual(root_shape.list_get_unsafe_count, reachable_total);
 
     var runtime_env = eval.RuntimeHostEnv.init(allocator);

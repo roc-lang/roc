@@ -557,11 +557,13 @@ pub fn lowerCheckedModulesToLir(
     errdefer if (lifted_owned) lifted.deinit();
     if (target.timing) |timing| timing.finish(lift_started_ns, .lift);
 
-    if (target.inline_mode != .none) {
+    var procedure_usage = if (target.inline_mode != .none) blk: {
         const spec_constr_started_ns = if (target.timing) |timing| timing.start() else 0;
-        try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
+        const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted);
         if (target.timing) |timing| timing.finish(spec_constr_started_ns, .spec_constr);
-    }
+        break :blk usage;
+    } else postcheck.MonotypeLifted.SpecConstr.OwnedProcedureUsage.empty(allocator);
+    defer procedure_usage.deinit();
 
     if (target.lifted_expr_count_out) |slot| slot.* = lifted.exprCount();
 
@@ -578,7 +580,7 @@ pub fn lowerCheckedModulesToLir(
         if (target.timing) |timing| timing.start() else 0
     else
         0;
-    var inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, &solved);
+    var inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved);
     defer inline_plan.deinit();
     if (target.inline_mode != .none) {
         if (target.timing) |timing| timing.finish(inline_plan_started_ns, .inline_plan);

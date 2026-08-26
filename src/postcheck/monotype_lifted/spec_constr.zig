@@ -261,11 +261,59 @@ fn walkSpanCloned(
     for (source) |item| try visit(context, item);
 }
 
+/// Exact post-SpecConstr use information for one lifted procedure.
+pub const ProcedureUse = struct {
+    external_calls: usize = 0,
+    external_call_expr: ?Ast.ExprId = null,
+    external_call_owner: ?Ast.FnId = null,
+    value_refs: usize = 0,
+    contains_return: bool = false,
+};
+
+/// Read-only exact procedure-use inventory produced after all SpecConstr graph
+/// rewrites. Function ids index `items` directly.
+pub const ProcedureUsage = struct {
+    items: []const ProcedureUse = &.{},
+
+    pub fn get(self: ProcedureUsage, fn_id: Ast.FnId) ProcedureUse {
+        const index = @intFromEnum(fn_id);
+        if (index >= self.items.len) {
+            Common.invariant("procedure-use inventory did not contain a lifted function");
+        }
+        return self.items[index];
+    }
+};
+
+/// Allocator-owned storage for an exact post-SpecConstr procedure-use inventory.
+pub const OwnedProcedureUsage = struct {
+    allocator: Allocator,
+    items: []ProcedureUse,
+
+    pub fn empty(allocator: Allocator) OwnedProcedureUsage {
+        return .{ .allocator = allocator, .items = &.{} };
+    }
+
+    pub fn deinit(self: *OwnedProcedureUsage) void {
+        if (self.items.len != 0) self.allocator.free(self.items);
+        self.* = empty(self.allocator);
+    }
+
+    pub fn view(self: *const OwnedProcedureUsage) ProcedureUsage {
+        return .{ .items = self.items };
+    }
+};
+
 /// Specialize recursive direct calls whose arguments are known constructor shapes.
 pub fn run(allocator: Allocator, program: *Ast.Program) Common.LowerError!void {
+    var procedure_usage = try runAndCollectProcedureUsage(allocator, program);
+    defer procedure_usage.deinit();
+}
+
+/// Run SpecConstr and retain the exact use inventory from its final graph.
+pub fn runAndCollectProcedureUsage(allocator: Allocator, program: *Ast.Program) Common.LowerError!OwnedProcedureUsage {
     var pass = try Pass.init(allocator, program);
     defer pass.deinit();
-    try pass.run();
+    return try pass.run();
 }
 
 const Shape = union(enum) {
@@ -902,7 +950,7 @@ const Pass = struct {
         self.arena.deinit();
     }
 
-    fn run(self: *Pass) Common.LowerError!void {
+    fn run(self: *Pass) Common.LowerError!OwnedProcedureUsage {
         const original_fn_count = self.plans.len;
 
         const capture_snapshot = try self.snapshotOriginalCaptures(original_fn_count);
@@ -921,12 +969,14 @@ const Pass = struct {
         try self.rewriteAllOriginalBodies(original_fn_count);
         try self.createSpecializations(original_fn_count);
         try self.projectUnusedLoopResults();
-        try self.localizeSingleUseTailRecursiveWorkers(original_fn_count);
+        var procedure_usage = try self.localizeSingleUseTailRecursiveWorkers(original_fn_count);
+        errdefer procedure_usage.deinit();
         try Lift.recomputeCaptures(self.allocator, self.program);
         self.verifyRewrittenCaptureGain(capture_snapshot);
         try self.verifyRewrittenBodyLocals(original_fn_count);
 
         self.program.next_symbol = self.symbols.next;
+        return procedure_usage;
     }
 
     /// Turn a specialized tail-recursive worker with exactly one external use
@@ -934,7 +984,7 @@ const Pass = struct {
     /// exposed the worker's constructor leaves as scalar arguments here, so
     /// moving that exact ABI into the caller preserves the specialized loop
     /// without paying an out-of-line call or duplicating any code.
-    fn localizeSingleUseTailRecursiveWorkers(self: *Pass, original_fn_count: usize) Common.LowerError!void {
+    fn localizeSingleUseTailRecursiveWorkers(self: *Pass, original_fn_count: usize) Common.LowerError!OwnedProcedureUsage {
         const fn_count = self.program.fnCount();
         var program_usage = try ProgramProcedureUsage.collect(self.allocator, self.program);
         defer program_usage.deinit(self.allocator);
@@ -947,7 +997,7 @@ const Pass = struct {
             // A source-level return is relative to the worker procedure. It
             // cannot be moved across a procedure boundary until the IR gives
             // it an explicit continuation target.
-            if (program_usage.contains_return[worker_index]) continue;
+            if (program_usage.fn_uses[worker_index].contains_return) continue;
 
             const tail = program_usage.tail_self_calls[worker_index];
             if (!tail.valid or tail.count == 0) continue;
@@ -967,6 +1017,11 @@ const Pass = struct {
             program_usage = refreshed_usage;
             refreshed_usage = undefined;
         }
+
+        return .{
+            .allocator = self.allocator,
+            .items = program_usage.takeFnUses(),
+        };
     }
 
     fn localizeTailRecursiveWorker(
@@ -10915,29 +10970,19 @@ const BodySizeCounter = struct {
     }
 };
 
-const FnUseSummary = struct {
-    external_calls: usize = 0,
-    external_call_expr: ?Ast.ExprId = null,
-    value_refs: usize = 0,
-};
-
 /// Program-wide procedure-use snapshot shared by SpecConstr graph rewrites.
 /// A transformation that changes edges requires a fresh snapshot; consumers
 /// never combine usage counts from different program generations.
 const ProgramProcedureUsage = struct {
-    contains_return: []bool,
     tail_self_calls: []TailSelfCallSummary,
-    fn_uses: []FnUseSummary,
+    fn_uses: []ProcedureUse,
 
     fn collect(allocator: Allocator, program: *const Ast.Program) Allocator.Error!ProgramProcedureUsage {
         const fn_count = program.fnCount();
-        const contains_return = try allocator.alloc(bool, fn_count);
-        errdefer allocator.free(contains_return);
-        @memset(contains_return, false);
         const tail_self_calls = try allocator.alloc(TailSelfCallSummary, fn_count);
         errdefer allocator.free(tail_self_calls);
         @memset(tail_self_calls, .{});
-        const fn_uses = try allocator.alloc(FnUseSummary, fn_count);
+        const fn_uses = try allocator.alloc(ProcedureUse, fn_count);
         errdefer allocator.free(fn_uses);
         @memset(fn_uses, .{});
 
@@ -10947,7 +10992,7 @@ const ProgramProcedureUsage = struct {
                 .roc => |body| body,
                 .hosted => continue,
             };
-            contains_return[owner_index] = exprContainsReturn(program, body);
+            fn_uses[owner_index].contains_return = exprContainsReturn(program, body);
             tail_self_calls[owner_index] = tailSelfCallSummary(program, body, owner);
             collectAllFnUsesInExpr(program, body, owner, fn_uses);
         }
@@ -10955,16 +11000,20 @@ const ProgramProcedureUsage = struct {
             fn_uses[@intFromEnum(root.fn_id)].value_refs += 1;
         }
         return .{
-            .contains_return = contains_return,
             .tail_self_calls = tail_self_calls,
             .fn_uses = fn_uses,
         };
     }
 
+    fn takeFnUses(self: *ProgramProcedureUsage) []ProcedureUse {
+        const fn_uses = self.fn_uses;
+        self.fn_uses = &.{};
+        return fn_uses;
+    }
+
     fn deinit(self: *ProgramProcedureUsage, allocator: Allocator) void {
-        allocator.free(self.fn_uses);
-        allocator.free(self.tail_self_calls);
-        allocator.free(self.contains_return);
+        if (self.fn_uses.len != 0) allocator.free(self.fn_uses);
+        if (self.tail_self_calls.len != 0) allocator.free(self.tail_self_calls);
         self.* = undefined;
     }
 };
@@ -10973,7 +11022,7 @@ fn collectAllFnUsesInExpr(
     program: *const Ast.Program,
     expr_id: Ast.ExprId,
     owner: Ast.FnId,
-    uses: []FnUseSummary,
+    uses: []ProcedureUse,
 ) void {
     switch (program.getExpr(expr_id).data) {
         .local,
@@ -11037,6 +11086,7 @@ fn collectAllFnUsesInExpr(
                     const summary = &uses[@intFromEnum(callee)];
                     summary.external_calls += 1;
                     summary.external_call_expr = expr_id;
+                    summary.external_call_owner = owner;
                 }
             }
             collectAllFnUsesInExprSpan(program, call.args, owner, uses);
@@ -11109,17 +11159,17 @@ fn collectAllFnUsesInExpr(
     }
 }
 
-fn collectAllFnUsesInExprSpan(program: *const Ast.Program, span: Ast.Span(Ast.ExprId), owner: Ast.FnId, uses: []FnUseSummary) void {
+fn collectAllFnUsesInExprSpan(program: *const Ast.Program, span: Ast.Span(Ast.ExprId), owner: Ast.FnId, uses: []ProcedureUse) void {
     const exprs = program.exprSpan(span);
     for (0..exprs.len) |index| collectAllFnUsesInExpr(program, GuardedList.at(exprs, index), owner, uses);
 }
 
-fn collectAllFnUsesInCaptureOperands(program: *const Ast.Program, span: Ast.Span(Ast.CaptureOperand), owner: Ast.FnId, uses: []FnUseSummary) void {
+fn collectAllFnUsesInCaptureOperands(program: *const Ast.Program, span: Ast.Span(Ast.CaptureOperand), owner: Ast.FnId, uses: []ProcedureUse) void {
     const operands = program.captureOperandSpan(span);
     for (0..operands.len) |index| collectAllFnUsesInExpr(program, GuardedList.at(operands, index).value, owner, uses);
 }
 
-fn collectAllFnUsesInStmt(program: *const Ast.Program, stmt_id: Ast.StmtId, owner: Ast.FnId, uses: []FnUseSummary) void {
+fn collectAllFnUsesInStmt(program: *const Ast.Program, stmt_id: Ast.StmtId, owner: Ast.FnId, uses: []ProcedureUse) void {
     switch (program.getStmt(stmt_id)) {
         .let_ => |let_| collectAllFnUsesInExpr(program, let_.value, owner, uses),
         .expr, .expect, .dbg => |expr| collectAllFnUsesInExpr(program, expr, owner, uses),
