@@ -28,10 +28,7 @@ fn expectCallBuiltRecordListSetHasNoRetain(
     defer stack.deinit(allocator);
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
-        const name = store.procDebugName(proc_id) orelse continue;
-        if (std.mem.eql(u8, name, "main_for_host!")) {
-            try stack.append(allocator, .{ .proc = proc_id });
-        }
+        if (store.getProcSpec(proc_id).body != null) try stack.append(allocator, .{ .proc = proc_id });
     }
 
     var saw_root = false;

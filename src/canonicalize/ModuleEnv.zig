@@ -1086,10 +1086,19 @@ pub const FileDependencyState = enum(u8) {
 pub const FileDependency = extern struct {
     relative_path: StringLiteral.Idx,
     state: FileDependencyState,
-    _padding: [3]u8,
+    _padding: [3]u8 = .{ 0, 0, 0 },
     content_hash: [32]u8,
+    start_offset: u32,
+    end_offset: u32,
 
     pub const SafeList = collections.SafeList(@This());
+
+    pub fn region(self: @This()) Region {
+        return .{
+            .start = .{ .offset = self.start_offset },
+            .end = .{ .offset = self.end_offset },
+        };
+    }
 };
 
 /// Relocate all pointers in the ModuleEnv by the given offset.
@@ -1367,13 +1376,15 @@ pub fn deinitCachedModule(self: *Self) void {
 }
 
 /// Record a relative file dependency before its final read state is known.
-pub fn recordFileDependency(self: *Self, relative_path: []const u8) Allocator.Error!FileDependency.SafeList.Idx {
+pub fn recordFileDependency(self: *Self, relative_path: []const u8, start_offset: u32, end_offset: u32) Allocator.Error!FileDependency.SafeList.Idx {
     const path_idx = try self.insertString(relative_path);
     return try self.file_dependencies.append(self.gpa, .{
         .relative_path = path_idx,
         .state = .pending,
         ._padding = .{ 0, 0, 0 },
         .content_hash = [_]u8{0} ** 32,
+        .start_offset = start_offset,
+        .end_offset = end_offset,
     });
 }
 
@@ -2774,6 +2785,39 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getSourceAll(),
                 self.getLineStartsAll(),
             );
+
+            break :blk report;
+        },
+        .internal_builtin_type => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            const parent_bytes = self.getIdent(data.parent_name);
+            const nested_bytes = self.getIdent(data.nested_name);
+
+            var report = try Report.init(allocator, "Internal Builtin Type", "", .runtime_error);
+            const parent_name = try report.addOwnedString(parent_bytes);
+            const nested_name = try report.addOwnedString(nested_bytes);
+
+            try report.headline.addInlineCode(nested_name);
+            try report.headline.addReflowingText(" is internal to ");
+            try report.headline.addInlineCode(parent_name);
+            try report.headline.addReflowingText(", so it can't be named here.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addReflowingText("It describes how a builtin format tracks its own state while encoding or parsing, which is why it has no spelling in Roc code. To require that a type can be encoded or parsed, name the constraint instead, as in ");
+            try report.document.addInlineCode(switch (data.kind) {
+                .json => "where [a.Json.Encodable([])]",
+                .http_header => "where [a.Encoding.HttpHeader.Parseable([])]",
+            });
+            try report.document.addReflowingText(".");
 
             break :blk report;
         },

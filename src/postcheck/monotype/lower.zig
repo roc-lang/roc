@@ -355,6 +355,9 @@ pub const BodyDiagnostics = struct {
     call_expressions: u64 = 0,
     dispatch_expressions: u64 = 0,
     deferred_template_requests: u64 = 0,
+    spec_jobs_enqueued: u64 = 0,
+    spec_jobs_executed: u64 = 0,
+    spec_jobs_skipped_ready: u64 = 0,
     cross_root_template_reuses: u64 = 0,
     caller_owned_template_bodies_lowered: u64 = 0,
     deferred_template_reuses: u64 = 0,
@@ -410,6 +413,10 @@ pub fn run(
     try builder.loadCandidateSpecializationShards();
     if (options.timing) |timing| timing.finish(setup_started_ns, .setup);
 
+    // Wave 1: roots in listed order, then the specialization queue. Each
+    // root remains a distinct job whose result lands in root order; symbolic
+    // requests discovered while roots seal are reserved immediately and their
+    // bodies drain afterward in deterministic dispatch order.
     const procedures_started_ns = if (options.timing) |timing| timing.start() else 0;
     if (options.timing) |timing| timing.startProcedureBreakdown();
     switch (roots.procedure_template_root_grouping) {
@@ -431,19 +438,26 @@ pub fn run(
             }
         },
     }
+    try builder.drainPendingSpecJobs();
     if (options.timing) |timing| timing.finishProcedureBreakdown();
     if (options.timing) |timing| timing.finish(procedures_started_ns, .procedure_specialization);
 
+    // Wave 2: layout requests lower types serially and discover no
+    // specializations, so the queue must still be empty afterward.
     const layouts_started_ns = if (options.timing) |timing| timing.start() else 0;
     for (roots.layout_requests) |checked_ty| {
         try builder.lowerLayoutRequest(checked_ty);
     }
+    builder.requirePendingSpecJobsDrained();
     if (options.timing) |timing| timing.finish(layouts_started_ns, .layout_requests);
 
+    // Wave 3: static-data restoration in listed order, then a second
+    // specialization queue drain for the template bodies it discovered.
     const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
     for (roots.static_data_requests) |request| {
         try builder.lowerStaticDataRequest(request);
     }
+    try builder.drainPendingSpecJobs();
     if (options.timing) |timing| timing.finish(static_data_started_ns, .static_data_requests);
 
     const finalization_started_ns = if (options.timing) |timing| timing.start() else 0;
@@ -1889,6 +1903,35 @@ const TemplateReservation = struct {
     symbol: Common.Symbol,
 };
 
+/// How a template specialization's body is produced once its identity is
+/// reserved. Callers that consume the callee's solved representation (roots,
+/// iterator-inline completion, restored constant functions, hosted adapter
+/// sources) lower the body immediately; a seal-time symbolic request only
+/// reserves the identity and queues the body for the scheduler's wave drain.
+const TemplateBodyScheduling = enum { immediate, queued };
+
+/// One reserved specialization whose body has not lowered yet, in the
+/// deterministic scheduler FIFO. Every field is durable for the builder's
+/// lifetime: evidence lives in the evidence arena, the requested type is
+/// sealed, and the reservation already owns its global ids, so the job
+/// outlives the requesting graph and draft.
+const PendingSpecJob = struct {
+    /// Logical enqueue order across the whole build. The inline executor
+    /// accepts jobs strictly in this order; a parallel executor later buffers
+    /// specialization-body outputs until their dispatch index is next.
+    dispatch_index: u64,
+    spec: Ast.SpecId,
+    reservation: TemplateReservation,
+    fn_template: Ast.FnTemplate,
+    template_ref: names.ProcTemplate,
+    method_scope: checked.ModuleId,
+    source_fn_ty: checked.CheckedTypeId,
+    source_fn_key: names.TypeDigest,
+    fn_ty: Type.TypeId,
+    evidence: []const SpecEvidence,
+    signature_relation: Ast.SignatureRelation,
+};
+
 /// One root body lowered into a shared root batch. Its checked type graph is
 /// still instantiated in a fresh scope; only the graph and draft stores are
 /// shared so an exact specialization discovered by an earlier root can be
@@ -2162,6 +2205,12 @@ const Builder = struct {
     /// owner remaps exactly these entries on commit and evicts exactly these
     /// on abort, so neither path scales with the whole cache.
     active_type_transaction_addresses: std.ArrayList(CheckedTypeAddress) = .empty,
+    /// Deterministic FIFO of reserved specializations awaiting body lowering.
+    /// Wave drains execute entries in dispatch order; an executing body may
+    /// append new entries, which the same drain then reaches.
+    pending_spec_jobs: std.ArrayList(PendingSpecJob) = .empty,
+    pending_spec_jobs_head: usize = 0,
+    next_spec_dispatch_index: u64 = 0,
     /// Exact constructor-keyed interning for parser result types synthesized
     /// after graph sealing. These types never mutate, so the reused ids are
     /// valid for the lifetime of the program builder.
@@ -2369,6 +2418,7 @@ const Builder = struct {
         self.lowered_templates.deinit();
         self.spec_store.deinit();
         self.uninhabited_type_cache.deinit();
+        self.pending_spec_jobs.deinit(self.allocator);
         self.active_type_transaction_addresses.deinit(self.allocator);
         self.generated_try_types.deinit();
         self.parse_result_ok_types.deinit();
@@ -3327,6 +3377,7 @@ const Builder = struct {
             null,
             null,
             root_batch,
+            .immediate,
         );
     }
 
@@ -3459,6 +3510,7 @@ const Builder = struct {
         precomputed_request_digest: ?names.TypeDigest,
         retained_topology: ?EvidenceChain,
         root_batch: ?*RootTemplateBatch,
+        body_scheduling: TemplateBodyScheduling,
     ) Allocator.Error!Ast.DefId {
         var lookup_timing_scope = ProcedureTimingScope.begin(self.timing, .lookup_reservation);
         defer lookup_timing_scope.end();
@@ -3507,7 +3559,38 @@ const Builder = struct {
                     self.promoteFnSignatureRelation(hit.fn_id, signature_relation);
                     return existing.def;
                 },
-                .reserved => Common.invariant("Monotype procedure specialization reached lowering with a reserved record"),
+                .reserved => {
+                    self.promoteFnSignatureRelation(hit.fn_id, signature_relation);
+                    switch (body_scheduling) {
+                        // A queued request reuses the reserved id; the body
+                        // is already owned by the queue.
+                        .queued => return existing.def,
+                        // An immediate caller consumes the callee's solved
+                        // representation, so it claims the queued body and
+                        // lowers it now with the reservation's own winning
+                        // seed. The queued job later observes the ready
+                        // record and is skipped instead of re-lowered.
+                        .immediate => {
+                            const job = self.pendingSpecJobFor(hit.fn_id) orelse
+                                Common.invariant("reserved Monotype specialization had no queued body to claim");
+                            self.spec_store.markLowering(job.spec);
+                            try self.completeTemplateReservation(
+                                job.reservation,
+                                job.fn_template,
+                                job.template_ref,
+                                self.moduleForId(job.method_scope),
+                                job.source_fn_ty,
+                                job.source_fn_key,
+                                job.fn_ty,
+                                job.evidence,
+                                null,
+                                job.signature_relation,
+                                null,
+                            );
+                            return existing.def;
+                        },
+                    }
+                },
             }
         } else {
             if (request_accounting == .count) self.count("template_misses");
@@ -3521,7 +3604,8 @@ const Builder = struct {
             fn_template.const_evidence_frame_head = stored_evidence.head;
         }
 
-        const reservation: TemplateReservation = blk: {
+        const ReservedSpec = struct { reservation: TemplateReservation, spec: Ast.SpecId };
+        const reserved: ReservedSpec = blk: {
             const symbol = self.symbols.fresh();
             try self.registerProcDebugNameForTemplate(symbol, view, template_ref);
             const fn_id = try self.program.addFn(fn_template);
@@ -3545,7 +3629,10 @@ const Builder = struct {
                 lower_fn_ty,
                 request_digest,
                 fn_id,
-                .lowering,
+                switch (body_scheduling) {
+                    .immediate => .lowering,
+                    .queued => .reserved,
+                },
             );
             try self.lowered_templates.put(fn_id, .{
                 .def = def_id,
@@ -3554,11 +3641,81 @@ const Builder = struct {
                 .topology = stored_source_topology,
             });
             break :blk .{
-                .def = def_id,
-                .fn_id = fn_id,
-                .symbol = symbol,
+                .reservation = .{
+                    .def = def_id,
+                    .fn_id = fn_id,
+                    .symbol = symbol,
+                },
+                .spec = spec,
             };
         };
+        const reservation = reserved.reservation;
+
+        switch (body_scheduling) {
+            .immediate => {},
+            .queued => {
+                if (root_batch != null) {
+                    Common.invariant("queued Monotype specialization request cannot join a root batch");
+                }
+                if (retained_topology != null) {
+                    Common.invariant("queued Monotype specialization request cannot carry a retained lexical topology");
+                }
+                self.countBodyDiagnostic("spec_jobs_enqueued");
+                const dispatch_index = self.next_spec_dispatch_index;
+                self.next_spec_dispatch_index += 1;
+                try self.pending_spec_jobs.append(self.allocator, .{
+                    .dispatch_index = dispatch_index,
+                    .spec = reserved.spec,
+                    .reservation = reservation,
+                    .fn_template = fn_template,
+                    .template_ref = template_ref,
+                    .method_scope = method_scope.key,
+                    .source_fn_ty = source_fn_ty,
+                    .source_fn_key = source_fn_key,
+                    .fn_ty = lower_fn_ty,
+                    .evidence = spec_evidence,
+                    .signature_relation = signature_relation,
+                });
+                return reservation.def;
+            },
+        }
+
+        try self.completeTemplateReservation(
+            reservation,
+            fn_template,
+            template_ref,
+            method_scope,
+            source_fn_ty,
+            source_fn_key,
+            lower_fn_ty,
+            spec_evidence,
+            retained_topology,
+            signature_relation,
+            root_batch,
+        );
+        return reservation.def;
+    }
+
+    /// Lower the body (or hosted completion) for a specialization whose
+    /// identity, ids, and seed are already reserved. Runs immediately for
+    /// direct callers and root batches, and from the scheduler's wave drain
+    /// for queued symbolic requests.
+    fn completeTemplateReservation(
+        self: *Builder,
+        reservation: TemplateReservation,
+        fn_template: Ast.FnTemplate,
+        template_ref: names.ProcTemplate,
+        method_scope: ModuleView,
+        source_fn_ty: checked.CheckedTypeId,
+        source_fn_key: names.TypeDigest,
+        lower_fn_ty: Type.TypeId,
+        spec_evidence: []const SpecEvidence,
+        retained_topology: ?EvidenceChain,
+        signature_relation: Ast.SignatureRelation,
+        root_batch: ?*RootTemplateBatch,
+    ) Allocator.Error!void {
+        const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
+        const template = view.templates.get(template_ref.template);
 
         switch (template.target) {
             .hosted => {
@@ -3605,6 +3762,7 @@ const Builder = struct {
                         null,
                         null,
                         null,
+                        .immediate,
                     );
                     const adapter_template = Ast.FnTemplate{
                         .fn_def = .{ .checked_generated = template_ref },
@@ -3633,7 +3791,7 @@ const Builder = struct {
                     });
                     self.program.setFnSource(reservation.fn_id, adapter_template);
                     try self.markTemplateReady(reservation.fn_id, lower_fn_ty);
-                    return reservation.def;
+                    return;
                 }
                 try self.requireHostedExternAtDeclaredAbi(
                     view,
@@ -3652,7 +3810,7 @@ const Builder = struct {
                 });
                 self.program.setFnSource(reservation.fn_id, hosted_fn_template);
                 try self.markTemplateReady(reservation.fn_id, lower_fn_ty);
-                return reservation.def;
+                return;
             },
             .roc,
             .intrinsic,
@@ -3678,7 +3836,7 @@ const Builder = struct {
                 signature_relation,
             );
             try batch.pending.append(self.allocator, pending);
-            return reservation.def;
+            return;
         }
 
         const graph = try self.createGraph();
@@ -3718,7 +3876,72 @@ const Builder = struct {
         var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
         defer completion_timing_scope.end();
         try self.finishReservedTemplateBody(pending, sealed.ids, sealed.root_ty.?);
-        return reservation.def;
+    }
+
+    /// The queued job whose reservation owns `fn_id`, or null when that body
+    /// has already been claimed and completed. Claims are rare (bounded by
+    /// iterator-inline occurrences), so a linear scan of the outstanding
+    /// window is cheaper than an index.
+    fn pendingSpecJobFor(self: *Builder, fn_id: Ast.FnId) ?PendingSpecJob {
+        for (self.pending_spec_jobs.items[self.pending_spec_jobs_head..]) |job| {
+            if (job.reservation.fn_id == fn_id) return job;
+        }
+        return null;
+    }
+
+    /// Execute queued specialization bodies in dispatch order until the wave
+    /// drains. Bodies executed here may enqueue further requests; those join
+    /// the same FIFO and are reached by this same loop, in enqueue order.
+    fn drainPendingSpecJobs(self: *Builder) Allocator.Error!void {
+        while (self.pending_spec_jobs_head < self.pending_spec_jobs.items.len) {
+            const job = self.pending_spec_jobs.items[self.pending_spec_jobs_head];
+            self.pending_spec_jobs_head += 1;
+            try self.executePendingSpecJob(job);
+        }
+        self.pending_spec_jobs.clearRetainingCapacity();
+        self.pending_spec_jobs_head = 0;
+    }
+
+    fn requirePendingSpecJobsDrained(self: *Builder) void {
+        if (self.pending_spec_jobs_head != self.pending_spec_jobs.items.len) {
+            Common.invariant("Monotype specialization queue was not drained at a wave boundary");
+        }
+    }
+
+    fn executePendingSpecJob(self: *Builder, job: PendingSpecJob) Allocator.Error!void {
+        if (self.active_graph != null) {
+            Common.invariant("Monotype specialization job executed during an active body draft");
+        }
+        switch (self.spec_store.recordStatus(job.spec)) {
+            // An immediate caller claimed and completed this reservation after
+            // it was queued; the queued duplicate is skipped, not re-lowered.
+            .ready => {
+                self.countBodyDiagnostic("spec_jobs_skipped_ready");
+                if (std.debug.runtime_safety) {
+                    const existing = self.lowered_templates.get(job.reservation.fn_id) orelse
+                        Common.invariant("completed Monotype specialization lost its lowering state");
+                    std.debug.assert(specEvidenceVectorEql(existing.evidence, job.evidence));
+                }
+                return;
+            },
+            .reserved => {},
+            .lowering => Common.invariant("queued Monotype specialization was already lowering at dispatch"),
+        }
+        self.countBodyDiagnostic("spec_jobs_executed");
+        self.spec_store.markLowering(job.spec);
+        try self.completeTemplateReservation(
+            job.reservation,
+            job.fn_template,
+            job.template_ref,
+            self.moduleForId(job.method_scope),
+            job.source_fn_ty,
+            job.source_fn_key,
+            job.fn_ty,
+            job.evidence,
+            null,
+            job.signature_relation,
+            null,
+        );
     }
 
     fn lowerReservedTemplateBodyIntoDraft(
@@ -5687,6 +5910,7 @@ const Builder = struct {
             null,
             null,
             null,
+            .immediate,
         );
         return .{ .local = self.defFnId(def) };
     }
@@ -5776,6 +6000,7 @@ const Builder = struct {
                     null,
                     retained,
                     null,
+                    .immediate,
                 );
                 return self.defFnId(def);
             },
@@ -7031,6 +7256,7 @@ const Builder = struct {
         body_draft: *BodyDraftStore,
         spec_index: usize,
         fn_ty: Type.TypeId,
+        body_scheduling: TemplateBodyScheduling,
     ) Allocator.Error!void {
         if (spec_index >= body_draft.template_specs.items.len) {
             Common.invariant("deferred template specialization index was outside the draft table");
@@ -7101,6 +7327,7 @@ const Builder = struct {
                 request_digest,
                 null,
                 null,
+                body_scheduling,
             );
             break :blk .{ .local = self.defFnId(def) };
         };
@@ -7126,7 +7353,9 @@ const Builder = struct {
             if (state != .deferred) continue;
             const request_fn_node = body_draft.template_specs.items[spec_index].request_fn_node;
             const fn_ty = try sealer.sealNode(request_fn_node);
-            try self.resolveDeferredTemplateSpecAtType(body_draft, spec_index, fn_ty);
+            // Seal-time requests are symbolic: they reserve the callee's id
+            // for call-site patching and queue the body for the wave drain.
+            try self.resolveDeferredTemplateSpecAtType(body_draft, spec_index, fn_ty, .queued);
         }
     }
 
@@ -8796,13 +9025,13 @@ const Builder = struct {
         requested_fn_ty: Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
         const hosted_try = capability orelse return null;
-        if (self.sameMonoType(declared_fn_ty, requested_fn_ty)) return null;
+        if (try self.sameMonoType(declared_fn_ty, requested_fn_ty)) return null;
         const declared = self.functionShape(declared_fn_ty, "hosted declared type was not a function");
         const requested = self.functionShape(requested_fn_ty, "hosted requested type was not a function");
-        if (self.sameMonoType(declared.ret, requested.ret)) return null;
+        if (try self.sameMonoType(declared.ret, requested.ret)) return null;
 
-        const declared_try = self.hostedTryInfoOrNull(hosted_try, declared.ret) orelse return null;
-        const requested_try = self.hostedTryInfoOrNull(hosted_try, requested.ret) orelse return null;
+        const declared_try = (try self.hostedTryInfoOrNull(hosted_try, declared.ret)) orelse return null;
+        const requested_try = (try self.hostedTryInfoOrNull(hosted_try, requested.ret)) orelse return null;
 
         const declared_args = self.program.types.span(declared.args);
         const requested_args = self.program.types.span(requested.args);
@@ -8871,7 +9100,7 @@ const Builder = struct {
             const arg = GuardedList.at(adapter_args, index);
             const source_arg_ty = GuardedList.at(source_args, index);
             const target_arg_ty = GuardedList.at(target_args, index);
-            if (!self.sameMonoType(arg.ty, source_arg_ty) or !self.sameMonoType(arg.ty, target_arg_ty)) {
+            if (!try self.sameMonoType(arg.ty, source_arg_ty) or !try self.sameMonoType(arg.ty, target_arg_ty)) {
                 Common.invariant("hosted Try adapter argument type differed from source or target function type");
             }
             call_args[index] = try self.localExpr(arg.local, arg.ty);
@@ -8894,14 +9123,14 @@ const Builder = struct {
         source_try_ty: Type.TypeId,
         target_try_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        if (self.sameMonoType(source_try_ty, target_try_ty)) return source_expr;
+        if (try self.sameMonoType(source_try_ty, target_try_ty)) return source_expr;
 
-        const source_info = self.hostedTryInfo(capability, source_try_ty);
-        const target_info = self.hostedTryInfo(capability, target_try_ty);
-        if (!self.sameMonoType(source_info.ok_ty, target_info.ok_ty)) {
+        const source_info = try self.hostedTryInfo(capability, source_try_ty);
+        const target_info = try self.hostedTryInfo(capability, target_try_ty);
+        if (!try self.sameMonoType(source_info.ok_ty, target_info.ok_ty)) {
             Common.invariant("Try adapter changed Ok type");
         }
-        if (!self.errorRowIsIncludedIn(source_info.err_ty, target_info.err_ty)) {
+        if (!try self.errorRowIsIncludedIn(source_info.err_ty, target_info.err_ty)) {
             Common.invariant("Try adapter error row was not included in target row");
         }
 
@@ -8940,7 +9169,7 @@ const Builder = struct {
         source_err_ty: Type.TypeId,
         target_err_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        if (self.sameMonoType(source_err_ty, target_err_ty)) return source_expr;
+        if (try self.sameMonoType(source_err_ty, target_err_ty)) return source_expr;
 
         const source_tags = self.tagUnionTags(source_err_ty);
         if (source_tags.len == 0) {
@@ -8968,7 +9197,7 @@ const Builder = struct {
             for (0..source_payload_tys.len) |payload_index| {
                 const source_payload_ty = GuardedList.at(source_payload_tys, payload_index);
                 const target_payload_ty = GuardedList.at(target_payload_tys, payload_index);
-                if (!self.sameMonoType(source_payload_ty, target_payload_ty)) {
+                if (!try self.sameMonoType(source_payload_ty, target_payload_ty)) {
                     Common.invariant("Try adapter error tag payload type differed in target row");
                 }
                 const local = try self.program.addLocal(self.symbols.fresh(), source_payload_ty);
@@ -8991,12 +9220,12 @@ const Builder = struct {
     }
 
     fn hostedTryOkExpr(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId, value_expr: Ast.ExprId) Allocator.Error!Ast.ExprId {
-        const info = self.hostedTryInfo(capability, try_ty);
+        const info = try self.hostedTryInfo(capability, try_ty);
         return try self.tagValueExpr(try_ty, info.ok_tag, &[_]Ast.ExprId{value_expr});
     }
 
     fn hostedTryErrExpr(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId, err_expr: Ast.ExprId) Allocator.Error!Ast.ExprId {
-        const info = self.hostedTryInfo(capability, try_ty);
+        const info = try self.hostedTryInfo(capability, try_ty);
         return try self.tagValueExpr(try_ty, info.err_tag, &[_]Ast.ExprId{err_expr});
     }
 
@@ -9020,12 +9249,12 @@ const Builder = struct {
         return tag_expr;
     }
 
-    fn hostedTryInfo(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId) HostedTryInfo {
-        return self.hostedTryInfoOrNull(capability, try_ty) orelse
+    fn hostedTryInfo(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId) Allocator.Error!HostedTryInfo {
+        return (try self.hostedTryInfoOrNull(capability, try_ty)) orelse
             Common.invariant("hosted Try capability did not match its Monotype result");
     }
 
-    fn hostedTryInfoOrNull(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId) ?HostedTryInfo {
+    fn hostedTryInfoOrNull(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId) Allocator.Error!?HostedTryInfo {
         const named = switch (self.program.types.get(try_ty)) {
             .named => |named| named,
             .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
@@ -9049,8 +9278,8 @@ const Builder = struct {
         const args = self.program.types.span(named.args);
         const ok_ty = GuardedList.at(args, capability.ok_type_arg_index);
         const err_ty = GuardedList.at(args, capability.err_type_arg_index);
-        if (!self.sameMonoType(ok_ty, GuardedList.at(ok_payloads, 0)) or
-            !self.sameMonoType(err_ty, GuardedList.at(err_payloads, 0)))
+        if (!try self.sameMonoType(ok_ty, GuardedList.at(ok_payloads, 0)) or
+            !try self.sameMonoType(err_ty, GuardedList.at(err_payloads, 0)))
         {
             Common.invariant("hosted Try capability payload mapping disagreed with its nominal arguments");
         }
@@ -9139,8 +9368,8 @@ const Builder = struct {
         return result.root;
     }
 
-    fn errorRowIsIncludedIn(self: *Builder, source_err_ty: Type.TypeId, target_err_ty: Type.TypeId) bool {
-        if (self.sameMonoType(source_err_ty, target_err_ty)) return true;
+    fn errorRowIsIncludedIn(self: *Builder, source_err_ty: Type.TypeId, target_err_ty: Type.TypeId) Allocator.Error!bool {
+        if (try self.sameMonoType(source_err_ty, target_err_ty)) return true;
         const source_tags = self.tagUnionTags(source_err_ty);
         for (0..source_tags.len) |index| {
             const source_tag = GuardedList.at(source_tags, index);
@@ -9151,7 +9380,7 @@ const Builder = struct {
             for (0..source_payloads.len) |payload_index| {
                 const source_payload = GuardedList.at(source_payloads, payload_index);
                 const target_payload = GuardedList.at(target_payloads, payload_index);
-                if (!self.sameMonoType(source_payload, target_payload)) return false;
+                if (!try self.sameMonoType(source_payload, target_payload)) return false;
             }
         }
         return true;
@@ -9187,11 +9416,15 @@ const Builder = struct {
         };
     }
 
-    fn sameMonoType(self: *Builder, a: Type.TypeId, b: Type.TypeId) bool {
+    /// Whether two Monotypes describe the same type. This is the structural
+    /// `typeEql` relation rather than a stored-identity digest comparison:
+    /// checking may present one unified type both alias-wrapped and unwrapped
+    /// (a nominal's type argument can keep an alias name that the backing
+    /// row's payload resolved away), and a digest keeps aliases opaque, so
+    /// digest equality would report such equal types as different.
+    fn sameMonoType(self: *Builder, a: Type.TypeId, b: Type.TypeId) Allocator.Error!bool {
         if (a == b) return true;
-        const a_digest = self.program.types.typeDigest(&self.program.names, a);
-        const b_digest = self.program.types.typeDigest(&self.program.names, b);
-        return std.mem.eql(u8, a_digest.bytes[0..], b_digest.bytes[0..]);
+        return try self.program.types.typeEql(&self.program.names, a, b);
     }
 };
 
@@ -25062,7 +25295,7 @@ const BodyContext = struct {
         if (!self.sameType(source_ret_info.ok_ty, target_ret_info.ok_ty)) {
             Common.invariant("custom parser result Ok type differed from derived parser result Ok type");
         }
-        if (!self.builder.errorRowIsIncludedIn(source_ret_info.err_ty, target_ret_info.err_ty)) {
+        if (!try self.builder.errorRowIsIncludedIn(source_ret_info.err_ty, target_ret_info.err_ty)) {
             Common.invariant("custom parser error row was not included in derived parser error row");
         }
         const parse_ok_fields = switch (self.builder.shapeContent(source_ret_info.ok_ty)) {
@@ -25111,7 +25344,7 @@ const BodyContext = struct {
         if (!self.sameType(source_info.ok_ty, target_info.ok_ty)) {
             Common.invariant("parser Try error-row injection changed the Ok type");
         }
-        if (!self.builder.errorRowIsIncludedIn(source_info.err_ty, target_info.err_ty)) {
+        if (!try self.builder.errorRowIsIncludedIn(source_info.err_ty, target_info.err_ty)) {
             Common.invariant("parser Try error-row injection source was not included in target");
         }
 
@@ -28385,7 +28618,9 @@ const BodyContext = struct {
         if (!try self.graph.typeIsResolved(spec.request_fn_node)) return current_node;
 
         const request_fn_ty = try self.activeTypeFromNode(spec.request_fn_node);
-        try self.builder.resolveDeferredTemplateSpecAtType(self.draft, spec_index, request_fn_ty);
+        // Iterator-inline completion consumes the callee's solved private
+        // representation, so the body must lower now rather than queue.
+        try self.builder.resolveDeferredTemplateSpecAtType(self.draft, spec_index, request_fn_ty, .immediate);
         self.draft.template_specs.items[spec_index].eager_resolution = .{
             .request_fn_node = spec.request_fn_node,
             .fn_ty = request_fn_ty,
@@ -50432,17 +50667,17 @@ test "hosted Try adapter narrows requested private representations by declared l
     const source = builder.functionShape(source_fn, "test source was not a function");
     const source_args = program.types.span(source.args);
     try std.testing.expectEqual(@as(usize, 1), source_args.len);
-    try std.testing.expect(builder.sameMonoType(GuardedList.at(source_args, 0), private_box));
-    const source_try = builder.hostedTryInfo(capability, source.ret);
-    try std.testing.expect(builder.sameMonoType(source_try.ok_ty, private_box));
+    try std.testing.expect(try builder.sameMonoType(GuardedList.at(source_args, 0), private_box));
+    const source_try = try builder.hostedTryInfo(capability, source.ret);
+    try std.testing.expect(try builder.sameMonoType(source_try.ok_ty, private_box));
     const source_err_tags = builder.tagUnionTags(source_try.err_ty);
     try std.testing.expectEqual(@as(usize, 1), source_err_tags.len);
     const source_host_err = GuardedList.at(source_err_tags, 0);
     try std.testing.expectEqual(host_err, source_host_err.name);
     const source_payloads = program.types.span(source_host_err.payloads);
     try std.testing.expectEqual(@as(usize, 1), source_payloads.len);
-    try std.testing.expect(builder.sameMonoType(GuardedList.at(source_payloads, 0), private_opaque));
-    try std.testing.expect(builder.errorRowIsIncludedIn(source_try.err_ty, requested_err));
+    try std.testing.expect(try builder.sameMonoType(GuardedList.at(source_payloads, 0), private_opaque));
+    try std.testing.expect(try builder.errorRowIsIncludedIn(source_try.err_ty, requested_err));
 
     const impostor_def = Type.TypeDef{
         .module = module_identity,
@@ -50460,6 +50695,125 @@ test "hosted Try adapter narrows requested private representations by declared l
         @as(?Type.TypeId, null),
         try builder.hostedTryAdapterSourceType(capability, impostor_declared_fn, impostor_requested_fn),
     );
+}
+
+test "hosted Try info accepts alias-wrapped nominal arguments over unwrapped backing payloads" {
+    // Regression test: checking may present one unified type both
+    // alias-wrapped and unwrapped—a hosted declaration like basic-cli's
+    // `cmd_exec_output! : Cmd => Try(CmdOutputSuccess, [NonZeroExitCode(CmdOutputFailure), ..])`
+    // lowered with the `Try` nominal's error argument still naming the
+    // `CmdOutputFailure` alias while the backing row's payload had resolved
+    // it to its record. Recognizing the capability mapping must use type
+    // equality (alias-transparent), not stored-identity digests, or lowering
+    // dies with "hosted Try capability payload mapping disagreed with its
+    // nominal arguments".
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator);
+    defer program.deinit();
+
+    var builder: Builder = undefined;
+    builder.allocator = allocator;
+    builder.program = &program;
+
+    const module_identity = try program.names.internModuleIdentity(&([_]u8{0xB2} ** 32));
+    const try_def = Type.TypeDef{
+        .module = module_identity,
+        .type_name = try program.names.internTypeName("Try"),
+    };
+    const failure_alias_def = Type.TypeDef{
+        .module = module_identity,
+        .type_name = try program.names.internTypeName("HostFailure"),
+    };
+    const try_named = Type.NamedType{ .module = .{}, .ty = @enumFromInt(1) };
+    const failure_named = Type.NamedType{ .module = .{}, .ty = @enumFromInt(2) };
+
+    const i64_ty = try program.types.add(.{ .primitive = .i64 });
+    const str_ty = try program.types.add(.{ .primitive = .str });
+
+    const failure_record = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &.{.{
+        .name = try program.names.internRecordFieldLabel("exit_code"),
+        .ty = i64_ty,
+        .default = null,
+    }}) });
+    const failure_alias = try program.types.add(.{ .named = .{
+        .named_type = failure_named,
+        .def = failure_alias_def,
+        .kind = .alias,
+        .args = .empty(),
+        .backing = .{ .ty = failure_record, .use = .inspectable },
+    } });
+
+    const host_err = try program.names.internTagLabel("HostErr");
+    const caller_err = try program.names.internTagLabel("CallerErr");
+    const err_row_with_alias = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{.{
+        .name = host_err,
+        .checked_name = host_err,
+        .payloads = try program.types.addSpan(&.{failure_alias}),
+    }}) });
+    const err_row_bare = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{.{
+        .name = host_err,
+        .checked_name = host_err,
+        .payloads = try program.types.addSpan(&.{failure_record}),
+    }}) });
+
+    const ok_name = try program.names.internTagLabel("Ok");
+    const err_name = try program.names.internTagLabel("Err");
+    const capability = HostedTryAdapterCapability{
+        .def = try_def,
+        .ok_tag = ok_name,
+        .err_tag = err_name,
+        .ok_type_arg_index = 0,
+        .err_type_arg_index = 1,
+    };
+    const declared_backing = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{
+        .{
+            .name = ok_name,
+            .checked_name = ok_name,
+            .payloads = try program.types.addSpan(&.{str_ty}),
+        },
+        .{
+            .name = err_name,
+            .checked_name = err_name,
+            .payloads = try program.types.addSpan(&.{err_row_bare}),
+        },
+    }) });
+    const declared_try = try program.types.add(.{ .named = .{
+        .named_type = try_named,
+        .def = try_def,
+        .kind = .nominal,
+        .args = try program.types.addSpan(&.{ str_ty, err_row_with_alias }),
+        .backing = .{ .ty = declared_backing, .use = .inspectable },
+    } });
+
+    try std.testing.expect(try builder.sameMonoType(failure_alias, failure_record));
+    const declared_info = (try builder.hostedTryInfoOrNull(capability, declared_try)) orelse
+        return error.TestExpectedEqual;
+    try std.testing.expect(try builder.sameMonoType(declared_info.err_ty, err_row_bare));
+
+    // A request that widens the declared error row must still produce an
+    // adapter source type from the alias-carrying declared type.
+    const requested_err = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{
+        .{
+            .name = host_err,
+            .checked_name = host_err,
+            .payloads = try program.types.addSpan(&.{failure_record}),
+        },
+        .{
+            .name = caller_err,
+            .checked_name = caller_err,
+            .payloads = try program.types.addSpan(&.{str_ty}),
+        },
+    }) });
+    const requested_try = try builder.hostedTryTypeLike(capability, declared_try, str_ty, requested_err);
+    const declared_fn = try builder.closedFunctionType(&.{i64_ty}, declared_try);
+    const requested_fn = try builder.closedFunctionType(&.{i64_ty}, requested_try);
+    const source_fn = (try builder.hostedTryAdapterSourceType(capability, declared_fn, requested_fn)) orelse
+        return error.TestExpectedEqual;
+    const source = builder.functionShape(source_fn, "test source was not a function");
+    const source_try = try builder.hostedTryInfo(capability, source.ret);
+    const source_err_tags = builder.tagUnionTags(source_try.err_ty);
+    try std.testing.expectEqual(@as(usize, 1), source_err_tags.len);
+    try std.testing.expectEqual(host_err, GuardedList.at(source_err_tags, 0).name);
 }
 
 test "hosted extern boundary admits only the declared host ABI type" {

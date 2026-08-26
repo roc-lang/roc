@@ -718,6 +718,7 @@ const DefaultPlatformCompilerRtObjects = struct {
             .x64elf,
             .x64v1mac,
             .x64v1win,
+            .x64v1mingw,
             .x64v1freebsd,
             .x64v1openbsd,
             .x64v1netbsd,
@@ -725,12 +726,11 @@ const DefaultPlatformCompilerRtObjects = struct {
             .x64v1glibc,
             .x64v1linux,
             .x64v1elf,
-            .x64v1mingw,
             .arm64v1win,
+            .arm64v1mingw,
             .arm64v1linux,
             .arm64v1musl,
             .arm64v1glibc,
-            .arm64v1mingw,
             .arm32linux,
             .arm32musl,
             .wasm32,
@@ -11282,6 +11282,15 @@ fn buildCliTestPlan(
     }
 
     for (modules, 0..) |module, module_index| {
+        // `roc test` runs the `expect`s the developer wrote. A dependency the
+        // build downloaded, and the platforms embedded in the compiler, carry
+        // tests belonging to whoever published them, so their roots are not
+        // part of this run. Dependencies reached through filesystem paths are
+        // the developer's own sources and are tested alongside the root.
+        switch (module.package_origin) {
+            .root, .local_path_dependency => {},
+            .fetched, .compiler_owned => continue,
+        }
         const artifact = module.semantic.checked_artifact orelse continue;
         const test_roots = try collectTestRootRequests(ctx.gpa, artifact);
         errdefer ctx.gpa.free(test_roots);

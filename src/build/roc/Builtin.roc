@@ -229,10 +229,23 @@ Builtin :: [].{
 			encode_dict : JsonEncoding, JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)), (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_dict = |_, state, count, write_entries| JsonEncoding.encode_dict(state, count, write_entries)
 
-			to_str : a -> Str
+			## Names the requirement that a value can be written as JSON, so a
+			## signature can say "JSON-encodable" without naming the encoder's
+			## internal format and output-state types.
+			a.Encodable(err) :
 				where [
-					a.encoder_for : JsonEncoding -> (a, JsonEncodeState -> Try(JsonEncodeState, [])),
+					a.encoder_for : JsonEncoding -> (a, JsonEncodeState -> Try(JsonEncodeState, err)),
 				]
+
+			## Names the requirement that a value can be read from JSON, so a
+			## signature can say "JSON-parseable" without naming the parser's
+			## internal format and cursor types.
+			a.Parseable(errs) :
+				where [
+					a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, errs)),
+				]
+
+			to_str : a -> Str where [a.Encodable([])]
 			to_str = |value| {
 				Shape : a
 				encode_shape = Shape.encoder_for(JsonEncoding.Default)
@@ -245,10 +258,7 @@ Builtin :: [].{
 			## be represented in JSON. For example, `F32` and `F64` values can be
 			## finite numbers, `NaN`, positive infinity, or negative infinity, but
 			## JSON can only represent the finite number case.
-			to_str_try : a -> Try(Str, err)
-				where [
-					a.encoder_for : JsonEncoding -> (a, JsonEncodeState -> Try(JsonEncodeState, err)),
-				]
+			to_str_try : a -> Try(Str, err) where [a.Encodable(err)]
 			to_str_try = |value| {
 				Shape : a
 				encode_shape = Shape.encoder_for(JsonEncoding.Default)
@@ -258,9 +268,7 @@ Builtin :: [].{
 			}
 
 			parse : Str -> Try(a, [InvalidJson(Str), ..errs])
-				where [
-					a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..errs])),
-				]
+				where [a.Parseable([InvalidJson(Str), ..errs])]
 			parse = |json| {
 				Shape : a
 				parse_shape = Shape.parser_for(JsonEncoding.Default)
@@ -277,9 +285,7 @@ Builtin :: [].{
 			}
 
 			parse_trailing_commas : Str -> Try(a, [InvalidJson(Str), ..errs])
-				where [
-					a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..errs])),
-				]
+				where [a.Parseable([InvalidJson(Str), ..errs])]
 			parse_trailing_commas = |json| {
 				Shape : a
 				parse_shape = Shape.parser_for(JsonEncoding.TrailingCommas)
@@ -296,9 +302,7 @@ Builtin :: [].{
 			}
 
 			parser_camel : () -> (Str -> Try(a, [InvalidJson(Str), ..errs]))
-				where [
-					a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..errs])),
-				]
+				where [a.Parseable([InvalidJson(Str), ..errs])]
 			parser_camel = || {
 				Shape : a
 				parse_shape = Shape.parser_for(JsonEncoding.CamelCase)
@@ -2098,10 +2102,17 @@ Builtin :: [].{
 		}
 
 		HttpHeader :: {}.{
-			parser_for : () -> (Str -> Try(output, [BadHeader, ..errs]))
+
+			## Names the requirement that a value can be read from HTTP headers, so
+			## a signature can say "header-parseable" without naming the parser's
+			## internal format and cursor types.
+			output.Parseable(errs) :
 				where [
-					output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, [BadHeader, ..errs])),
+					output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, errs)),
 				]
+
+			parser_for : () -> (Str -> Try(output, [BadHeader, ..errs]))
+				where [output.Parseable([BadHeader, ..errs])]
 			parser_for = || {
 				Output : output
 				parse_output = Output.parser_for(HttpHeaderEncoding.Caseless)
@@ -2113,9 +2124,7 @@ Builtin :: [].{
 			}
 
 			parse : Str -> Try(output, [BadHeader, ..errs])
-				where [
-					output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, [BadHeader, ..errs])),
-				]
+				where [output.Parseable([BadHeader, ..errs])]
 			parse = |raw| {
 				Output : output
 
@@ -3564,6 +3573,12 @@ Builtin :: [].{
 		## This means the #U64 this function returns can always be safely converted to #I64 or #I32, depending on the target.
 		len : List(_item) -> U64
 
+		## Returns the number of items the list can hold without triggering a memory allocation.
+		## The capacity is always greater than or equal to the [List.len], with one exception:
+		## a list of zero-sized items, such as `{}`, never allocates at all, so its capacity is
+		## always 0 no matter how many items it holds.
+		capacity : List(_item) -> U64
+
 		##  Check if the list is empty.
 		## ```roc
 		## [1, 2, 3].is_empty()
@@ -4138,10 +4153,19 @@ Builtin :: [].{
 		## expect [10, 20, 30].update(5, |x| x + 5) == Err(OutOfBounds)
 		## ```
 		update : List(a), U64, (a -> a) -> Try(List(a), [OutOfBounds, ..])
-		update = |list, index, func| if index < List.len(list) {
-			Ok(list_replace_unsafe(list, index, func(list_get_unsafe(list, index))).list)
-		} else {
-			Err(OutOfBounds)
+		update = |list, index, func| {
+			if index < List.len(list) {
+				prepared_list = list_map_prepare_reuse(list)
+				match list_map_can_reuse(prepared_list, func) {
+					1 => {
+						item = list_map_extract_unsafe(prepared_list, index)
+						Ok(list_map_write_unsafe(prepared_list, index, func(item)))
+					}
+					_ => Ok(list_replace_unsafe(prepared_list, index, func(list_get_unsafe(prepared_list, index))).list)
+				}
+			} else {
+				Err(OutOfBounds)
+			}
 		}
 
 		## Exchanges the items at the two given indices.
@@ -23140,11 +23164,11 @@ str_drop_first_bytes_unsafe = |s, count| {
 }
 
 # Implemented by the compiler. Moves the input list's ownership into the
-# returned list before List.map tests whether it can reuse the allocation.
+# returned list before a list transform tests whether it can reuse the allocation.
 list_map_prepare_reuse : List(input) -> List(input)
 
-# Implemented by the compiler. Returns 1 (otherwise 0) when List.map may reuse
-# the prepared list's allocation for its output: the input and output item
+# Implemented by the compiler. Returns 1 (otherwise 0) when a list transform may
+# reuse the prepared list's allocation for its output: the input and output item
 # layouts are interchangeable, and at runtime the list is uniquely owned and
 # not a seamless slice. Lowered to a constant 0 when the layouts are not
 # interchangeable, which lets lowering drop the in-place branch entirely.
