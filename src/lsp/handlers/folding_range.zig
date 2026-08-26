@@ -7,6 +7,7 @@ const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
 const parse = @import("parse");
 const can = @import("can");
+const pos = @import("../position.zig");
 const Token = parse.tokenize.Token;
 
 /// Handler for `textDocument/foldingRange` requests.
@@ -69,7 +70,8 @@ const FoldingRange = struct {
 /// Extract folding ranges from source code by finding matching brackets.
 fn extractFoldingRanges(allocator: std.mem.Allocator, source: []const u8) Allocator.Error![]FoldingRange {
     // Build line offset table
-    const line_offsets = buildLineOffsets(source);
+    const line_offsets = try pos.buildLineOffsets(allocator, source);
+    defer line_offsets.deinit();
 
     // Track bracket positions for folding
     var ranges: std.ArrayList(FoldingRange) = .empty;
@@ -91,7 +93,7 @@ fn extractFoldingRanges(allocator: std.mem.Allocator, source: []const u8) Alloca
 
     for (tags, regions) |tag, region| {
         const offset = region.start.offset;
-        const line = offsetToLine(offset, &line_offsets);
+        const line = line_offsets.lineAt(offset);
 
         // Opening brackets
         if (tag == .OpenCurly or tag == .OpenSquare or tag == .OpenRound) {
@@ -136,32 +138,4 @@ fn popMatchingBracket(stack: *std.ArrayList(BracketInfo), expected_open: Token.T
         }
     }
     return null;
-}
-
-const LineOffsets = struct {
-    offsets: [4096]u32,
-    count: usize,
-};
-
-fn buildLineOffsets(source: []const u8) LineOffsets {
-    var result = LineOffsets{ .offsets = undefined, .count = 0 };
-    result.offsets[0] = 0;
-    result.count = 1;
-
-    for (source, 0..) |c, i| {
-        if (c == '\n' and result.count < 4096) {
-            result.offsets[result.count] = @intCast(i + 1);
-            result.count += 1;
-        }
-    }
-    return result;
-}
-
-fn offsetToLine(offset: u32, line_offsets: *const LineOffsets) u32 {
-    var line: u32 = 0;
-    for (0..line_offsets.count) |i| {
-        if (line_offsets.offsets[i] > offset) break;
-        line = @intCast(i);
-    }
-    return line;
 }

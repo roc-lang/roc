@@ -1178,8 +1178,8 @@ pub fn compileInspectedExpr(allocator: Allocator, io: std.Io, source: []const u8
 /// capturing the Debug verifier's materialized Lambda Mono program in
 /// `materialized_out`. Compiles with the specialization cache disabled (so
 /// every function body materializes locally rather than loading as an
-/// imported shard) and the in-place List.map path off (so the materialized
-/// tree stays on the copy path a tree evaluator executes).
+/// imported shard) and the in-place list-transform paths off (so the
+/// materialized tree stays on the copy paths a tree evaluator executes).
 pub fn compileInspectedProgramWithLambdaMono(
     allocator: Allocator,
     io: std.Io,
@@ -1745,9 +1745,9 @@ const LowerToLirOptions = struct {
     tag_reachability: bool = false,
     prove_ranges: bool = false,
     /// Match optimized builds so every backend exercises the in-place
-    /// List.map path; the copy path is still covered by shared-list,
-    /// slice, and layout-mismatch cases. The Lambda Mono differential
-    /// harness disables this so its tree stays on the copy path.
+    /// List.map and List.update paths; the copy paths are still covered by
+    /// shared-list, slice, and layout-mismatch cases. The Lambda Mono
+    /// differential harness disables this so its tree stays on the copy path.
     list_in_place_map: bool = true,
     /// Specialization cache control; the differential harness disables the
     /// cache so every function body materializes locally.

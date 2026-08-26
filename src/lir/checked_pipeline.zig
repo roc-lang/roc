@@ -74,10 +74,11 @@ pub const TargetConfig = struct {
     inline_expects: InlineExpectMode = .run,
     /// Whether ARC may consume a dead Box lender while unboxing.
     consume_dead_boxes: bool = false,
-    /// Allow `List.map` to reuse a unique input list's allocation when the
-    /// input and output element layouts are interchangeable. Optimized builds
-    /// enable this; dev builds and compile-time evaluation leave it off so
-    /// the in-place branch is dropped during lowering.
+    /// Allow `List.map` and `List.update` to reuse a unique input list's
+    /// allocation. Map additionally requires interchangeable input and output
+    /// element layouts. Optimized builds enable this; dev builds and
+    /// compile-time evaluation leave it off so the in-place branches are
+    /// dropped during lowering.
     list_in_place_map: bool = false,
     /// Preserve source-level procedure names in LIR for runtime diagnostics.
     proc_debug_names: bool = false,

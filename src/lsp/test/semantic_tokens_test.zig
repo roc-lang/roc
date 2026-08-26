@@ -10,6 +10,24 @@ const SemanticToken = semantic_tokens.SemanticToken;
 const SemanticType = semantic_tokens.SemanticType;
 const LineInfo = line_info.LineInfo;
 
+test "semantic tokens do not read file imports" {
+    const allocator = std.testing.allocator;
+    const source = "import \"does-not-exist.txt\" as input : Str\nmain = input";
+
+    var info = try LineInfo.init(allocator, source);
+    defer info.deinit();
+
+    const tokens = try semantic_tokens.extractSemanticTokensWithImports(
+        allocator,
+        source,
+        &info,
+        null,
+    );
+    defer allocator.free(tokens);
+
+    try std.testing.expect(tokens.len > 0);
+}
+
 // Token tag mapping tests
 
 test "tokenTagToSemanticType maps keywords" {

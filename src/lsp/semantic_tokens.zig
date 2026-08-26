@@ -153,16 +153,6 @@ pub fn extractSemanticTokens(
     return tokens.toOwnedSlice(allocator);
 }
 
-/// Extracts semantic tokens using the Canonicalized IR for richer semantic information.
-/// Falls back to token-only extraction on canonicalization errors.
-pub fn extractSemanticTokensWithCIR(
-    allocator: std.mem.Allocator,
-    source: []const u8,
-    info: *const LineInfo,
-) Allocator.Error![]SemanticToken {
-    return extractSemanticTokensWithImports(allocator, source, info, null);
-}
-
 /// Extracts semantic tokens with cross-module import context.
 /// When imported_envs is provided, can distinguish Module.function from record.field.
 pub fn extractSemanticTokensWithImports(
@@ -197,6 +187,7 @@ pub fn extractSemanticTokensWithImports(
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
         },
+        .skip_file_import_contents = true,
     }) catch return error.OutOfMemory;
     defer canonicalizer.deinit();
 
