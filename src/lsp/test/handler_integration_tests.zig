@@ -299,6 +299,7 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "references handler honours includeDeclaration", .run = referencesHandlerHonoursIncludeDeclaration },
     .{ .name = "references handler respects shadowing", .run = referencesHandlerRespectsShadowing },
     .{ .name = "the name on an annotation is a usable starting point", .run = annotationNameResolvesLikeAnyOccurrence },
+    .{ .name = "positions are UTF-16 code units, not bytes", .run = positionsUseUtf16CodeUnits },
     .{ .name = "definition handler finds local variable definition", .run = definitionHandlerFindsLocalVariableDefinition },
     .{ .name = "definition handler returns null for undefined symbol", .run = definitionHandlerReturnsNullForUndefinedSymbol },
     .{ .name = "hover handler handles type annotation request", .run = hoverHandlerReturnsTypeInfoForTypeAnnotation },
@@ -1317,6 +1318,75 @@ pub fn annotationNameResolvesLikeAnyOccurrence() integration_spec.SpecError!void
     try std.testing.expect(try hasEdit(edits, 2, 0, 6, "triple"));
     try std.testing.expect(try hasEdit(edits, 3, 0, 6, "triple"));
     try std.testing.expect(try hasEdit(edits, 5, 7, 13, "triple"));
+}
+
+/// Verifies positions are exchanged in UTF-16 code units, as the server
+/// advertises with `positionEncoding`.
+///
+/// Reproduction from #10948. On the line below, `num` starts at UTF-16 column
+/// 27 and byte column 28, because `e` with an acute accent is two bytes and one
+/// UTF-16 unit. Reading the incoming column as a byte offset made the request
+/// miss the identifier; emitting a byte column as a UTF-16 one made rename hand
+/// the editor a range shifted one to the right, which replaces `um ` instead of
+/// `num` and corrupts the line.
+pub fn positionsUseUtf16CodeUnits() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "utf16_positions.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    // U+00E9: two UTF-8 bytes, one UTF-16 code unit. Written as bytes because a
+    // multiline string literal does not process escapes.
+    const accented = "\xc3\xa9";
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\num = 42
+        \\
+        \\main = {{ x: "{s}", y: num }}
+    , .{ platform_path, accented });
+    defer allocator.free(source);
+
+    // `num` sits at UTF-16 column 20 on that line, and byte column 21.
+    const definition = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":4,"character":20}}}}}}
+    , .{fixture.uri});
+    defer allocator.free(definition);
+    const rename = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/rename","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":4,"character":20}},"newName":"total"}}}}
+    , .{fixture.uri});
+    defer allocator.free(rename);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{ definition, rename });
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    // Asking at the UTF-16 column finds the binding, rather than landing beside
+    // it and answering null.
+    var located = try responseById(allocator, responses, 2);
+    defer located.deinit();
+    const location = try located.result();
+    try std.testing.expect(location == .object);
+    const range = try objectField(location, "range");
+    try std.testing.expectEqual(@as(i64, 2), try integerField(try objectField(range, "start"), "line"));
+
+    // And the returned edit covers `num` itself, in UTF-16 columns.
+    var renamed = try responseById(allocator, responses, 3);
+    defer renamed.deinit();
+    const edits = try workspaceEditsFor(try renamed.result(), fixture.uri);
+    try std.testing.expect(edits == .array);
+    try std.testing.expectEqual(@as(usize, 2), edits.array.items.len);
+    try std.testing.expect(try hasEdit(edits, 2, 0, 3, "total"));
+    try std.testing.expect(try hasEdit(edits, 4, 20, 23, "total"));
 }
 
 /// Verifies goto definition locates a local variable definition.

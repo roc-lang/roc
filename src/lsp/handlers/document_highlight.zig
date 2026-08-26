@@ -7,6 +7,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
+const pos = @import("../position.zig");
 const parse = @import("parse");
 const can = @import("can");
 const Token = parse.tokenize.Token;
@@ -260,10 +261,12 @@ fn isIdentifierTag(tag: Token.Tag) bool {
 const LineOffsets = struct {
     offsets: [4096]u32,
     count: usize,
+    /// The text the offsets describe, needed to count UTF-16 columns.
+    source: []const u8,
 };
 
 fn buildLineOffsets(source: []const u8) LineOffsets {
-    var result = LineOffsets{ .offsets = undefined, .count = 0 };
+    var result = LineOffsets{ .offsets = undefined, .count = 0, .source = source };
     result.offsets[0] = 0;
     result.count = 1;
 
@@ -278,7 +281,9 @@ fn buildLineOffsets(source: []const u8) LineOffsets {
 
 fn positionToOffset(line: u32, character: u32, line_offsets: *const LineOffsets) ?u32 {
     if (line >= line_offsets.count) return null;
-    return line_offsets.offsets[line] + character;
+    const text = pos.lineText(line_offsets.source, line_offsets.offsets[0..line_offsets.count], line) orelse return null;
+    const column = pos.utf16ColumnToByteOffset(text, character) orelse return null;
+    return line_offsets.offsets[line] + column;
 }
 
 fn offsetToPosition(offset: u32, line_offsets: *const LineOffsets) Position {
@@ -288,8 +293,12 @@ fn offsetToPosition(offset: u32, line_offsets: *const LineOffsets) Position {
         line = @intCast(i);
     }
     const line_start = line_offsets.offsets[line];
+    const text = pos.lineText(line_offsets.source, line_offsets.offsets[0..line_offsets.count], line) orelse return .{
+        .line = line,
+        .character = 0,
+    };
     return .{
         .line = line,
-        .character = offset - line_start,
+        .character = pos.byteOffsetToUtf16Column(text, offset - line_start),
     };
 }

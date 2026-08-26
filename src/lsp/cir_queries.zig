@@ -21,6 +21,7 @@ const VisitAction = @import("cir_visitor.zig").VisitAction;
 const types = @import("types");
 const base = @import("base");
 const Region = base.Region;
+const pos = @import("position.zig");
 
 fn statementAnnotation(statement: CIR.Statement) ?CIR.Annotation.Idx {
     return switch (statement) {
@@ -216,8 +217,14 @@ pub fn regionToRange(module_env: *const ModuleEnv, region: Region) ?LspRange {
         end_line = @intCast(i);
     }
 
-    const start_col = start_offset - line_starts[start_line];
-    const end_col = end_offset - line_starts[end_line];
+    // LSP columns are UTF-16 code units, not bytes. The two agree until a line
+    // holds a character outside ASCII, after which every column to its right
+    // differs; see issue #10948.
+    const source = module_env.common.source;
+    const start_text = pos.lineText(source, line_starts, start_line) orelse return null;
+    const end_text = pos.lineText(source, line_starts, end_line) orelse return null;
+    const start_col = pos.byteOffsetToUtf16Column(start_text, start_offset - line_starts[start_line]);
+    const end_col = pos.byteOffsetToUtf16Column(end_text, end_offset - line_starts[end_line]);
 
     return .{
         .start_line = start_line,
