@@ -505,6 +505,14 @@ pub const SpecBuilder = struct {
         }
     }
 
+    /// Current lifecycle status of a record. The scheduler consults this at
+    /// dispatch to skip queued bodies an immediate caller already completed.
+    pub fn recordStatus(self: *const SpecBuilder, spec: Ast.SpecId) Ast.SpecStatus {
+        const index = @intFromEnum(spec);
+        if (index >= self.records.len()) invariant("Monotype spec builder referenced a missing record");
+        return self.records.get(index).status;
+    }
+
     pub fn markLowering(self: *SpecBuilder, spec: Ast.SpecId) void {
         const record = self.recordPtr(spec);
         if (record.status != .reserved) {

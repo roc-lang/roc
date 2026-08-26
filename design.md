@@ -2040,6 +2040,13 @@ sibling bindings, and a lookup at a checked-error index lowers to a runtime
 crash. There is no relation-less error fallback and no separate flow that
 "permits" user errors.
 
+Requirement rows may be allocated before their app definitions are checked, but
+they remain explicitly pending checker state until all definition checking and
+error poisoning has completed. The checker then stamps each row as successful
+or checked-error. `platformRequirementSolutionTableFromInputs` and
+`EvidencePass.run` consume that verdict directly; they never infer success by
+inspecting solved type shape or by comparing the eventual runtime value kind.
+
 A platform `provides` declaration must name a top-level value defined in the
 platform module. It cannot name a value from `requires` directly; a platform
 that wants to expose an app-provided value to its host defines an explicit
@@ -3463,8 +3470,8 @@ The explicit `InlineMode` controls the optional specialization work:
 
 - `.none` skips Monotype Lifted SpecConstr and produces an empty solved inline
   plan. Dev and interpreter modes select this.
-- `.wrappers` runs SpecConstr and produces wrapper-inline decisions from
-  Lambda Solved. Size and speed modes select this.
+- `.wrappers` runs SpecConstr and produces wrapper and exact-single-use inline
+  decisions from Lambda Solved. Size and speed modes select this.
 - optimized eval and focused lowering tests may select `.wrappers` directly.
 
 The mode is compiler input supplied to the checked pipeline. SpecConstr and the
@@ -3478,6 +3485,33 @@ pipeline consumes that output directly and must not repeat capture analysis.
 SpecConstr can change free-variable use while cloning and rewriting function
 bodies, so SpecConstr owns one exact capture finalization before it returns its
 Monotype Lifted output. No later pipeline stage repeats that finalization.
+
+SpecConstr also owns the exact procedure-use inventory for its final rewritten
+graph. Its last graph snapshot records each function's external direct-call
+count, unique call expression and owning function when there is one,
+function-value/root uses, and presence of procedure-relative returns. The
+checked pipeline retains that sidecar across Lambda Solved and supplies it to
+the solved inline analyzer; the analyzer does not rescan the whole program or
+reconstruct uses from emitted code. Lambda Solved does not change the lifted
+expression graph, so function ids and use counts remain exact across that
+boundary.
+
+The solved inline plan admits capture-free functions with exactly one non-cold
+external direct call and no function-value or root uses. A single call-site proof
+permits ordinary statements, branches, local loops, and typed join points because
+lowering the body once cannot duplicate stored code. That proof follows the
+unique call's owning functions through the selected inline plan. If an owning
+wrapper has multiple direct inline sites or also survives as a function value,
+the nested single-use body remains a procedure; a non-inlined owner establishes
+a single procedure-body boundary. Bodies with procedure-relative returns or
+loop control not owned by a loop inside the body remain procedures, and cycles
+consisting entirely of selected inline bodies are rejected before lowering. The
+analyzer records the complete decision before LIR generation; direct
+Solved-to-LIR lowering only substitutes arguments and dumbly lowers a selected
+body at its unique call site. The existing wrapper eligibility remains available
+for proven small call-through and low-level wrappers even when they have multiple
+direct uses.
+
 Each post-lift capture operand explicitly names the callee capture slot it
 supplies. Capture finalization preserves that key while rewriting the operand
 value and never infers the target slot from the value's own capture identity.
@@ -3884,6 +3918,13 @@ whole bodies to classify branch-chosen loops, count construction-call depth,
 recognize iterator types by text, or set a guessed body category that changes
 how a later clone interprets opaque calls.
 
+After the exact append-tail pre-clone rewrite, SpecConstr seals each original
+function's source body together with its measured body-size admission result.
+Every specialization and inline clone consumes that paired source record. Once
+output rewriting begins, the function table owns emitted bodies, and in-place
+call redirection touches only generated output bodies; it is invalid to charge
+the sealed source size while cloning a rewritten output body.
+
 Monotype can assign distinct local ids to uses of one checked pattern binder at
 one monomorphic type. SpecConstr therefore keeps lexical binder aliases separate
 from known-value evidence. Every active binding records its exact local and an
@@ -4209,6 +4250,34 @@ test/cli/JsonTagUnionProtocol.roc (issue #10418's unannotated
 `Ok(Friendly) == Json.parse(...)` comparison closes the inferred parser row);
 rejected—test/cli/ParserOpenTagUnion.roc (a parser whose result annotation
 has a named rigid extension remains a missing-method error).
+
+### Derived Structural Codec Record-Row Closure
+
+A compiler-derived structural record codec owns the exact set of fields it
+reads or writes. A record inferred only from use sites can retain an
+unconstrained flexible extension after all of those uses have been checked.
+Once codec dispatch has deferred that record through constraint quiescence and
+no pending literal can add information, the checker closes that flexible
+extension to the empty record through ordinary unification and validates the
+codec against the complete closed row. Parser and encoder derivation use the
+same rule.
+
+Eligibility follows every concrete record extension and remains unresolved at
+a flexible tail, so generated-codec evidence is never frozen against a partial
+row. The rule does not close a bare flexible shape before a record exists, an
+extension with a pending literal, or a rigid named extension. A polymorphic
+open record can contain fields for which no codec was checked, so its derived
+codec dispatch is rejected.
+
+Both sides are pinned by tests: accepted—
+test/cli/JsonParseInferredRecord.roc (a parser record inferred from field uses
+closes at quiescence), the issue #10824 tests in
+src/check/test/issue_10824_test.zig (an inferred encoder row closes after its
+known field use), and test/cli/issue_10824_generated_codec_contract/app.roc (an
+encoder contract waits for a platform model row to close before freezing all
+of its field calls); rejected—the issue #10824 tests in
+src/check/test/issue_10824_test.zig (parser and encoder dispatch both reject a
+named rigid record extension).
 
 ### Derived Parser Required-Field Error Composition
 
@@ -5222,6 +5291,11 @@ Other solved-graph mutations:
   (above). Once structural parser eligibility has selected a known tag union,
   its unconstrained flexible extension closes to the empty tag union through
   ordinary unification; rigid extensions remain rejected.
+- `closeRecordRowForDerivedParse` / `closeRecordRowForDerivedEncode`—policy:
+  Derived Structural Codec Record-Row Closure (above). After derived codec
+  dispatch reaches quiescence, a record inferred from use sites closes its
+  unconstrained flexible extension to the empty record through ordinary
+  unification; rigid extensions remain rejected.
 - `constrainDerivedParserRequiredFieldError`—policy: Derived Parser
   Required-Field Error Composition (above). A structural probe of derived
   record fields gates ordinary unification of the parser's shared error row
@@ -10295,7 +10369,7 @@ choosing between a borrow and an owned move, the choice that keeps a
 mutation check-free becomes visible to the solver rather than a lucky
 outcome of emission order.
 
-### In-Place List.map
+### In-Place List Transforms
 
 `List.map` may overwrite a uniquely owned input list's buffer instead of
 allocating an output list when the input and output item representations are
@@ -10322,6 +10396,16 @@ the refcount only after all live ownership units are present; leaving the query
 on the original, unconsumed argument would allow ARC to move a preservation
 retain after that observation and incorrectly report a shared buffer as unique.
 
+`List.update` uses the same ownership-transfer protocol for its single selected
+item. After checking the index, it prepares the outer list and tests whether
+the allocation is reusable. A reusable list moves the selected item out of
+its slot, calls the updater with that owned value, and moves the result back
+into the vacated slot. This is what lets an updater mutate a uniquely owned
+refcounted item, such as an inner list, without a defensive copy. A shared
+outer list takes the ordinary checked replace path, which keeps the original
+list and selected item unchanged. Since `List.update` has the same item type
+on both sides, it needs no in-place representation cast.
+
 The runtime meaning of `list_map_can_reuse` is "uniquely owned and not a
 seamless slice"—a slice's buffer points into the middle of an allocation
 whose header bookkeeping covers the whole allocation, so a unique slice still
@@ -10335,14 +10419,17 @@ The in-place branch itself is dropped before it reaches LIR whenever the item
 representations are not interchangeable or the optimization is disabled
 (`TargetConfig.list_in_place_map`, on for `--opt=size`/`--opt=speed`, off for
 dev, interpreter, and compile-time evaluation), so ineligible map
-specializations never carry dead in-place machinery and dev builds lower
-exactly the copy loop. The fold uses the same representation-eligibility
-decision as the primitive. Different fully concrete types may keep the branch
-when their layouts are interchangeable; descriptor-bearing types may keep it
-only when their descriptor representation identity is the same. The debug
-Lambda Mono materializer runs before layout selection and cannot recompute that
-decision; instead, direct lowering records each statically resolved match site
-as explicit data and the verifier replays the record, so the two derivations
+and update specializations never carry dead in-place machinery and dev builds
+lower exactly the copy path. Both direct lowerers identify the compiler
+operation from producer IR and consume its typed numeral/wildcard arms; neither
+infers the site from source names or resulting LIR shape. The fold
+uses the same representation-eligibility decision as the primitive. Different
+fully concrete types may keep the branch when their layouts are
+interchangeable; descriptor-bearing types may keep it only when their
+descriptor representation identity is the same. The debug Lambda Mono
+materializer runs before layout selection and cannot recompute that decision;
+instead, direct lowering records each statically resolved match site as
+explicit data and the verifier replays the record, so the two derivations
 demand the same set of functions without the materializer ever consulting
 layouts. A wrong record can only misplace dead code, never a runtime check—the
 primitive's own lowering independently gates the runtime path—and a fold
@@ -10663,6 +10750,33 @@ Roots that finish before the slow threshold therefore pay only monitor setup and
 signaling overhead, not the reporting period. Roots that exceed the threshold
 are reported, then the worker waits interruptibly until the next per-root report
 deadline or finalization stop.
+
+## Test Root Ownership
+
+`roc test` runs the `expect`s the developer wrote. Whether a module's roots
+qualify is decided by how the build reached the package that module belongs to,
+which is explicit data the dependency-discovery stage already produced:
+
+- The root package, and every dependency reachable from it through filesystem
+  paths alone, are the developer's own sources. Their roots are planned.
+- A package downloaded from a URL is not. Its `expect`s are its author's tests,
+  they passed before the release went out, and re-running them on every
+  `roc test` of every consumer is work no consumer asked for.
+- A compiler-owned platform is not, for the same reason.
+
+The explicitly requested root remains the root when the source argument is a
+bundle URL or installed shorthand. Its recorded URL is package identity, not a
+reason to classify its own roots as fetched dependency tests.
+
+The reachability walk stops at the first downloaded package, so a path
+dependency declared inside downloaded content stays downloaded content and does
+not inherit the root's ownership. Test planning consumes this classification
+from `CompiledModuleInfo.package_origin`; it must not re-derive ownership from
+module paths, package cache directories, or package names.
+
+Skipping a package's roots is a planning decision, not an execution one. The
+package is still resolved, checked, and lowered exactly as before, so code a
+tested root reaches into a dependency is compiled and linked the same way.
 
 ## Optimized Test Execution
 

@@ -132,24 +132,61 @@ pub fn handler(comptime ServerType: type) type {
             if (def_result) |result| {
                 defer result.deinit(self.allocator);
 
-                // Build the Location response
-                const LocationResponse = struct {
-                    uri: []const u8,
-                    range: struct {
-                        start: struct { line: u32, character: u32 },
-                        end: struct { line: u32, character: u32 },
-                    },
-                };
+                if (result.origin_selection_range) |origin| {
+                    const LocationLink = struct {
+                        originSelectionRange: struct {
+                            start: struct { line: u32, character: u32 },
+                            end: struct { line: u32, character: u32 },
+                        },
+                        targetUri: []const u8,
+                        targetRange: struct {
+                            start: struct { line: u32, character: u32 },
+                            end: struct { line: u32, character: u32 },
+                        },
+                        targetSelectionRange: struct {
+                            start: struct { line: u32, character: u32 },
+                            end: struct { line: u32, character: u32 },
+                        },
+                    };
 
-                const response = LocationResponse{
-                    .uri = result.uri,
-                    .range = .{
-                        .start = .{ .line = result.range.start_line, .character = result.range.start_col },
-                        .end = .{ .line = result.range.end_line, .character = result.range.end_col },
-                    },
-                };
+                    const link = LocationLink{
+                        .originSelectionRange = .{
+                            .start = .{ .line = origin.start_line, .character = origin.start_col },
+                            .end = .{ .line = origin.end_line, .character = origin.end_col },
+                        },
+                        .targetUri = result.uri,
+                        .targetRange = .{
+                            .start = .{ .line = result.range.start_line, .character = result.range.start_col },
+                            .end = .{ .line = result.range.end_line, .character = result.range.end_col },
+                        },
+                        .targetSelectionRange = .{
+                            .start = .{ .line = result.range.start_line, .character = result.range.start_col },
+                            .end = .{ .line = result.range.end_line, .character = result.range.end_col },
+                        },
+                    };
 
-                try self.sendResponse(id, response);
+                    const response = [1]LocationLink{link};
+                    try self.sendResponse(id, response[0..]);
+                } else {
+                    // Build the Location response
+                    const LocationResponse = struct {
+                        uri: []const u8,
+                        range: struct {
+                            start: struct { line: u32, character: u32 },
+                            end: struct { line: u32, character: u32 },
+                        },
+                    };
+
+                    const response = LocationResponse{
+                        .uri = result.uri,
+                        .range = .{
+                            .start = .{ .line = result.range.start_line, .character = result.range.start_col },
+                            .end = .{ .line = result.range.end_line, .character = result.range.end_col },
+                        },
+                    };
+
+                    try self.sendResponse(id, response);
+                }
             } else {
                 try self.sendNullResponse(id);
             }

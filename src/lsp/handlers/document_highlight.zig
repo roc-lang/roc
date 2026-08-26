@@ -10,6 +10,7 @@ const protocol = @import("../protocol.zig");
 const parse = @import("parse");
 const can = @import("can");
 const Token = parse.tokenize.Token;
+const pos = @import("../position.zig");
 
 /// Handler for `textDocument/documentHighlight` requests.
 pub fn handler(comptime ServerType: type) type {
@@ -183,10 +184,11 @@ const DocumentHighlight = struct {
 /// Used when CIR is not available (e.g., parse errors).
 fn findHighlightsByToken(allocator: std.mem.Allocator, source: []const u8, line: u32, character: u32) Allocator.Error![]DocumentHighlight {
     // Build line offset table
-    const line_offsets = buildLineOffsets(source);
+    const line_offsets = try pos.buildLineOffsets(allocator, source);
+    defer line_offsets.deinit();
 
     // Convert position to offset
-    const target_offset = positionToOffset(line, character, &line_offsets) orelse {
+    const target_offset = line_offsets.offsetAt(line, character) orelse {
         return &[_]DocumentHighlight{};
     };
 
@@ -237,8 +239,8 @@ fn findHighlightsByToken(allocator: std.mem.Allocator, source: []const u8, line:
 
         const token_text = source[start..end];
         if (std.mem.eql(u8, token_text, target_text.?)) {
-            const start_pos = offsetToPosition(start, &line_offsets);
-            const end_pos = offsetToPosition(end, &line_offsets);
+            const start_pos = positionAt(start, &line_offsets);
+            const end_pos = positionAt(end, &line_offsets);
 
             try highlights.append(allocator, .{
                 .range = .{
@@ -257,39 +259,8 @@ fn isIdentifierTag(tag: Token.Tag) bool {
     return tag == .LowerIdent or tag == .UpperIdent or tag == .NamedUnderscore;
 }
 
-const LineOffsets = struct {
-    offsets: [4096]u32,
-    count: usize,
-};
-
-fn buildLineOffsets(source: []const u8) LineOffsets {
-    var result = LineOffsets{ .offsets = undefined, .count = 0 };
-    result.offsets[0] = 0;
-    result.count = 1;
-
-    for (source, 0..) |c, i| {
-        if (c == '\n' and result.count < 4096) {
-            result.offsets[result.count] = @intCast(i + 1);
-            result.count += 1;
-        }
-    }
-    return result;
-}
-
-fn positionToOffset(line: u32, character: u32, line_offsets: *const LineOffsets) ?u32 {
-    if (line >= line_offsets.count) return null;
-    return line_offsets.offsets[line] + character;
-}
-
-fn offsetToPosition(offset: u32, line_offsets: *const LineOffsets) Position {
-    var line: u32 = 0;
-    for (0..line_offsets.count) |i| {
-        if (line_offsets.offsets[i] > offset) break;
-        line = @intCast(i);
-    }
-    const line_start = line_offsets.offsets[line];
-    return .{
-        .line = line,
-        .character = offset - line_start,
-    };
+/// Convert a byte offset into this handler's position shape.
+fn positionAt(offset: u32, line_offsets: *const pos.LineOffsets) Position {
+    const converted = pos.offsetToPosition(offset, line_offsets);
+    return .{ .line = converted.line, .character = converted.character };
 }

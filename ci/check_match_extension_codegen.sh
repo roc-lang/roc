@@ -55,12 +55,16 @@ cd "$repo_root"
 # Evaluating the later position first makes its bounds check govern both reads.
 # This keeps the fast loop to one bound branch per eight bytes when proven
 # no-wrap arithmetic gives LLVM stronger induction-variable facts.
-# Restoring internal linkage to procedures not named by static-data relocations
-# lets LLVM inline this fixture's procedure into its exported roc_main wrapper.
-# The arm64 count is unchanged; x64 includes two additional wrapper instructions.
+# Exact single-use inlining before ARC adds the release of the owned root
+# argument list after its length is read. Restoring internal linkage to
+# procedures not named by static-data relocations then lets LLVM optimize that
+# body together with its exported roc_main wrapper. These transformations
+# interact rather than adding their separate instruction-count changes: the
+# resulting entrypoint totals are 106 on x64musl and 92 on arm64musl. The
+# pinned compare loop itself is unchanged.
 expectations=(
-    "x64musl:104"
-    "arm64musl:90"
+    "x64musl:106"
+    "arm64musl:92"
 )
 
 failed=0

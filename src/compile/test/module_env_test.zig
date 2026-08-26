@@ -246,14 +246,14 @@ test "ModuleEnv.Serialized roundtrip preserves file dependency states" {
 
     try original.initCIRFields("Test");
 
-    const present_idx = try original.recordFileDependency("data.txt");
+    const present_idx = try original.recordFileDependency("data.txt", 0, 0);
     const present_hash = [_]u8{0x11} ** 32;
     original.setFileDependencyContentHash(present_idx, present_hash);
 
-    const missing_idx = try original.recordFileDependency("missing.txt");
+    const missing_idx = try original.recordFileDependency("missing.txt", 0, 0);
     original.setFileDependencyMissing(missing_idx);
 
-    const unreadable_idx = try original.recordFileDependency("denied.txt");
+    const unreadable_idx = try original.recordFileDependency("denied.txt", 0, 0);
     original.setFileDependencyUnreadable(unreadable_idx);
 
     var arena = collections.SingleThreadArena.init(gpa);
