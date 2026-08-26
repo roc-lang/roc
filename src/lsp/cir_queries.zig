@@ -1136,6 +1136,48 @@ pub fn collectLookupReferences(
 /// Kept separate from `collectLookupReferences` because LSP asks for the two
 /// separately: `textDocument/references` can be told to leave the declaration
 /// out.
+/// The source range of the name a pattern binds, or null when it cannot be
+/// pinned down exactly.
+///
+/// A pattern's region is not always just its name. Canonicalization gives an
+/// annotation without a matching declaration a synthetic `assign` pattern whose
+/// region spans the whole `name : Type` statement, so using it as the
+/// declaration would make rename replace the annotation with the bare new name
+/// and delete the type.
+///
+/// The region is therefore accepted only when the source there spells exactly
+/// the bound name. Callers that rewrite text must treat null as "do not touch
+/// this", not as "nothing to do".
+pub fn declarationNameRegion(module_env: *ModuleEnv, target_pattern: CIR.Pattern.Idx) ?LspRange {
+    const pattern = module_env.store.getPattern(target_pattern);
+    if (std.meta.activeTag(pattern) != .assign) return null;
+
+    const name = module_env.common.idents.getText(pattern.assign.ident);
+    const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(target_pattern));
+    const region = module_env.store.getRegionAt(pattern_node_idx);
+
+    const source = module_env.common.source;
+    if (region.end.offset <= source.len and
+        region.start.offset <= region.end.offset and
+        std.mem.eql(u8, source[region.start.offset..region.end.offset], name))
+    {
+        return regionToRange(module_env, region);
+    }
+
+    // The pattern covers more than the name. An annotation that names this
+    // binding records where the name itself is written.
+    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        if (@intFromEnum(def.pattern) != @intFromEnum(target_pattern)) continue;
+        const anno_idx = def.annotation orelse continue;
+        const name_region = module_env.store.getAnnotation(anno_idx).name_region orelse continue;
+        return regionToRange(module_env, name_region);
+    }
+
+    return null;
+}
+
 pub fn collectDeclarationRegions(
     module_env: *ModuleEnv,
     target_pattern: CIR.Pattern.Idx,
@@ -1144,9 +1186,8 @@ pub fn collectDeclarationRegions(
     var results: std.ArrayList(LspRange) = .empty;
     errdefer results.deinit(allocator);
 
-    // The binding site itself.
-    const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(target_pattern));
-    if (regionToRange(module_env, module_env.store.getRegionAt(pattern_node_idx))) |range| {
+    // The binding site itself, but only where it is exactly the name.
+    if (declarationNameRegion(module_env, target_pattern)) |range| {
         try results.append(allocator, range);
     }
 

@@ -3108,6 +3108,9 @@ pub const SyntaxChecker = struct {
         /// The renamed binding's extent could not be determined, so the rename
         /// could not be checked for capture at all.
         scope_unavailable,
+        /// The binding's own declaration could not be pinned to exactly its
+        /// name, so rewriting it would take neighbouring source with it.
+        declaration_not_isolated,
     };
 
     /// The edits a rename produces, all within the requested document.
@@ -3171,6 +3174,7 @@ pub const SyntaxChecker = struct {
         const module_env = build.getModuleEnv() orelse return null;
         const target_offset = pos.positionToOffset(module_env, line, character) orelse return null;
         const target = renameTargetAt(module_env, target_offset) orelse return null;
+        if (cir_queries.declarationNameRegion(module_env, target.pattern) == null) return null;
 
         const regions = try self.collectSymbolRegions(module_env, target.pattern);
         defer self.allocator.free(regions);
@@ -3217,6 +3221,12 @@ pub const SyntaxChecker = struct {
 
         const target = renameTargetAt(module_env, target_offset) orelse
             return RenameOutcome{ .rejected = .not_a_local_binding };
+
+        // Renaming the uses while leaving the declaration behind is exactly the
+        // partial rewrite this must not produce.
+        if (cir_queries.declarationNameRegion(module_env, target.pattern) == null) {
+            return RenameOutcome{ .rejected = .declaration_not_isolated };
+        }
 
         const old_name = module_env.common.idents.getText(target.ident);
         if (try rename_rules.checkNewName(self.allocator, old_name, new_name)) |rejection| {

@@ -112,6 +112,7 @@ pub fn handler(comptime ServerType: type) type {
                         .bad_new_name => |reason| reason.message(),
                         .name_already_in_scope => "that name is already used by another binding that is visible here, so renaming would change what the code means",
                         .scope_unavailable => "this binding's scope could not be determined, so the rename could not be checked for safety",
+                        .declaration_not_isolated => "this binding's declaration is not written as a plain name, so renaming it would rewrite the surrounding source",
                     };
                     try self.sendError(id, .request_failed, message);
                 },

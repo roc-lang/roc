@@ -335,6 +335,7 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "references handler respects shadowing", .run = referencesHandlerRespectsShadowing },
     .{ .name = "the name on an annotation is a usable starting point", .run = annotationNameResolvesLikeAnyOccurrence },
     .{ .name = "positions are UTF-16 code units, not bytes", .run = positionsUseUtf16CodeUnits },
+    .{ .name = "rename refuses a declaration that is not a plain name", .run = renameRefusesNonIsolatedDeclaration },
     .{ .name = "definition handler finds local variable definition", .run = definitionHandlerFindsLocalVariableDefinition },
     .{ .name = "definition handler returns null for undefined symbol", .run = definitionHandlerReturnsNullForUndefinedSymbol },
     .{ .name = "hover handler handles type annotation request", .run = hoverHandlerReturnsTypeInfoForTypeAnnotation },
@@ -1422,6 +1423,61 @@ pub fn positionsUseUtf16CodeUnits() integration_spec.SpecError!void {
     try std.testing.expectEqual(@as(usize, 2), edits.array.items.len);
     try std.testing.expect(try hasEdit(edits, 2, 0, 3, "total"));
     try std.testing.expect(try hasEdit(edits, 4, 20, 23, "total"));
+}
+
+/// Verifies rename refuses a binding whose declaration is not written as a
+/// plain name.
+///
+/// An annotation with no matching declaration gets a synthetic `assign` pattern
+/// spanning the whole `name : Type` statement. Taking that as the declaration
+/// made rename replace the statement with the bare new name, deleting the type.
+/// Reported by review on #10945.
+pub fn renameRefusesNonIsolatedDeclaration() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "rename_orphan_anno.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    // `orphan` is annotated but never defined.
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\orphan : I64
+        \\
+        \\main = 1
+    , .{platform_path});
+    defer allocator.free(source);
+
+    const rename = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/rename","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":2}},"newName":"renamed"}}}}
+    , .{fixture.uri});
+    defer allocator.free(rename);
+    const prepare = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/prepareRename","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":2}}}}}}
+    , .{fixture.uri});
+    defer allocator.free(prepare);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{ rename, prepare });
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    // Refused, rather than answering an edit that spans `orphan : I64`.
+    var refused = try responseById(allocator, responses, 2);
+    defer refused.deinit();
+    try std.testing.expect(refused.isError());
+
+    // And the editor is told not to offer the action at all.
+    var prepared = try responseById(allocator, responses, 3);
+    defer prepared.deinit();
+    try std.testing.expect((try prepared.result()) == .null);
 }
 
 /// Verifies goto definition locates a local variable definition.
