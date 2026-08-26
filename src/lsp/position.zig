@@ -90,16 +90,43 @@ pub fn byteOffsetToUtf16Column(line_text: []const u8, byte_offset: u32) u32 {
     if (isAscii(upto)) return @intCast(upto.len);
 
     var units: u32 = 0;
-    var it = std.unicode.Utf8Iterator{ .bytes = upto, .i = 0 };
-    while (it.nextCodepointSlice()) |slice| {
-        const cp = std.unicode.utf8Decode(slice) catch {
+    var index: usize = 0;
+    while (index < upto.len) {
+        const sequence = utf8SequenceAt(upto, index);
+        units += if (sequence.codepoint) |codepoint|
+            (if (codepoint <= 0xFFFF) @as(u32, 1) else 2)
+        else
             // Not valid UTF-8; count the bytes so the column stays monotonic.
-            units += @intCast(slice.len);
-            continue;
-        };
-        units += if (cp <= 0xFFFF) 1 else 2;
+            @as(u32, @intCast(sequence.len));
+        index += sequence.len;
     }
     return units;
+}
+
+/// One UTF-8 sequence, as far as the bytes allow it to be read.
+const Utf8Sequence = struct {
+    /// How many bytes to step over to reach the next sequence. Never zero, so
+    /// a scan always makes progress.
+    len: usize,
+    /// What the bytes decode to, or null when they decode to nothing.
+    codepoint: ?u21,
+};
+
+/// Read the UTF-8 sequence at `index` without trusting the bytes there.
+///
+/// `std.unicode.Utf8Iterator` may only be pointed at text already known to be
+/// valid: it reaches `unreachable` on a byte that starts no sequence, and slices
+/// past the end when the last sequence is cut short. Source arrives here
+/// unvalidated—the tokenizer reports `InvalidUtf8InSource` as a diagnostic and
+/// carries on, so a document being edited holds whatever bytes it holds—which
+/// makes both of those ordinary inputs rather than impossible ones.
+fn utf8SequenceAt(text: []const u8, index: usize) Utf8Sequence {
+    const sequence_len = std.unicode.utf8ByteSequenceLength(text[index]) catch
+        return .{ .len = 1, .codepoint = null };
+    if (index + sequence_len > text.len) return .{ .len = text.len - index, .codepoint = null };
+    const codepoint = std.unicode.utf8Decode(text[index..][0..sequence_len]) catch
+        return .{ .len = sequence_len, .codepoint = null };
+    return .{ .len = sequence_len, .codepoint = codepoint };
 }
 
 /// How a column that does not land on a character boundary is treated.
@@ -123,18 +150,21 @@ pub fn utf16ColumnToByteOffset(line_text: []const u8, character: usize, landing:
     }
 
     var units: usize = 0;
-    var it = std.unicode.Utf8Iterator{ .bytes = line_text, .i = 0 };
+    var index: usize = 0;
     while (units < character) {
-        const slice = it.nextCodepointSlice() orelse return null;
-        const cp = std.unicode.utf8Decode(slice) catch {
+        if (index >= line_text.len) return null;
+        const sequence = utf8SequenceAt(line_text, index);
+        const cp = sequence.codepoint orelse {
             if (landing == .exact) return null;
-            units += slice.len;
+            units += sequence.len;
+            index += sequence.len;
             continue;
         };
         units += if (cp <= 0xFFFF) @as(usize, 1) else 2;
+        index += sequence.len;
     }
     if (landing == .exact and units != character) return null;
-    return it.i;
+    return index;
 }
 
 /// A line's text without its terminating EOL sequence.
