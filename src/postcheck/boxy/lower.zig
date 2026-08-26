@@ -146,6 +146,76 @@ const ResolvedWorkerBody = union(enum) {
     generated_interpolation_step: Plan.GeneratedInterpolationStepSource,
 };
 
+fn resolvedWorkerIsListMapCanReuseWrapper(resolved: ResolvedWorker) bool {
+    const body = switch (resolved.body) {
+        .checked_expr => |checked_body| checked_body.root_expr,
+        .intrinsic,
+        .hosted,
+        .unimplemented,
+        .generated_codec,
+        .generated_field_iterator,
+        .generated_interpolation_step,
+        => return false,
+    };
+    return checkedExprIsListMapCanReuseWrapper(resolved.module, body);
+}
+
+fn checkedExprIsListMapCanReuseWrapper(
+    module: ProcedureModuleView,
+    expr_id: checked.CheckedExprId,
+) bool {
+    return switch (module.checked_bodies.expr(expr_id).data) {
+        .run_low_level => |low_level| low_level.op == .list_map_can_reuse,
+        .lambda => |lambda| checkedExprIsListMapCanReuseWrapper(module, lambda.body),
+        .block => |block| block.statements.len == 0 and
+            checkedExprIsListMapCanReuseWrapper(module, block.final_expr),
+        .pending,
+        .numeral,
+        .str_from_quote,
+        .str_segment,
+        .str,
+        .bytes_literal,
+        .lookup_local,
+        .lookup_external,
+        .lookup_required,
+        .list,
+        .empty_list,
+        .tuple,
+        .match_,
+        .if_,
+        .call,
+        .record,
+        .empty_record,
+        .tag,
+        .nominal,
+        .zero_argument_tag,
+        .closure,
+        .binop,
+        .unary_minus,
+        .unary_not,
+        .field_access,
+        .dispatch_call,
+        .interpolation,
+        .structural_eq,
+        .structural_hash,
+        .method_eq,
+        .type_dispatch_call,
+        .tuple_access,
+        .runtime_error,
+        .crash,
+        .dbg,
+        .expect_err,
+        .expect,
+        .ellipsis,
+        .anno_only,
+        .break_,
+        .return_,
+        .for_,
+        .hosted_lambda,
+        => false,
+    };
+}
+
 const ResolvedWorkers = struct {
     allocator: Allocator,
     items: []ResolvedWorker,
@@ -19714,6 +19784,7 @@ const ProcBodyBuilder = struct {
         branches: []const checked.CheckedMatchBranch,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        if (try self.foldListMapCanReuseMatch(target, match_ty, cond, branches, next)) |folded| return folded;
         const cond_expr = self.module.checked_bodies.expr(cond);
         const cond_rep = self.matchConditionRep(cond, self.repForType(cond_expr.ty));
         try self.reserveMatchBranchRepresentativeBindings(branches, cond_rep);
@@ -19748,6 +19819,140 @@ const ProcBodyBuilder = struct {
         } });
         self.restoreDescriptorBindings(outer_descriptors);
         return match_stmt;
+    }
+
+    const ListMapCanReuseMatch = struct {
+        args: []const checked.CheckedExprId,
+        zero_branch_body: checked.CheckedExprId,
+    };
+
+    /// When the explicit target configuration or committed representations
+    /// make list-buffer reuse impossible, lower only the arm selected by the
+    /// primitive's constant-zero result. This is the Boxy counterpart of
+    /// direct lowering's `foldListMapCanReuseMatch`: both consume the checked
+    /// low-level operation and the same exact layout-eligibility decision.
+    fn foldListMapCanReuseMatch(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        result_ty: checked.CheckedTypeId,
+        cond: checked.CheckedExprId,
+        branches: []const checked.CheckedMatchBranch,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!?LIR.CFStmtId {
+        const match = self.listMapCanReuseMatch(cond, branches) orelse return null;
+        const interchangeable = self.listMapLayoutsInterchangeable(match.args);
+        if (interchangeable.get(.u32) or interchangeable.get(.u64)) return null;
+        return try self.lowerExprExpectedInto(target, result_ty, match.zero_branch_body, next);
+    }
+
+    fn listMapCanReuseMatch(
+        self: *ProcBodyBuilder,
+        cond: checked.CheckedExprId,
+        branches: []const checked.CheckedMatchBranch,
+    ) ?ListMapCanReuseMatch {
+        const args = self.listMapCanReuseArgs(cond) orelse return null;
+
+        for (branches) |branch| {
+            if (branch.guard != null) return null;
+            const patterns = branch.patternsSlice(self.module.checked_bodies);
+            if (patterns.len != 1 or patterns[0].degenerate) return null;
+            if (patterns[0].binderRemapsSlice(self.module.checked_bodies).len != 0) return null;
+
+            const pattern = self.module.checked_bodies.pattern(patterns[0].pattern);
+            switch (pattern.data) {
+                .numeral_literal => |literal| {
+                    if (literal.conversion != null) return null;
+                    const magnitude = exact_numeral.intMagnitude(
+                        self.module.module_env.exactNumeral(literal.literal),
+                    ) orelse return null;
+                    if (magnitude == 0) {
+                        return .{ .args = args, .zero_branch_body = branch.value };
+                    }
+                },
+                .underscore => return .{ .args = args, .zero_branch_body = branch.value },
+                .pending,
+                .assign,
+                .as,
+                .applied_tag,
+                .nominal,
+                .record_destructure,
+                .list,
+                .tuple,
+                .str_literal,
+                .str_interpolation,
+                .runtime_error,
+                => return null,
+            }
+        }
+        return null;
+    }
+
+    fn listMapCanReuseArgs(
+        self: *ProcBodyBuilder,
+        cond: checked.CheckedExprId,
+    ) ?[]const checked.CheckedExprId {
+        const expr = self.module.checked_bodies.expr(cond);
+        return switch (expr.data) {
+            .run_low_level => |low_level| if (low_level.op == .list_map_can_reuse) low_level.args else null,
+            .block => |block| if (block.statements.len == 0)
+                self.listMapCanReuseArgs(block.final_expr)
+            else
+                null,
+            .call => |call| blk: {
+                if (call.direct_target == null) break :blk null;
+                const direct = self.parent.plan.directCallPlanForCall(
+                    .{ .module = self.module.key, .expr = cond },
+                    self.worker_layout.worker,
+                ) orelse break :blk null;
+                const resolved = self.parent.resolved_workers.items[@intFromEnum(direct.worker)];
+                if (!resolvedWorkerIsListMapCanReuseWrapper(resolved)) break :blk null;
+                break :blk call.args;
+            },
+            .pending,
+            .numeral,
+            .str_from_quote,
+            .str_segment,
+            .str,
+            .bytes_literal,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .list,
+            .empty_list,
+            .tuple,
+            .match_,
+            .if_,
+            .record,
+            .empty_record,
+            .tag,
+            .nominal,
+            .zero_argument_tag,
+            .closure,
+            .lambda,
+            .binop,
+            .unary_minus,
+            .unary_not,
+            .field_access,
+            .dispatch_call,
+            .interpolation,
+            .structural_eq,
+            .structural_hash,
+            .method_eq,
+            .type_dispatch_call,
+            .tuple_access,
+            .runtime_error,
+            .crash,
+            .dbg,
+            .expect_err,
+            .expect,
+            .ellipsis,
+            .anno_only,
+            .break_,
+            .return_,
+            .for_,
+            .hosted_lambda,
+            => null,
+        };
     }
 
     fn matchConditionRep(

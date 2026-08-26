@@ -16934,7 +16934,12 @@ const EvidencePass = struct {
         // finished evidence vector across the checked-artifact boundary.
         for (self.platform_requirement_solutions, self.platform_requirement_root_evidence) |solution, *out| {
             out.* = .{};
-            if (!solution.is_function or try solutionVarsReachErr(self.allocator, self.module, solution)) continue;
+            switch (solution.outcome) {
+                .checked_error => continue,
+                .success => {},
+                .pending => checkedArtifactInvariant("platform requirement solution was not finalized before evidence publication", .{}),
+            }
+            if (!solution.is_function) continue;
 
             params.clearRetainingCapacity();
             try self.enumerateParams(solution.solved_var, &params);
@@ -20971,7 +20976,11 @@ fn platformRequirementSolutionTableFromInputs(
     errdefer identity_solutions.deinit(allocator);
 
     for (inputs, root_evidence) |input, evidence| {
-        if (try solutionVarsReachErr(allocator, module, input)) continue;
+        switch (input.outcome) {
+            .checked_error => continue,
+            .success => {},
+            .pending => checkedArtifactInvariant("platform requirement solution was not finalized by checking", .{}),
+        }
 
         const top_level = top_level_values.lookupByDef(input.def) orelse {
             checkedArtifactInvariant("platform requirement solution references a def with no published top-level value", .{});
@@ -21026,28 +21035,6 @@ fn platformRequirementSolutionTableFromInputs(
         .solutions = try solutions.toOwnedSlice(allocator),
         .identity_solutions = try identity_solutions.toOwnedSlice(allocator),
     };
-}
-
-fn solutionVarsReachErr(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    input: requirement_solution.SolutionInput,
-) Allocator.Error!bool {
-    if (try canonical_type_keys.containsError(
-        allocator,
-        module.typeStoreConst(),
-        module.moduleEnvConst(),
-        input.solved_var,
-    )) return true;
-    for (input.identity_vars) |identity_var| {
-        if (try canonical_type_keys.containsError(
-            allocator,
-            module.typeStoreConst(),
-            module.moduleEnvConst(),
-            identity_var,
-        )) return true;
-    }
-    return false;
 }
 
 /// Public `PlatformRequiredBinding` declaration.
@@ -35173,7 +35160,7 @@ test "module source input hash uses explicit file dependency state" {
     var missing_env = try ModuleEnv.init(gpa, "");
     defer missing_env.deinit();
     try missing_env.initCIRFields("Test");
-    const missing_idx = try missing_env.recordFileDependency("data.txt");
+    const missing_idx = try missing_env.recordFileDependency("data.txt", 0, 0);
     missing_env.setFileDependencyMissing(missing_idx);
     const missing_hash = hashModuleSourceInputs(&missing_env);
 
@@ -35184,14 +35171,14 @@ test "module source input hash uses explicit file dependency state" {
     var unreadable_env = try ModuleEnv.init(gpa, "");
     defer unreadable_env.deinit();
     try unreadable_env.initCIRFields("Test");
-    const unreadable_idx = try unreadable_env.recordFileDependency("data.txt");
+    const unreadable_idx = try unreadable_env.recordFileDependency("data.txt", 0, 0);
     unreadable_env.setFileDependencyUnreadable(unreadable_idx);
     const unreadable_hash = hashModuleSourceInputs(&unreadable_env);
 
     var present_env = try ModuleEnv.init(gpa, "");
     defer present_env.deinit();
     try present_env.initCIRFields("Test");
-    const present_idx = try present_env.recordFileDependency("data.txt");
+    const present_idx = try present_env.recordFileDependency("data.txt", 0, 0);
     present_env.setFileDependencyContentHash(present_idx, [_]u8{0} ** 32);
     const present_hash = hashModuleSourceInputs(&present_env);
 

@@ -9741,10 +9741,29 @@ pub const MonoLlvmCodeGen = struct {
         try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_append_sublist)), call_args.types.items, call_args.values.items);
     }
 
+    /// Store the canonical value for a list of zero-width elements into
+    /// `target`: such a list owns no allocation, so its data pointer is null
+    /// and its stored capacity is zero, and it carries nothing but `len`.
+    fn storeZstList(self: *MonoLlvmCodeGen, target: LocalId, len: LlvmBuilder.Value) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const out_ptr = self.slot(target).ptr;
+        try self.storePointer(out_ptr, builder.nullValue(try self.ptrType()) catch return error.OutOfMemory);
+        try self.storeListLen(out_ptr, len);
+        try self.storeListCapacity(out_ptr, builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory);
+    }
+
     fn emitListPrepend(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const list_local = GuardedList.at(args, 0);
         const abi = self.boxyAwareBuiltinListAbi(self.localLayout(list_local));
+        // A zero-width element has no bytes to place at the front, so
+        // prepending one only bumps the length.
+        if (abi.elem_size == 0) {
+            const len = try self.loadUsize(try self.offsetPtr(self.slot(list_local).ptr, self.rocListLenOffset()));
+            const one = builder.intValue(self.ptrSizedIntType(), 1) catch return error.OutOfMemory;
+            const grown = (self.wip orelse return error.CompilationFailed).bin(.add, len, one, "") catch return error.OutOfMemory;
+            return self.storeZstList(target, grown);
+        }
         var call_args = try self.rocListArgs1(list_local);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
@@ -9793,6 +9812,19 @@ pub const MonoLlvmCodeGen = struct {
             try self.loadSublistStartLen(GuardedList.at(args, 1))
         else
             return error.UnsupportedLowLevel;
+
+        // Zero-width elements have no bytes to slice, so the result is the
+        // window length alone: min(len, size -| start).
+        if (abi.elem_size == 0) {
+            const wip = self.wip orelse return error.CompilationFailed;
+            const past_end = wip.icmp(.uge, slice.start, len, "") catch return error.OutOfMemory;
+            const remaining = wip.bin(.sub, len, slice.start, "") catch return error.OutOfMemory;
+            const avail = wip.select(.normal, past_end, zero, remaining, "") catch return error.OutOfMemory;
+            const wants_more = wip.icmp(.ugt, slice.len, avail, "") catch return error.OutOfMemory;
+            const kept = wip.select(.normal, wants_more, avail, slice.len, "") catch return error.OutOfMemory;
+            return self.storeZstList(target, kept);
+        }
+
         var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
@@ -9868,6 +9900,18 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const list_local = GuardedList.at(args, 0);
         const abi = self.boxyAwareBuiltinListAbi(self.localLayout(list_local));
+        // Zero-width elements have no bytes to move, so dropping one only
+        // shortens the length, and only when the index is in bounds.
+        if (abi.elem_size == 0) {
+            const wip = self.wip orelse return error.CompilationFailed;
+            const len = try self.loadUsize(try self.offsetPtr(self.slot(list_local).ptr, self.rocListLenOffset()));
+            const index = try self.loadIntegerLocalAsUsize(GuardedList.at(args, 1));
+            const one = builder.intValue(self.ptrSizedIntType(), 1) catch return error.OutOfMemory;
+            const out_of_bounds = wip.icmp(.uge, index, len, "") catch return error.OutOfMemory;
+            const shortened = wip.bin(.sub, len, one, "") catch return error.OutOfMemory;
+            const kept = wip.select(.normal, out_of_bounds, len, shortened, "") catch return error.OutOfMemory;
+            return self.storeZstList(target, kept);
+        }
         var call_args = try self.rocListArgs1(list_local);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
@@ -10135,6 +10179,12 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const list_local = GuardedList.at(args, 0);
         const abi = self.boxyAwareBuiltinListAbi(self.localLayout(list_local));
+        // A zero-width list holds no allocation, so it has no excess to release
+        // and passes through unchanged.
+        if (abi.elem_size == 0) {
+            const len = try self.loadUsize(try self.offsetPtr(self.slot(list_local).ptr, self.rocListLenOffset()));
+            return self.storeZstList(target, len);
+        }
         var call_args = try self.rocListArgs1(list_local);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
