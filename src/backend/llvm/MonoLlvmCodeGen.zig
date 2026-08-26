@@ -1197,7 +1197,7 @@ pub const MonoLlvmCodeGen = struct {
                     ) catch return error.OutOfMemory,
                 }
             },
-            .box, .box_of_zst => {
+            .box, .box_of_zst, .erased_box => {
                 const elem_ty: ?LlvmBuilder.Metadata = if (lay.tag == .box)
                     try self.debugTypeFor(builder, lay.getIdx())
                 else
@@ -1323,7 +1323,7 @@ pub const MonoLlvmCodeGen = struct {
                     .closure => "Closure",
                     .erased_callable => "ErasedCallable",
                     .zst => "Unit",
-                    .scalar, .box, .box_of_zst, .list, .list_of_zst, .struct_, .tag_union, .ptr => unreachable,
+                    .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .tag_union, .ptr => unreachable,
                 };
                 return builder.debugStructType(
                     builder.metadataString(name) catch return error.OutOfMemory,
@@ -9353,7 +9353,7 @@ pub const MonoLlvmCodeGen = struct {
     ) ?BoxyListElementDesc {
         const elem_layout = abi.elem_layout_idx orelse return null;
         const elem_layout_value = self.layoutValue(elem_layout);
-        const elem_is_erased_box = elem_layout_value.tag == .box_of_zst;
+        const elem_is_erased_box = elem_layout_value.tag == .erased_box;
         if (!elem_is_erased_box and elem_layout_value.tag != .box) return null;
 
         for (list_locals) |local| {
@@ -10311,7 +10311,7 @@ pub const MonoLlvmCodeGen = struct {
                 );
                 try self.storePointer(self.slot(target).ptr, result);
             },
-            .scalar, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => return error.CompilationFailed,
+            .scalar, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => return error.CompilationFailed,
         }
     }
 
@@ -10515,6 +10515,7 @@ pub const MonoLlvmCodeGen = struct {
                 const rhs = try self.loadPointer(rhs_ptr);
                 out.* = wip.icmp(.eq, lhs, rhs, "") catch return error.OutOfMemory;
             },
+            .erased_box => return error.CompilationFailed,
             .list, .list_of_zst => try self.emitListEqual(lhs_ptr, rhs_ptr, layout_idx, out, wa, work),
             .struct_ => {
                 const info = self.layouts().getStructInfo(layout_val);
@@ -11309,13 +11310,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn boxyAwareBuiltinListAbi(self: *MonoLlvmCodeGen, list_layout: layout.Idx) layout.Store.BuiltinListAbi {
-        var abi = self.layouts().builtinListAbi(list_layout);
-        // An erased box has a zero-sized canonical form in concrete code, but
-        // Boxy values stored in that layout carry an ordinary refcounted heap
-        // pointer. Lists of erased boxes therefore require the refcounted
-        // allocation prefix even though the base layout reports otherwise.
-        abi.contains_refcounted = abi.contains_refcounted or self.layouts().layoutContainsRcErasedBox(abi.elem_layout);
-        return abi;
+        return self.layouts().builtinListAbi(list_layout);
     }
 
     fn layoutValue(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) layout.Layout {
@@ -11982,7 +11977,7 @@ pub const MonoLlvmCodeGen = struct {
                 .frac => direct_idx == .dec,
                 .vector, .opaque_ptr, .str => false,
             },
-            .tag_union, .box, .box_of_zst, .ptr => false,
+            .tag_union, .box, .box_of_zst, .erased_box, .ptr => false,
             .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst => direct_idx.isSigned(),
         };
     }

@@ -380,6 +380,7 @@ pub const Store = struct {
                 try self.appendInternKeyIdx(layout.getIdx());
             },
             .box_of_zst => try self.startInternKey(.box_of_zst),
+            .erased_box => try self.startInternKey(.erased_box),
             .erased_callable => try self.startInternKey(.erased_callable),
             .list => {
                 try self.startInternKey(.list);
@@ -511,6 +512,11 @@ pub const Store = struct {
     pub fn insertBox(self: *Self, elem_idx: Idx) std.mem.Allocator.Error!Idx {
         const layout = Layout.box(elem_idx);
         return try self.insertLayout(layout);
+    }
+
+    /// Insert the descriptor-backed runtime box used for Boxy dynamic storage.
+    pub fn insertErasedBox(self: *Self) std.mem.Allocator.Error!Idx {
+        return try self.insertLayout(Layout.erasedBox());
     }
 
     /// Insert a compiler-internal pointer layout with the given element layout.
@@ -2350,7 +2356,7 @@ pub const Store = struct {
                 .opaque_ptr => target_usize.size(),
                 .vector => 16,
             },
-            .box, .box_of_zst, .erased_callable, .ptr => target_usize.size(),
+            .box, .box_of_zst, .erased_box, .erased_callable, .ptr => target_usize.size(),
             .list, .list_of_zst => 3 * target_usize.size(), // ptr, length, capacity
             .struct_ => self.getStructData(layout.getStruct().idx).size.get(target_usize),
             .closure => blk: {
@@ -2455,7 +2461,7 @@ pub const Store = struct {
     pub fn layoutContainsRefcounted(self: *const Self, l: Layout) bool {
         return switch (l.tag) {
             .scalar => l.getScalar().tag == .str,
-            .list, .list_of_zst, .box, .erased_callable => true,
+            .list, .list_of_zst, .box, .erased_box, .erased_callable => true,
             // Compiler-internal pointers are never refcounted (TRMC holes); this is
             // what keeps ARC from tracking hole/head locals.
             .ptr, .box_of_zst => false,
@@ -2463,47 +2469,6 @@ pub const Store = struct {
             .struct_ => self.getStructData(l.getStruct().idx).contains_refcounted,
             .tag_union => self.getTagUnionData(l.getTagUnion().idx).contains_refcounted,
             .closure => self.layoutContainsRefcounted(self.getLayout(l.getClosure().captures_layout_idx)),
-        };
-    }
-
-    /// Like `layoutContainsRefcounted`, but treats `box_of_zst` as refcounted.
-    ///
-    /// A `box_of_zst` is the erased box representation: its payload layout is
-    /// erased to zero-sized, but at runtime it holds a real refcounted heap
-    /// allocation (the boxed concrete payload). `layoutContainsRefcounted`
-    /// reports it as unrefcounted because a standalone `box_of_zst` local names
-    /// a canonical null box, but the descriptor-guided boxy runtime—which
-    /// maintains refcounts of the actual erased allocations—must treat it as
-    /// refcounted so a container of erased boxes increfs its elements on clone
-    /// and decrefs them on drop. Reference counting a canonical null box is a
-    /// null-safe no-op, so this is correct for both uses. This mirrors the
-    /// refcount presence the interpreter computes for the same runtime.
-    pub fn layoutContainsRcErasedBox(self: *const Self, l: Layout) bool {
-        return switch (l.tag) {
-            .scalar => l.getScalar().tag == .str,
-            .list, .list_of_zst, .box, .box_of_zst, .erased_callable => true,
-            .ptr => false,
-            .zst => false,
-            .struct_ => blk: {
-                const sd = self.getStructData(l.getStruct().idx);
-                const struct_idx = l.getStruct().idx;
-                var i: u32 = 0;
-                while (i < sd.fields.count) : (i += 1) {
-                    if (self.getStructFieldIsPadding(struct_idx, i)) continue;
-                    if (self.layoutContainsRcErasedBox(self.getLayout(self.getStructFieldLayout(struct_idx, i)))) break :blk true;
-                }
-                break :blk false;
-            },
-            .tag_union => blk: {
-                const tu_data = self.getTagUnionData(l.getTagUnion().idx);
-                const variants = self.getTagUnionVariants(tu_data);
-                var i: u32 = 0;
-                while (i < variants.len) : (i += 1) {
-                    if (self.layoutContainsRcErasedBox(self.getLayout(variants.get(i).payload_layout))) break :blk true;
-                }
-                break :blk false;
-            },
-            .closure => self.layoutContainsRcErasedBox(self.getLayout(l.getClosure().captures_layout_idx)),
         };
     }
 
@@ -2531,22 +2496,6 @@ pub const Store = struct {
 
     pub fn rcHelperPlan(self: *const Self, helper_key: @import("./rc_helper.zig").HelperKey) @import("./rc_helper.zig").Plan {
         return rc_helper.Resolver.init(self).plan(helper_key);
-    }
-
-    /// Like `rcHelperPlan`, but treats erased boxes (`box_of_zst`) as
-    /// refcounted container elements/fields/payloads. Used by the
-    /// descriptor-guided boxy runtime's concrete RC path so it matches the
-    /// interpreter; not used to decide which RC statements a program lowers to.
-    pub fn rcHelperPlanErasedBox(self: *const Self, helper_key: @import("./rc_helper.zig").HelperKey) @import("./rc_helper.zig").Plan {
-        return rc_helper.Resolver.initErasedBox(self).plan(helper_key);
-    }
-
-    pub fn rcHelperStructFieldPlanErasedBox(self: *const Self, struct_plan: @import("./rc_helper.zig").StructPlan, field_index: u32) ?@import("./rc_helper.zig").FieldPlan {
-        return rc_helper.Resolver.initErasedBox(self).structFieldPlan(struct_plan, field_index);
-    }
-
-    pub fn rcHelperTagUnionVariantPlanErasedBox(self: *const Self, tag_plan: @import("./rc_helper.zig").TagUnionPlan, variant_index: u32) ?@import("./rc_helper.zig").HelperKey {
-        return rc_helper.Resolver.initErasedBox(self).tagUnionVariantPlan(tag_plan, variant_index);
     }
 
     pub fn rcHelperStructFieldCount(self: *const Self, struct_plan: @import("./rc_helper.zig").StructPlan) u32 {
@@ -2846,7 +2795,7 @@ test "layout store records explicit resolved list layout facts for boxed lists" 
     try testing.expectEqual(@as(?Idx, null), store.resolvedListLayoutIdx(.u8));
 }
 
-test "ZST containers are refcounted layouts with no refcounted children" {
+test "ZST containers and erased boxes have distinct RC semantics" {
     const testing = std.testing;
 
     var store = try Store.init(testing.allocator, .u64);
@@ -2854,10 +2803,14 @@ test "ZST containers are refcounted layouts with no refcounted children" {
 
     const list_zst_idx = try store.insertLayout(Layout.listOfZst());
     const box_zst_idx = try store.insertLayout(Layout.boxOfZst());
+    const erased_box_idx = try store.insertErasedBox();
+    const list_erased_box_idx = try store.insertList(erased_box_idx);
 
     try testing.expect(!store.layoutContainsRefcounted(store.getLayout(.zst)));
     try testing.expect(store.layoutContainsRefcounted(store.getLayout(list_zst_idx)));
     try testing.expect(!store.layoutContainsRefcounted(store.getLayout(box_zst_idx)));
+    try testing.expect(store.layoutContainsRefcounted(store.getLayout(erased_box_idx)));
+    try testing.expectEqual(store.targetUsize().size(), store.layoutSize(store.getLayout(erased_box_idx)));
 
     const list_abi = store.builtinListAbi(list_zst_idx);
     try testing.expectEqual(@as(?Idx, null), list_abi.elem_layout_idx);
@@ -2868,6 +2821,15 @@ test "ZST containers are refcounted layouts with no refcounted children" {
     try testing.expectEqual(@as(?Idx, null), box_abi.elem_layout_idx);
     try testing.expectEqual(@as(u32, 0), box_abi.elem_size);
     try testing.expect(!box_abi.contains_refcounted);
+
+    const list_erased_box_abi = store.builtinListAbi(list_erased_box_idx);
+    try testing.expectEqual(erased_box_idx, list_erased_box_abi.elem_layout_idx.?);
+    try testing.expectEqual(store.targetUsize().size(), list_erased_box_abi.elem_size);
+    try testing.expectEqual(
+        @as(u32, @intCast(store.targetUsize().alignment().toByteUnits())),
+        list_erased_box_abi.elem_alignment,
+    );
+    try testing.expect(list_erased_box_abi.contains_refcounted);
 
     try testing.expectEqual(
         rc_helper.Plan.noop,

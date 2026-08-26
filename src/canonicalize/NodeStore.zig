@@ -222,6 +222,7 @@ const DiagnosticNodeTag = enum {
     diag_type_from_missing_module,
     diag_module_not_imported,
     diag_nested_type_not_found,
+    diag_internal_builtin_type,
     diag_nested_value_not_found,
     diag_record_builder_map2_not_found,
     diag_too_many_exports,
@@ -741,7 +742,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 92;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 93;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
@@ -5354,6 +5355,15 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.region;
             node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.parent_name), .ident2 = @bitCast(r.nested_name) } });
         },
+        .internal_builtin_type => |r| {
+            node.tag = .diag_internal_builtin_type;
+            region = r.region;
+            node.setPayload(.{ .diag_internal_builtin_type = .{
+                .parent_name = @bitCast(r.parent_name),
+                .nested_name = @bitCast(r.nested_name),
+                .kind = @intFromEnum(r.kind),
+            } });
+        },
         .nested_value_not_found => |r| {
             node.tag = .diag_nested_value_not_found;
             region = r.region;
@@ -5741,6 +5751,15 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             return CIR.Diagnostic{ .nested_type_not_found = .{
                 .parent_name = @as(base.Ident.Idx, @bitCast(p.ident1)),
                 .nested_name = @as(base.Ident.Idx, @bitCast(p.ident2)),
+                .region = store.getRegionAt(node_idx),
+            } };
+        },
+        .diag_internal_builtin_type => {
+            const p = payload.diag_internal_builtin_type;
+            return CIR.Diagnostic{ .internal_builtin_type = .{
+                .parent_name = @as(base.Ident.Idx, @bitCast(p.parent_name)),
+                .nested_name = @as(base.Ident.Idx, @bitCast(p.nested_name)),
+                .kind = @enumFromInt(p.kind),
                 .region = store.getRegionAt(node_idx),
             } };
         },

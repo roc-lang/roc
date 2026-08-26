@@ -269,7 +269,7 @@ exposed_types: std.AutoHashMapUnmanaged(Ident.Idx, void) = .{},
 /// Track exposed identifiers by text to handle changing indices
 exposed_ident_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// Track exposed types by text to handle changing indices
-exposed_type_texts: std.StringHashMapUnmanaged(Region) = .{},
+exposed_type_idents: std.AutoHashMapUnmanaged(Ident.Idx, Region) = .{},
 /// Track which identifiers in the current scope are placeholders (not yet replaced with real definitions)
 /// Maps the fully qualified placeholder ident to its component parts for hierarchical registration.
 /// In the common case this stays empty—it is only populated by builtin canon paths that still
@@ -604,6 +604,33 @@ fn insertQualifiedIdent(self: *Self, parent: []const u8, child: []const u8) std.
     return try self.env.insertIdent(Ident.for_text(qualified));
 }
 
+/// Interns the dotted name a chain of qualifier tokens spells, e.g. `Foo.Bar.Baz`.
+///
+/// The name is assembled from each segment's interned text because neither the
+/// source text nor a single token's text spells it: a dotted-identifier token
+/// interns as `Bar` but its region starts at the `.`, and the parser accepts
+/// whitespace between segments, so any name recovered by slicing source is
+/// wrong in one of those two ways.
+fn qualifiedNameIdent(
+    self: *Self,
+    qualifiers: AST.Token.Span,
+    final_token: Token.Idx,
+) std.mem.Allocator.Error!Ident.Idx {
+    const top = self.qualified_ident_bytes.top();
+    defer self.qualified_ident_bytes.clearFrom(top);
+
+    for (self.parse_ir.store.tokenSlice(qualifiers)) |raw_token| {
+        const segment = self.parse_ir.tokens.resolveIdentifier(@intCast(raw_token)) orelse unreachable;
+        try self.qualified_ident_bytes.items.appendSlice(self.parse_ir.env.getIdent(segment));
+        try self.qualified_ident_bytes.append('.');
+    }
+
+    const final_ident = self.parse_ir.tokens.resolveIdentifier(final_token) orelse unreachable;
+    try self.qualified_ident_bytes.items.appendSlice(self.parse_ir.env.getIdent(final_ident));
+
+    return try self.env.insertIdent(Ident.for_text(self.qualified_ident_bytes.sliceFromStart(top)));
+}
+
 /// Deinitialize canonicalizer resources
 pub fn deinit(
     self: *Self,
@@ -615,7 +642,7 @@ pub fn deinit(
     self.exposed_idents.deinit(gpa);
     self.exposed_types.deinit(gpa);
     self.exposed_ident_texts.deinit(gpa);
-    self.exposed_type_texts.deinit(gpa);
+    self.exposed_type_idents.deinit(gpa);
     self.placeholder_idents.deinit(gpa);
     self.pending_provides_entries.deinit(gpa);
     self.method_registrations.deinit(gpa);
@@ -804,6 +831,15 @@ fn autoImportedTypeUsesCompilerBuiltinImport(info: AutoImportedType) bool {
         .compiler_builtin => true,
         .module => false,
     };
+}
+
+/// Return the exact internal builtin family reached through the compiler-owned
+/// auto-import named by `root_ident`. A user type that shares the same text has
+/// no internal family.
+fn internalBuiltinTypeKind(self: *Self, root_ident: Ident.Idx, qualified_name: []const u8) ?CIR.InternalBuiltinTypeKind {
+    const imported = self.lookupAvailableModuleEnv(root_ident) orelse return null;
+    if (!autoImportedTypeUsesCompilerBuiltinImport(imported)) return null;
+    return CIR.internalBuiltinTypeKind(qualified_name);
 }
 
 fn isSourceTagIdent(self: *const Self, ident: Ident.Idx) bool {
@@ -2446,9 +2482,8 @@ fn registerTypeDecl(
         }
     }
 
-    // Remove from exposed_type_texts since the type is now fully defined
-    const type_text = self.env.getIdent(type_header.name);
-    _ = self.exposed_type_texts.remove(type_text);
+    // Remove from exposed_type_idents since the type is now fully defined
+    _ = self.exposed_type_idents.remove(type_header.name);
 
     return if (is_redeclaration)
         TypeDeclRegistration{ .redeclared = type_decl_stmt_idx }
@@ -5518,34 +5553,23 @@ fn addToExposedScope(
                     continue;
                 }
 
-                // Get the text for tracking redundant exposures
-                const token_region = self.parse_ir.tokens.resolve(@intCast(type_name.ident));
-                const type_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
+                const type_ident = self.parse_ir.tokens.resolveIdentifier(type_name.ident) orelse continue;
+                try self.env.addExposedById(type_ident);
 
-                // Get the interned identifier
-                if (self.parse_ir.tokens.resolveIdentifier(type_name.ident)) |ident_idx| {
-                    try self.env.addExposedById(ident_idx);
+                // Just track that this type is exposed
+                try self.exposed_types.put(gpa, type_ident, {});
 
-                    // Just track that this type is exposed
-                    try self.exposed_types.put(gpa, ident_idx, {});
-                }
-
-                // Store by text in a temporary hash map, since indices may change
                 const region = self.parse_ir.tokenizedRegionToRegion(type_name.region);
 
                 // Check if this type was already exposed
-                if (self.exposed_type_texts.get(type_text)) |original_region| {
-                    // Report redundant exposed entry error
-                    if (self.parse_ir.tokens.resolveIdentifier(type_name.ident)) |ident_idx| {
-                        const diag = Diagnostic{ .redundant_exposed = .{
-                            .ident = ident_idx,
-                            .region = region,
-                            .original_region = original_region,
-                        } };
-                        try self.env.pushDiagnostic(diag);
-                    }
+                if (self.exposed_type_idents.get(type_ident)) |original_region| {
+                    try self.env.pushDiagnostic(Diagnostic{ .redundant_exposed = .{
+                        .ident = type_ident,
+                        .region = region,
+                        .original_region = original_region,
+                    } });
                 } else {
-                    try self.exposed_type_texts.put(gpa, type_text, region);
+                    try self.exposed_type_idents.put(gpa, type_ident, region);
                 }
             },
             .upper_ident_star => |type_with_constructors| {
@@ -5558,34 +5582,23 @@ fn addToExposedScope(
                     continue;
                 }
 
-                // Get the text for tracking redundant exposures
-                const token_region = self.parse_ir.tokens.resolve(@intCast(type_with_constructors.ident));
-                const type_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
+                const type_ident = self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident) orelse continue;
+                try self.env.addExposedById(type_ident);
 
-                // Get the interned identifier
-                if (self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident)) |ident_idx| {
-                    try self.env.addExposedById(ident_idx);
+                // Just track that this type is exposed
+                try self.exposed_types.put(gpa, type_ident, {});
 
-                    // Just track that this type is exposed
-                    try self.exposed_types.put(gpa, ident_idx, {});
-                }
-
-                // Store by text in a temporary hash map, since indices may change
                 const region = self.parse_ir.tokenizedRegionToRegion(type_with_constructors.region);
 
                 // Check if this type was already exposed
-                if (self.exposed_type_texts.get(type_text)) |original_region| {
-                    // Report redundant exposed entry error
-                    if (self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident)) |ident_idx| {
-                        const diag = Diagnostic{ .redundant_exposed = .{
-                            .ident = ident_idx,
-                            .region = region,
-                            .original_region = original_region,
-                        } };
-                        try self.env.pushDiagnostic(diag);
-                    }
+                if (self.exposed_type_idents.get(type_ident)) |original_region| {
+                    try self.env.pushDiagnostic(Diagnostic{ .redundant_exposed = .{
+                        .ident = type_ident,
+                        .region = region,
+                        .original_region = original_region,
+                    } });
                 } else {
-                    try self.exposed_type_texts.put(gpa, type_text, region);
+                    try self.exposed_type_idents.put(gpa, type_ident, region);
                 }
             },
             .malformed => {
@@ -5601,19 +5614,17 @@ fn addQualifiedExposedType(
     final_token: Token.Idx,
     tokenized_region: AST.TokenizedRegion,
 ) std.mem.Allocator.Error!void {
-    const strip_tokens = [_]tokenize.Token.Tag{ .NoSpaceDotUpperIdent, .DotUpperIdent };
-    const type_text = self.parse_ir.resolveQualifiedName(qualifiers, final_token, &strip_tokens);
+    const type_ident = try self.qualifiedNameIdent(qualifiers, final_token);
     const region = self.parse_ir.tokenizedRegionToRegion(tokenized_region);
 
-    if (self.exposed_type_texts.get(type_text)) |original_region| {
-        const ident = try self.env.insertIdent(base.Ident.for_text(type_text));
+    if (self.exposed_type_idents.get(type_ident)) |original_region| {
         try self.env.pushDiagnostic(Diagnostic{ .redundant_exposed = .{
-            .ident = ident,
+            .ident = type_ident,
             .region = region,
             .original_region = original_region,
         } });
     } else {
-        try self.exposed_type_texts.put(self.env.gpa, type_text, region);
+        try self.exposed_type_idents.put(self.env.gpa, type_ident, region);
     }
 }
 
@@ -6058,9 +6069,7 @@ fn resolveQualifiedExposedTypes(self: *Self) std.mem.Allocator.Error!void {
 
         if (!try self.qualifiedExposedTypeExists(imported.env, qualifier_tokens[1..], final_token)) continue;
 
-        const strip_tokens = [_]tokenize.Token.Tag{ .NoSpaceDotUpperIdent, .DotUpperIdent };
-        const full_type_text = self.parse_ir.resolveQualifiedName(qualifiers, final_token, &strip_tokens);
-        _ = self.exposed_type_texts.remove(full_type_text);
+        _ = self.exposed_type_idents.remove(try self.qualifiedNameIdent(qualifiers, final_token));
     }
 }
 
@@ -6115,17 +6124,12 @@ fn checkExposedButNotImplemented(self: *Self) std.mem.Allocator.Error!void {
     }
 
     // Check for remaining exposed types
-    var iter = self.exposed_type_texts.iterator();
+    var iter = self.exposed_type_idents.iterator();
     while (iter.next()) |entry| {
-        const type_text = entry.key_ptr.*;
-        const region = entry.value_ptr.*;
-        // Create an identifier for error reporting
-        const ident_idx = try self.env.insertIdent(base.Ident.for_text(type_text));
-
         // Report error: exposed type but not implemented
         try self.env.pushDiagnostic(Diagnostic{ .exposed_but_not_implemented = .{
-            .ident = ident_idx,
-            .region = region,
+            .ident = entry.key_ptr.*,
+            .region = entry.value_ptr.*,
         } });
     }
 }
@@ -6571,13 +6575,13 @@ fn importAliased(
     }
 
     // If this import satisfies an exposed type requirement (e.g., platform re-exporting
-    // an imported module), remove it from exposed_type_texts so we don't report
+    // an imported module), remove it from exposed_type_idents so we don't report
     // "Exposed But Not Defined" for re-exported imports. The ident text must be
     // fetched fresh here: the import processing above interns new idents, which
     // can grow the interner's byte buffer and invalidate any earlier text slice.
     // Package headers expose the source-visible alias, not the dependency's
     // complete import path.
-    _ = self.exposed_type_texts.remove(self.env.getIdent(alias));
+    _ = self.exposed_type_idents.remove(alias);
 
     return import_idx;
 }
@@ -6640,11 +6644,11 @@ fn importUnaliased(
     }
 
     // If this import satisfies an exposed type requirement (e.g., platform re-exporting
-    // an imported module), remove it from exposed_type_texts so we don't report
+    // an imported module), remove it from exposed_type_idents so we don't report
     // "Exposed But Not Defined" for re-exported imports. The ident text must be
     // fetched fresh here: the import processing above interns new idents, which
     // can grow the interner's byte buffer and invalidate any earlier text slice.
-    _ = self.exposed_type_texts.remove(self.env.getIdent(module_name));
+    _ = self.exposed_type_idents.remove(module_name);
 
     return import_idx;
 }
@@ -15565,18 +15569,18 @@ fn finishTagPattern(
         // resolve the remaining path through that module's explicit
         // exposed-node facts; otherwise resolve the full path locally.
         const qualifier_toks = self.parse_ir.store.tokenSlice(qualifiers);
-        const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
         const first_tok_idx = qualifier_toks[0];
         const first_tok_ident = self.parse_ir.tokens.resolveIdentifier(first_tok_idx) orelse unreachable;
         const type_tok_idx = qualifier_toks[qualifier_toks.len - 1];
         const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
 
-        const full_type_name = self.parse_ir.resolveQualifiedName(
-            qualifiers,
-            qualifier_toks[qualifier_toks.len - 1],
-            &strip_tokens,
-        );
-        const full_type_ident = try self.env.insertIdent(base.Ident.for_text(full_type_name));
+        // The whole qualifier chain names the type, so the last qualifier is the
+        // final segment rather than a prefix of one.
+        const type_path_qualifiers = AST.Token.Span{ .span = .{
+            .start = qualifiers.span.start,
+            .len = @intCast(qualifier_toks.len - 1),
+        } };
+        const full_type_ident = try self.qualifiedNameIdent(type_path_qualifiers, type_tok_idx);
 
         const module_info = (try self.scopeLookupOrPrepareModule(first_tok_ident)) orelse {
             if (try self.scopeLookupOrPrepareTypeDecl(full_type_ident)) |nominal_type_decl_stmt_idx| {
@@ -15609,7 +15613,7 @@ fn finishTagPattern(
             }
 
             if (self.lookupAvailableModuleEnv(first_tok_ident)) |auto_imported_type| {
-                if (try self.lookupNestedAutoImportedTypeNode(auto_imported_type, first_tok_ident, full_type_name)) |target_node_idx| {
+                if (try self.lookupNestedAutoImportedTypeNode(auto_imported_type, first_tok_ident, self.env.getIdent(full_type_ident))) |target_node_idx| {
                     const import_idx = try self.getOrCreateAutoImportedTypeImport(auto_imported_type);
 
                     if (try self.validateImportedNominalTagTarget(Pattern.Idx, auto_imported_type.env, target_node_idx, first_tok_ident, full_type_ident, type_tok_region)) |malformed_idx| {
@@ -15641,11 +15645,14 @@ fn finishTagPattern(
             } });
         };
 
-        const first_alias_len = self.env.getIdent(first_tok_ident).len;
-        std.debug.assert(full_type_name.len > first_alias_len);
-        std.debug.assert(full_type_name[first_alias_len] == '.');
-        const type_name = full_type_name[first_alias_len + 1 ..];
-        const type_name_ident = try self.env.insertIdent(base.Ident.for_text(type_name));
+        // The path the imported module knows this type by drops the module
+        // qualifier, so build it from the remaining segments rather than by
+        // slicing the interned full path.
+        const module_relative_qualifiers = AST.Token.Span{ .span = .{
+            .start = type_path_qualifiers.span.start + 1,
+            .len = type_path_qualifiers.span.len - 1,
+        } };
+        const type_name_ident = try self.qualifiedNameIdent(module_relative_qualifiers, type_tok_idx);
 
         const target_node_idx = blk: {
             const auto_imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
@@ -15656,7 +15663,7 @@ fn finishTagPattern(
                 } });
             };
 
-            const other_module_node_id = (try self.lookupImportedExposedTypeNode(auto_imported_type.env, type_name)) orelse {
+            const other_module_node_id = (try self.lookupImportedExposedTypeNode(auto_imported_type.env, self.env.getIdent(type_name_ident))) orelse {
                 return try self.env.pushMalformed(Pattern.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
                     .type_name = type_name_ident,
@@ -19533,13 +19540,7 @@ fn canonicalizeTypeAnnoBasicType(
     } else {
         // First, check if this is a qualified name for an associated type (e.g., Foo.Bar)
         // Build the full qualified name
-        const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
-        const qualified_prefix = self.parse_ir.resolveQualifiedName(
-            ty.qualifiers,
-            ty.token,
-            &strip_tokens,
-        );
-        const qualified_name_ident = try self.env.insertIdent(base.Ident.for_text(qualified_prefix));
+        const qualified_name_ident = try self.qualifiedNameIdent(ty.qualifiers, ty.token);
 
         // Try looking up the full qualified name in local scope (for associated types)
         if (try self.scopeLookupOrPrepareTypeDecl(qualified_name_ident)) |type_decl_idx| {
@@ -19551,7 +19552,7 @@ fn canonicalizeTypeAnnoBasicType(
 
         const first_qualifier_ident = self.parse_ir.tokens.resolveIdentifier(qualifier_toks[0]) orelse unreachable;
         if (self.lookupAvailableModuleEnv(first_qualifier_ident)) |auto_imported_type| {
-            if (try self.lookupNestedAutoImportedTypeNode(auto_imported_type, first_qualifier_ident, qualified_prefix)) |target_node_idx| {
+            if (try self.lookupNestedAutoImportedTypeNode(auto_imported_type, first_qualifier_ident, self.env.getIdent(qualified_name_ident))) |target_node_idx| {
                 const import_idx = try self.getOrCreateAutoImportedTypeImport(auto_imported_type);
                 return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{ .name = qualified_name_ident, .base = .{ .external = .{
                     .module_idx = import_idx,
@@ -19569,22 +19570,13 @@ fn canonicalizeTypeAnnoBasicType(
                 } });
             };
 
-            const type_path_text = if (qualifier_toks.len > 1) blk: {
+            const type_path_ident = if (qualifier_toks.len > 1) blk: {
                 const type_qualifiers = AST.Token.Span{ .span = .{
                     .start = ty.qualifiers.span.start + 1,
                     .len = @intCast(qualifier_toks.len - 1),
                 } };
-                const raw_type_path = self.parse_ir.resolveQualifiedName(
-                    type_qualifiers,
-                    ty.token,
-                    &strip_tokens,
-                );
-                break :blk if (raw_type_path.len > 0 and raw_type_path[0] == '.')
-                    raw_type_path[1..]
-                else
-                    raw_type_path;
-            } else self.env.getIdent(type_name_ident);
-            const type_path_ident = try self.env.insertIdent(base.Ident.for_text(type_path_text));
+                break :blk try self.qualifiedNameIdent(type_qualifiers, ty.token);
+            } else type_name_ident;
 
             const imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
                 return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_from_missing_module = .{
@@ -19594,7 +19586,7 @@ fn canonicalizeTypeAnnoBasicType(
                 } });
             };
 
-            const target_node_idx = (try self.lookupImportedExposedTypeNode(imported_type.env, type_path_text)) orelse {
+            const target_node_idx = (try self.lookupImportedExposedTypeNode(imported_type.env, self.env.getIdent(type_path_ident))) orelse {
                 return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
                     .type_name = type_path_ident,
@@ -19611,8 +19603,17 @@ fn canonicalizeTypeAnnoBasicType(
         if (try self.scopeLookupTypeBinding(first_qualifier_ident)) |binding_location| {
             const binding = binding_location.binding.*;
             if (binding == .external_nominal) {
-                if (try self.resolveNestedExternalTypeAnno(binding.external_nominal, qualified_prefix, qualified_name_ident, region)) |anno_idx| {
+                if (try self.resolveNestedExternalTypeAnno(binding.external_nominal, qualified_name_ident, region)) |anno_idx| {
                     return anno_idx;
+                }
+
+                if (self.internalBuiltinTypeKind(first_qualifier_ident, self.env.getIdent(qualified_name_ident))) |kind| {
+                    return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .internal_builtin_type = .{
+                        .parent_name = first_qualifier_ident,
+                        .nested_name = type_name_ident,
+                        .kind = kind,
+                        .region = region,
+                    } });
                 }
 
                 return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .nested_type_not_found = .{
@@ -19630,18 +19631,25 @@ fn canonicalizeTypeAnnoBasicType(
         else
             .{ .span = .{ .start = 0, .len = 0 } };
 
-        const module_alias_text = self.parse_ir.resolveQualifiedName(
+        const module_alias = try self.qualifiedNameIdent(
             module_qualifiers,
             qualifier_toks[qualifier_toks.len - 1],
-            &strip_tokens,
         );
-        const module_alias = try self.env.insertIdent(base.Ident.for_text(module_alias_text));
 
         // Check if this is a module alias
         const module_info = (try self.scopeLookupOrPrepareModule(module_alias)) orelse {
             // Module is not in current scope - but check if it's a type name first
             if (try self.scopeLookupTypeBinding(module_alias)) |_| {
                 // This is in scope as a type/value, but doesn't expose the nested type being requested
+                if (self.internalBuiltinTypeKind(module_alias, self.env.getIdent(qualified_name_ident))) |kind| {
+                    return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .internal_builtin_type = .{
+                        .parent_name = module_alias,
+                        .nested_name = type_name_ident,
+                        .kind = kind,
+                        .region = region,
+                    } });
+                }
+
                 return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .nested_type_not_found = .{
                     .parent_name = module_alias,
                     .nested_name = type_name_ident,
@@ -19707,7 +19715,7 @@ fn lookupNestedAutoImportedTypeNode(
     const nested_suffix = self.nestedAutoImportedTypeSuffix(imported_type, source_root_ident, type_path_text);
 
     const qualified_type_text = self.env.getIdent(imported_type.qualified_type_ident);
-    if (std.mem.eql(u8, qualified_type_text, "Builtin.Encoding") and isHiddenEncodingNestedType(nested_suffix)) {
+    if (CIR.builtinTypeIsInternalNested(qualified_type_text, nested_suffix)) {
         return null;
     }
 
@@ -19748,48 +19756,21 @@ fn nestedAutoImportedTypeSuffix(
     return type_path_text;
 }
 
-fn isHiddenAutoImportedNestedType(
+fn isInternalAutoImportedNestedType(
     self: *Self,
     imported_type: AutoImportedType,
     source_root_ident: Ident.Idx,
     type_path_text: []const u8,
 ) bool {
-    const qualified_type_text = self.env.getIdent(imported_type.qualified_type_ident);
-    if (!std.mem.eql(u8, qualified_type_text, "Builtin.Encoding")) {
-        return false;
-    }
-
-    const nested_suffix = self.nestedAutoImportedTypeSuffix(imported_type, source_root_ident, type_path_text);
-    return isHiddenEncodingNestedType(nested_suffix);
-}
-
-fn isHiddenEncodingNestedType(nested_suffix: []const u8) bool {
-    const hidden_names = [_][]const u8{
-        "JsonState",
-        "JsonEncodeState",
-        "JsonContainerEncodeState",
-        "JsonEncoding",
-        "HttpHeaderState",
-        "HttpHeaderEncoding",
-    };
-
-    inline for (hidden_names) |hidden_name| {
-        if (std.mem.eql(u8, nested_suffix, hidden_name)) return true;
-        if (std.mem.startsWith(u8, nested_suffix, hidden_name) and
-            nested_suffix.len > hidden_name.len and
-            nested_suffix[hidden_name.len] == '.')
-        {
-            return true;
-        }
-    }
-
-    return false;
+    return CIR.builtinTypeIsInternalNested(
+        self.env.getIdent(imported_type.qualified_type_ident),
+        self.nestedAutoImportedTypeSuffix(imported_type, source_root_ident, type_path_text),
+    );
 }
 
 fn resolveNestedExternalTypeAnno(
     self: *Self,
     external: Scope.ExternalTypeBinding,
-    type_path_text: []const u8,
     type_path_ident: Ident.Idx,
     region: Region,
 ) std.mem.Allocator.Error!?TypeAnno.Idx {
@@ -19797,12 +19778,12 @@ fn resolveNestedExternalTypeAnno(
     const imported_type = self.lookupAvailableModuleEnv(external.module_ident) orelse
         self.lookupAvailableModuleEnv(external.original_ident) orelse
         return null;
-    if (self.isHiddenAutoImportedNestedType(imported_type, external.original_ident, type_path_text)) {
+    if (self.isInternalAutoImportedNestedType(imported_type, external.original_ident, self.env.getIdent(type_path_ident))) {
         return null;
     }
-    const target_node_idx = (try self.lookupImportedExposedTypeNode(imported_type.env, type_path_text)) orelse
-        (try self.lookupImportedTypeDeclNode(imported_type.env, type_path_text)) orelse
-        (try self.lookupNestedAutoImportedTypeNode(imported_type, external.original_ident, type_path_text)) orelse
+    const target_node_idx = (try self.lookupImportedExposedTypeNode(imported_type.env, self.env.getIdent(type_path_ident))) orelse
+        (try self.lookupImportedTypeDeclNode(imported_type.env, self.env.getIdent(type_path_ident))) orelse
+        (try self.lookupNestedAutoImportedTypeNode(imported_type, external.original_ident, self.env.getIdent(type_path_ident))) orelse
         return null;
 
     return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{ .name = type_path_ident, .base = .{ .external = .{

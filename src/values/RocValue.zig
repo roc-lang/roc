@@ -408,6 +408,7 @@ pub fn equals(self: RocValue, other: RocValue, ctx: FormatContext) bool {
             };
         },
         .erased_callable => unreachable, // Function values are not equality-comparable Roc values.
+        .erased_box => unreachable, // Descriptor-backed boxes must be compared through Boxy.
         .zst => return true,
         .struct_ => {
             const s_fields = ctx.layout_store.struct_fields.sliceRange(

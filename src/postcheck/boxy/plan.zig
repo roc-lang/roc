@@ -235,6 +235,9 @@ pub const TypeRepresentation = struct {
     nominal_backing_arg_substitutions: Span = .{},
     dictionaries: Span = .{},
     descriptor: ?DescriptorRequirementId = null,
+    /// Set when this planned representation transitively stores at least one
+    /// dynamic child whose ownership is descriptor-defined. Lowering consumes
+    /// `contains_dynamic` directly; committed layouts are not an input.
     contains_dynamic: bool = false,
     /// This representation is the checker-defined `[#Missing, #Present(a)]`
     /// storage convention used for an optional or still-parametric field kind.

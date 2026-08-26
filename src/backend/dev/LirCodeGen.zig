@@ -213,11 +213,6 @@ fn updateModeImmForArg1(unique_args: u64) i64 {
 
 fn builtinInternalListAbi(ls: *const LayoutStore, comptime _: []const u8, list_layout_idx: layout.Idx) BuiltinListAbi {
     const abi = ls.builtinListAbi(list_layout_idx);
-    // Erased `box_of_zst` values carry real refcounted heap allocations in
-    // boxy mode, so containers that store them need the refcounted list prefix
-    // and element callbacks even though the canonical null form is not
-    // refcounted.
-    const elements_refcounted = abi.contains_refcounted or ls.layoutContainsRcErasedBox(abi.elem_layout);
     return .{
         .elem_layout_idx = abi.elem_layout_idx,
         .elem_layout = abi.elem_layout,
@@ -226,7 +221,7 @@ fn builtinInternalListAbi(ls: *const LayoutStore, comptime _: []const u8, list_l
             .alignment = layout.RocAlignment.fromByteUnits(@intCast(abi.elem_alignment)),
         },
         .alignment_bytes = abi.elem_alignment,
-        .elements_refcounted = elements_refcounted,
+        .elements_refcounted = abi.contains_refcounted,
     };
 }
 
@@ -1988,6 +1983,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .scalar,
                             .box,
                             .box_of_zst,
+                            .erased_box,
                             .struct_,
                             .closure,
                             .erased_callable,
@@ -2008,6 +2004,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .scalar,
                         .box,
                         .box_of_zst,
+                        .erased_box,
                         .struct_,
                         .closure,
                         .erased_callable,
@@ -2190,6 +2187,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .scalar,
                         .box,
                         .box_of_zst,
+                        .erased_box,
                         .struct_,
                         .closure,
                         .erased_callable,
@@ -2212,8 +2210,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const elem_layout_val = ls.getLayout(list_elem_layout);
                         const ret_list_like = ret_layout_val.tag == .list or ret_layout_val.tag == .list_of_zst;
                         const elem_list_like = elem_layout_val.tag == .list or elem_layout_val.tag == .list_of_zst;
-                        const ret_box_like = ret_layout_val.tag == .box or ret_layout_val.tag == .box_of_zst;
-                        const elem_box_like = elem_layout_val.tag == .box or elem_layout_val.tag == .box_of_zst;
+                        const ret_box_like = ret_layout_val.tag == .box or ret_layout_val.tag == .box_of_zst or ret_layout_val.tag == .erased_box;
+                        const elem_box_like = elem_layout_val.tag == .box or elem_layout_val.tag == .box_of_zst or elem_layout_val.tag == .erased_box;
 
                         if (!(ret_list_like and elem_list_like) and !(ret_box_like and elem_box_like)) {
                             std.debug.panic(
@@ -4023,6 +4021,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                     .scalar,
                                     .box,
                                     .box_of_zst,
+                                    .erased_box,
                                     .list,
                                     .list_of_zst,
                                     .closure,
@@ -12856,6 +12855,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .scalar,
                 .box,
                 .box_of_zst,
+                .erased_box,
                 .struct_,
                 .closure,
                 .erased_callable,
@@ -12877,6 +12877,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .struct_ => try work.append(wa, .{ .node_struct = .{ .lhs_loc = lhs_norm, .rhs_loc = rhs_norm, .layout_idx = inner_layout_idx, .result_reg = rr } }),
                             .tag_union => try work.append(wa, .{ .node_tag = .{ .lhs_loc = lhs_norm, .rhs_loc = rhs_norm, .layout_idx = inner_layout_idx, .result_reg = rr } }),
                             .list, .list_of_zst => try work.append(wa, .{ .node_list = .{ .lhs_loc = lhs_norm, .rhs_loc = rhs_norm, .layout_idx = inner_layout_idx, .result_reg = rr } }),
+                            .erased_box => unreachable,
                             .scalar,
                             .box,
                             .box_of_zst,
@@ -13215,6 +13216,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .scalar,
                         .box,
                         .box_of_zst,
+                        .erased_box,
                         .struct_,
                         .closure,
                         .erased_callable,
@@ -14090,6 +14092,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .box_of_zst => {
                     if (expected_layout == .zst) return .{ .immediate_i64 = 0 };
                 },
+                .erased_box,
                 .scalar,
                 .list,
                 .list_of_zst,
@@ -14150,8 +14153,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const ls = self.layout_store;
                 const actual_val = ls.getLayout(actual_layout);
                 const expected_val = ls.getLayout(expected_layout);
-                const actual_is_box = actual_val.tag == .box or actual_val.tag == .box_of_zst;
-                const expected_is_box = expected_val.tag == .box or expected_val.tag == .box_of_zst;
+                const actual_is_box = actual_val.tag == .box or actual_val.tag == .box_of_zst or actual_val.tag == .erased_box;
+                const expected_is_box = expected_val.tag == .box or expected_val.tag == .box_of_zst or expected_val.tag == .erased_box;
                 const actual_is_list = actual_val.tag == .list or actual_val.tag == .list_of_zst;
                 const expected_is_list = expected_val.tag == .list or expected_val.tag == .list_of_zst;
                 const expected_is_erased_ptr = expected_val.tag == .scalar and expected_val.getScalar().tag == .opaque_ptr;
@@ -14205,6 +14208,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 _ = self.requireExactValueLocationToLayout(loc, actual_layout, .zst, site);
                 return .{ .immediate_i64 = 0 };
             }
+            if (expected_val.tag == .erased_box) {
+                return self.requireExactValueLocationToLayout(loc, actual_layout, expected_layout, site);
+            }
             if (expected_val.tag != .box) {
                 return self.requireExactValueLocationToLayout(loc, actual_layout, expected_layout, site);
             }
@@ -14240,7 +14246,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Coerce a value being written into a struct field to the field's
-        /// layout. A box-family value (`box` / `box_of_zst`) relabelled to a
+        /// layout. A box-family value relabelled to a
         /// different box-family layout of the same pointer size is a bitwise
         /// identity: a box holds a pointer regardless of which element layout
         /// labels it, so the pointer is copied as-is. This mirrors the
@@ -14258,8 +14264,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const ls = self.layout_store;
                 const actual_val = ls.getLayout(actual_layout);
                 const expected_val = ls.getLayout(expected_layout);
-                const actual_is_box = actual_val.tag == .box or actual_val.tag == .box_of_zst;
-                const expected_is_box = expected_val.tag == .box or expected_val.tag == .box_of_zst;
+                const actual_is_box = actual_val.tag == .box or actual_val.tag == .box_of_zst or actual_val.tag == .erased_box;
+                const expected_is_box = expected_val.tag == .box or expected_val.tag == .box_of_zst or expected_val.tag == .erased_box;
                 if (actual_is_box and expected_is_box and
                     self.getLayoutSize(actual_layout) == self.getLayoutSize(expected_layout))
                 {
@@ -14283,8 +14289,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (builtin.mode == .Debug) {
                 const actual_layout_val = self.layout_store.getLayout(actual_layout);
                 const expected_layout_val = self.layout_store.getLayout(expected_layout);
-                const actual_is_box = actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst;
-                const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst;
+                const actual_is_box = actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst or actual_layout_val.tag == .erased_box;
+                const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst or expected_layout_val.tag == .erased_box;
                 const actual_is_erased_ptr = actual_layout_val.tag == .scalar and actual_layout_val.getScalar().tag == .opaque_ptr;
                 const expected_is_erased_ptr = expected_layout_val.tag == .scalar and expected_layout_val.getScalar().tag == .opaque_ptr;
                 const actual_is_list = actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst;
@@ -14875,7 +14881,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             value_loc: ValueLocation,
             count: u16,
         ) Allocator.Error!void {
-            const helper_plan = self.layout_store.rcHelperPlanErasedBox(helper.key);
+            const helper_plan = self.layout_store.rcHelperPlan(helper.key);
             if (helper_plan == .noop) {
                 if (builtin.mode == .Debug) {
                     std.debug.panic("LIR/codegen invariant violated: explicit RC statement used noop helper for layout {d}", .{@intFromEnum(helper.key.layout_idx)});
@@ -14939,7 +14945,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .key = .{ .op = op, .layout_idx = layout_idx },
                 .atomicity = .atomic,
             };
-            if (self.layout_store.rcHelperPlanErasedBox(helper.key) == .noop) return null;
+            if (self.layout_store.rcHelperPlan(helper.key) == .noop) return null;
 
             const callback_reg = try self.allocTempGeneral();
             try self.emitPendingRcAddr(helper, callback_reg);
@@ -15304,7 +15310,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const field_count = self.layout_store.rcHelperStructFieldCount(struct_plan);
                     var i: u32 = 0;
                     while (i < field_count) : (i += 1) {
-                        const field_plan = self.layout_store.rcHelperStructFieldPlanErasedBox(struct_plan, i) orelse continue;
+                        const field_plan = self.layout_store.rcHelperStructFieldPlan(struct_plan, i) orelse continue;
                         const field_ptr_reg = try self.allocTempGeneral();
                         defer self.codegen.freeGeneral(field_ptr_reg);
 
@@ -15323,7 +15329,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (variant_count == 0) return;
 
                     if (variant_count == 1) {
-                        if (self.layout_store.rcHelperTagUnionVariantPlanErasedBox(tag_plan, 0)) |child_key| {
+                        if (self.layout_store.rcHelperTagUnionVariantPlan(tag_plan, 0)) |child_key| {
                             const payload_reg = try self.allocTempGeneral();
                             defer self.codegen.freeGeneral(payload_reg);
                             try self.emitLoad(.w64, payload_reg, frame_ptr, ptr_slot);
@@ -15347,7 +15353,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     var variant_i: u32 = 0;
                     while (variant_i < variant_count) : (variant_i += 1) {
-                        const child_key = self.layout_store.rcHelperTagUnionVariantPlanErasedBox(tag_plan, variant_i) orelse continue;
+                        const child_key = self.layout_store.rcHelperTagUnionVariantPlan(tag_plan, variant_i) orelse continue;
 
                         const value_ptr_reg = try self.allocTempGeneral();
                         const disc_reg = try self.allocTempGeneral();
@@ -15615,7 +15621,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return code_offset;
             }
 
-            const helper_plan = self.layout_store.rcHelperPlanErasedBox(helper.key);
+            const helper_plan = self.layout_store.rcHelperPlan(helper.key);
             if (helper_plan == .noop) {
                 if (builtin.mode == .Debug) {
                     std.debug.panic("attempted to compile noop RC helper for layout {d}", .{@intFromEnum(helper.key.layout_idx)});
@@ -15828,6 +15834,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .box => source_layout.getIdx(),
                 .scalar,
                 .box_of_zst,
+                .erased_box,
                 .list,
                 .list_of_zst,
                 .struct_,
@@ -15918,6 +15925,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .scalar,
                 .box_of_zst,
+                .erased_box,
                 .list,
                 .list_of_zst,
                 .struct_,
@@ -15940,6 +15948,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .scalar,
                 .box,
                 .box_of_zst,
+                .erased_box,
                 .list,
                 .list_of_zst,
                 .closure,
@@ -16033,6 +16042,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .scalar,
                 .box_of_zst,
+                .erased_box,
                 .list,
                 .list_of_zst,
                 .struct_,
@@ -16325,6 +16335,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return self.stackLocationForLayout(s.target_layout, base_offset);
                 },
                 .scalar,
+                .erased_box,
                 .list,
                 .list_of_zst,
                 .closure,
@@ -17063,7 +17074,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (on_drop) {
                 .none => try self.codegen.emitLoadImm(on_drop_reg, 0),
                 .rc_helper => |helper_key| {
-                    if (self.layout_store.rcHelperPlanErasedBox(helper_key) == .noop) {
+                    if (self.layout_store.rcHelperPlan(helper_key) == .noop) {
                         try self.codegen.emitLoadImm(on_drop_reg, 0);
                     } else {
                         // `on_drop` is selected here at closure creation, which
@@ -17803,6 +17814,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .scalar,
                     .box,
                     .box_of_zst,
+                    .erased_box,
                     .list,
                     .list_of_zst,
                     .struct_,
@@ -17851,6 +17863,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (a_layout.tag) {
                 .scalar => return std.meta.eql(a_layout.getScalar(), b_layout.getScalar()),
                 .zst => return true,
+                .erased_box => return true,
                 .box, .box_of_zst => {
                     return try self.layoutsInterchangeableInner(
                         ls.getBoxInfo(a_layout).elem_layout_idx,
@@ -18006,7 +18019,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!?BoxyListElementDesc {
             const elem_layout = list_abi.elem_layout_idx orelse return null;
             const elem_layout_value = self.layout_store.getLayout(elem_layout);
-            const elem_is_erased_box = elem_layout_value.tag == .box_of_zst;
+            const elem_is_erased_box = elem_layout_value.tag == .erased_box;
             const elem_is_box = elem_is_erased_box or elem_layout_value.tag == .box;
             if (!elem_is_box) return null;
 
@@ -19562,7 +19575,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             // Zero-sized type—nothing to store.
                             return;
                         },
-                        .box, .box_of_zst, .erased_callable, .ptr => {
+                        .box, .box_of_zst, .erased_box, .erased_callable, .ptr => {
                             // Box is a heap pointer (machine word)
                             const reg = try self.ensureInGeneralReg(loc);
                             try self.emitStoreToMem(saved_ptr_reg, reg);
@@ -22296,7 +22309,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Zero-sized types: nothing to move
                 .zst => {},
                 // Box: single pointer (1 register)
-                .box, .box_of_zst, .erased_callable, .ptr => try self.moveOneRegToReturn(loc),
+                .box, .box_of_zst, .erased_box, .erased_callable, .ptr => try self.moveOneRegToReturn(loc),
                 .closure => {
                     if (builtin.mode == .Debug) {
                         std.debug.panic(

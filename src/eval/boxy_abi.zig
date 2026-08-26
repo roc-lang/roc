@@ -534,25 +534,19 @@ const AbiHooks = struct {
 
     pub fn layoutContainsRc(self: AbiHooks, layout_idx: layout_mod.Idx) bool {
         const store = self.g.runtime.layout_store;
-        // The descriptor-guided boxy runtime maintains refcounts of the real
-        // allocations behind erased `box_of_zst` values, so element/payload RC
-        // must treat them as refcounted—matching the interpreter, which drives
-        // the same runtime. Using the plain `layoutContainsRefcounted` here would
-        // skip refcounting the boxes stored in a container of erased boxes,
-        // leaking or corrupting them on clone/drop.
-        return store.layoutContainsRcErasedBox(store.getLayout(layout_idx));
+        return store.layoutContainsRefcounted(store.getLayout(layout_idx));
     }
 
     pub fn rcPlanFor(self: AbiHooks, helper: layout_mod.RcHelperKey) layout_mod.RcHelperPlan {
-        return self.g.runtime.layout_store.rcHelperPlanErasedBox(helper);
+        return self.g.runtime.layout_store.rcHelperPlan(helper);
     }
 
     pub fn rcStructFieldPlan(self: AbiHooks, struct_plan: layout_mod.RcStructPlan, field_index: u32) ?layout_mod.RcFieldPlan {
-        return self.g.runtime.layout_store.rcHelperStructFieldPlanErasedBox(struct_plan, field_index);
+        return self.g.runtime.layout_store.rcHelperStructFieldPlan(struct_plan, field_index);
     }
 
     pub fn rcTagVariantPlan(self: AbiHooks, tag_plan: layout_mod.RcTagUnionPlan, variant_index: u32) ?layout_mod.RcHelperKey {
-        return self.g.runtime.layout_store.rcHelperTagUnionVariantPlanErasedBox(tag_plan, variant_index);
+        return self.g.runtime.layout_store.rcHelperTagUnionVariantPlan(tag_plan, variant_index);
     }
 
     pub fn traceProcId(_: AbiHooks) u32 {

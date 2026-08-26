@@ -718,6 +718,7 @@ const DefaultPlatformCompilerRtObjects = struct {
             .x64elf,
             .x64v1mac,
             .x64v1win,
+            .x64v1mingw,
             .x64v1freebsd,
             .x64v1openbsd,
             .x64v1netbsd,
@@ -725,12 +726,11 @@ const DefaultPlatformCompilerRtObjects = struct {
             .x64v1glibc,
             .x64v1linux,
             .x64v1elf,
-            .x64v1mingw,
             .arm64v1win,
+            .arm64v1mingw,
             .arm64v1linux,
             .arm64v1musl,
             .arm64v1glibc,
-            .arm64v1mingw,
             .arm32linux,
             .arm32musl,
             .wasm32,
@@ -2161,7 +2161,7 @@ const LayoutHashContext = struct {
                 }
             },
             .box, .list, .ptr => try self.hashIdx(hasher, layout_val.getIdx()),
-            .box_of_zst, .list_of_zst, .erased_callable, .zst => {},
+            .box_of_zst, .erased_box, .list_of_zst, .erased_callable, .zst => {},
             .closure => try self.hashIdx(hasher, layout_val.getClosure().captures_layout_idx),
             .struct_ => {
                 const info = self.layouts.getStructInfo(layout_val);
