@@ -5536,10 +5536,10 @@ layouts are committed, so
 `layoutContainsRefcounted` remains an O(1) query and list allocation-prefix
 selection never needs to search descriptors or recursively inspect layouts.
 Boxy planning separately computes `TypeRepresentation.contains_dynamic` as the
-exact transitive fact that a representation stores descriptor-defined dynamic
-content. Boxy lowering consumes that plan bit when deciding which locals and
-representation boundaries must carry a descriptor; it does not recover the
-requirement by recursively inspecting committed layouts.
+planner output that marks when a representation transitively stores
+descriptor-defined dynamic data. Boxy lowering consumes that plan bit when
+deciding which locals and representation boundaries must carry a descriptor;
+committed layouts are not an input to that decision.
 
 Function values in `.boxy` use the erased callable representation. A function
 value is one Roc refcounted allocation whose data pointer is the function
