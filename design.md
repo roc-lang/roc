@@ -3891,6 +3891,13 @@ whole bodies to classify branch-chosen loops, count construction-call depth,
 recognize iterator types by text, or set a guessed body category that changes
 how a later clone interprets opaque calls.
 
+After the exact append-tail pre-clone rewrite, SpecConstr seals each original
+function's source body together with its measured body-size admission result.
+Every specialization and inline clone consumes that paired source record. Once
+output rewriting begins, the function table owns emitted bodies, and in-place
+call redirection touches only generated output bodies; it is invalid to charge
+the sealed source size while cloning a rewritten output body.
+
 Monotype can assign distinct local ids to uses of one checked pattern binder at
 one monomorphic type. SpecConstr therefore keeps lexical binder aliases separate
 from known-value evidence. Every active binding records its exact local and an
