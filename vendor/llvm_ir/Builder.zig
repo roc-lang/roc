@@ -5615,9 +5615,15 @@ pub const WipFunction = struct {
         mask: Value,
         name: []const u8,
     ) Allocator.Error!Value {
-        assert(lhs.typeOfWip(self).isVector(self.builder));
-        assert(lhs.typeOfWip(self) == rhs.typeOfWip(self));
-        assert(mask.typeOfWip(self).scalarType(self.builder).isInteger(self.builder));
+        const lhs_ty = lhs.typeOfWip(self);
+        const rhs_ty = rhs.typeOfWip(self);
+        const mask_ty = mask.typeOfWip(self);
+        assert(lhs_ty.isVector(self.builder));
+        assert(lhs_ty == rhs_ty);
+        assert(mask_ty.scalarType(self.builder).isInteger(self.builder));
+        // `typeOfWip` reconstructs this result with assume-capacity APIs, so
+        // intern the result type while allocation failure can still be returned.
+        _ = try lhs_ty.changeLength(mask_ty.vectorLen(self.builder), self.builder);
         _ = try self.ensureUnusedExtraCapacity(1, Instruction.ShuffleVector, 0);
         const instruction = try self.addInst(name, .{
             .tag = .shufflevector,
