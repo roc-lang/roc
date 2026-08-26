@@ -1918,7 +1918,7 @@ const TemplateBodyScheduling = enum { immediate, queued };
 const PendingSpecJob = struct {
     /// Logical enqueue order across the whole build. The inline executor
     /// accepts jobs strictly in this order; a parallel executor later buffers
-    /// physical completions back into it.
+    /// specialization-body outputs until their dispatch index is next.
     dispatch_index: u64,
     spec: Ast.SpecId,
     reservation: TemplateReservation,
