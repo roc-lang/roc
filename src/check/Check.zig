@@ -7454,7 +7454,53 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     try self.finalizeBindingSchemeNodes();
 
+    try self.finalizePlatformRequirementSolutions();
+
     self.debugAssertNominalDeclTableComplete();
+}
+
+/// Turn every provisional platform-requirement row into the explicit
+/// successful-binding or checked-error outcome consumed by artifact
+/// publication. This runs after all checker error poisoning, while the checker
+/// still owns the exact source def and solved vars.
+fn finalizePlatformRequirementSolutions(self: *Self) Allocator.Error!void {
+    for (self.platform_requirement_solutions.items) |*solution| {
+        const def = self.cir.store.getDef(solution.def);
+        var checked_error = self.erroneous_value_exprs.contains(def.expr) or
+            self.erroneous_value_patterns.contains(def.pattern);
+
+        if (!checked_error) {
+            checked_error = try canonical_type_keys.containsError(
+                self.gpa,
+                self.types,
+                self.cir,
+                ModuleEnv.varFrom(def.expr),
+            );
+        }
+        if (!checked_error) {
+            checked_error = try canonical_type_keys.containsError(
+                self.gpa,
+                self.types,
+                self.cir,
+                solution.solved_var,
+            );
+        }
+        if (!checked_error) {
+            for (solution.identity_vars) |identity_var| {
+                if (try canonical_type_keys.containsError(
+                    self.gpa,
+                    self.types,
+                    self.cir,
+                    identity_var,
+                )) {
+                    checked_error = true;
+                    break;
+                }
+            }
+        }
+
+        solution.outcome = if (checked_error) .checked_error else .success;
+    }
 }
 
 /// Finish canonicalization's strict-demand relation with the exact local

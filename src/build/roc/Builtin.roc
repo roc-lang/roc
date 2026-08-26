@@ -4153,10 +4153,19 @@ Builtin :: [].{
 		## expect [10, 20, 30].update(5, |x| x + 5) == Err(OutOfBounds)
 		## ```
 		update : List(a), U64, (a -> a) -> Try(List(a), [OutOfBounds, ..])
-		update = |list, index, func| if index < List.len(list) {
-			Ok(list_replace_unsafe(list, index, func(list_get_unsafe(list, index))).list)
-		} else {
-			Err(OutOfBounds)
+		update = |list, index, func| {
+			if index < List.len(list) {
+				prepared_list = list_map_prepare_reuse(list)
+				match list_map_can_reuse(prepared_list, func) {
+					1 => {
+						item = list_map_extract_unsafe(prepared_list, index)
+						Ok(list_map_write_unsafe(prepared_list, index, func(item)))
+					}
+					_ => Ok(list_replace_unsafe(prepared_list, index, func(list_get_unsafe(prepared_list, index))).list)
+				}
+			} else {
+				Err(OutOfBounds)
+			}
 		}
 
 		## Exchanges the items at the two given indices.
@@ -23155,11 +23164,11 @@ str_drop_first_bytes_unsafe = |s, count| {
 }
 
 # Implemented by the compiler. Moves the input list's ownership into the
-# returned list before List.map tests whether it can reuse the allocation.
+# returned list before a list transform tests whether it can reuse the allocation.
 list_map_prepare_reuse : List(input) -> List(input)
 
-# Implemented by the compiler. Returns 1 (otherwise 0) when List.map may reuse
-# the prepared list's allocation for its output: the input and output item
+# Implemented by the compiler. Returns 1 (otherwise 0) when a list transform may
+# reuse the prepared list's allocation for its output: the input and output item
 # layouts are interchangeable, and at runtime the list is uniquely owned and
 # not a seamless slice. Lowered to a constant 0 when the layouts are not
 # interchangeable, which lets lowering drop the in-place branch entirely.
