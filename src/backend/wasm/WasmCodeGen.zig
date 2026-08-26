@@ -18355,9 +18355,12 @@ fn emitStrToUtf8(self: *Self, str_arg: ProcLocalId) Allocator.Error!void {
         try self.emitLocalSet(str_cap);
 
         // Non-SSO Str.to_utf8 returns a List(U8) that aliases the string bytes.
-        // Retain the shared backing so dropping the list does not invalidate the
-        // input Str that ARC still owns.
-        try self.emitDataPtrIncref(str_data, 1);
+        // A seamless string slice's data pointer points inside its allocation,
+        // so decode the allocation pointer before retaining the shared backing.
+        const alloc_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        const is_small = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitDecodeStrAllocPtr(str_ptr, alloc_ptr, is_small);
+        try self.emitDataPtrIncref(alloc_ptr, 1);
 
         try self.emitLocalGet(result_ptr);
         try self.emitLocalGet(str_data);
