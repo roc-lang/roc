@@ -41,6 +41,17 @@ Labels are cut at 56 bytes with a trailing `…`, because a hint is drawn inside
 annotates and an inferred Roc type can be far longer than the code it describes—a generic
 function carries its whole `where` clause. Hovering the same name gives the type in full.
 
+Each hint carries the edit that writes its type into the source, so a client that lets the
+reader accept a hint inserts the annotation instead of leaving them to retype it. That matters
+here more than elsewhere: a hint reads like an inline annotation, which is how several
+languages spell one, and Roc has no `name : Type = value` form - inside a block that spelling
+is already taken by record fields, so retyping what a hint shows changes what the braces mean.
+The edit writes the two-line form, and carries the type in full even where the label is cut.
+
+A hint on a lambda parameter carries no edit. The type is still worth seeing, but a parameter
+takes no annotation, and one written above it would land in the parameter list. The same
+applies to any binding that does not open its line.
+
 A document that does not build produces no hints, which leaves whatever the editor last drew
 in place rather than blanking every hint on each keystroke.
 

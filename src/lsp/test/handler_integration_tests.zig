@@ -336,6 +336,7 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "inlay hints show inferred types and skip annotated bindings", .run = inlayHintsShowInferredTypes },
     .{ .name = "inlay hints stay within the requested range and truncate long types", .run = inlayHintsRespectRangeAndLength },
     .{ .name = "inlay hints survive an out-of-range end line", .run = inlayHintsSurviveOutOfRangeEndLine },
+    .{ .name = "inlay hints carry the edit that writes their type down", .run = inlayHintsCarryTheirAnnotationEdit },
     .{ .name = "code actions annotate a binding with its inferred type", .run = codeActionsAnnotateInferredBinding },
     .{ .name = "code actions generate an expect test for a function", .run = codeActionsGenerateExpectTest },
     .{ .name = "code actions offer an annotation and a test for one function", .run = codeActionsOfferBothForOneFunction },
@@ -1491,6 +1492,26 @@ pub fn renameRefusesNonIsolatedDeclaration() integration_spec.SpecError!void {
 }
 
 /// Find the hint at a position and return its label.
+/// The hint drawn at one position, or null.
+fn hintAt(hints: std.json.Value, line: i64, character: i64) integration_spec.SpecError!?std.json.Value {
+    if (hints != .array) return error.TestUnexpectedResult;
+    for (hints.array.items) |hint| {
+        const position = try objectField(hint, "position");
+        if ((try integerField(position, "line")) != line) continue;
+        if ((try integerField(position, "character")) != character) continue;
+        return hint;
+    }
+    return null;
+}
+
+/// The single text edit a hint carries, or null when it carries none.
+fn hintEdit(hint: std.json.Value) integration_spec.SpecError!?std.json.Value {
+    if (hint != .object) return error.TestUnexpectedResult;
+    const edits = hint.object.get("textEdits") orelse return null;
+    if (edits != .array or edits.array.items.len != 1) return error.TestUnexpectedResult;
+    return edits.array.items[0];
+}
+
 fn hintLabelAt(hints: std.json.Value, line: i64, character: i64) integration_spec.SpecError!?[]const u8 {
     if (hints != .array) return error.TestUnexpectedResult;
     for (hints.array.items) |hint| {
@@ -1616,6 +1637,15 @@ pub fn inlayHintsRespectRangeAndLength() integration_spec.SpecError!void {
     try std.testing.expect(std.mem.endsWith(u8, label, "…"));
     // ": " + at most 56 bytes of type + the three bytes of "…".
     try std.testing.expect(label.len <= 2 + 56 + 3);
+
+    // The label is cut to keep the line readable, but the edit that writes the
+    // type down carries it in full: a cut type would not compile.
+    const wide_hint = try hintAt(hints, 4, 8) orelse return error.TestUnexpectedResult;
+    const wide_edit = try hintEdit(wide_hint) orelse return error.TestUnexpectedResult;
+    const new_text = try stringField(wide_edit, "newText");
+    try std.testing.expect(std.mem.startsWith(u8, new_text, "    wide : {"));
+    try std.testing.expect(std.mem.endsWith(u8, new_text, "}\n"));
+    try std.testing.expect(new_text.len > label.len);
 }
 
 /// Verifies a range whose end line is past the document does not crash.
@@ -5686,4 +5716,71 @@ pub fn codeActionsLeaveLambdaParametersAlone() integration_spec.SpecError!void {
     const actions = try response.result();
     try std.testing.expect(actions == .array);
     try std.testing.expect((try codeActionByPrefix(actions, "Annotate")) == null);
+}
+
+/// Verifies a hint carries the edit that writes its type into the source, and
+/// only where such an annotation can be written.
+///
+/// A hint reads like an inline annotation, which Roc does not have, so a reader
+/// who retypes what one shows gets source that does not compile. The edit turns
+/// accepting the hint into the two-line form that does - and a lambda parameter,
+/// which can take no annotation at all, carries no edit rather than a broken one.
+pub fn inlayHintsCarryTheirAnnotationEdit() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "inlay_edits.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\join = |
+        \\    left,
+        \\    right,
+        \\| Str.concat(left, right)
+        \\
+        \\main = {{
+        \\    text = join("ro", "c")
+        \\    text
+        \\}}
+    , .{platform_path});
+    defer allocator.free(source);
+
+    const request = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/inlayHint","params":{{"textDocument":{{"uri":"{s}"}},"range":{{"start":{{"line":0,"character":0}},"end":{{"line":11,"character":0}}}}}}}}
+    , .{fixture.uri});
+    defer allocator.free(request);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{request});
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const hints = try response.result();
+
+    // A local binding inside a block takes the annotation on the line above,
+    // with that line's indentation.
+    const text_hint = try hintAt(hints, 8, 8) orelse return error.TestUnexpectedResult;
+    const text_edit = try hintEdit(text_hint) orelse return error.TestUnexpectedResult;
+    try expectInsertionAt(text_edit, 8, 0, "    text : Str\n");
+
+    // So does a top-level definition.
+    const join_hint = try hintAt(hints, 2, 4) orelse return error.TestUnexpectedResult;
+    const join_edit = try hintEdit(join_hint) orelse return error.TestUnexpectedResult;
+    try expectInsertionAt(join_edit, 2, 0, "join : Str, Str -> Str\n");
+
+    // A lambda parameter still gets its hint, because the type is worth
+    // seeing, but no edit: written above, it would land in the parameter list.
+    const left_hint = try hintAt(hints, 3, 8) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(": Str", try stringField(left_hint, "label"));
+    try std.testing.expect((try hintEdit(left_hint)) == null);
 }
