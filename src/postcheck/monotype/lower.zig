@@ -1946,17 +1946,15 @@ const PendingTemplateBody = struct {
 };
 
 /// Owned handoff between queued body lowering and ordered coordinator commit.
-/// Keeping graph and draft ownership together makes every graph-local and
-/// draft-local id valid until the existing relocation commit consumes it.
-/// Type/name stores and builder caches remain shared in this first slice; later
-/// shards move those Monotype and name stores behind the same ownership boundary.
+/// Deferred relation production and graph validation finish before this handoff,
+/// so commit only seals durable types, relocates ids, and appends program data.
+/// Type/name stores, deferred preparation, and builder caches remain shared in
+/// this transitional slice; later shards move them behind the same boundary.
 const CompletedSpecJobShard = struct {
     dispatch_index: u64,
     graph: *InstGraph,
     body_draft: BodyDraftStore,
     pending: PendingTemplateBody,
-    final_guard: FinalBodyOutputGuard,
-    final_end: FinalBodyOutputGuard.End,
 
     fn deinit(self: *CompletedSpecJobShard) void {
         self.body_draft.deinit();
@@ -4005,11 +4003,14 @@ const Builder = struct {
         self.next_spec_accept_index += 1;
     }
 
-    /// Lower one ordinary queued specialization into independently owned graph
-    /// and syntax state. Coordinator-owned type sealing and program appends
-    /// happen only after this result is returned. Representation-sensitive
-    /// immediate callees still complete synchronously until inline outputs also
-    /// move into the shard protocol.
+    /// Lower one ordinary queued specialization into independently owned frozen
+    /// graph and prepared syntax state. Coordinator-owned type sealing and
+    /// program appends happen only after this result is returned.
+    ///
+    /// Deferred preparation and iterator identity calculation still use shared
+    /// Builder/type/name state and execute serially here. Representation-sensitive
+    /// immediate callees also complete synchronously until those outputs move
+    /// into the shard protocol.
     fn lowerPendingSpecJobToShard(
         self: *Builder,
         job: PendingSpecJob,
@@ -4046,29 +4047,26 @@ const Builder = struct {
             job.signature_relation,
         );
         const final_end = final_guard.end(self);
+        try self.finalizeBodyDraftGraph(graph, &body_draft, final_guard, final_end);
         self.countBodyDiagnostic("spec_job_shards_lowered");
         return .{
             .dispatch_index = job.dispatch_index,
             .graph = graph,
             .body_draft = body_draft,
             .pending = pending,
-            .final_guard = final_guard,
-            .final_end = final_end,
         };
     }
 
-    /// Accept one completed shard in logical dispatch order and reuse the
-    /// existing exhaustive draft-to-program relocation commit.
+    /// Accept one frozen shard in logical dispatch order and reuse the existing
+    /// exhaustive draft-to-program relocation commit.
     fn commitCompletedSpecJobShard(
         self: *Builder,
         shard: *CompletedSpecJobShard,
     ) Allocator.Error!void {
         self.requireNextSpecAcceptance(shard.dispatch_index);
-        const sealed = try self.sealActiveBodyDraft(
+        const sealed = try self.commitFinalizedBodyDraft(
             shard.graph,
             &shard.body_draft,
-            shard.final_guard,
-            shard.final_end,
             shard.pending.root_node,
             &.{},
             null,
@@ -7723,6 +7721,31 @@ const Builder = struct {
         root_def: ?DraftDefId,
         root_fn: ?DraftFnId,
     ) Allocator.Error!ActiveBodyDraftSeal {
+        try self.finalizeBodyDraftGraph(graph, body_draft, final_guard, final_end);
+        return self.commitFinalizedBodyDraft(
+            graph,
+            body_draft,
+            root_node,
+            root_nodes,
+            extra_ty,
+            root_def,
+            root_fn,
+        );
+    }
+
+    /// Finish every relation-producing draft operation and freeze the graph
+    /// before an owned specialization result can cross the coordinator handoff.
+    ///
+    /// Deferred preparation remains serialized because it can reenter lowering
+    /// and mutate shared Builder state. Iterator identity calculation also still
+    /// reads the graph's shared type and name stores in this transitional slice.
+    fn finalizeBodyDraftGraph(
+        self: *Builder,
+        graph: *InstGraph,
+        body_draft: *BodyDraftStore,
+        final_guard: FinalBodyOutputGuard,
+        final_end: FinalBodyOutputGuard.End,
+    ) Allocator.Error!void {
         var timing_scope = ProcedureTimingScope.begin(self.timing, .body_finalization);
         defer timing_scope.end();
 
@@ -7730,6 +7753,7 @@ const Builder = struct {
         if (body_draft.active_callable_eval_bindings.items.len != 0) {
             Common.invariant("unfinished callable eval binding reached Monotype body sealing");
         }
+        const finalization_guard = FinalBodyOutputGuard.begin(self);
         try self.prepareDraftDeferredExprs(body_draft, graph);
         try graph.finalizeGeneratedIteratorRepresentations();
         try graph.finalizeGeneratedIteratorIdentities();
@@ -7743,6 +7767,24 @@ const Builder = struct {
             }
         }
         try verifySpecReuseDemands(body_draft, graph, &impossibility_evaluator);
+        finalization_guard.assertNoFinalBodyOutput(finalization_guard.end(self));
+    }
+
+    /// Seal one already-frozen graph into durable coordinator-owned ids and
+    /// append its retained draft ranges to the final program.
+    fn commitFinalizedBodyDraft(
+        self: *Builder,
+        graph: *InstGraph,
+        body_draft: *BodyDraftStore,
+        root_node: ?NodeId,
+        root_nodes: []const NodeId,
+        extra_ty: ?Type.TypeId,
+        root_def: ?DraftDefId,
+        root_fn: ?DraftFnId,
+    ) Allocator.Error!ActiveBodyDraftSeal {
+        var timing_scope = ProcedureTimingScope.begin(self.timing, .body_finalization);
+        defer timing_scope.end();
+
         var sealer = GraphTypeFinals.init(graph);
         defer sealer.deinit();
         try self.emitDraftDeferredStructuralSerializations(body_draft, graph, &sealer);
