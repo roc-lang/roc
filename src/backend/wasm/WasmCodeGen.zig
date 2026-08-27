@@ -504,6 +504,7 @@ list_append_le_bytes_import: ?u32 = null,
 list_drop_at_import: ?u32 = null,
 list_reserve_import: ?u32 = null,
 list_reverse_import: ?u32 = null,
+list_sort_with_import: ?u32 = null,
 list_replace_import: ?u32 = null,
 list_set_import: ?u32 = null,
 list_swap_import: ?u32 = null,
@@ -842,6 +843,7 @@ fn hostBuiltinImports(self: *const Self) HostBuiltinImports {
             .list_str_eq => self.list_str_eq_import,
             .list_list_eq => self.list_list_eq_import,
             .list_reverse => self.list_reverse_import,
+            .list_sort_with => self.list_sort_with_import,
             .simd_store_16 => self.simd_store_16_import,
             .simd_append_16 => self.simd_append_16_import,
             .allocate_with_refcount => null,
@@ -2240,6 +2242,10 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
 
     const list_reverse_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32 }, &.{});
     self.list_reverse_import = try self.module.addImport("env", "roc_list_reverse", list_reverse_type);
+
+    const list_sort_with_sig = BuiltinSignatures.sigOf(.list_sort_with);
+    const list_sort_with_type = try self.module.addFuncType(list_sort_with_sig.wasm_params, list_sort_with_sig.wasm_results);
+    self.list_sort_with_import = try self.module.addImport("env", list_sort_with_sig.name, list_sort_with_type);
 
     // roc_list_replace(list_ptr, elem_width, alignment, index, element_ptr, out_element_ptr, result_ptr)
     const list_replace_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i64, .i32, .i32, .i32 }, &.{});
@@ -9185,6 +9191,7 @@ pub fn registerBoxySymbolTargets(self: *Self) HostedSymbolError!void {
     try self.registerBoxySymbol("roc_boxy_list_set", &.{ .i32, .i32, .i32, .i32, .i32, .i64, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_swap", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i64, .i64, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_reverse", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
+    try self.registerBoxySymbol("roc_boxy_list_sort_with", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_reserve", &.{ .i32, .i32, .i32, .i32, .i32, .i64, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_release_excess_capacity", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
 }
@@ -11464,19 +11471,17 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
         4,
         @intCast(builtins.erased_callable.capture_offset + metadata_offset + @offsetOf(builtins.erased_callable.CompilerMetadata, "result_desc")),
     );
-    if (c.result_desc != null) {
-        const proc_spec = self.store.getProcSpec(c.proc);
-        try self.emitFunctionTableIndexConst(table_idx);
-        try self.emitI32Const(@intCast(@intFromEnum(c.proc)));
-        try self.emitI32Const(@intCast(@intFromEnum(self.runtimeRepresentationLayoutIdx(proc_spec.ret_layout))));
-        try self.emitI32Const(@intCast(metadata_offset));
-        try self.emitI32Const(@intCast(proc_spec.erased_arg_layouts.start));
-        try self.emitI32Const(@intCast(proc_spec.erased_arg_layouts.len));
-        try self.emitI32Const(@intCast(proc_spec.erased_arg_desc_offsets.start));
-        try self.emitI32Const(@intCast(proc_spec.erased_arg_desc_offsets.len));
-        try self.emitI32Const(0);
-        try self.emitBoxyCall("roc_boxy_register_erased_proc");
-    }
+    const proc_spec = self.store.getProcSpec(c.proc);
+    try self.emitFunctionTableIndexConst(table_idx);
+    try self.emitI32Const(@intCast(@intFromEnum(c.proc)));
+    try self.emitI32Const(@intCast(@intFromEnum(self.runtimeRepresentationLayoutIdx(proc_spec.ret_layout))));
+    try self.emitI32Const(@intCast(metadata_offset));
+    try self.emitI32Const(@intCast(proc_spec.erased_arg_layouts.start));
+    try self.emitI32Const(@intCast(proc_spec.erased_arg_layouts.len));
+    try self.emitI32Const(@intCast(proc_spec.erased_arg_desc_offsets.start));
+    try self.emitI32Const(@intCast(proc_spec.erased_arg_desc_offsets.len));
+    try self.emitI32Const(0);
+    try self.emitBoxyCall("roc_boxy_register_erased_proc");
 
     try self.emitLocalGet(payload_ptr);
 }
@@ -13748,6 +13753,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // list_reverse(list) -> reversed list
             try self.generateLLListReverse(args, ll.ret_layout, ll.target, ll.unique_args);
         },
+        .list_sort_with => try self.generateLLListSortWith(args, ll.ret_layout, ll.target, ll.unique_args),
         // list_with_capacity(capacity) -> empty list with given capacity
         .list_with_capacity => {
             try self.generateLLListWithCapacity(args, ll.ret_layout);
@@ -15096,7 +15102,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitProcLocal(GuardedList.at(args, 0));
         },
 
-        // Compare—returns Ordering enum (EQ=0, GT=1, LT=2)
+        // Compare—returns Ordering enum (Equivalent=0, FirstBeforeSecond=1, SecondBeforeFirst=2)
         .compare => {
             try self.emitProcLocal(GuardedList.at(args, 0));
             try self.emitProcLocal(GuardedList.at(args, 1));
@@ -15122,8 +15128,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     switch (arg_layout) {
                         .u128, .i128, .dec => {
                             const is_signed = arg_layout == .i128 or arg_layout == .dec;
-                            try self.emitI128CompareWithSignedness(a, b, .gt, is_signed);
                             try self.emitI128CompareWithSignedness(a, b, .lt, is_signed);
+                            try self.emitI128CompareWithSignedness(a, b, .gt, is_signed);
                             self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                             WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
                             self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
@@ -15139,13 +15145,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), a) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), b) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, if (is_unsigned) Op.i32_gt_u else Op.i32_gt_s) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, if (is_unsigned) Op.i32_lt_u else Op.i32_lt_s) catch return error.OutOfMemory;
                     // lt_flag * 2
                     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), a) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), b) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, if (is_unsigned) Op.i32_lt_u else Op.i32_lt_s) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, if (is_unsigned) Op.i32_gt_u else Op.i32_gt_s) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                     WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
@@ -15163,12 +15169,12 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), a) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), b) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, if (is_unsigned) Op.i64_gt_u else Op.i64_gt_s) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, if (is_unsigned) Op.i64_lt_u else Op.i64_lt_s) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), a) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), b) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, if (is_unsigned) Op.i64_lt_u else Op.i64_lt_s) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, if (is_unsigned) Op.i64_gt_u else Op.i64_gt_s) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                     WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
@@ -16376,6 +16382,7 @@ fn numericOpFromLowLevel(op: LIR.LowLevel) NumericOp {
         .list_take_first,
         .list_take_last,
         .list_reverse,
+        .list_sort_with,
         .list_reserve,
         .list_release_excess_capacity,
         .list_split_first,
@@ -21201,6 +21208,75 @@ fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx, tar
             }
         },
         .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_reverse", .{}),
+    }
+    try self.emitFpOffset(result_offset);
+}
+
+fn generateLLListSortWith(self: *Self, args: anytype, ret_layout: layout.Idx, target: ?ProcLocalId, unique_args: u64) Allocator.Error!void {
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListSortWith.builtin_list_abi", ret_layout);
+    if (list_abi.elem_size == 0) {
+        try self.emitProcLocal(GuardedList.at(args, 0));
+        return;
+    }
+    try self.emitProcLocal(GuardedList.at(args, 0));
+    const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(list_ptr);
+    try self.emitProcLocal(GuardedList.at(args, 1));
+    const callable_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(callable_ptr);
+    const result_offset = try self.allocStackMemory(12, 4);
+    const fields = try self.loadRocListFields(list_ptr);
+    switch (self.external_calls) {
+        .builtin_relocs => {
+            if (self.boxyListElementDescForLocals(list_abi, &.{GuardedList.at(args, 0)}, target)) |boxy_elem| {
+                try self.emitFpOffset(result_offset);
+                try self.emitRocListFields(fields);
+                try self.emitLocalGet(callable_ptr);
+                try self.emitI32Const(@intCast(list_abi.elem_align));
+                try self.emitI32Const(@intCast(list_abi.elem_size));
+                try self.emitI32Const(1);
+                try self.emitI32Const(0);
+                try self.emitI32Const(0);
+                try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
+                try self.resolveBoxyDesc(boxy_elem.desc);
+                try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+                try self.emitI32Const(0);
+                try self.emitI32Const(0);
+                try self.emitLocalGet(self.roc_ops_local);
+                try self.emitBoxyCall("roc_boxy_list_sort_with");
+            } else {
+                const callbacks = try self.listElementCallbacks(list_abi);
+                try self.emitFpOffset(result_offset);
+                try self.emitRocListFields(fields);
+                try self.emitLocalGet(callable_ptr);
+                try self.emitI32Const(@intCast(list_abi.elem_align));
+                try self.emitI32Const(@intCast(list_abi.elem_size));
+                try self.emitI32Const(@intCast(callbacks.elements_refcounted));
+                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
+                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
+                try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+                try self.emitI32Const(0);
+                try self.emitI32Const(0);
+                try self.emitLocalGet(self.roc_ops_local);
+                try self.emitBuiltinCall(.list_sort_with, null);
+            }
+        },
+        .host_imports => {
+            try self.emitFpOffset(result_offset);
+            try self.emitRocListFields(fields);
+            try self.emitLocalGet(callable_ptr);
+            try self.emitI32Const(@intCast(list_abi.elem_align));
+            try self.emitI32Const(@intCast(list_abi.elem_size));
+            try self.emitI32Const(0);
+            try self.emitI32Const(0);
+            try self.emitI32Const(0);
+            try self.emitI32Const(0);
+            try self.emitI32Const(0);
+            try self.emitI32Const(0);
+            try self.emitLocalGet(self.roc_ops_local);
+            try self.emitBuiltinCall(.list_sort_with, self.list_sort_with_import);
+        },
+        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_sort_with", .{}),
     }
     try self.emitFpOffset(result_offset);
 }

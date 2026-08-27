@@ -168,8 +168,8 @@ g : e -> e where [e.A, e.B,]
                    ^^
 
 A where alias names a set of method constraints, declared like a.Sortable :
-where [a.compare : a -> [LT, EQ, GT]] and written in a where clause as where
-[a.Sortable]
+where [a.compare : a -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]] and
+written in a where clause as where [a.Sortable]
 
 ── ✗ not a where alias ───────────────────────────────────── everything.md:14:25
 
@@ -179,8 +179,8 @@ g : e -> e where [e.A, e.B,]
                         ^^
 
 A where alias names a set of method constraints, declared like a.Sortable :
-where [a.compare : a -> [LT, EQ, GT]] and written in a where clause as where
-[a.Sortable]
+where [a.compare : a -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]] and
+written in a where clause as where [a.Sortable]
 
 ── ● declaration has no value ─────────────────────────────── everything.md:14:1
 

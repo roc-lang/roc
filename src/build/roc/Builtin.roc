@@ -3564,6 +3564,12 @@ Builtin :: [].{
 		}
 	}
 
+	## A type has a default sort order when its module provides
+	## `default_cmp : item, item -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]`.
+	## These tags say which argument comes first; they deliberately do not tie
+	## sorting to "less than" or to the `<` and `>` operators.
+	item.Sort :  where [item.default_cmp : item, item -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]]
+
 	List(_item) :: [ProvidedByCompiler].{
 		parser_for : _
 
@@ -3857,55 +3863,44 @@ Builtin :: [].{
 		release_excess_capacity : List(item) -> List(item)
 		release_excess_capacity = |list| list_release_excess_capacity(list)
 
-		## Sort a list using a custom comparison function. The comparator receives two
-		## items and returns `LT`, `EQ`, or `GT` to indicate their relative order.
-		## ```roc
-		## expect [3, 1, 2].sort_with(|a, b| if a < b LT else if a > b GT else EQ) == [1, 2, 3]
-		##
-		## # Sort in descending order by swapping the LT and GT
-		## expect [3, 1, 2].sort_with(|a, b| if a > b LT else if a < b GT else EQ) == [3, 2, 1]
-		## ```
-		sort_with : List(item), (item, item -> [LT, EQ, GT]) -> List(item)
-		sort_with = |list, order| {
-			list_len = List.len(list)
+		## Sort a list using its items' default ordering.
+		sort : List(item) -> List(item)
+			where [item.Sort]
+		sort = |list| sort_impl(list, |left, right| left.default_cmp(right))
 
-			if list_len < 2 {
-				list
-			} else {
-				match List.first(list) {
-					Ok(pivot) => {
-						rest = List.drop_first(list, 1)
-						less_or_equal =
-							List.keep_if(
-								rest,
-								|item|
-									match order(item, pivot) {
-										LT => True
-										EQ => True
-										GT => False
-									},
-							)
-						greater =
-							List.keep_if(
-								rest,
-								|item|
-									match order(item, pivot) {
-										LT => False
-										EQ => False
-										GT => True
-									},
-							)
-
-						List.concat(
-							List.sort_with(less_or_equal, order),
-							List.concat(List.single(pivot), List.sort_with(greater, order)),
-						)
-					}
-
-					Err(_) => list
-				}
-			}
+		## Sort a list by a projected field. The projection is evaluated once per item,
+		## and items with equal fields retain their input order.
+		sort_by : List(item), (item -> field) -> List(item)
+			where [field.Sort]
+		sort_by = |list, project| {
+			decorated = List.map(list, |item| (project(item), item))
+			sorted = sort_impl(decorated, |(left, _), (right, _)| left.default_cmp(right))
+			List.map(sorted, |(_, item)| item)
 		}
+
+		## Sort a list using a custom three-way comparison function.
+		sort_with : List(item), (item, item -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]) -> List(item)
+		sort_with = |list, compare_items| sort_impl(list, compare_items)
+
+		## Sort a list in reverse using its items' default ordering.
+		sort_reversed : List(item) -> List(item)
+			where [item.Sort]
+		sort_reversed = |list| sort_impl(list, |left, right| reverse_order(left.default_cmp(right)))
+
+		## Sort a list in reverse by a projected field. The projection is evaluated
+		## once per item, and items with equal fields retain their input order.
+		sort_by_reversed : List(item), (item -> field) -> List(item)
+			where [field.Sort]
+		sort_by_reversed = |list, project| {
+			decorated = List.map(list, |item| (project(item), item))
+			sorted = sort_impl(decorated, |(left, _), (right, _)| reverse_order(left.default_cmp(right)))
+			List.map(sorted, |(_, item)| item)
+		}
+
+		## Sort a list in reverse using a custom three-way comparison function.
+		sort_with_reversed : List(item), (item, item -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]) -> List(item)
+		sort_with_reversed = |list, compare_items|
+			sort_impl(list, |left, right| reverse_order(compare_items(left, right)))
 
 		## Returns `True` if the two lists have the same length and their items are pairwise equal.
 		is_eq : List(item), List(item) -> Bool
@@ -6737,14 +6732,18 @@ Builtin :: [].{
 
 			## Compare two [U8] values and return their ordering.
 			## ```roc
-			## expect U8.compare(1, 2) == LT
+			## expect U8.compare(1, 2) == FirstBeforeSecond
 			##
-			## expect U8.compare(2, 2) == EQ
+			## expect U8.compare(2, 2) == Equivalent
 			##
-			## expect U8.compare(3, 2) == GT
+			## expect U8.compare(3, 2) == SecondBeforeFirst
 			## ```
-			compare : U8, U8 -> [LT, EQ, GT]
+			compare : U8, U8 -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
 			compare = |a, b| numeric_compare(a, b)
+
+			## Default ordering used by [List.sort].
+			default_cmp : U8, U8 -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
+			default_cmp = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -7404,14 +7403,18 @@ Builtin :: [].{
 
 			## Compare two [I8] values and return their ordering.
 			## ```roc
-			## expect I8.compare(1, 2) == LT
+			## expect I8.compare(1, 2) == FirstBeforeSecond
 			##
-			## expect I8.compare(2, 2) == EQ
+			## expect I8.compare(2, 2) == Equivalent
 			##
-			## expect I8.compare(3, 2) == GT
+			## expect I8.compare(3, 2) == SecondBeforeFirst
 			## ```
-			compare : I8, I8 -> [LT, EQ, GT]
+			compare : I8, I8 -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
 			compare = |a, b| numeric_compare(a, b)
+
+			## Default ordering used by [List.sort].
+			default_cmp : I8, I8 -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
+			default_cmp = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -8190,14 +8193,18 @@ Builtin :: [].{
 
 			## Compare two [U16] values and return their ordering.
 			## ```roc
-			## expect U16.compare(1, 2) == LT
+			## expect U16.compare(1, 2) == FirstBeforeSecond
 			##
-			## expect U16.compare(2, 2) == EQ
+			## expect U16.compare(2, 2) == Equivalent
 			##
-			## expect U16.compare(3, 2) == GT
+			## expect U16.compare(3, 2) == SecondBeforeFirst
 			## ```
-			compare : U16, U16 -> [LT, EQ, GT]
+			compare : U16, U16 -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
 			compare = |a, b| numeric_compare(a, b)
+
+			## Default ordering used by [List.sort].
+			default_cmp : U16, U16 -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
+			default_cmp = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -8916,14 +8923,18 @@ Builtin :: [].{
 
 			## Compare two [I16] values and return their ordering.
 			## ```roc
-			## expect I16.compare(1, 2) == LT
+			## expect I16.compare(1, 2) == FirstBeforeSecond
 			##
-			## expect I16.compare(2, 2) == EQ
+			## expect I16.compare(2, 2) == Equivalent
 			##
-			## expect I16.compare(3, 2) == GT
+			## expect I16.compare(3, 2) == SecondBeforeFirst
 			## ```
-			compare : I16, I16 -> [LT, EQ, GT]
+			compare : I16, I16 -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
 			compare = |a, b| numeric_compare(a, b)
+
+			## Default ordering used by [List.sort].
+			default_cmp : I16, I16 -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
+			default_cmp = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -9743,14 +9754,18 @@ Builtin :: [].{
 
 			## Compare two [U32] values and return their ordering.
 			## ```roc
-			## expect U32.compare(1, 2) == LT
+			## expect U32.compare(1, 2) == FirstBeforeSecond
 			##
-			## expect U32.compare(2, 2) == EQ
+			## expect U32.compare(2, 2) == Equivalent
 			##
-			## expect U32.compare(3, 2) == GT
+			## expect U32.compare(3, 2) == SecondBeforeFirst
 			## ```
-			compare : U32, U32 -> [LT, EQ, GT]
+			compare : U32, U32 -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
 			compare = |a, b| numeric_compare(a, b)
+
+			## Default ordering used by [List.sort].
+			default_cmp : U32, U32 -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
+			default_cmp = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -10501,14 +10516,18 @@ Builtin :: [].{
 
 			## Compare two [I32] values and return their ordering.
 			## ```roc
-			## expect I32.compare(1, 2) == LT
+			## expect I32.compare(1, 2) == FirstBeforeSecond
 			##
-			## expect I32.compare(2, 2) == EQ
+			## expect I32.compare(2, 2) == Equivalent
 			##
-			## expect I32.compare(3, 2) == GT
+			## expect I32.compare(3, 2) == SecondBeforeFirst
 			## ```
-			compare : I32, I32 -> [LT, EQ, GT]
+			compare : I32, I32 -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
 			compare = |a, b| numeric_compare(a, b)
+
+			## Default ordering used by [List.sort].
+			default_cmp : I32, I32 -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
+			default_cmp = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -11345,14 +11364,18 @@ Builtin :: [].{
 
 			## Compare two [U64] values and return their ordering.
 			## ```roc
-			## expect U64.compare(1, 2) == LT
+			## expect U64.compare(1, 2) == FirstBeforeSecond
 			##
-			## expect U64.compare(2, 2) == EQ
+			## expect U64.compare(2, 2) == Equivalent
 			##
-			## expect U64.compare(3, 2) == GT
+			## expect U64.compare(3, 2) == SecondBeforeFirst
 			## ```
-			compare : U64, U64 -> [LT, EQ, GT]
+			compare : U64, U64 -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
 			compare = |a, b| numeric_compare(a, b)
+
+			## Default ordering used by [List.sort].
+			default_cmp : U64, U64 -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
+			default_cmp = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -12165,14 +12188,18 @@ Builtin :: [].{
 
 			## Compare two [I64] values and return their ordering.
 			## ```roc
-			## expect I64.compare(1, 2) == LT
+			## expect I64.compare(1, 2) == FirstBeforeSecond
 			##
-			## expect I64.compare(2, 2) == EQ
+			## expect I64.compare(2, 2) == Equivalent
 			##
-			## expect I64.compare(3, 2) == GT
+			## expect I64.compare(3, 2) == SecondBeforeFirst
 			## ```
-			compare : I64, I64 -> [LT, EQ, GT]
+			compare : I64, I64 -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
 			compare = |a, b| numeric_compare(a, b)
+
+			## Default ordering used by [List.sort].
+			default_cmp : I64, I64 -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
+			default_cmp = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -13032,14 +13059,18 @@ Builtin :: [].{
 
 			## Compare two [U128] values and return their ordering.
 			## ```roc
-			## expect U128.compare(1, 2) == LT
+			## expect U128.compare(1, 2) == FirstBeforeSecond
 			##
-			## expect U128.compare(2, 2) == EQ
+			## expect U128.compare(2, 2) == Equivalent
 			##
-			## expect U128.compare(3, 2) == GT
+			## expect U128.compare(3, 2) == SecondBeforeFirst
 			## ```
-			compare : U128, U128 -> [LT, EQ, GT]
+			compare : U128, U128 -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
 			compare = |a, b| numeric_compare(a, b)
+
+			## Default ordering used by [List.sort].
+			default_cmp : U128, U128 -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
+			default_cmp = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -13865,14 +13896,18 @@ Builtin :: [].{
 
 			## Compare two [I128] values and return their ordering.
 			## ```roc
-			## expect I128.compare(1, 2) == LT
+			## expect I128.compare(1, 2) == FirstBeforeSecond
 			##
-			## expect I128.compare(2, 2) == EQ
+			## expect I128.compare(2, 2) == Equivalent
 			##
-			## expect I128.compare(3, 2) == GT
+			## expect I128.compare(3, 2) == SecondBeforeFirst
 			## ```
-			compare : I128, I128 -> [LT, EQ, GT]
+			compare : I128, I128 -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
 			compare = |a, b| numeric_compare(a, b)
+
+			## Default ordering used by [List.sort].
+			default_cmp : I128, I128 -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
+			default_cmp = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -14820,14 +14855,18 @@ Builtin :: [].{
 
 			## Compare two [Dec] values and return their ordering.
 			## ```roc
-			## expect Dec.compare(1.0, 2.0) == LT
+			## expect Dec.compare(1.0, 2.0) == FirstBeforeSecond
 			##
-			## expect Dec.compare(2.0, 2.0) == EQ
+			## expect Dec.compare(2.0, 2.0) == Equivalent
 			##
-			## expect Dec.compare(3.0, 2.0) == GT
+			## expect Dec.compare(3.0, 2.0) == SecondBeforeFirst
 			## ```
-			compare : Dec, Dec -> [LT, EQ, GT]
+			compare : Dec, Dec -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
 			compare = |a, b| numeric_compare(a, b)
+
+			## Default ordering used by [List.sort].
+			default_cmp : Dec, Dec -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
+			default_cmp = |a, b| numeric_compare(a, b)
 
 			## Returns the greater of two [Dec] values.
 			## ```roc
@@ -22170,6 +22209,17 @@ bytes_to_str = |bytes|
 		Err(_) => Err(OutOfRange)
 	}
 
+reverse_order : [FirstBeforeSecond, Equivalent, SecondBeforeFirst] -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
+reverse_order = |order|
+	match order {
+		FirstBeforeSecond => SecondBeforeFirst
+		Equivalent => Equivalent
+		SecondBeforeFirst => FirstBeforeSecond
+	}
+
+sort_impl : List(item), (item, item -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]) -> List(item)
+sort_impl = |list, compare_items| list_sort_with(list, Box.box(compare_items))
+
 unsigned_plus_try : item, item -> Try(item, [Overflow, ..])
 	where [item.plus_overflows : item, item -> Bool, item.plus_wrap : item, item -> item]
 unsigned_plus_try = |a, b|
@@ -22594,7 +22644,7 @@ signed_is_multiple_of = |zero, neg_one, value, divisor|
 		value.rem_by(divisor) == zero
 	}
 
-numeric_compare : item, item -> [LT, EQ, GT]
+numeric_compare : item, item -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]
 
 range_with_step : num, num, num, [Exclusive, Inclusive], [To, From] -> Num.Range(num)
 	where [num.range_len_if_known : num, num, num, [Exclusive, Inclusive] -> [Known(U64), Unknown]]
@@ -23213,6 +23263,10 @@ list_append_le_bytes : List(U8), U64, U64 -> List(U8)
 
 # Implemented by the compiler, trims unused list capacity
 list_release_excess_capacity : List(item) -> List(item)
+
+# Implemented by the compiler. Consumes the list and sorts it stably using the
+# boxed comparator. The comparator allocation is borrowed for the whole call.
+list_sort_with : List(item), Box((item, item -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst])) -> List(item)
 
 # Unsafe conversion functions - these return simple records instead of Try types
 # They are low-level operations that get replaced by the compiler

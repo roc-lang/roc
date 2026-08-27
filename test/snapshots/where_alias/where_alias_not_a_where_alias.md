@@ -21,8 +21,8 @@ describe : a -> Str where [a.Wrapper]
                             ^^^^^^^^
 
 A where alias names a set of method constraints, declared like a.Sortable :
-where [a.compare : a -> [LT, EQ, GT]] and written in a where clause as where
-[a.Sortable]
+where [a.compare : a -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]] and
+written in a where clause as where [a.Sortable]
 
 # TOKENS
 ~~~zig

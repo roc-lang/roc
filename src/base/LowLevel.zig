@@ -84,6 +84,7 @@ pub const LowLevel = enum(u16) {
     list_take_first,
     list_take_last,
     list_reverse,
+    list_sort_with,
     list_reserve,
     list_release_excess_capacity,
     list_split_first,
@@ -868,6 +869,7 @@ pub const LowLevel = enum(u16) {
             .list_sublist_borrowed => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
 
             .list_reverse,
+            .list_sort_with,
             .list_reserve,
             .list_release_excess_capacity,
             => RcEffect.runtimeUniqueness(argMask(&.{0})),

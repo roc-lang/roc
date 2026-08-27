@@ -1403,6 +1403,7 @@ pub const Evaluator = struct {
             .list_map_cast_unsafe,
             .list_map_extract_unsafe,
             .list_map_write_unsafe,
+            .list_sort_with,
             .hasher_finish,
             .hasher_write_bool,
             .hasher_write_u8,
@@ -1740,15 +1741,15 @@ pub const Evaluator = struct {
             .str => return self.unsupported_("compare on string"),
             .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return self.unsupported_("compare on SIMD vector"),
         };
-        // Result ordering tag union sorts as EQ, GT, LT (alphabetical), matching
-        // the interpreter's runtime discriminants EQ=0, GT=1, LT=2.
+        // Result ordering tag union sorts as Equivalent, SecondBeforeFirst, FirstBeforeSecond (alphabetical), matching
+        // the interpreter's runtime discriminants Equivalent=0, FirstBeforeSecond=1, SecondBeforeFirst=2.
         return .{ .tag = .{ .discriminant = order, .payloads = &.{} } };
     }
 
     fn cmpOrder(comptime T: type, a: T, b: T) u8 {
-        if (a == b) return 0; // EQ
-        if (a > b) return 1; // GT
-        return 2; // LT
+        if (a == b) return 0; // Equivalent
+        if (a < b) return 1; // FirstBeforeSecond
+        return 2; // SecondBeforeFirst
     }
 
     // numeric arithmetic
