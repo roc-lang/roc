@@ -11,7 +11,7 @@ Sublist :: {}.{
 				}
 			}
 
-			Equal => {
+			Equivalent => {
 				if list1 == list2 {
 					Equal
 				} else {
