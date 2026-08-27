@@ -192,7 +192,7 @@ pub const Statement = union(enum) {
     /// A where alias declaration, naming a reusable set of method constraints.
     ///
     /// ```roc
-    /// a.Sortable : where [a.compare : a -> [LessThan, Equal, GreaterThan]]
+    /// a.Sortable : where [a.compare : a -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]]
     /// ```
     ///
     /// The declaration's type is `receiver`: a rigid variable carrying every

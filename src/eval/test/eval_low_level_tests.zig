@@ -5004,7 +5004,7 @@ pub const tests = [_]TestCase{
         .name = "low_level - List.sortWith basic ascending sort",
         .source =
         \\{
-        \\x = List.sortWith([3, 1, 2], |a, b| if a < b LessThan else if a > b GreaterThan else Equal)
+        \\x = List.sortWith([3, 1, 2], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent)
         \\first = List.first(x)
         \\first
         \\}
@@ -5015,7 +5015,7 @@ pub const tests = [_]TestCase{
         .name = "low_level - List.sortWith preserves length",
         .source =
         \\{
-        \\x = List.sortWith([5, 2, 8, 1, 9], |a, b| if a < b LessThan else if a > b GreaterThan else Equal)
+        \\x = List.sortWith([5, 2, 8, 1, 9], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent)
         \\len = List.len(x)
         \\len
         \\}
@@ -5026,7 +5026,7 @@ pub const tests = [_]TestCase{
         .name = "low_level - List.sortWith nested in len defaults literal item type",
         .source =
         \\{
-        \\List.len(List.sortWith([3, 1, 2], |a, b| if a < b LessThan else if a > b GreaterThan else Equal))
+        \\List.len(List.sortWith([3, 1, 2], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
         \\}
         ,
         .expected = .{ .inspect_str = "3" },
@@ -5035,7 +5035,7 @@ pub const tests = [_]TestCase{
         .name = "low_level - List.sortWith with larger list",
         .source =
         \\{
-        \\x = List.sortWith([5, 2, 8, 1, 9, 3, 7, 4, 6], |a, b| if a < b LessThan else if a > b GreaterThan else Equal)
+        \\x = List.sortWith([5, 2, 8, 1, 9, 3, 7, 4, 6], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent)
         \\first = List.first(x)
         \\first
         \\}
@@ -5046,7 +5046,7 @@ pub const tests = [_]TestCase{
         .name = "low_level - List.sortWith with two elements",
         .source =
         \\{
-        \\x = List.sortWith([2, 1], |a, b| if a < b LessThan else if a > b GreaterThan else Equal)
+        \\x = List.sortWith([2, 1], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent)
         \\first = List.first(x)
         \\first
         \\}
@@ -5057,7 +5057,7 @@ pub const tests = [_]TestCase{
         .name = "low_level - List.sortWith descending order",
         .source =
         \\{
-        \\x = List.sortWith([1, 3, 2], |a, b| if a > b LessThan else if a < b GreaterThan else Equal)
+        \\x = List.sortWith([1, 3, 2], |a, b| if a > b FirstBeforeSecond else if a < b SecondBeforeFirst else Equivalent)
         \\first = List.first(x)
         \\first
         \\}
@@ -5069,7 +5069,7 @@ pub const tests = [_]TestCase{
         .source =
         \\{
         \\x : List(U64)
-        \\x = List.sortWith([], |a, b| if a < b LessThan else if a > b GreaterThan else Equal)
+        \\x = List.sortWith([], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent)
         \\len = List.len(x)
         \\len
         \\}
@@ -5080,7 +5080,7 @@ pub const tests = [_]TestCase{
         .name = "low_level - List.sortWith single element",
         .source =
         \\{
-        \\x = List.sortWith([42], |a, b| if a < b LessThan else if a > b GreaterThan else Equal)
+        \\x = List.sortWith([42], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent)
         \\first = List.first(x)
         \\first
         \\}
@@ -5091,7 +5091,7 @@ pub const tests = [_]TestCase{
         .name = "low_level - List.sortWith already sorted",
         .source =
         \\{
-        \\x = List.sortWith([1, 2, 3, 4, 5], |a, b| if a < b LessThan else if a > b GreaterThan else Equal)
+        \\x = List.sortWith([1, 2, 3, 4, 5], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent)
         \\first = List.first(x)
         \\first
         \\}
@@ -5102,7 +5102,7 @@ pub const tests = [_]TestCase{
         .name = "low_level - List.sortWith reverse sorted",
         .source =
         \\{
-        \\x = List.sortWith([5, 4, 3, 2, 1], |a, b| if a < b LessThan else if a > b GreaterThan else Equal)
+        \\x = List.sortWith([5, 4, 3, 2, 1], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent)
         \\first = List.first(x)
         \\first
         \\}
@@ -5159,6 +5159,72 @@ pub const tests = [_]TestCase{
         \\List.sortWithReversed([3, 1, 2], |a, b| a.compare(b))
         ,
         .expected = .{ .inspect_str = "[3.0, 2.0, 1.0]" },
+    },
+    .{
+        .name = "low_level - List.sortWith comparator captures",
+        .source =
+        \\{
+        \\descending = True
+        \\cmp = |a, b| if descending { if a > b FirstBeforeSecond else if a < b SecondBeforeFirst else Equivalent } else { a.compare(b) }
+        \\List.sortWith([1, 3, 2], cmp)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[3.0, 2.0, 1.0]" },
+    },
+    .{
+        .name = "low_level - List.sortWith preserves refcounted elements",
+        .source =
+        \\{
+        \\items = ["pear", "apple", "banana", "apple"]
+        \\List.sortWith(items, |a, b| a.count_utf8_bytes().default_cmp(b.count_utf8_bytes()))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[\"pear\", \"apple\", \"apple\", \"banana\"]" },
+    },
+    .{
+        .name = "low_level - List.sortWith indirect wide elements is stable",
+        .source =
+        \\{
+        \\items = [
+        \\    { key: 2.U64, index: 0.U64, a: "a", b: "b", c: "c", d: "d", e: "e", f: "f", g: "g" },
+        \\    { key: 1.U64, index: 1.U64, a: "a", b: "b", c: "c", d: "d", e: "e", f: "f", g: "g" },
+        \\    { key: 2.U64, index: 2.U64, a: "a", b: "b", c: "c", d: "d", e: "e", f: "f", g: "g" },
+        \\]
+        \\sorted = List.sortWith(items, |a, b| a.key.default_cmp(b.key))
+        \\List.map(sorted, |item| item.index)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 0, 2]" },
+    },
+    .{
+        .name = "low_level - List.sortWith exercises Fluxsort partition path",
+        .source =
+        \\{
+        \\items = List.repeat(1.U64, 140)
+        \\List.len(List.sortWith(items, |a, b| a.default_cmp(b)))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "140" },
+    },
+    .{
+        .name = "low_level - List.sortWith crosses a generic module boundary",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Sorter",
+            .source =
+            \\Sorter := [].{
+            \\    sort : List(a), (a, a -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]) -> List(a)
+            \\    sort = |items, cmp| List.sortWith(items, cmp)
+            \\}
+            \\
+            ,
+        }},
+        .source =
+        \\import Sorter
+        \\
+        \\main = Sorter.sort(["pear", "a", "banana"], |a, b| a.count_utf8_bytes().default_cmp(b.count_utf8_bytes()))
+        ,
+        .expected = .{ .inspect_str = "[\"a\", \"pear\", \"banana\"]" },
     },
     .{
         .name = "low_level - U8.mod_by basic",

@@ -105,6 +105,7 @@ pub const BuiltinKind = enum {
     list_str_eq,
     list_list_eq,
     list_reverse,
+    list_sort_with,
     simd_store_16,
     simd_append_16,
     allocate_with_refcount,

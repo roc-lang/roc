@@ -79,9 +79,9 @@ fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) 
     std.debug.assert(@as(*isize, @ptrCast(@alignCast(count_ptr))).* > 0);
     @as(*isize, @ptrCast(@alignCast(count_ptr))).* -= 1;
     // Eq = 0
-    // GreaterThan = 1
-    // LessThan = 2
-    return lt + lt + gt;
+    // FirstBeforeSecond = 1
+    // SecondBeforeFirst = 2
+    return lt + gt + gt;
 }
 
 fn test_i64_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.c) void {

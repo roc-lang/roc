@@ -275,8 +275,8 @@ e.A,
  ^^
 
 A where alias names a set of method constraints, declared like a.Sortable :
-where [a.compare : a -> [LessThan, Equal, GreaterThan]] and written in a where
-clause as where [a.Sortable]
+where [a.compare : a -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]] and
+written in a where clause as where [a.Sortable]
 
 ── ✗ not a where alias ────────────────────────────────────── everything.md:65:4
 
@@ -286,8 +286,8 @@ e.B,
  ^^
 
 A where alias names a set of method constraints, declared like a.Sortable :
-where [a.compare : a -> [LessThan, Equal, GreaterThan]] and written in a where
-clause as where [a.Sortable]
+where [a.compare : a -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]] and
+written in a where clause as where [a.Sortable]
 
 ── ● declaration has no value ─────────────────────────────── everything.md:62:1
 
