@@ -15,6 +15,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const base = @import("base");
+const numeric_conversion = base.numeric_conversion;
 const builtins = @import("builtins");
 const layout = @import("layout");
 /// Dec's scaling factor (10^18) as an i64, sourced from the canonical Dec type.
@@ -7614,95 +7615,10 @@ fn emitIntToI128(self: *Self, signed: bool) Allocator.Error!void {
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), result_local) catch return error.OutOfMemory;
 }
 
-const DecIntTryInfo = struct {
-    val_size: u32,
-    signed: bool,
-    min: i64,
-    max_exclusive: i64,
-};
-
-const DecIntTryOp = enum {
-    dec_to_i8_try_unsafe,
-    dec_to_u8_try_unsafe,
-    dec_to_i16_try_unsafe,
-    dec_to_u16_try_unsafe,
-    dec_to_i32_try_unsafe,
-    dec_to_u32_try_unsafe,
-    dec_to_i64_try_unsafe,
-    dec_to_u64_try_unsafe,
-};
-
-fn decIntTryInfo(op: DecIntTryOp) DecIntTryInfo {
-    return switch (op) {
-        .dec_to_i8_try_unsafe => .{ .val_size = 1, .signed = true, .min = -128, .max_exclusive = 128 },
-        .dec_to_u8_try_unsafe => .{ .val_size = 1, .signed = false, .min = 0, .max_exclusive = 256 },
-        .dec_to_i16_try_unsafe => .{ .val_size = 2, .signed = true, .min = -32768, .max_exclusive = 32768 },
-        .dec_to_u16_try_unsafe => .{ .val_size = 2, .signed = false, .min = 0, .max_exclusive = 65536 },
-        .dec_to_i32_try_unsafe => .{ .val_size = 4, .signed = true, .min = -2147483648, .max_exclusive = 2147483648 },
-        .dec_to_u32_try_unsafe => .{ .val_size = 4, .signed = false, .min = 0, .max_exclusive = 4294967296 },
-        .dec_to_i64_try_unsafe => .{ .val_size = 8, .signed = true, .min = std.math.minInt(i64), .max_exclusive = 0 },
-        .dec_to_u64_try_unsafe => .{ .val_size = 8, .signed = false, .min = 0, .max_exclusive = 0 },
-    };
-}
-
-const FloatIntTryInfo = struct {
-    src_is_f32: bool,
-    target_bits: u32,
-    val_size: u32,
-    signed: bool,
-};
-
-const FloatIntTryOp = enum {
-    f32_to_i8_try_unsafe,
-    f64_to_i8_try_unsafe,
-    f32_to_u8_try_unsafe,
-    f64_to_u8_try_unsafe,
-    f32_to_i16_try_unsafe,
-    f64_to_i16_try_unsafe,
-    f32_to_u16_try_unsafe,
-    f64_to_u16_try_unsafe,
-    f32_to_i32_try_unsafe,
-    f64_to_i32_try_unsafe,
-    f32_to_u32_try_unsafe,
-    f64_to_u32_try_unsafe,
-    f32_to_i64_try_unsafe,
-    f64_to_i64_try_unsafe,
-    f32_to_u64_try_unsafe,
-    f64_to_u64_try_unsafe,
-    f32_to_i128_try_unsafe,
-    f64_to_i128_try_unsafe,
-    f32_to_u128_try_unsafe,
-    f64_to_u128_try_unsafe,
-};
-
-fn floatIntTryInfo(op: FloatIntTryOp) FloatIntTryInfo {
-    return switch (op) {
-        .f32_to_i8_try_unsafe => .{ .src_is_f32 = true, .target_bits = 8, .val_size = 1, .signed = true },
-        .f64_to_i8_try_unsafe => .{ .src_is_f32 = false, .target_bits = 8, .val_size = 1, .signed = true },
-        .f32_to_u8_try_unsafe => .{ .src_is_f32 = true, .target_bits = 8, .val_size = 1, .signed = false },
-        .f64_to_u8_try_unsafe => .{ .src_is_f32 = false, .target_bits = 8, .val_size = 1, .signed = false },
-        .f32_to_i16_try_unsafe => .{ .src_is_f32 = true, .target_bits = 16, .val_size = 2, .signed = true },
-        .f64_to_i16_try_unsafe => .{ .src_is_f32 = false, .target_bits = 16, .val_size = 2, .signed = true },
-        .f32_to_u16_try_unsafe => .{ .src_is_f32 = true, .target_bits = 16, .val_size = 2, .signed = false },
-        .f64_to_u16_try_unsafe => .{ .src_is_f32 = false, .target_bits = 16, .val_size = 2, .signed = false },
-        .f32_to_i32_try_unsafe => .{ .src_is_f32 = true, .target_bits = 32, .val_size = 4, .signed = true },
-        .f64_to_i32_try_unsafe => .{ .src_is_f32 = false, .target_bits = 32, .val_size = 4, .signed = true },
-        .f32_to_u32_try_unsafe => .{ .src_is_f32 = true, .target_bits = 32, .val_size = 4, .signed = false },
-        .f64_to_u32_try_unsafe => .{ .src_is_f32 = false, .target_bits = 32, .val_size = 4, .signed = false },
-        .f32_to_i64_try_unsafe => .{ .src_is_f32 = true, .target_bits = 64, .val_size = 8, .signed = true },
-        .f64_to_i64_try_unsafe => .{ .src_is_f32 = false, .target_bits = 64, .val_size = 8, .signed = true },
-        .f32_to_u64_try_unsafe => .{ .src_is_f32 = true, .target_bits = 64, .val_size = 8, .signed = false },
-        .f64_to_u64_try_unsafe => .{ .src_is_f32 = false, .target_bits = 64, .val_size = 8, .signed = false },
-        .f32_to_i128_try_unsafe => .{ .src_is_f32 = true, .target_bits = 128, .val_size = 16, .signed = true },
-        .f64_to_i128_try_unsafe => .{ .src_is_f32 = false, .target_bits = 128, .val_size = 16, .signed = true },
-        .f32_to_u128_try_unsafe => .{ .src_is_f32 = true, .target_bits = 128, .val_size = 16, .signed = false },
-        .f64_to_u128_try_unsafe => .{ .src_is_f32 = false, .target_bits = 128, .val_size = 16, .signed = false },
-    };
-}
-
-fn emitFloatToIntTryBuiltin(self: *Self, op: FloatIntTryOp, ret_layout: layout.Idx, arg: ProcLocalId) Allocator.Error!void {
+fn emitFloatToIntTryBuiltin(self: *Self, op: lir.LowLevel, ret_layout: layout.Idx, arg: ProcLocalId) Allocator.Error!void {
     const offsets = self.tryUnsafeOffsets(ret_layout);
-    const info = floatIntTryInfo(op);
+    const spec = numeric_conversion.getConversionSpec(op).?;
+    std.debug.assert(spec.src.class() == .float and spec.dst.class() == .int);
     const result_size = try self.layoutStorageByteSize(ret_layout);
     const result_align = try self.layoutStorageByteAlign(ret_layout);
     const result_offset = try self.allocStackMemory(result_size, result_align);
@@ -7712,13 +7628,13 @@ fn emitFloatToIntTryBuiltin(self: *Self, op: FloatIntTryOp, ret_layout: layout.I
     try self.emitLocalSet(result_local);
     try self.emitLocalGet(result_local);
     try self.emitProcLocal(arg);
-    try self.emitI32Const(@intCast(info.target_bits));
-    try self.emitI32Const(@intFromBool(info.signed));
-    try self.emitI32Const(@intCast(info.val_size));
+    try self.emitI32Const(spec.dst.bits());
+    try self.emitI32Const(@intFromBool(spec.dst.isSigned()));
+    try self.emitI32Const(spec.dst.bytes());
     try self.emitI32Const(@intCast(offsets.success));
     try self.emitI32Const(@intCast(offsets.value));
 
-    if (info.src_is_f32) {
+    if (spec.src == .f32) {
         try self.emitBuiltinCall(.f32_to_int_try_unsafe, self.f32_to_int_try_unsafe_import);
     } else {
         try self.emitBuiltinCall(.f64_to_int_try_unsafe, self.f64_to_int_try_unsafe_import);
@@ -7727,16 +7643,19 @@ fn emitFloatToIntTryBuiltin(self: *Self, op: FloatIntTryOp, ret_layout: layout.I
     try self.emitLocalGet(result_local);
 }
 
-fn emitDecToIntTryUnsafe(self: *Self, op: DecIntTryOp, ret_layout: layout.Idx, arg: ProcLocalId) Allocator.Error!void {
+fn emitDecToIntTryUnsafe(self: *Self, op: lir.LowLevel, ret_layout: layout.Idx, arg: ProcLocalId) Allocator.Error!void {
     const offsets = self.tryUnsafeOffsets(ret_layout);
-    const info = decIntTryInfo(op);
+    const spec = numeric_conversion.getConversionSpec(op).?;
+    std.debug.assert(spec.src == .dec and spec.dst.class() == .int);
+    const val_size: u32 = spec.dst.bytes();
+    const signed = spec.dst.isSigned();
 
     try self.emitProcLocal(arg);
     const src = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(src);
 
-    const total_size: u32 = if (info.val_size == 8) 16 else 8;
-    const alignment: u32 = if (info.val_size == 8) 8 else 4;
+    const total_size: u32 = if (val_size == 8) 16 else 8;
+    const alignment: u32 = if (val_size == 8) 8 else 4;
     const result_offset = try self.allocStackMemory(total_size, alignment);
     const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitFpOffset(result_offset);
@@ -7748,9 +7667,9 @@ fn emitDecToIntTryUnsafe(self: *Self, op: DecIntTryOp, ret_layout: layout.Idx, a
         try self.emitLoadOp(.i64, 0);
         try self.emitLocalGet(src);
         try self.emitLoadOp(.i64, 8);
-        try self.emitI32Const(@intCast(info.val_size * 8));
-        try self.emitI32Const(@intFromBool(info.signed));
-        try self.emitI32Const(@intCast(info.val_size));
+        try self.emitI32Const(@intCast(val_size * 8));
+        try self.emitI32Const(@intFromBool(signed));
+        try self.emitI32Const(@intCast(val_size));
         try self.emitI32Const(@intCast(offsets.success));
         try self.emitI32Const(@intCast(offsets.value));
         try self.emitBuiltinCall(.dec_to_int_try_unsafe, null);
@@ -7765,7 +7684,7 @@ fn emitDecToIntTryUnsafe(self: *Self, op: DecIntTryOp, ret_layout: layout.Idx, a
 
     try self.emitLocalGet(src);
     try self.emitLocalGet(int_local);
-    try self.emitBuiltinCall(.dec_to_int_try_unsafe, if (info.signed) self.dec_to_i128_import else self.dec_to_u128_import);
+    try self.emitBuiltinCall(.dec_to_int_try_unsafe, if (signed) self.dec_to_i128_import else self.dec_to_u128_import);
     const host_success = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(host_success);
 
@@ -7780,7 +7699,7 @@ fn emitDecToIntTryUnsafe(self: *Self, op: DecIntTryOp, ret_layout: layout.Idx, a
     try self.emitLocalSet(high);
 
     const in_range = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    if (info.signed) {
+    if (signed) {
         try self.emitLocalGet(high);
         self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
         WasmModule.leb128WriteI64(self.allocator, self.currentCode(), -1) catch return error.OutOfMemory;
@@ -7797,16 +7716,17 @@ fn emitDecToIntTryUnsafe(self: *Self, op: DecIntTryOp, ret_layout: layout.Idx, a
         self.currentCode().append(self.allocator, Op.i64_lt_s) catch return error.OutOfMemory;
         self.currentCode().append(self.allocator, Op.select) catch return error.OutOfMemory;
 
-        if (info.val_size < 8) {
+        if (val_size < 8) {
+            const magnitude_bits: u6 = @intCast(spec.dst.bits() - 1);
             try self.emitLocalGet(low);
             self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI64(self.allocator, self.currentCode(), info.min) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, self.currentCode(), -(@as(i64, 1) << magnitude_bits)) catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, Op.i64_ge_s) catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
 
             try self.emitLocalGet(low);
             self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI64(self.allocator, self.currentCode(), info.max_exclusive) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, self.currentCode(), @as(i64, 1) << magnitude_bits) catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, Op.i64_lt_s) catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
         }
@@ -7816,10 +7736,10 @@ fn emitDecToIntTryUnsafe(self: *Self, op: DecIntTryOp, ret_layout: layout.Idx, a
         WasmModule.leb128WriteI64(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
         self.currentCode().append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
 
-        if (info.val_size < 8) {
+        if (val_size < 8) {
             try self.emitLocalGet(low);
             self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI64(self.allocator, self.currentCode(), info.max_exclusive) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, self.currentCode(), @as(i64, 1) << @intCast(spec.dst.bits())) catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, Op.i64_lt_u) catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
         }
@@ -7841,11 +7761,11 @@ fn emitDecToIntTryUnsafe(self: *Self, op: DecIntTryOp, ret_layout: layout.Idx, a
     self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
     try self.emitLocalGet(result_local);
     try self.emitLocalGet(low);
-    if (info.val_size == 8) {
+    if (val_size == 8) {
         try self.emitStoreOp(.i64, offsets.value);
     } else {
         self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-        try self.emitStoreOpSized(.i32, info.val_size, offsets.value);
+        try self.emitStoreOpSized(.i32, val_size, offsets.value);
     }
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 
@@ -14596,7 +14516,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const tu_layout = try WasmLayout.tagUnionLayoutWithStore(ret_layout_val.getTagUnion().idx, ls);
             const disc_offset: u32 = tu_layout.discriminant_offset;
             const result_offset = try self.allocStackMemory(tu_layout.size, 4);
-            const parse_spec = ll.op.numericParseSpec() orelse unreachable;
+            const parse_spec = numeric_conversion.getNumericParseSpec(ll.op) orelse unreachable;
 
             try self.emitProcLocal(GuardedList.at(args, 0));
             const input = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -16146,14 +16066,15 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         // Dec try_unsafe conversions return { success, val_or_memory_garbage }.
         // The fractional part is truncated toward zero before range checking.
-        .dec_to_i8_try_unsafe => try self.emitDecToIntTryUnsafe(.dec_to_i8_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .dec_to_i16_try_unsafe => try self.emitDecToIntTryUnsafe(.dec_to_i16_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .dec_to_i32_try_unsafe => try self.emitDecToIntTryUnsafe(.dec_to_i32_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .dec_to_i64_try_unsafe => try self.emitDecToIntTryUnsafe(.dec_to_i64_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .dec_to_u8_try_unsafe => try self.emitDecToIntTryUnsafe(.dec_to_u8_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .dec_to_u16_try_unsafe => try self.emitDecToIntTryUnsafe(.dec_to_u16_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .dec_to_u32_try_unsafe => try self.emitDecToIntTryUnsafe(.dec_to_u32_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .dec_to_u64_try_unsafe => try self.emitDecToIntTryUnsafe(.dec_to_u64_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
+        .dec_to_i8_try_unsafe,
+        .dec_to_i16_try_unsafe,
+        .dec_to_i32_try_unsafe,
+        .dec_to_i64_try_unsafe,
+        .dec_to_u8_try_unsafe,
+        .dec_to_u16_try_unsafe,
+        .dec_to_u32_try_unsafe,
+        .dec_to_u64_try_unsafe,
+        => try self.emitDecToIntTryUnsafe(ll.op, ll.ret_layout, GuardedList.at(args, 0)),
         // Dec → u128: divide by 10^18
         .dec_to_u128_try_unsafe => {
             const offsets = self.tryUnsafeOffsets(ll.ret_layout);
@@ -16252,26 +16173,27 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         // Float try_unsafe conversions return { success, val_or_memory_garbage }.
         // The wrapper ABI preserves the source width exactly: F32 never passes
         // through an F64 Wasm value or helper parameter.
-        .f32_to_i8_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_i8_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_i8_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_i8_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_u8_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_u8_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_u8_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_u8_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_i16_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_i16_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_i16_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_i16_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_u16_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_u16_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_u16_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_u16_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_i32_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_i32_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_i32_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_i32_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_u32_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_u32_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_u32_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_u32_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_i64_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_i64_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_i64_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_i64_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_u64_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_u64_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_u64_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_u64_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_i128_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_i128_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_i128_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_i128_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_u128_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_u128_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_u128_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_u128_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
+        .f32_to_i8_try_unsafe,
+        .f64_to_i8_try_unsafe,
+        .f32_to_u8_try_unsafe,
+        .f64_to_u8_try_unsafe,
+        .f32_to_i16_try_unsafe,
+        .f64_to_i16_try_unsafe,
+        .f32_to_u16_try_unsafe,
+        .f64_to_u16_try_unsafe,
+        .f32_to_i32_try_unsafe,
+        .f64_to_i32_try_unsafe,
+        .f32_to_u32_try_unsafe,
+        .f64_to_u32_try_unsafe,
+        .f32_to_i64_try_unsafe,
+        .f64_to_i64_try_unsafe,
+        .f32_to_u64_try_unsafe,
+        .f64_to_u64_try_unsafe,
+        .f32_to_i128_try_unsafe,
+        .f64_to_i128_try_unsafe,
+        .f32_to_u128_try_unsafe,
+        .f64_to_u128_try_unsafe,
+        => try self.emitFloatToIntTryBuiltin(ll.op, ll.ret_layout, GuardedList.at(args, 0)),
         .f64_to_f32_try_unsafe => {
             const offsets = self.tryUnsafeOffsets(ll.ret_layout);
             try self.emitProcLocal(GuardedList.at(args, 0));

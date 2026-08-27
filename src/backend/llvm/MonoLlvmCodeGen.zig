@@ -16,6 +16,7 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const SourceLoc = lir.SourceLoc;
 const LowLevelBuiltins = Base.LowLevelBuiltins;
+const numeric_conversion = Base.numeric_conversion;
 const builtins = @import("builtins");
 const shim_symbols = builtins.shim_symbols;
 const BoxyBuiltinFn = @import("backend").LirCodeGenMod.BoxyBuiltinFn;
@@ -39,59 +40,59 @@ const StrLiteral = lir.LIR.StrLiteral;
 
 const BuiltinSymbol = builtins.builtin_registry.BuiltinFn;
 
-const SimdLowLevel = enum {
-    simd_splat,
-    simd_get_lane_unchecked,
-    simd_with_lane_unchecked,
-    simd_to_u128_bits,
-    simd_from_u128_bits,
-    simd_add_wrap,
-    simd_sub_wrap,
-    simd_add_sat,
-    simd_sub_sat,
-    simd_neg_wrap,
-    simd_abs_wrap,
-    simd_min,
-    simd_max,
-    simd_abs_diff,
-    simd_avg_rounded,
-    simd_mul_wrap,
-    simd_mul_high,
-    simd_mul_q15_sat,
-    simd_mul_wide_lo,
-    simd_mul_wide_hi,
-    simd_dot_pairs,
-    simd_dot_pairs_sat,
-    simd_sad,
-    simd_and,
-    simd_or,
-    simd_xor,
-    simd_not,
-    simd_bit_select,
-    simd_eq_lanes,
-    simd_gt_lanes,
-    simd_gte_lanes,
-    simd_bitmask,
-    simd_shl_wrap,
-    simd_shr_wrap,
-    simd_shr_zf_wrap,
-    simd_shr_rounded,
-    simd_interleave_lo,
-    simd_interleave_hi,
-    simd_even_lanes,
-    simd_odd_lanes,
-    simd_reverse_lanes,
-    simd_table_lookup,
-    simd_concat_shift_bytes,
-    simd_widen_lo,
-    simd_widen_hi,
-    simd_pairwise_add_widen,
-    simd_narrow_wrap,
-    simd_narrow_sat,
-    simd_sum_lanes,
-    simd_sum_lanes_wrap,
-    simd_clmul_lo,
-    simd_clmul_hi,
+const SimdLowLevel = enum(u16) {
+    simd_splat = @intFromEnum(lir.LowLevel.simd_splat),
+    simd_get_lane_unchecked = @intFromEnum(lir.LowLevel.simd_get_lane_unchecked),
+    simd_with_lane_unchecked = @intFromEnum(lir.LowLevel.simd_with_lane_unchecked),
+    simd_to_u128_bits = @intFromEnum(lir.LowLevel.simd_to_u128_bits),
+    simd_from_u128_bits = @intFromEnum(lir.LowLevel.simd_from_u128_bits),
+    simd_add_wrap = @intFromEnum(lir.LowLevel.simd_add_wrap),
+    simd_sub_wrap = @intFromEnum(lir.LowLevel.simd_sub_wrap),
+    simd_add_sat = @intFromEnum(lir.LowLevel.simd_add_sat),
+    simd_sub_sat = @intFromEnum(lir.LowLevel.simd_sub_sat),
+    simd_neg_wrap = @intFromEnum(lir.LowLevel.simd_neg_wrap),
+    simd_abs_wrap = @intFromEnum(lir.LowLevel.simd_abs_wrap),
+    simd_min = @intFromEnum(lir.LowLevel.simd_min),
+    simd_max = @intFromEnum(lir.LowLevel.simd_max),
+    simd_abs_diff = @intFromEnum(lir.LowLevel.simd_abs_diff),
+    simd_avg_rounded = @intFromEnum(lir.LowLevel.simd_avg_rounded),
+    simd_mul_wrap = @intFromEnum(lir.LowLevel.simd_mul_wrap),
+    simd_mul_high = @intFromEnum(lir.LowLevel.simd_mul_high),
+    simd_mul_q15_sat = @intFromEnum(lir.LowLevel.simd_mul_q15_sat),
+    simd_mul_wide_lo = @intFromEnum(lir.LowLevel.simd_mul_wide_lo),
+    simd_mul_wide_hi = @intFromEnum(lir.LowLevel.simd_mul_wide_hi),
+    simd_dot_pairs = @intFromEnum(lir.LowLevel.simd_dot_pairs),
+    simd_dot_pairs_sat = @intFromEnum(lir.LowLevel.simd_dot_pairs_sat),
+    simd_sad = @intFromEnum(lir.LowLevel.simd_sad),
+    simd_and = @intFromEnum(lir.LowLevel.simd_and),
+    simd_or = @intFromEnum(lir.LowLevel.simd_or),
+    simd_xor = @intFromEnum(lir.LowLevel.simd_xor),
+    simd_not = @intFromEnum(lir.LowLevel.simd_not),
+    simd_bit_select = @intFromEnum(lir.LowLevel.simd_bit_select),
+    simd_eq_lanes = @intFromEnum(lir.LowLevel.simd_eq_lanes),
+    simd_gt_lanes = @intFromEnum(lir.LowLevel.simd_gt_lanes),
+    simd_gte_lanes = @intFromEnum(lir.LowLevel.simd_gte_lanes),
+    simd_bitmask = @intFromEnum(lir.LowLevel.simd_bitmask),
+    simd_shl_wrap = @intFromEnum(lir.LowLevel.simd_shl_wrap),
+    simd_shr_wrap = @intFromEnum(lir.LowLevel.simd_shr_wrap),
+    simd_shr_zf_wrap = @intFromEnum(lir.LowLevel.simd_shr_zf_wrap),
+    simd_shr_rounded = @intFromEnum(lir.LowLevel.simd_shr_rounded),
+    simd_interleave_lo = @intFromEnum(lir.LowLevel.simd_interleave_lo),
+    simd_interleave_hi = @intFromEnum(lir.LowLevel.simd_interleave_hi),
+    simd_even_lanes = @intFromEnum(lir.LowLevel.simd_even_lanes),
+    simd_odd_lanes = @intFromEnum(lir.LowLevel.simd_odd_lanes),
+    simd_reverse_lanes = @intFromEnum(lir.LowLevel.simd_reverse_lanes),
+    simd_table_lookup = @intFromEnum(lir.LowLevel.simd_table_lookup),
+    simd_concat_shift_bytes = @intFromEnum(lir.LowLevel.simd_concat_shift_bytes),
+    simd_widen_lo = @intFromEnum(lir.LowLevel.simd_widen_lo),
+    simd_widen_hi = @intFromEnum(lir.LowLevel.simd_widen_hi),
+    simd_pairwise_add_widen = @intFromEnum(lir.LowLevel.simd_pairwise_add_widen),
+    simd_narrow_wrap = @intFromEnum(lir.LowLevel.simd_narrow_wrap),
+    simd_narrow_sat = @intFromEnum(lir.LowLevel.simd_narrow_sat),
+    simd_sum_lanes = @intFromEnum(lir.LowLevel.simd_sum_lanes),
+    simd_sum_lanes_wrap = @intFromEnum(lir.LowLevel.simd_sum_lanes_wrap),
+    simd_clmul_lo = @intFromEnum(lir.LowLevel.simd_clmul_lo),
+    simd_clmul_hi = @intFromEnum(lir.LowLevel.simd_clmul_hi),
 };
 
 /// Linker name of a registered builtin; the registry is the only place
@@ -4697,27 +4698,27 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
 
-        const HasherOp = enum {
-            dict_pseudo_seed,
-            hasher_finish,
-            hasher_write_bool,
-            hasher_write_u8,
-            hasher_write_u16,
-            hasher_write_u32,
-            hasher_write_u64,
-            hasher_write_i8,
-            hasher_write_i16,
-            hasher_write_i32,
-            hasher_write_i64,
-            hasher_write_f32,
-            hasher_write_f64,
-            hasher_write_u128,
-            hasher_write_i128,
-            hasher_write_dec,
-            hasher_write_bytes,
-            hasher_write_str,
+        const HasherOp = enum(u16) {
+            dict_pseudo_seed = @intFromEnum(lir.LowLevel.dict_pseudo_seed),
+            hasher_finish = @intFromEnum(lir.LowLevel.hasher_finish),
+            hasher_write_bool = @intFromEnum(lir.LowLevel.hasher_write_bool),
+            hasher_write_u8 = @intFromEnum(lir.LowLevel.hasher_write_u8),
+            hasher_write_u16 = @intFromEnum(lir.LowLevel.hasher_write_u16),
+            hasher_write_u32 = @intFromEnum(lir.LowLevel.hasher_write_u32),
+            hasher_write_u64 = @intFromEnum(lir.LowLevel.hasher_write_u64),
+            hasher_write_i8 = @intFromEnum(lir.LowLevel.hasher_write_i8),
+            hasher_write_i16 = @intFromEnum(lir.LowLevel.hasher_write_i16),
+            hasher_write_i32 = @intFromEnum(lir.LowLevel.hasher_write_i32),
+            hasher_write_i64 = @intFromEnum(lir.LowLevel.hasher_write_i64),
+            hasher_write_f32 = @intFromEnum(lir.LowLevel.hasher_write_f32),
+            hasher_write_f64 = @intFromEnum(lir.LowLevel.hasher_write_f64),
+            hasher_write_u128 = @intFromEnum(lir.LowLevel.hasher_write_u128),
+            hasher_write_i128 = @intFromEnum(lir.LowLevel.hasher_write_i128),
+            hasher_write_dec = @intFromEnum(lir.LowLevel.hasher_write_dec),
+            hasher_write_bytes = @intFromEnum(lir.LowLevel.hasher_write_bytes),
+            hasher_write_str = @intFromEnum(lir.LowLevel.hasher_write_str),
         };
-        const hasher_op = std.meta.stringToEnum(HasherOp, @tagName(op)) orelse return error.UnsupportedLowLevel;
+        const hasher_op = narrowLowLevel(HasherOp, op) orelse return error.UnsupportedLowLevel;
         const result = switch (hasher_op) {
             .dict_pseudo_seed => blk: {
                 if (args.len != 0) return error.CompilationFailed;
@@ -4829,17 +4830,17 @@ pub const MonoLlvmCodeGen = struct {
             name: []const u8,
             arity: Arity,
         };
-        const CryptoOp = enum {
-            crypto_sha256_hash_bytes,
-            crypto_sha256_hasher_empty,
-            crypto_sha256_hasher_write,
-            crypto_sha256_hasher_finish,
-            crypto_blake3_hash_bytes,
-            crypto_blake3_hasher_empty,
-            crypto_blake3_hasher_write,
-            crypto_blake3_hasher_finish,
+        const CryptoOp = enum(u16) {
+            crypto_sha256_hash_bytes = @intFromEnum(lir.LowLevel.crypto_sha256_hash_bytes),
+            crypto_sha256_hasher_empty = @intFromEnum(lir.LowLevel.crypto_sha256_hasher_empty),
+            crypto_sha256_hasher_write = @intFromEnum(lir.LowLevel.crypto_sha256_hasher_write),
+            crypto_sha256_hasher_finish = @intFromEnum(lir.LowLevel.crypto_sha256_hasher_finish),
+            crypto_blake3_hash_bytes = @intFromEnum(lir.LowLevel.crypto_blake3_hash_bytes),
+            crypto_blake3_hasher_empty = @intFromEnum(lir.LowLevel.crypto_blake3_hasher_empty),
+            crypto_blake3_hasher_write = @intFromEnum(lir.LowLevel.crypto_blake3_hasher_write),
+            crypto_blake3_hasher_finish = @intFromEnum(lir.LowLevel.crypto_blake3_hasher_finish),
         };
-        const crypto_op = std.meta.stringToEnum(CryptoOp, @tagName(op)) orelse return error.UnsupportedLowLevel;
+        const crypto_op = narrowLowLevel(CryptoOp, op) orelse return error.UnsupportedLowLevel;
         const info: CryptoInfo = switch (crypto_op) {
             .crypto_sha256_hash_bytes => .{ .name = builtinSymbol(LowLevelBuiltins.cryptoOp(.crypto_sha256_hash_bytes)), .arity = Arity.one },
             .crypto_sha256_hasher_empty => .{ .name = builtinSymbol(LowLevelBuiltins.cryptoOp(.crypto_sha256_hasher_empty)), .arity = Arity.zero },
@@ -5627,7 +5628,7 @@ pub const MonoLlvmCodeGen = struct {
         const vector_ty = try self.simdType(vector);
         const lane_ty = builder.intType(vector.laneBits()) catch return error.OutOfMemory;
 
-        const simd_op = std.meta.stringToEnum(SimdLowLevel, @tagName(op)) orelse return error.UnsupportedLowLevel;
+        const simd_op = narrowLowLevel(SimdLowLevel, op) orelse return error.UnsupportedLowLevel;
         switch (simd_op) {
             .simd_splat => {
                 const arg = GuardedList.at(args, 0);
@@ -5824,7 +5825,7 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const vector_ty = try self.simdType(vector);
 
-        const simd_op = std.meta.stringToEnum(SimdLowLevel, @tagName(op)) orelse return error.UnsupportedLowLevel;
+        const simd_op = narrowLowLevel(SimdLowLevel, op) orelse return error.UnsupportedLowLevel;
         switch (simd_op) {
             .simd_mul_high => {
                 const wide_bits: u16 = vector.laneBits() * 2;
@@ -6272,128 +6273,120 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeScalar(self.slot(target).ptr, target_layout, coerced);
     }
 
+    /// Narrow `op` to a smaller enum whose variants carry `LowLevel`'s values.
+    /// Returns null when `op` is not one of them.
+    fn narrowLowLevel(comptime Narrow: type, op: lir.LowLevel) ?Narrow {
+        const raw = @intFromEnum(op);
+        inline for (@typeInfo(Narrow).@"enum".fields) |field| {
+            if (raw == field.value) return @enumFromInt(field.value);
+        }
+        return null;
+    }
+
+    /// Lower a scalar numeric conversion. Delegates to a helper for each
+    /// (source class, destination class) pair. Each helper switches on the mode.
     fn emitNumericConversion(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype) Error!void {
-        const name = @tagName(op);
-        const SpecialConversion = enum {
-            f32_to_i8_try_unsafe,
-            f32_to_i16_try_unsafe,
-            f32_to_i32_try_unsafe,
-            f32_to_i64_try_unsafe,
-            f32_to_i128_try_unsafe,
-            f32_to_u8_try_unsafe,
-            f32_to_u16_try_unsafe,
-            f32_to_u32_try_unsafe,
-            f32_to_u64_try_unsafe,
-            f32_to_u128_try_unsafe,
-            f64_to_i8_try_unsafe,
-            f64_to_i16_try_unsafe,
-            f64_to_i32_try_unsafe,
-            f64_to_i64_try_unsafe,
-            f64_to_i128_try_unsafe,
-            f64_to_u8_try_unsafe,
-            f64_to_u16_try_unsafe,
-            f64_to_u32_try_unsafe,
-            f64_to_u64_try_unsafe,
-            f64_to_u128_try_unsafe,
-            f64_to_f32_try_unsafe,
-            dec_to_f32_try_unsafe,
-            i128_to_dec_try_unsafe,
-            u128_to_dec_try_unsafe,
-            dec_to_f32_wrap,
-            dec_to_f64,
-            dec_to_i8_try_unsafe,
-            dec_to_i16_try_unsafe,
-            dec_to_i32_try_unsafe,
-            dec_to_i64_try_unsafe,
-            dec_to_u8_try_unsafe,
-            dec_to_u16_try_unsafe,
-            dec_to_u32_try_unsafe,
-            dec_to_u64_try_unsafe,
-            dec_to_u128_try_unsafe,
-        };
-        if (std.meta.stringToEnum(SpecialConversion, name)) |conversion| switch (conversion) {
-            .f32_to_i8_try_unsafe,
-            .f32_to_i16_try_unsafe,
-            .f32_to_i32_try_unsafe,
-            .f32_to_i64_try_unsafe,
-            .f32_to_i128_try_unsafe,
-            .f32_to_u8_try_unsafe,
-            .f32_to_u16_try_unsafe,
-            .f32_to_u32_try_unsafe,
-            .f32_to_u64_try_unsafe,
-            .f32_to_u128_try_unsafe,
-            .f64_to_i8_try_unsafe,
-            .f64_to_i16_try_unsafe,
-            .f64_to_i32_try_unsafe,
-            .f64_to_i64_try_unsafe,
-            .f64_to_i128_try_unsafe,
-            .f64_to_u8_try_unsafe,
-            .f64_to_u16_try_unsafe,
-            .f64_to_u32_try_unsafe,
-            .f64_to_u64_try_unsafe,
-            .f64_to_u128_try_unsafe,
-            => {
-                try self.emitFloatToIntTryUnsafeConversion(target, GuardedList.at(args, 0));
-                return;
+        if (args.len < 1) return error.UnsupportedLowLevel;
+        const arg = GuardedList.at(args, 0);
+        const spec = numeric_conversion.getConversionSpec(op) orelse return error.UnsupportedLowLevel;
+        switch (spec.src.class()) {
+            .int => switch (spec.dst.class()) {
+                .int => try self.lowerIntToInt(spec, target, arg),
+                .float => try self.lowerIntToFloat(spec, target, arg),
+                .dec => try self.lowerIntToDec(spec, target, arg),
             },
-            .f64_to_f32_try_unsafe => {
-                try self.emitF64ToF32TryUnsafeConversion(target, GuardedList.at(args, 0));
-                return;
+            .float => switch (spec.dst.class()) {
+                .int => try self.lowerFloatToInt(spec, target, arg),
+                .float => try self.lowerFloatToFloat(spec, target, arg),
+                .dec => return error.UnsupportedLowLevel,
             },
-            .dec_to_f32_try_unsafe => {
-                try self.emitDecToF32TryUnsafeConversion(target, GuardedList.at(args, 0));
-                return;
+            .dec => switch (spec.dst.class()) {
+                .int => try self.lowerDecToInt(spec, target, arg),
+                .float => try self.lowerDecToFloat(spec, target, arg),
+                .dec => return error.UnsupportedLowLevel,
             },
-            .i128_to_dec_try_unsafe, .u128_to_dec_try_unsafe => {
-                try self.emitInt128ToDecTryUnsafeConversion(target, GuardedList.at(args, 0), op == .i128_to_dec_try_unsafe);
-                return;
-            },
-            .dec_to_f32_wrap, .dec_to_f64 => {
-                try self.emitDecToFloatConversion(target, GuardedList.at(args, 0), op == .dec_to_f32_wrap);
-                return;
-            },
-            .dec_to_i8_try_unsafe,
-            .dec_to_i16_try_unsafe,
-            .dec_to_i32_try_unsafe,
-            .dec_to_i64_try_unsafe,
-            .dec_to_u8_try_unsafe,
-            .dec_to_u16_try_unsafe,
-            .dec_to_u32_try_unsafe,
-            .dec_to_u64_try_unsafe,
-            .dec_to_u128_try_unsafe,
-            => {
-                try self.emitDecToIntTryUnsafeConversion(target, GuardedList.at(args, 0));
-                return;
-            },
-        };
-        if (args.len >= 1 and isIntegerLayout(self.localLayout(GuardedList.at(args, 0))) and self.localLayout(target) == .dec and std.mem.endsWith(u8, name, "_to_dec")) {
-            try self.emitIntToDec(target, GuardedList.at(args, 0));
-            return;
         }
-        if (args.len >= 1 and isIntegerLayout(self.localLayout(GuardedList.at(args, 0))) and std.mem.endsWith(u8, name, "_try")) {
-            try self.emitIntTryConversion(target, GuardedList.at(args, 0));
-            return;
+    }
+
+    fn lowerIntToInt(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+        switch (spec.mode) {
+            .exact, .wrap => try self.emitScalarCoercion(target, arg),
+            .@"try" => try self.emitIntTryConversion(target, arg),
+            .trunc, .try_unsafe => return error.UnsupportedLowLevel,
         }
-        if (args.len >= 1) {
-            if (floatToIntTruncInfo(op)) |info| {
-                try self.emitFloatToIntTruncConversion(target, GuardedList.at(args, 0), info);
-                return;
-            }
+    }
+
+    fn lowerIntToFloat(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+        switch (spec.mode) {
+            .exact => try self.emitScalarCoercion(target, arg),
+            .wrap, .trunc, .@"try", .try_unsafe => return error.UnsupportedLowLevel,
         }
-        if (args.len >= 1 and isDecToIntTrunc(op)) {
-            try self.emitDecToIntTruncConversion(target, GuardedList.at(args, 0));
-            return;
+    }
+
+    fn lowerIntToDec(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+        switch (spec.mode) {
+            .exact => try self.emitIntToDec(target, arg),
+            // The builtin takes the source as two 64-bit halves, so a narrower
+            // source has no lowering here.
+            .try_unsafe => if (spec.src.bits() == 128)
+                try self.emitInt128ToDecTryUnsafeConversion(target, arg, spec.src.isSigned())
+            else
+                return error.UnsupportedLowLevel,
+            .wrap, .trunc, .@"try" => return error.UnsupportedLowLevel,
         }
-        if (std.mem.find(u8, name, "_to_") != null and args.len >= 1 and
-            std.mem.find(u8, name, "_try") == null and
-            std.mem.find(u8, name, "_str") == null)
-        {
-            const value = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, self.localLayout(GuardedList.at(args, 0)));
-            const coerced = try self.coerceScalar(value, self.scalarType(self.localLayout(target)), self.localLayout(GuardedList.at(args, 0)).isSigned());
-            try self.storeScalar(self.slot(target).ptr, self.localLayout(target), coerced);
-            return;
+    }
+
+    fn lowerFloatToInt(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+        switch (spec.mode) {
+            .trunc => try self.emitFloatToIntTruncConversion(spec, target, arg),
+            .try_unsafe => try self.emitFloatToIntTryUnsafeConversion(target, arg),
+            .exact, .wrap, .@"try" => return error.UnsupportedLowLevel,
         }
-        return error.UnsupportedLowLevel;
+    }
+
+    fn lowerFloatToFloat(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+        switch (spec.mode) {
+            .exact, .wrap => try self.emitScalarCoercion(target, arg),
+            // The builtin is the f64 to f32 one, so the other direction has no
+            // lowering here.
+            .try_unsafe => if (spec.src == .f64 and spec.dst == .f32)
+                try self.emitF64ToF32TryUnsafeConversion(target, arg)
+            else
+                return error.UnsupportedLowLevel,
+            .trunc, .@"try" => return error.UnsupportedLowLevel,
+        }
+    }
+
+    fn lowerDecToInt(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+        switch (spec.mode) {
+            .trunc => try self.emitDecToIntTruncConversion(target, arg),
+            .try_unsafe => try self.emitDecToIntTryUnsafeConversion(target, arg),
+            .exact, .wrap, .@"try" => return error.UnsupportedLowLevel,
+        }
+    }
+
+    fn lowerDecToFloat(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+        switch (spec.mode) {
+            .exact, .wrap => try self.emitDecToFloatConversion(target, arg, spec.dst == .f32),
+            // The builtin is the Dec to f32 one, so a wider destination has no
+            // lowering here.
+            .try_unsafe => if (spec.dst == .f32)
+                try self.emitDecToF32TryUnsafeConversion(target, arg)
+            else
+                return error.UnsupportedLowLevel,
+            .trunc, .@"try" => return error.UnsupportedLowLevel,
+        }
+    }
+
+    /// Convert a scalar to the target's type with a single LLVM instruction. The
+    /// layouts of `arg` and `target` decide which: sext, zext, trunc, sitofp,
+    /// uitofp, fpext, or fptrunc.
+    fn emitScalarCoercion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        const src_layout = self.localLayout(arg);
+        const target_layout = self.localLayout(target);
+        const value = try self.loadScalar(self.slot(arg).ptr, src_layout);
+        const coerced = try self.coerceScalar(value, self.scalarType(target_layout), src_layout.isSigned());
+        try self.storeScalar(self.slot(target).ptr, target_layout, coerced);
     }
 
     fn emitDecToFloatConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, is_f32: bool) Error!void {
@@ -6407,22 +6400,6 @@ pub const MonoLlvmCodeGen = struct {
             &.{ parts.low, parts.high },
         );
         try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
-    }
-
-    fn isDecToIntTrunc(op: lir.LowLevel) bool {
-        const DecToIntTrunc = enum {
-            dec_to_i8_trunc,
-            dec_to_u8_trunc,
-            dec_to_i16_trunc,
-            dec_to_u16_trunc,
-            dec_to_i32_trunc,
-            dec_to_u32_trunc,
-            dec_to_i64_trunc,
-            dec_to_u64_trunc,
-            dec_to_i128_trunc,
-            dec_to_u128_trunc,
-        };
-        return std.meta.stringToEnum(DecToIntTrunc, @tagName(op)) != null;
     }
 
     /// A Dec's payload is its value scaled by 10^18, so recovering the whole
@@ -6446,66 +6423,25 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeScalar(self.slot(target).ptr, target_layout, wrapped);
     }
 
-    const FloatToIntTruncInfo = struct {
-        src_is_f32: bool,
-        target_bits: u8,
-    };
-
-    fn floatToIntTruncInfo(op: lir.LowLevel) ?FloatToIntTruncInfo {
-        const FloatToIntTrunc = enum {
-            f32_to_i8_trunc,
-            f32_to_u8_trunc,
-            f32_to_i16_trunc,
-            f32_to_u16_trunc,
-            f32_to_i32_trunc,
-            f32_to_u32_trunc,
-            f32_to_i64_trunc,
-            f32_to_u64_trunc,
-            f32_to_i128_trunc,
-            f32_to_u128_trunc,
-            f64_to_i8_trunc,
-            f64_to_u8_trunc,
-            f64_to_i16_trunc,
-            f64_to_u16_trunc,
-            f64_to_i32_trunc,
-            f64_to_u32_trunc,
-            f64_to_i64_trunc,
-            f64_to_u64_trunc,
-            f64_to_i128_trunc,
-            f64_to_u128_trunc,
-        };
-        const conversion = std.meta.stringToEnum(FloatToIntTrunc, @tagName(op)) orelse return null;
-        return switch (conversion) {
-            .f32_to_i8_trunc, .f32_to_u8_trunc => .{ .src_is_f32 = true, .target_bits = 8 },
-            .f32_to_i16_trunc, .f32_to_u16_trunc => .{ .src_is_f32 = true, .target_bits = 16 },
-            .f32_to_i32_trunc, .f32_to_u32_trunc => .{ .src_is_f32 = true, .target_bits = 32 },
-            .f32_to_i64_trunc, .f32_to_u64_trunc => .{ .src_is_f32 = true, .target_bits = 64 },
-            .f32_to_i128_trunc, .f32_to_u128_trunc => .{ .src_is_f32 = true, .target_bits = 128 },
-            .f64_to_i8_trunc, .f64_to_u8_trunc => .{ .src_is_f32 = false, .target_bits = 8 },
-            .f64_to_i16_trunc, .f64_to_u16_trunc => .{ .src_is_f32 = false, .target_bits = 16 },
-            .f64_to_i32_trunc, .f64_to_u32_trunc => .{ .src_is_f32 = false, .target_bits = 32 },
-            .f64_to_i64_trunc, .f64_to_u64_trunc => .{ .src_is_f32 = false, .target_bits = 64 },
-            .f64_to_i128_trunc, .f64_to_u128_trunc => .{ .src_is_f32 = false, .target_bits = 128 },
-        };
-    }
-
     /// Wrapping float→int conversion: the builtin wrapper implements Roc's
     /// wrap semantics (NaN and the infinities produce 0; finite values
     /// truncate toward zero and wrap modulo 2^bits), writing the result bytes
     /// directly into the target slot.
-    fn emitFloatToIntTruncConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, info: FloatToIntTruncInfo) Error!void {
+    fn emitFloatToIntTruncConversion(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+        const src_is_f32 = spec.src == .f32;
+        const target_bits: u32 = spec.dst.bits();
         const builder = self.builder orelse return error.CompilationFailed;
         const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
-        const name = if (info.src_is_f32) builtinSymbol(.f32_to_int_wrap) else builtinSymbol(.f64_to_int_wrap);
-        const float_ty: LlvmBuilder.Type = if (info.src_is_f32) .float else .double;
+        const name = if (src_is_f32) builtinSymbol(.f32_to_int_wrap) else builtinSymbol(.f64_to_int_wrap);
+        const float_ty: LlvmBuilder.Type = if (src_is_f32) .float else .double;
         try self.callBuiltinVoid(
             name,
             &.{ try self.ptrType(), float_ty, .i32, .i32 },
             &.{
                 self.slot(target).ptr,
                 value,
-                builder.intValue(.i32, info.target_bits) catch return error.OutOfMemory,
-                builder.intValue(.i32, @as(u32, info.target_bits) / 8) catch return error.OutOfMemory,
+                builder.intValue(.i32, target_bits) catch return error.OutOfMemory,
+                builder.intValue(.i32, target_bits / 8) catch return error.OutOfMemory,
             },
         );
     }
