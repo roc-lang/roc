@@ -49147,12 +49147,14 @@ test "queued specialization skips a body claimed immediately before dispatch" {
     const ty = try program.types.internZst(&program.names);
     const template_ref = names.ProcTemplate{
         .artifact = .{},
-        .proc_base = @enumFromInt(0),
-        .template = @enumFromInt(0),
+        // Both fields are only carried by jobs that are skipped below.
+        .proc_base = undefined,
+        .template = undefined,
     };
     const fn_template = Ast.FnTemplate{
         .fn_def = .{ .local_template = template_ref },
-        .source_fn_ty = @enumFromInt(0),
+        // This test never lowers the template, so its checked type is not read.
+        .source_fn_ty = undefined,
         .source_fn_key = .{},
         .mono_fn_ty = ty,
     };
@@ -49222,7 +49224,8 @@ test "queued specialization skips a body claimed immediately before dispatch" {
                 .fn_template = fn_template_,
                 .template_ref = template_ref_,
                 .method_scope = .{},
-                .source_fn_ty = @enumFromInt(0),
+                // The job is marked ready before draining, so its type is not read.
+                .source_fn_ty = undefined,
                 .source_fn_key = .{},
                 .fn_ty = ty_,
                 .evidence = &.{},
