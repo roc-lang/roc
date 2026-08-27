@@ -27,6 +27,7 @@ const completion_builder = @import("completion/builder.zig");
 const BuildEnvHandle = @import("build_env_handle.zig").BuildEnvHandle;
 const doc_comments = @import("doc_comments.zig");
 const rename_rules = @import("rename.zig");
+const code_action = @import("code_action.zig");
 
 const BuildEnv = compile.BuildEnv;
 const CacheManager = compile.CacheManager;
@@ -3070,14 +3071,193 @@ pub const SyntaxChecker = struct {
             errdefer self.allocator.free(label);
 
             try hints.append(self.allocator, .{
-                .line = binding.after.line,
-                .character = binding.after.character,
+                .line = binding.range.end_line,
+                .character = binding.range.end_col,
                 .label = label,
             });
         }
 
         return InlayHintsResult{
             .hints = try hints.toOwnedSlice(self.allocator),
+        };
+    }
+
+    /// One edit the editor may offer, ready to be sent as a `CodeAction`.
+    pub const CodeAction = struct {
+        /// What the editor shows in its menu. Owned by the result.
+        title: []u8,
+        /// The LSP `CodeActionKind` this belongs under.
+        kind: []const u8,
+        /// Where the text goes. Both actions insert, so this range is empty.
+        range: LspRange,
+        /// The source to insert there. Owned by the result.
+        new_text: []u8,
+    };
+
+    /// The actions offered for one requested range.
+    pub const CodeActionsResult = struct {
+        actions: []CodeAction,
+
+        pub fn deinit(self: CodeActionsResult, allocator: std.mem.Allocator) void {
+            for (self.actions) |action| {
+                allocator.free(action.title);
+                allocator.free(action.new_text);
+            }
+            allocator.free(self.actions);
+        }
+    };
+
+    /// The `CodeActionKind` both offered actions belong to.
+    const refactor_rewrite_kind = "refactor.rewrite";
+
+    /// Offer the edits that apply to a requested range.
+    ///
+    /// Two are offered today, both written from the checked types: an
+    /// annotation for a binding that infers its type, and an `expect` that
+    /// calls a top-level function. Both need types, so a document that does
+    /// not build offers nothing.
+    pub fn getCodeActions(
+        self: *SyntaxChecker,
+        uri: []const u8,
+        override_text: ?[]const u8,
+        start_line: u32,
+        start_character: u32,
+        end_line: u32,
+        end_character: u32,
+    ) QueryError!?CodeActionsResult {
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+
+        var build = try self.prepareDocumentBuild(uri, override_text);
+        defer build.deinit();
+
+        self.logDebug(.build, "codeAction: document {s} reused={}", .{ build.absolute_path, build.reused });
+
+        if (!build.build_succeeded) {
+            self.logDebug(.build, "codeAction: build unavailable for {s}", .{build.absolute_path});
+            return null;
+        }
+
+        const module_env = build.getModuleEnv() orelse return null;
+        const start_offset = pos.positionToOffset(module_env, start_line, start_character) orelse return null;
+        const end_offset = pos.positionToOffset(module_env, end_line, end_character) orelse return null;
+        if (end_offset < start_offset) return null;
+
+        var actions: std.ArrayList(CodeAction) = .empty;
+        errdefer {
+            for (actions.items) |action| {
+                self.allocator.free(action.title);
+                self.allocator.free(action.new_text);
+            }
+            actions.deinit(self.allocator);
+        }
+
+        if (try self.buildAnnotationAction(module_env, start_offset, end_offset)) |action| {
+            try actions.append(self.allocator, action);
+        }
+        if (try self.buildExpectTestAction(module_env, start_offset, end_offset)) |action| {
+            try actions.append(self.allocator, action);
+        }
+
+        return CodeActionsResult{
+            .actions = try actions.toOwnedSlice(self.allocator),
+        };
+    }
+
+    /// Build the action that writes an inferred type above the binding it
+    /// belongs to, or null when the range names no binding that can take one.
+    fn buildAnnotationAction(
+        self: *SyntaxChecker,
+        module_env: *ModuleEnv,
+        start_offset: u32,
+        end_offset: u32,
+    ) Allocator.Error!?CodeAction {
+        var bindings = try cir_queries.collectUnannotatedBindings(module_env, start_offset, end_offset, self.allocator);
+        defer bindings.deinit(self.allocator);
+        if (bindings.items.len == 0) return null;
+
+        // A selection can cover several bindings at once. The shortest is the
+        // innermost, which is the one the cursor is on.
+        var chosen = bindings.items[0];
+        for (bindings.items[1..]) |binding| {
+            const chosen_len = chosen.region.end.offset - chosen.region.start.offset;
+            const binding_len = binding.region.end.offset - binding.region.start.offset;
+            if (binding_len < chosen_len) chosen = binding;
+        }
+
+        // The annotation is written on its own line above the binding, so the
+        // binding has to open its line. Anything else in front of it would be
+        // split across the inserted line break.
+        const line_starts = module_env.getLineStartsAll();
+        if (chosen.range.start_line >= line_starts.len) return null;
+        const line_start = line_starts[chosen.range.start_line];
+        if (line_start > chosen.region.start.offset) return null;
+        const indent = module_env.common.source[line_start..chosen.region.start.offset];
+        for (indent) |byte| {
+            if (byte != ' ' and byte != '\t') return null;
+        }
+
+        // The collected binding is spelled exactly its name, so the source
+        // under it is the name to write the annotation for.
+        const name = module_env.common.source[chosen.region.start.offset..chosen.region.end.offset];
+
+        var type_writer = try module_env.initTypeWriter();
+        defer type_writer.deinit();
+        type_writer.write(ModuleEnv.varFrom(chosen.pattern), .one_line) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return null,
+        };
+
+        const rendered = type_writer.get();
+        if (rendered.len == 0) return null;
+
+        const new_text = try std.fmt.allocPrint(self.allocator, "{s}{s} : {s}\n", .{ indent, name, rendered });
+        errdefer self.allocator.free(new_text);
+        const title = try std.fmt.allocPrint(self.allocator, "Annotate '{s}' with its inferred type", .{name});
+
+        return CodeAction{
+            .title = title,
+            .kind = refactor_rewrite_kind,
+            .range = .{
+                .start_line = chosen.range.start_line,
+                .start_col = 0,
+                .end_line = chosen.range.start_line,
+                .end_col = 0,
+            },
+            .new_text = new_text,
+        };
+    }
+
+    /// Build the action that writes an `expect` calling a top-level function,
+    /// or null when the range names no function one can be written for.
+    fn buildExpectTestAction(
+        self: *SyntaxChecker,
+        module_env: *ModuleEnv,
+        start_offset: u32,
+        end_offset: u32,
+    ) Allocator.Error!?CodeAction {
+        const definition = cir_queries.findTopLevelDefinitionAtOffset(module_env, start_offset, end_offset) orelse return null;
+
+        const new_text = try code_action.renderExpectTest(
+            self.allocator,
+            module_env,
+            definition.name,
+            ModuleEnv.varFrom(definition.pattern),
+        ) orelse return null;
+        errdefer self.allocator.free(new_text);
+
+        const title = try std.fmt.allocPrint(self.allocator, "Generate an expect test for '{s}'", .{definition.name});
+
+        return CodeAction{
+            .title = title,
+            .kind = refactor_rewrite_kind,
+            .range = .{
+                .start_line = definition.end.line,
+                .start_col = definition.end.character,
+                .end_line = definition.end.line,
+                .end_col = definition.end.character,
+            },
+            .new_text = new_text,
         };
     }
 

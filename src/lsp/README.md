@@ -12,6 +12,7 @@ The following requests are handled:
 - `textDocument/documentHighlight`
 - `textDocument/references`
 - `textDocument/inlayHint`
+- `textDocument/codeAction`
 - `textDocument/formatting`
 - `textDocument/foldingRange`
 - `textDocument/selectionRange`
@@ -42,6 +43,33 @@ function carries its whole `where` clause. Hovering the same name gives the type
 
 A document that does not build produces no hints, which leaves whatever the editor last drew
 in place rather than blanking every hint on each keystroke.
+
+### Code actions
+
+Two actions are offered, both written from the checked types rather than from the text on
+screen. Neither is offered unless it can be written in full: a document that does not build
+has no types to read, and handing the author source that does not compile is worse than
+offering nothing.
+
+**Annotate a binding with its inferred type** writes the type on its own line above the
+binding, carrying the indentation of the line it opens. It is offered for the same bindings
+inlay hints are drawn for, and only where the binding opens its line - anything in front of
+it would be split across the inserted line break. Where a selection covers several bindings,
+the innermost one is annotated.
+
+**Generate an expect test for a function** writes an `expect` that calls the function,
+directly after the definition it tests. Each argument and the expected result are placeholder
+literals of the right type - `""`, `0`, `[]`, `Bool.True`, and records and tuples of those -
+so the generated test compiles and fails loudly until the author replaces the values.
+
+The action is left out rather than guessed at when a type has no such literal: a nominal type
+the author declared, a tag union, a function argument, or a type variable. It is also left out
+for effectful functions, because `expect` checks a value rather than running effects, for
+functions taking no arguments, and for anything that is not a top-level definition - a
+generated `expect` sits at the top level, where a name bound inside a block cannot be reached.
+
+The inserted annotation is the checker's own rendering of the type, which is worth a read
+before it is kept: an inferred type can be wider than the one the author would write.
 
 ### References
 

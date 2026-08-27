@@ -21,6 +21,7 @@ pub const completion = @import("completion/mod.zig");
 pub const module_lookup = @import("module_lookup.zig");
 pub const doc_comments = @import("doc_comments.zig");
 pub const rename = @import("rename.zig");
+pub const code_action = @import("code_action.zig");
 /// Request handlers exposed for server wiring and LSP tests.
 pub const handlers = struct {
     pub const completion = @import("handlers/completion.zig");

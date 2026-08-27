@@ -35,6 +35,7 @@ pub const ServerCapabilities = struct {
     completionProvider: ?CompletionOptions = null,
     referencesProvider: bool = false,
     inlayHintProvider: bool = false,
+    codeActionProvider: ?CodeActionOptions = null,
     renameProvider: ?RenameOptions = null,
 
     pub const TextDocumentSyncOptions = struct {
@@ -62,6 +63,12 @@ pub const ServerCapabilities = struct {
     pub const CompletionOptions = struct {
         triggerCharacters: []const []const u8 = &.{ ".", ":" },
         resolveProvider: bool = false,
+    };
+
+    pub const CodeActionOptions = struct {
+        /// The kinds this server can return, so a client asking for a subset
+        /// knows in advance whether it is worth asking at all.
+        codeActionKinds: []const []const u8 = &.{"refactor.rewrite"},
     };
 
     pub const RenameOptions = struct {
@@ -95,6 +102,7 @@ pub fn buildCapabilities() ServerCapabilities {
         .completionProvider = .{},
         .referencesProvider = true,
         .inlayHintProvider = true,
+        .codeActionProvider = .{},
         .renameProvider = .{},
     };
 }

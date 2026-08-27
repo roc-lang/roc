@@ -1171,8 +1171,11 @@ pub fn declarationNameRegion(module_env: *ModuleEnv, target_pattern: CIR.Pattern
 /// A binding whose type is inferred rather than written down.
 pub const UnannotatedBinding = struct {
     pattern: CIR.Pattern.Idx,
-    /// Where the inferred type belongs: immediately after the bound name.
-    after: LspPosition,
+    /// Where the bound name is written. An inlay hint is drawn just past its
+    /// end; a generated annotation goes above the line its start names.
+    range: LspRange,
+    /// The same span in bytes, so a caller can read the source around it.
+    region: Region,
 };
 
 /// Context for collecting the patterns that carry a written type annotation.
@@ -1231,7 +1234,8 @@ const CollectBindingsContext = struct {
         const range = regionToRange(ctx.module_env, region) orelse return .continue_traversal;
         ctx.results.append(ctx.allocator, .{
             .pattern = pattern_idx,
-            .after = .{ .line = range.end_line, .character = range.end_col },
+            .range = range,
+            .region = region,
         }) catch |err| {
             ctx.oom = err;
             return .stop;
@@ -1324,6 +1328,58 @@ pub fn collectUnannotatedBindings(
     results.shrinkRetainingCapacity(kept);
 
     return results;
+}
+
+/// A top-level definition the requested range falls inside.
+pub const TopLevelDefinition = struct {
+    pattern: CIR.Pattern.Idx,
+    /// The bound name, borrowed from the module's ident store.
+    name: []const u8,
+    /// Where the definition's value ends, so generated source can follow it.
+    end: LspPosition,
+};
+
+/// Find the top-level definition whose source covers part of a byte range.
+///
+/// Only plain `assign` bindings whose source spells exactly the bound name
+/// qualify. The name is what generated code calls the definition by, so a
+/// pattern spelling anything else would produce a call to something that is
+/// not there.
+///
+/// Definitions nested inside a block are not searched. A generated `expect`
+/// sits at the top level of the module, where a name bound inside a block
+/// cannot be reached.
+pub fn findTopLevelDefinitionAtOffset(
+    module_env: *ModuleEnv,
+    start_offset: u32,
+    end_offset: u32,
+) ?TopLevelDefinition {
+    const source = module_env.common.source;
+    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        const pattern = module_env.store.getPattern(def.pattern);
+        if (std.meta.activeTag(pattern) != .assign) continue;
+
+        const name = module_env.common.idents.getText(pattern.assign.ident);
+        const name_region = module_env.store.getPatternRegion(def.pattern);
+        if (name_region.end.offset > source.len or name_region.start.offset > name_region.end.offset) continue;
+        if (!std.mem.eql(u8, source[name_region.start.offset..name_region.end.offset], name)) continue;
+
+        // The whole definition counts, name and value alike, so the cursor can
+        // sit anywhere inside the function it asks about.
+        const body_region = module_env.store.getExprRegion(def.expr);
+        const extent_end = @max(name_region.end.offset, body_region.end.offset);
+        if (extent_end < start_offset or name_region.start.offset > end_offset) continue;
+
+        const body_range = regionToRange(module_env, body_region) orelse continue;
+        return .{
+            .pattern = def.pattern,
+            .name = name,
+            .end = .{ .line = body_range.end_line, .character = body_range.end_col },
+        };
+    }
+    return null;
 }
 
 /// Collect the places that declare `target_pattern`.

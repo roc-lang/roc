@@ -33,6 +33,7 @@ const completion_handler_mod = @import("handlers/completion.zig");
 const rename_handler_mod = @import("handlers/rename.zig");
 const references_handler_mod = @import("handlers/references.zig");
 const inlay_hint_handler_mod = @import("handlers/inlay_hint.zig");
+const code_action_handler_mod = @import("handlers/code_action.zig");
 
 const log = std.log.scoped(.roc_lsp_server);
 
@@ -81,6 +82,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         const PrepareRenameHandler = rename_handler_mod.prepareHandler(Self);
         const ReferencesHandler = references_handler_mod.handler(Self);
         const InlayHintHandler = inlay_hint_handler_mod.handler(Self);
+        const CodeActionHandler = code_action_handler_mod.handler(Self);
         const request_handlers = std.StaticStringMap(HandlerPtr).initComptime(.{
             .{ "initialize", &InitializeHandler.call },
             .{ "shutdown", &ShutdownHandler.call },
@@ -97,6 +99,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             .{ "textDocument/prepareRename", &PrepareRenameHandler.call },
             .{ "textDocument/references", &ReferencesHandler.call },
             .{ "textDocument/inlayHint", &InlayHintHandler.call },
+            .{ "textDocument/codeAction", &CodeActionHandler.call },
         });
         const DidOpenHandler = did_open_handler_mod.handler(Self);
         const DidChangeHandler = did_change_handler_mod.handler(Self);
