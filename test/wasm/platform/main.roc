@@ -5,6 +5,7 @@ platform ""
     provides { "roc_main": main_for_host! }
     hosted {
         "roc_fallible_str_ok": FallibleHost.str_ok!,
+        "roc_json_input": FallibleHost.json_input!,
         "roc_stdout_line": Stdout.line!,
         "roc_stdout_unused_niche_feature": Stdout.unused_niche_feature!,
     }
