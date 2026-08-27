@@ -15096,7 +15096,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitProcLocal(GuardedList.at(args, 0));
         },
 
-        // Compare—returns Ordering enum (EQ=0, GT=1, LT=2)
+        // Compare—returns Ordering enum (Equal=0, GreaterThan=1, LessThan=2)
         .compare => {
             try self.emitProcLocal(GuardedList.at(args, 0));
             try self.emitProcLocal(GuardedList.at(args, 1));

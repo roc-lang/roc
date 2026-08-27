@@ -1011,22 +1011,22 @@ pub fn shiftRightZeroFillU128(self: u128, other: u8) callconv(.c) u128 {
 /// Compares two i128 values, returning ordering.
 pub fn compareI128(self: i128, other: i128) callconv(.c) Ordering {
     if (self == other) {
-        return Ordering.EQ;
+        return Ordering.Equal;
     } else if (self < other) {
-        return Ordering.LT;
+        return Ordering.LessThan;
     } else {
-        return Ordering.GT;
+        return Ordering.GreaterThan;
     }
 }
 
 /// Compares two u128 values, returning ordering.
 pub fn compareU128(self: u128, other: u128) callconv(.c) Ordering {
     if (self == other) {
-        return Ordering.EQ;
+        return Ordering.Equal;
     } else if (self < other) {
-        return Ordering.LT;
+        return Ordering.LessThan;
     } else {
-        return Ordering.GT;
+        return Ordering.GreaterThan;
     }
 }
 
@@ -1629,9 +1629,9 @@ test "compareI128 functionality" {
     const b: i128 = 2000000000000000000;
     const c: i128 = 1000000000000000000;
 
-    try std.testing.expectEqual(@import("utils.zig").Ordering.LT, compareI128(a, b));
-    try std.testing.expectEqual(@import("utils.zig").Ordering.GT, compareI128(b, a));
-    try std.testing.expectEqual(@import("utils.zig").Ordering.EQ, compareI128(a, c));
+    try std.testing.expectEqual(@import("utils.zig").Ordering.LessThan, compareI128(a, b));
+    try std.testing.expectEqual(@import("utils.zig").Ordering.GreaterThan, compareI128(b, a));
+    try std.testing.expectEqual(@import("utils.zig").Ordering.Equal, compareI128(a, c));
 }
 
 test "compareU128 functionality" {
@@ -1639,9 +1639,9 @@ test "compareU128 functionality" {
     const b: u128 = 2000000000000000000;
     const c: u128 = 1000000000000000000;
 
-    try std.testing.expectEqual(@import("utils.zig").Ordering.LT, compareU128(a, b));
-    try std.testing.expectEqual(@import("utils.zig").Ordering.GT, compareU128(b, a));
-    try std.testing.expectEqual(@import("utils.zig").Ordering.EQ, compareU128(a, c));
+    try std.testing.expectEqual(@import("utils.zig").Ordering.LessThan, compareU128(a, b));
+    try std.testing.expectEqual(@import("utils.zig").Ordering.GreaterThan, compareU128(b, a));
+    try std.testing.expectEqual(@import("utils.zig").Ordering.Equal, compareU128(a, c));
 }
 
 test "128-bit comparison functions" {

@@ -2136,7 +2136,7 @@ pub const ReportBuilder = struct {
 
         try D.renderSlice(&.{
             D.bytes("A where alias names a set of method constraints, declared like"),
-            D.bytes("a.Sortable : where [a.compare : a -> [LT, EQ, GT]]").withAnnotation(.inline_code),
+            D.bytes("a.Sortable : where [a.compare : a -> [LessThan, Equal, GreaterThan]]").withAnnotation(.inline_code),
             D.bytes("and written in a where clause as"),
             D.bytes("where [a.Sortable]").withAnnotation(.inline_code),
         }, self, &report);

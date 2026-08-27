@@ -1,3 +1,3 @@
 Issue9388SortWithTopLevelExpect :: [].{}
 
-expect [3, 1, 2].sort_with(|a, b| if a < b LT else if a > b GT else EQ) == [1, 2, 3]
+expect [3, 1, 2].sortWith(|a, b| if a < b LessThan else if a > b GreaterThan else Equal) == [1, 2, 3]

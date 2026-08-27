@@ -6323,17 +6323,17 @@ const core_tests = [_]TestCase{
         .source =
         \\{
         \\    (
-        \\        U8.compare(0, U8.highest) == LT and U8.compare(U8.highest, U8.highest) == EQ and U8.compare(U8.highest, 0) == GT,
-        \\        I8.compare(I8.lowest, 0) == LT and I8.compare(0, 0) == EQ and I8.compare(I8.highest, 0) == GT,
-        \\        U16.compare(0, U16.highest) == LT and U16.compare(U16.highest, U16.highest) == EQ and U16.compare(U16.highest, 0) == GT,
-        \\        I16.compare(I16.lowest, 0) == LT and I16.compare(0, 0) == EQ and I16.compare(I16.highest, 0) == GT,
-        \\        U32.compare(0, U32.highest) == LT and U32.compare(U32.highest, U32.highest) == EQ and U32.compare(U32.highest, 0) == GT,
-        \\        I32.compare(I32.lowest, 0) == LT and I32.compare(0, 0) == EQ and I32.compare(I32.highest, 0) == GT,
-        \\        U64.compare(0, U64.highest) == LT and U64.compare(U64.highest, U64.highest) == EQ and U64.compare(U64.highest, 0) == GT,
-        \\        I64.compare(I64.lowest, 0) == LT and I64.compare(0, 0) == EQ and I64.compare(I64.highest, 0) == GT,
-        \\        U128.compare(0, U128.highest) == LT and U128.compare(U128.highest, U128.highest) == EQ and U128.compare(U128.highest, 0) == GT,
-        \\        I128.compare(I128.lowest, 0) == LT and I128.compare(0, 0) == EQ and I128.compare(I128.highest, 0) == GT,
-        \\        Dec.compare(Dec.lowest, 0.0) == LT and Dec.compare(0.0, 0.0) == EQ and Dec.compare(Dec.highest, 0.0) == GT,
+        \\        U8.compare(0, U8.highest) == LessThan and U8.compare(U8.highest, U8.highest) == Equal and U8.compare(U8.highest, 0) == GreaterThan,
+        \\        I8.compare(I8.lowest, 0) == LessThan and I8.compare(0, 0) == Equal and I8.compare(I8.highest, 0) == GreaterThan,
+        \\        U16.compare(0, U16.highest) == LessThan and U16.compare(U16.highest, U16.highest) == Equal and U16.compare(U16.highest, 0) == GreaterThan,
+        \\        I16.compare(I16.lowest, 0) == LessThan and I16.compare(0, 0) == Equal and I16.compare(I16.highest, 0) == GreaterThan,
+        \\        U32.compare(0, U32.highest) == LessThan and U32.compare(U32.highest, U32.highest) == Equal and U32.compare(U32.highest, 0) == GreaterThan,
+        \\        I32.compare(I32.lowest, 0) == LessThan and I32.compare(0, 0) == Equal and I32.compare(I32.highest, 0) == GreaterThan,
+        \\        U64.compare(0, U64.highest) == LessThan and U64.compare(U64.highest, U64.highest) == Equal and U64.compare(U64.highest, 0) == GreaterThan,
+        \\        I64.compare(I64.lowest, 0) == LessThan and I64.compare(0, 0) == Equal and I64.compare(I64.highest, 0) == GreaterThan,
+        \\        U128.compare(0, U128.highest) == LessThan and U128.compare(U128.highest, U128.highest) == Equal and U128.compare(U128.highest, 0) == GreaterThan,
+        \\        I128.compare(I128.lowest, 0) == LessThan and I128.compare(0, 0) == Equal and I128.compare(I128.highest, 0) == GreaterThan,
+        \\        Dec.compare(Dec.lowest, 0.0) == LessThan and Dec.compare(0.0, 0.0) == Equal and Dec.compare(Dec.highest, 0.0) == GreaterThan,
         \\    )
         \\}
         ,

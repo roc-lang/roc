@@ -5001,10 +5001,10 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "13" },
     },
     .{
-        .name = "low_level - List.sort_with basic ascending sort",
+        .name = "low_level - List.sortWith basic ascending sort",
         .source =
         \\{
-        \\x = List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sortWith([3, 1, 2], |a, b| if a < b LessThan else if a > b GreaterThan else Equal)
         \\first = List.first(x)
         \\first
         \\}
@@ -5012,10 +5012,10 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "Ok(1.0)" },
     },
     .{
-        .name = "low_level - List.sort_with preserves length",
+        .name = "low_level - List.sortWith preserves length",
         .source =
         \\{
-        \\x = List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sortWith([5, 2, 8, 1, 9], |a, b| if a < b LessThan else if a > b GreaterThan else Equal)
         \\len = List.len(x)
         \\len
         \\}
@@ -5023,19 +5023,19 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "5" },
     },
     .{
-        .name = "low_level - List.sort_with nested in len defaults literal item type",
+        .name = "low_level - List.sortWith nested in len defaults literal item type",
         .source =
         \\{
-        \\List.len(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))
+        \\List.len(List.sortWith([3, 1, 2], |a, b| if a < b LessThan else if a > b GreaterThan else Equal))
         \\}
         ,
         .expected = .{ .inspect_str = "3" },
     },
     .{
-        .name = "low_level - List.sort_with with larger list",
+        .name = "low_level - List.sortWith with larger list",
         .source =
         \\{
-        \\x = List.sort_with([5, 2, 8, 1, 9, 3, 7, 4, 6], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sortWith([5, 2, 8, 1, 9, 3, 7, 4, 6], |a, b| if a < b LessThan else if a > b GreaterThan else Equal)
         \\first = List.first(x)
         \\first
         \\}
@@ -5043,10 +5043,10 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "Ok(1.0)" },
     },
     .{
-        .name = "low_level - List.sort_with with two elements",
+        .name = "low_level - List.sortWith with two elements",
         .source =
         \\{
-        \\x = List.sort_with([2, 1], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sortWith([2, 1], |a, b| if a < b LessThan else if a > b GreaterThan else Equal)
         \\first = List.first(x)
         \\first
         \\}
@@ -5054,10 +5054,10 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "Ok(1.0)" },
     },
     .{
-        .name = "low_level - List.sort_with descending order",
+        .name = "low_level - List.sortWith descending order",
         .source =
         \\{
-        \\x = List.sort_with([1, 3, 2], |a, b| if a > b LT else if a < b GT else EQ)
+        \\x = List.sortWith([1, 3, 2], |a, b| if a > b LessThan else if a < b GreaterThan else Equal)
         \\first = List.first(x)
         \\first
         \\}
@@ -5065,11 +5065,11 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "Ok(3.0)" },
     },
     .{
-        .name = "low_level - List.sort_with empty list",
+        .name = "low_level - List.sortWith empty list",
         .source =
         \\{
         \\x : List(U64)
-        \\x = List.sort_with([], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sortWith([], |a, b| if a < b LessThan else if a > b GreaterThan else Equal)
         \\len = List.len(x)
         \\len
         \\}
@@ -5077,10 +5077,10 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "0" },
     },
     .{
-        .name = "low_level - List.sort_with single element",
+        .name = "low_level - List.sortWith single element",
         .source =
         \\{
-        \\x = List.sort_with([42], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sortWith([42], |a, b| if a < b LessThan else if a > b GreaterThan else Equal)
         \\first = List.first(x)
         \\first
         \\}
@@ -5088,10 +5088,10 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "Ok(42.0)" },
     },
     .{
-        .name = "low_level - List.sort_with already sorted",
+        .name = "low_level - List.sortWith already sorted",
         .source =
         \\{
-        \\x = List.sort_with([1, 2, 3, 4, 5], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sortWith([1, 2, 3, 4, 5], |a, b| if a < b LessThan else if a > b GreaterThan else Equal)
         \\first = List.first(x)
         \\first
         \\}
@@ -5099,15 +5099,66 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "Ok(1.0)" },
     },
     .{
-        .name = "low_level - List.sort_with reverse sorted",
+        .name = "low_level - List.sortWith reverse sorted",
         .source =
         \\{
-        \\x = List.sort_with([5, 4, 3, 2, 1], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sortWith([5, 4, 3, 2, 1], |a, b| if a < b LessThan else if a > b GreaterThan else Equal)
         \\first = List.first(x)
         \\first
         \\}
         ,
         .expected = .{ .inspect_str = "Ok(1.0)" },
+    },
+    .{
+        .name = "low_level - List.sort uses the item comparison method",
+        .source =
+        \\List.sort([3, 1, 2])
+        ,
+        .expected = .{ .inspect_str = "[1.0, 2.0, 3.0]" },
+    },
+    .{
+        .name = "low_level - List.sortReversed reverses only the ordering",
+        .source =
+        \\List.sortReversed([3, 1, 2])
+        ,
+        .expected = .{ .inspect_str = "[3.0, 2.0, 1.0]" },
+    },
+    .{
+        .name = "low_level - List.sortBy is stable",
+        .source =
+        \\{
+        \\items = [
+        \\    { key: 2.U64, input_index: 0.U64 },
+        \\    { key: 1, input_index: 1 },
+        \\    { key: 2, input_index: 2 },
+        \\    { key: 1, input_index: 3 },
+        \\]
+        \\List.map(List.sortBy(items, |item| item.key), |item| item.input_index)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 3, 0, 2]" },
+    },
+    .{
+        .name = "low_level - List.sortByReversed is stable",
+        .source =
+        \\{
+        \\items = [
+        \\    { key: 2.U64, input_index: 0.U64 },
+        \\    { key: 1, input_index: 1 },
+        \\    { key: 2, input_index: 2 },
+        \\    { key: 1, input_index: 3 },
+        \\]
+        \\List.map(List.sortByReversed(items, |item| item.key), |item| item.input_index)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[0, 2, 1, 3]" },
+    },
+    .{
+        .name = "low_level - List.sortWithReversed reverses a custom comparator",
+        .source =
+        \\List.sortWithReversed([3, 1, 2], |a, b| a.compare(b))
+        ,
+        .expected = .{ .inspect_str = "[3.0, 2.0, 1.0]" },
     },
     .{
         .name = "low_level - U8.mod_by basic",

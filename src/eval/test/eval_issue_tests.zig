@@ -280,7 +280,7 @@ pub const tests = [_]TestCase{
     .{
         // https://github.com/roc-lang/roc/issues/9686
         // A type alias (`Score : U64`) defined in an imported type module is used
-        // as a List element type. The comparator passed to List.sort_with desugars
+        // as a List element type. The comparator passed to List.sortWith desugars
         // `a < b`/`a > b` to is_lt/is_gt static dispatches on `Score`. Across the
         // module boundary the alias must be unwrapped to its U64 backing for static
         // dispatch; otherwise the comparator fails to resolve / selects the wrong
@@ -302,13 +302,13 @@ pub const tests = [_]TestCase{
             \\}
             \\
             \\sort_desc = |list| {
-            \\    list.sort_with(
+            \\    list.sortWith(
             \\        |a, b| if a < b {
-            \\            GT
+            \\            GreaterThan
             \\        } else if a > b {
-            \\            LT
+            \\            LessThan
             \\        } else {
-            \\            EQ
+            \\            Equal
             \\        },
             \\    )
             \\}

@@ -3564,6 +3564,8 @@ Builtin :: [].{
 		}
 	}
 
+	item.Sort :  where [item.compare : item, item -> [LessThan, Equal, GreaterThan]]
+
 	List(_item) :: [ProvidedByCompiler].{
 		parser_for : _
 
@@ -3857,55 +3859,44 @@ Builtin :: [].{
 		release_excess_capacity : List(item) -> List(item)
 		release_excess_capacity = |list| list_release_excess_capacity(list)
 
-		## Sort a list using a custom comparison function. The comparator receives two
-		## items and returns `LT`, `EQ`, or `GT` to indicate their relative order.
-		## ```roc
-		## expect [3, 1, 2].sort_with(|a, b| if a < b LT else if a > b GT else EQ) == [1, 2, 3]
-		##
-		## # Sort in descending order by swapping the LT and GT
-		## expect [3, 1, 2].sort_with(|a, b| if a > b LT else if a < b GT else EQ) == [3, 2, 1]
-		## ```
-		sort_with : List(item), (item, item -> [LT, EQ, GT]) -> List(item)
-		sort_with = |list, order| {
-			list_len = List.len(list)
+		## Sort a list using its items' default ordering.
+		sort : List(item) -> List(item)
+			where [item.Sort]
+		sort = |list| sort_impl(list, |left, right| left.compare(right))
 
-			if list_len < 2 {
-				list
-			} else {
-				match List.first(list) {
-					Ok(pivot) => {
-						rest = List.drop_first(list, 1)
-						less_or_equal =
-							List.keep_if(
-								rest,
-								|item|
-									match order(item, pivot) {
-										LT => True
-										EQ => True
-										GT => False
-									},
-							)
-						greater =
-							List.keep_if(
-								rest,
-								|item|
-									match order(item, pivot) {
-										LT => False
-										EQ => False
-										GT => True
-									},
-							)
-
-						List.concat(
-							List.sort_with(less_or_equal, order),
-							List.concat(List.single(pivot), List.sort_with(greater, order)),
-						)
-					}
-
-					Err(_) => list
-				}
-			}
+		## Sort a list by a projected field. The projection is evaluated once per item,
+		## and items with equal fields retain their input order.
+		sortBy : List(item), (item -> field) -> List(item)
+			where [field.Sort]
+		sortBy = |list, project| {
+			decorated = List.map(list, |item| (project(item), item))
+			sorted = sort_impl(decorated, |(left, _), (right, _)| left.compare(right))
+			List.map(sorted, |(_, item)| item)
 		}
+
+		## Sort a list using a custom three-way comparison function.
+		sortWith : List(item), (item, item -> [LessThan, Equal, GreaterThan]) -> List(item)
+		sortWith = |list, compare_items| sort_impl(list, compare_items)
+
+		## Sort a list in reverse using its items' default ordering.
+		sortReversed : List(item) -> List(item)
+			where [item.Sort]
+		sortReversed = |list| sort_impl(list, |left, right| reverse_order(left.compare(right)))
+
+		## Sort a list in reverse by a projected field. The projection is evaluated
+		## once per item, and items with equal fields retain their input order.
+		sortByReversed : List(item), (item -> field) -> List(item)
+			where [field.Sort]
+		sortByReversed = |list, project| {
+			decorated = List.map(list, |item| (project(item), item))
+			sorted = sort_impl(decorated, |(left, _), (right, _)| reverse_order(left.compare(right)))
+			List.map(sorted, |(_, item)| item)
+		}
+
+		## Sort a list in reverse using a custom three-way comparison function.
+		sortWithReversed : List(item), (item, item -> [LessThan, Equal, GreaterThan]) -> List(item)
+		sortWithReversed = |list, compare_items|
+			sort_impl(list, |left, right| reverse_order(compare_items(left, right)))
 
 		## Returns `True` if the two lists have the same length and their items are pairwise equal.
 		is_eq : List(item), List(item) -> Bool
@@ -6737,13 +6728,13 @@ Builtin :: [].{
 
 			## Compare two [U8] values and return their ordering.
 			## ```roc
-			## expect U8.compare(1, 2) == LT
+			## expect U8.compare(1, 2) == LessThan
 			##
-			## expect U8.compare(2, 2) == EQ
+			## expect U8.compare(2, 2) == Equal
 			##
-			## expect U8.compare(3, 2) == GT
+			## expect U8.compare(3, 2) == GreaterThan
 			## ```
-			compare : U8, U8 -> [LT, EQ, GT]
+			compare : U8, U8 -> [LessThan, Equal, GreaterThan]
 			compare = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
@@ -7404,13 +7395,13 @@ Builtin :: [].{
 
 			## Compare two [I8] values and return their ordering.
 			## ```roc
-			## expect I8.compare(1, 2) == LT
+			## expect I8.compare(1, 2) == LessThan
 			##
-			## expect I8.compare(2, 2) == EQ
+			## expect I8.compare(2, 2) == Equal
 			##
-			## expect I8.compare(3, 2) == GT
+			## expect I8.compare(3, 2) == GreaterThan
 			## ```
-			compare : I8, I8 -> [LT, EQ, GT]
+			compare : I8, I8 -> [LessThan, Equal, GreaterThan]
 			compare = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
@@ -8190,13 +8181,13 @@ Builtin :: [].{
 
 			## Compare two [U16] values and return their ordering.
 			## ```roc
-			## expect U16.compare(1, 2) == LT
+			## expect U16.compare(1, 2) == LessThan
 			##
-			## expect U16.compare(2, 2) == EQ
+			## expect U16.compare(2, 2) == Equal
 			##
-			## expect U16.compare(3, 2) == GT
+			## expect U16.compare(3, 2) == GreaterThan
 			## ```
-			compare : U16, U16 -> [LT, EQ, GT]
+			compare : U16, U16 -> [LessThan, Equal, GreaterThan]
 			compare = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
@@ -8916,13 +8907,13 @@ Builtin :: [].{
 
 			## Compare two [I16] values and return their ordering.
 			## ```roc
-			## expect I16.compare(1, 2) == LT
+			## expect I16.compare(1, 2) == LessThan
 			##
-			## expect I16.compare(2, 2) == EQ
+			## expect I16.compare(2, 2) == Equal
 			##
-			## expect I16.compare(3, 2) == GT
+			## expect I16.compare(3, 2) == GreaterThan
 			## ```
-			compare : I16, I16 -> [LT, EQ, GT]
+			compare : I16, I16 -> [LessThan, Equal, GreaterThan]
 			compare = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
@@ -9743,13 +9734,13 @@ Builtin :: [].{
 
 			## Compare two [U32] values and return their ordering.
 			## ```roc
-			## expect U32.compare(1, 2) == LT
+			## expect U32.compare(1, 2) == LessThan
 			##
-			## expect U32.compare(2, 2) == EQ
+			## expect U32.compare(2, 2) == Equal
 			##
-			## expect U32.compare(3, 2) == GT
+			## expect U32.compare(3, 2) == GreaterThan
 			## ```
-			compare : U32, U32 -> [LT, EQ, GT]
+			compare : U32, U32 -> [LessThan, Equal, GreaterThan]
 			compare = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
@@ -10501,13 +10492,13 @@ Builtin :: [].{
 
 			## Compare two [I32] values and return their ordering.
 			## ```roc
-			## expect I32.compare(1, 2) == LT
+			## expect I32.compare(1, 2) == LessThan
 			##
-			## expect I32.compare(2, 2) == EQ
+			## expect I32.compare(2, 2) == Equal
 			##
-			## expect I32.compare(3, 2) == GT
+			## expect I32.compare(3, 2) == GreaterThan
 			## ```
-			compare : I32, I32 -> [LT, EQ, GT]
+			compare : I32, I32 -> [LessThan, Equal, GreaterThan]
 			compare = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
@@ -11345,13 +11336,13 @@ Builtin :: [].{
 
 			## Compare two [U64] values and return their ordering.
 			## ```roc
-			## expect U64.compare(1, 2) == LT
+			## expect U64.compare(1, 2) == LessThan
 			##
-			## expect U64.compare(2, 2) == EQ
+			## expect U64.compare(2, 2) == Equal
 			##
-			## expect U64.compare(3, 2) == GT
+			## expect U64.compare(3, 2) == GreaterThan
 			## ```
-			compare : U64, U64 -> [LT, EQ, GT]
+			compare : U64, U64 -> [LessThan, Equal, GreaterThan]
 			compare = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
@@ -12165,13 +12156,13 @@ Builtin :: [].{
 
 			## Compare two [I64] values and return their ordering.
 			## ```roc
-			## expect I64.compare(1, 2) == LT
+			## expect I64.compare(1, 2) == LessThan
 			##
-			## expect I64.compare(2, 2) == EQ
+			## expect I64.compare(2, 2) == Equal
 			##
-			## expect I64.compare(3, 2) == GT
+			## expect I64.compare(3, 2) == GreaterThan
 			## ```
-			compare : I64, I64 -> [LT, EQ, GT]
+			compare : I64, I64 -> [LessThan, Equal, GreaterThan]
 			compare = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
@@ -13032,13 +13023,13 @@ Builtin :: [].{
 
 			## Compare two [U128] values and return their ordering.
 			## ```roc
-			## expect U128.compare(1, 2) == LT
+			## expect U128.compare(1, 2) == LessThan
 			##
-			## expect U128.compare(2, 2) == EQ
+			## expect U128.compare(2, 2) == Equal
 			##
-			## expect U128.compare(3, 2) == GT
+			## expect U128.compare(3, 2) == GreaterThan
 			## ```
-			compare : U128, U128 -> [LT, EQ, GT]
+			compare : U128, U128 -> [LessThan, Equal, GreaterThan]
 			compare = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
@@ -13865,13 +13856,13 @@ Builtin :: [].{
 
 			## Compare two [I128] values and return their ordering.
 			## ```roc
-			## expect I128.compare(1, 2) == LT
+			## expect I128.compare(1, 2) == LessThan
 			##
-			## expect I128.compare(2, 2) == EQ
+			## expect I128.compare(2, 2) == Equal
 			##
-			## expect I128.compare(3, 2) == GT
+			## expect I128.compare(3, 2) == GreaterThan
 			## ```
-			compare : I128, I128 -> [LT, EQ, GT]
+			compare : I128, I128 -> [LessThan, Equal, GreaterThan]
 			compare = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
@@ -14820,13 +14811,13 @@ Builtin :: [].{
 
 			## Compare two [Dec] values and return their ordering.
 			## ```roc
-			## expect Dec.compare(1.0, 2.0) == LT
+			## expect Dec.compare(1.0, 2.0) == LessThan
 			##
-			## expect Dec.compare(2.0, 2.0) == EQ
+			## expect Dec.compare(2.0, 2.0) == Equal
 			##
-			## expect Dec.compare(3.0, 2.0) == GT
+			## expect Dec.compare(3.0, 2.0) == GreaterThan
 			## ```
-			compare : Dec, Dec -> [LT, EQ, GT]
+			compare : Dec, Dec -> [LessThan, Equal, GreaterThan]
 			compare = |a, b| numeric_compare(a, b)
 
 			## Returns the greater of two [Dec] values.
@@ -22170,6 +22161,72 @@ bytes_to_str = |bytes|
 		Err(_) => Err(OutOfRange)
 	}
 
+reverse_order : [LessThan, Equal, GreaterThan] -> [LessThan, Equal, GreaterThan]
+reverse_order = |order|
+	match order {
+		LessThan => GreaterThan
+		Equal => Equal
+		GreaterThan => LessThan
+	}
+
+sort_impl : List(item), (item, item -> [LessThan, Equal, GreaterThan]) -> List(item)
+sort_impl = |list, compare_items| {
+	list_len = List.len(list)
+	if list_len < 2 {
+		list
+	} else {
+		var $width = 1
+		var $source = list
+		while $width < list_len {
+			$source = sort_merge_pass($source, $width, compare_items)
+			$width = if $width > list_len / 2 list_len else $width * 2
+		}
+		$source
+	}
+}
+
+sort_merge_pass : List(item), U64, (item, item -> [LessThan, Equal, GreaterThan]) -> List(item)
+sort_merge_pass = |source, width, compare_items| {
+	list_len = List.len(source)
+	var $out = List.with_capacity(list_len)
+	var $start = 0
+
+	while $start < list_len {
+		middle = if width > list_len - $start list_len else $start + width
+		end = if width > list_len - middle list_len else middle + width
+		var $left = $start
+		var $right = middle
+
+		while $left < middle and $right < end {
+			left_item = list_get_unsafe(source, $left)
+			right_item = list_get_unsafe(source, $right)
+			match compare_items(left_item, right_item) {
+				LessThan | Equal => {
+					$out = list_append_unsafe($out, left_item)
+					$left = $left + 1
+				}
+				GreaterThan => {
+					$out = list_append_unsafe($out, right_item)
+					$right = $right + 1
+				}
+			}
+		}
+
+		while $left < middle {
+			$out = list_append_unsafe($out, list_get_unsafe(source, $left))
+			$left = $left + 1
+		}
+		while $right < end {
+			$out = list_append_unsafe($out, list_get_unsafe(source, $right))
+			$right = $right + 1
+		}
+
+		$start = end
+	}
+
+	$out
+}
+
 unsigned_plus_try : item, item -> Try(item, [Overflow, ..])
 	where [item.plus_overflows : item, item -> Bool, item.plus_wrap : item, item -> item]
 unsigned_plus_try = |a, b|
@@ -22594,7 +22651,7 @@ signed_is_multiple_of = |zero, neg_one, value, divisor|
 		value.rem_by(divisor) == zero
 	}
 
-numeric_compare : item, item -> [LT, EQ, GT]
+numeric_compare : item, item -> [LessThan, Equal, GreaterThan]
 
 range_with_step : num, num, num, [Exclusive, Inclusive], [To, From] -> Num.Range(num)
 	where [num.range_len_if_known : num, num, num, [Exclusive, Inclusive] -> [Known(U64), Unknown]]

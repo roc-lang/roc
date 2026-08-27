@@ -39,7 +39,7 @@ largest : List(List(U64)) -> U64
 largest = |numbers|
 	numbers
 		.map(List.sum)
-		.sort_with(|a, b| if a < b GT else if b > a LT else EQ)
+		.sortWith(|a, b| if a < b GreaterThan else if b > a LessThan else Equal)
 		.first()
 		?? 0
 

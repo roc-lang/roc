@@ -49,20 +49,20 @@ GlueInput := {
 		}
 
 		{
-			hosted_functions: List.sort_with($hosted_functions, compare_by_index),
+			hosted_functions: List.sortWith($hosted_functions, compare_by_index),
 			provides_entries: $provides_entries,
 			types: $types,
 		}
 	}
 
-	compare_by_index : HostedFunctionInfo, HostedFunctionInfo -> [LT, EQ, GT]
+	compare_by_index : HostedFunctionInfo, HostedFunctionInfo -> [LessThan, Equal, GreaterThan]
 	compare_by_index = |a, b| {
 		if a.index < b.index {
-			return LT
+			return LessThan
 		}
 		if a.index > b.index {
-			return GT
+			return GreaterThan
 		}
-		EQ
+		Equal
 	}
 }

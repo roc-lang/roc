@@ -964,9 +964,9 @@ pub fn unsafeReallocate(
 
 /// Represents comparison results: equal, greater than, or less than
 pub const Ordering = enum(u8) {
-    EQ = 0,
-    GT = 1,
-    LT = 2,
+    Equal = 0,
+    GreaterThan = 1,
+    LessThan = 2,
 };
 
 /// Specifies whether updates should create new data or modify existing data

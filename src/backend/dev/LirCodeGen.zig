@@ -13432,7 +13432,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.codegen.emitNeg(.w64, neg_reg, reg);
 
             if (comptime target.toCpuArch() == .aarch64) {
-                // CMP reg, #0; CSEL result, neg_reg, reg, LT
+                // CMP reg, #0; CSEL result, neg_reg, reg, LessThan
                 try self.codegen.emit.cmpRegImm12(.w64, reg, 0);
                 try self.codegen.emit.csel(.w64, neg_reg, neg_reg, reg, .lt);
             } else {
