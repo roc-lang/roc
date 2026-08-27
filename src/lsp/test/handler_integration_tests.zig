@@ -339,6 +339,8 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "code actions annotate a binding with its inferred type", .run = codeActionsAnnotateInferredBinding },
     .{ .name = "code actions generate an expect test for a function", .run = codeActionsGenerateExpectTest },
     .{ .name = "code actions offer an annotation and a test for one function", .run = codeActionsOfferBothForOneFunction },
+    .{ .name = "code actions annotate a binding nested inside a function", .run = codeActionsAnnotateNestedBinding },
+    .{ .name = "code actions do not annotate a lambda parameter", .run = codeActionsLeaveLambdaParametersAlone },
     .{ .name = "code actions leave out a test they cannot write", .run = codeActionsLeaveOutUnwritableTest },
     .{ .name = "code actions offer nothing for a document that does not compile", .run = codeActionsOfferNothingWithoutTypes },
     .{ .name = "the name on an annotation is a usable starting point", .run = annotationNameResolvesLikeAnyOccurrence },
@@ -5590,4 +5592,98 @@ pub fn codeActionsOfferBothForOneFunction() integration_spec.SpecError!void {
         36,
         "\n\n## TODO Replace these placeholder values with a case worth checking.\nexpect shout(\"\") == \"\"",
     );
+}
+
+/// Verifies a binding several blocks deep inside a function is annotated, with
+/// the indentation of the line it is written on.
+pub fn codeActionsAnnotateNestedBinding() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "code_action_nested.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\pick : Str -> Str
+        \\pick = |text| {{
+        \\    outer = Str.concat(text, "!")
+        \\    inner = {{
+        \\        doubled = Str.concat(outer, outer)
+        \\        doubled
+        \\    }}
+        \\    inner
+        \\}}
+        \\
+        \\main = pick("roc")
+    , .{platform_path});
+    defer allocator.free(source);
+
+    const request = try codeActionRequest(allocator, 2, fixture.uri, 6, 8, 6, 15);
+    defer allocator.free(request);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{request});
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const actions = try response.result();
+
+    const annotate = try codeActionByPrefix(actions, "Annotate 'doubled'") orelse return error.TestUnexpectedResult;
+    try expectInsertionAt(try codeActionEdit(annotate, fixture.uri), 6, 0, "        doubled : Str\n");
+}
+
+/// Verifies a lambda parameter is never annotated.
+///
+/// A parameter is a plain binding like any other, and Roc lets a lambda spread
+/// its parameters over several lines, so a parameter can open its own line.
+/// Writing a type above one would land inside the parameter list.
+pub fn codeActionsLeaveLambdaParametersAlone() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "code_action_param.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\join : Str, Str -> Str
+        \\join = |
+        \\    left,
+        \\    right,
+        \\| Str.concat(left, right)
+        \\
+        \\main = join("ro", "c")
+    , .{platform_path});
+    defer allocator.free(source);
+
+    const request = try codeActionRequest(allocator, 2, fixture.uri, 4, 4, 4, 8);
+    defer allocator.free(request);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{request});
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const actions = try response.result();
+    try std.testing.expect(actions == .array);
+    try std.testing.expect((try codeActionByPrefix(actions, "Annotate")) == null);
 }

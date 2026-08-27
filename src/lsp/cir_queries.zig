@@ -1330,6 +1330,62 @@ pub fn collectUnannotatedBindings(
     return results;
 }
 
+/// Context for collecting the patterns that definitions and statements declare.
+const CollectDeclaredContext = struct {
+    allocator: std.mem.Allocator,
+    results: *std.ArrayList(CIR.Pattern.Idx),
+    oom: ?std.mem.Allocator.Error = null,
+
+    fn visitStmtPre(ctx: *CollectDeclaredContext, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
+        const pattern_idx = statementPattern(stmt) orelse return .continue_traversal;
+        ctx.results.append(ctx.allocator, pattern_idx) catch |err| {
+            ctx.oom = err;
+            return .stop;
+        };
+        return .continue_traversal;
+    }
+};
+
+/// Collect every pattern that a definition or a statement declares.
+///
+/// A type annotation is written on the line above the binding it names, so it
+/// belongs only to a binding that is what its line declares. Lambda parameters
+/// and destructured fields are `assign` patterns too, and a Roc lambda may
+/// spread its parameters over several lines, so a parameter can open a line of
+/// its own - which is why the two are told apart by what declares them rather
+/// than by what the source around them looks like.
+pub fn collectDeclaredPatterns(
+    module_env: *ModuleEnv,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!std.ArrayList(CIR.Pattern.Idx) {
+    var results: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    errdefer results.deinit(allocator);
+
+    var ctx = CollectDeclaredContext{
+        .allocator = allocator,
+        .results = &results,
+    };
+    var visitor = CirVisitor(CollectDeclaredContext).init(&ctx, .{
+        .visit_stmt_pre = CollectDeclaredContext.visitStmtPre,
+    });
+
+    // A top-level definition is not a statement, so its pattern is taken from
+    // the definition itself; the ones inside blocks are reached by the walk.
+    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        try results.append(allocator, def.pattern);
+        visitor.walkExpr(&module_env.store, def.expr);
+        if (visitor.stopped) break;
+    }
+    if (!visitor.stopped) {
+        visitor.walkModule(&module_env.store, module_env.all_statements);
+    }
+    if (ctx.oom) |err| return err;
+
+    return results;
+}
+
 /// A top-level definition the requested range falls inside.
 pub const TopLevelDefinition = struct {
     pattern: CIR.Pattern.Idx,

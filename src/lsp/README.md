@@ -52,10 +52,17 @@ has no types to read, and handing the author source that does not compile is wor
 offering nothing.
 
 **Annotate a binding with its inferred type** writes the type on its own line above the
-binding, carrying the indentation of the line it opens. It is offered for the same bindings
-inlay hints are drawn for, and only where the binding opens its line - anything in front of
-it would be split across the inserted line break. Where a selection covers several bindings,
-the innermost one is annotated.
+binding, carrying the indentation of the line it opens. Roc has no inline `foo : U64 = 100`
+form, so this two-line one is the only one there is. It is offered for any binding a
+definition or a statement declares that does not already write its type - top level, or
+several blocks deep inside a function.
+
+Lambda parameters and destructured fields are left out. They are plain bindings like any
+other, and a Roc lambda may spread its parameters over several lines, so a parameter can open
+a line of its own: what declares a binding tells the two apart, the source around it does not.
+The binding must still open its line, which rules out a block written on a single line, since
+anything in front of the binding would be split across the inserted line break. Where a
+selection covers several bindings, the innermost one is annotated.
 
 **Generate an expect test for a function** writes an `expect` that calls the function,
 directly after the definition it tests. Each argument and the expected result are placeholder

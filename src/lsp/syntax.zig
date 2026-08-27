@@ -54,6 +54,14 @@ const MethodOwnerLookup = struct {
     builtin_origin: bool,
 };
 
+/// Whether a collected list of patterns holds this one.
+fn patternListContains(patterns: []const CIR.Pattern.Idx, pattern: CIR.Pattern.Idx) bool {
+    for (patterns) |candidate| {
+        if (@intFromEnum(candidate) == @intFromEnum(pattern)) return true;
+    }
+    return false;
+}
+
 fn statementTypeAnno(module_env: *const ModuleEnv, statement: CIR.Statement) ?CIR.TypeAnno.Idx {
     return switch (statement) {
         .s_decl => |decl| if (decl.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
@@ -3176,34 +3184,47 @@ pub const SyntaxChecker = struct {
         defer bindings.deinit(self.allocator);
         if (bindings.items.len == 0) return null;
 
+        // A lambda parameter and a destructured field are bindings too, and an
+        // annotation belongs to neither: it is a line of its own above what
+        // that line declares.
+        var declared = try cir_queries.collectDeclaredPatterns(module_env, self.allocator);
+        defer declared.deinit(self.allocator);
+
         // A selection can cover several bindings at once. The shortest is the
         // innermost, which is the one the cursor is on.
-        var chosen = bindings.items[0];
-        for (bindings.items[1..]) |binding| {
-            const chosen_len = chosen.region.end.offset - chosen.region.start.offset;
+        var chosen: ?cir_queries.UnannotatedBinding = null;
+        for (bindings.items) |binding| {
+            if (!patternListContains(declared.items, binding.pattern)) continue;
+            const current = chosen orelse {
+                chosen = binding;
+                continue;
+            };
+            const current_len = current.region.end.offset - current.region.start.offset;
             const binding_len = binding.region.end.offset - binding.region.start.offset;
-            if (binding_len < chosen_len) chosen = binding;
+            if (binding_len < current_len) chosen = binding;
         }
+        const target = chosen orelse return null;
 
         // The annotation is written on its own line above the binding, so the
-        // binding has to open its line. Anything else in front of it would be
-        // split across the inserted line break.
+        // binding has to open its line. Anything else in front of it - a block
+        // written on one line, for one - would be split across the inserted
+        // line break.
         const line_starts = module_env.getLineStartsAll();
-        if (chosen.range.start_line >= line_starts.len) return null;
-        const line_start = line_starts[chosen.range.start_line];
-        if (line_start > chosen.region.start.offset) return null;
-        const indent = module_env.common.source[line_start..chosen.region.start.offset];
+        if (target.range.start_line >= line_starts.len) return null;
+        const line_start = line_starts[target.range.start_line];
+        if (line_start > target.region.start.offset) return null;
+        const indent = module_env.common.source[line_start..target.region.start.offset];
         for (indent) |byte| {
             if (byte != ' ' and byte != '\t') return null;
         }
 
         // The collected binding is spelled exactly its name, so the source
         // under it is the name to write the annotation for.
-        const name = module_env.common.source[chosen.region.start.offset..chosen.region.end.offset];
+        const name = module_env.common.source[target.region.start.offset..target.region.end.offset];
 
         var type_writer = try module_env.initTypeWriter();
         defer type_writer.deinit();
-        type_writer.write(ModuleEnv.varFrom(chosen.pattern), .one_line) catch |err| switch (err) {
+        type_writer.write(ModuleEnv.varFrom(target.pattern), .one_line) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return null,
         };
@@ -3219,9 +3240,9 @@ pub const SyntaxChecker = struct {
             .title = title,
             .kind = refactor_rewrite_kind,
             .range = .{
-                .start_line = chosen.range.start_line,
+                .start_line = target.range.start_line,
                 .start_col = 0,
-                .end_line = chosen.range.start_line,
+                .end_line = target.range.start_line,
                 .end_col = 0,
             },
             .new_text = new_text,
