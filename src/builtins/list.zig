@@ -1888,6 +1888,9 @@ fn compareErasedCallable(context_bytes: Opaque, first: Opaque, second: Opaque) c
     @memcpy(context.args[0..context.element_width], first_ptr[0..context.element_width]);
     @memcpy(context.args[context.second_offset..][0..context.element_width], second_ptr[0..context.element_width]);
     if (context.elements_refcounted) {
+        // Erased callable arguments are owned: the generated callable consumes
+        // and decrefs them. These increfs create the ownership transferred by
+        // the copied argument values, so no matching decrefs belong here.
         context.inc(context.inc_context, context.args);
         context.inc(context.inc_context, context.args + context.second_offset);
     }
