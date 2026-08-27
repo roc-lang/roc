@@ -3032,9 +3032,11 @@ pub const SyntaxChecker = struct {
 
         // `end_line` is whatever the client sent, so widen before adding one:
         // a u32 maximum would otherwise overflow ahead of the bounds check.
-        const line_after_end: usize = @as(usize, end_line) + 1;
-        const end_offset: u32 = if (line_after_end < line_starts.len)
-            line_starts[line_after_end]
+        // The widening target is `u64` rather than `usize`, which is itself 32
+        // bits on a 32-bit build and would overflow on the same input.
+        const line_after_end: u64 = @as(u64, end_line) + 1;
+        const end_offset: u32 = if (line_after_end < @as(u64, line_starts.len))
+            line_starts[@intCast(line_after_end)]
         else
             @intCast(module_env.common.source.len);
 
