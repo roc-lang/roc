@@ -24,6 +24,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
+const numeric_conversion = base.numeric_conversion;
 const layout = @import("layout");
 const lir = @import("lir");
 const CheckedArithmetic = lir.CheckedArithmetic;
@@ -101,6 +102,11 @@ const LayoutStore = layout.Store;
 const RcOp = layout.RcOp;
 const RcHelperKey = layout.RcHelperKey;
 const RcAtomicity = lir.LIR.RcAtomicity;
+
+/// Width in bits of `op`'s source type. `op` must be a conversion.
+fn srcBits(op: lir.LowLevel) u8 {
+    return numeric_conversion.getConversionSpec(op).?.src.bits();
+}
 
 fn narrowEnum(comptime Narrow: type, wide: anytype) Narrow {
     const raw = @intFromEnum(wide);
@@ -2919,14 +2925,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const src_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const src_reg = try self.ensureInGeneralReg(src_loc);
                     // Sign-extend: shift left to put sign bit at bit 63, then arithmetic shift right
-                    const src_bits: u8 = if (ll.op == .i8_to_i16 or ll.op == .i8_to_i32 or ll.op == .i8_to_i64)
-                        8
-                    else if (ll.op == .i16_to_i32 or ll.op == .i16_to_i64)
-                        16
-                    else if (ll.op == .i32_to_i64)
-                        32
-                    else
-                        unreachable;
+                    const src_bits = srcBits(ll.op);
                     const shift_amount: u8 = 64 - src_bits;
                     try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
                     try self.emitAsrImm(.w64, src_reg, src_reg, shift_amount);
@@ -2951,14 +2950,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const src_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const src_reg = try self.ensureInGeneralReg(src_loc);
                     // Zero-extend: mask off upper bits
-                    const src_bits: u8 = if (ll.op == .u8_to_i16 or ll.op == .u8_to_i32 or ll.op == .u8_to_i64 or ll.op == .u8_to_u16 or ll.op == .u8_to_u32 or ll.op == .u8_to_u64)
-                        8
-                    else if (ll.op == .u16_to_i32 or ll.op == .u16_to_i64 or ll.op == .u16_to_u32 or ll.op == .u16_to_u64)
-                        16
-                    else if (ll.op == .u32_to_i64 or ll.op == .u32_to_u64)
-                        32
-                    else
-                        unreachable;
+                    const src_bits = srcBits(ll.op);
                     const shift_amount: u8 = 64 - src_bits;
                     try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
                     try self.emitLsrImm(.w64, src_reg, src_reg, shift_amount);
@@ -3045,16 +3037,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const src_reg = try self.ensureInGeneralReg(src_loc);
 
                     // Sign-extend source to 64 bits
-                    const src_bits: u8 = if (ll.op == .i8_to_f32 or ll.op == .i8_to_f64)
-                        8
-                    else if (ll.op == .i16_to_f32 or ll.op == .i16_to_f64)
-                        16
-                    else if (ll.op == .i32_to_f32 or ll.op == .i32_to_f64)
-                        32
-                    else if (ll.op == .i64_to_f32 or ll.op == .i64_to_f64)
-                        64
-                    else
-                        unreachable;
+                    const src_bits = srcBits(ll.op);
                     if (src_bits < 64) {
                         const shift_amount: u8 = 64 - src_bits;
                         try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
@@ -3094,14 +3077,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const src_reg = try self.ensureInGeneralReg(src_loc);
 
                     // Zero-extend source to 64 bits
-                    const src_bits: u8 = if (ll.op == .u8_to_f32 or ll.op == .u8_to_f64)
-                        8
-                    else if (ll.op == .u16_to_f32 or ll.op == .u16_to_f64)
-                        16
-                    else if (ll.op == .u32_to_f32 or ll.op == .u32_to_f64)
-                        32
-                    else
-                        unreachable;
+                    const src_bits = srcBits(ll.op);
                     const shift_amount: u8 = 64 - src_bits;
                     try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
                     try self.emitLsrImm(.w64, src_reg, src_reg, shift_amount);
@@ -3329,16 +3305,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         ll.op == .i16_to_u128_wrap or
                         ll.op == .i32_to_u128_wrap or
                         ll.op == .i64_to_u128_wrap;
-                    const src_bits: u8 = if (ll.op == .u8_to_u128 or ll.op == .u8_to_i128 or ll.op == .i8_to_i128 or ll.op == .i8_to_u128_wrap)
-                        8
-                    else if (ll.op == .u16_to_u128 or ll.op == .u16_to_i128 or ll.op == .i16_to_i128 or ll.op == .i16_to_u128_wrap)
-                        16
-                    else if (ll.op == .u32_to_u128 or ll.op == .u32_to_i128 or ll.op == .i32_to_i128 or ll.op == .i32_to_u128_wrap)
-                        32
-                    else if (ll.op == .u64_to_u128 or ll.op == .u64_to_i128 or ll.op == .i64_to_i128 or ll.op == .i64_to_u128_wrap)
-                        64
-                    else
-                        unreachable;
+                    const src_bits = srcBits(ll.op);
 
                     // Sign/zero extend source to 64 bits
                     if (src_bits < 64) {
@@ -3445,16 +3412,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const src_reg = try self.ensureInGeneralReg(src_loc);
 
                     // Zero-extend source to 64 bits
-                    const src_bits: u8 = if (ll.op == .u8_to_dec)
-                        8
-                    else if (ll.op == .u16_to_dec)
-                        16
-                    else if (ll.op == .u32_to_dec)
-                        32
-                    else if (ll.op == .u64_to_dec)
-                        64
-                    else
-                        unreachable;
+                    const src_bits = srcBits(ll.op);
                     if (src_bits < 64) {
                         const shift_amount: u8 = 64 - src_bits;
                         try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
@@ -3475,16 +3433,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const src_reg = try self.ensureInGeneralReg(src_loc);
 
                     // Sign-extend source to 64 bits
-                    const src_bits: u8 = if (ll.op == .i8_to_dec)
-                        8
-                    else if (ll.op == .i16_to_dec)
-                        16
-                    else if (ll.op == .i32_to_dec)
-                        32
-                    else if (ll.op == .i64_to_dec)
-                        64
-                    else
-                        unreachable;
+                    const src_bits = srcBits(ll.op);
                     if (src_bits < 64) {
                         const shift_amount: u8 = 64 - src_bits;
                         try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
@@ -11486,142 +11435,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .float_reg = .{ .reg = result_reg, .width = width } };
         }
 
-        // ── Integer try conversion info ──
-
-        const IntTryInfo = struct {
-            src_bits: u8,
-            src_signed: bool,
-            tgt_bits: u8,
-            tgt_signed: bool,
-        };
-
-        fn intTryConvInfo(op: anytype) IntTryInfo {
-            const IntTryOp = enum(u16) {
-                u8_to_i8_try = @intFromEnum(lir.LowLevel.u8_to_i8_try),
-                i8_to_u8_try = @intFromEnum(lir.LowLevel.i8_to_u8_try),
-                i8_to_u16_try = @intFromEnum(lir.LowLevel.i8_to_u16_try),
-                i8_to_u32_try = @intFromEnum(lir.LowLevel.i8_to_u32_try),
-                i8_to_u64_try = @intFromEnum(lir.LowLevel.i8_to_u64_try),
-                i8_to_u128_try = @intFromEnum(lir.LowLevel.i8_to_u128_try),
-                u16_to_i8_try = @intFromEnum(lir.LowLevel.u16_to_i8_try),
-                u16_to_i16_try = @intFromEnum(lir.LowLevel.u16_to_i16_try),
-                u16_to_u8_try = @intFromEnum(lir.LowLevel.u16_to_u8_try),
-                i16_to_i8_try = @intFromEnum(lir.LowLevel.i16_to_i8_try),
-                i16_to_u8_try = @intFromEnum(lir.LowLevel.i16_to_u8_try),
-                i16_to_u16_try = @intFromEnum(lir.LowLevel.i16_to_u16_try),
-                i16_to_u32_try = @intFromEnum(lir.LowLevel.i16_to_u32_try),
-                i16_to_u64_try = @intFromEnum(lir.LowLevel.i16_to_u64_try),
-                i16_to_u128_try = @intFromEnum(lir.LowLevel.i16_to_u128_try),
-                u32_to_i8_try = @intFromEnum(lir.LowLevel.u32_to_i8_try),
-                u32_to_i16_try = @intFromEnum(lir.LowLevel.u32_to_i16_try),
-                u32_to_i32_try = @intFromEnum(lir.LowLevel.u32_to_i32_try),
-                u32_to_u8_try = @intFromEnum(lir.LowLevel.u32_to_u8_try),
-                u32_to_u16_try = @intFromEnum(lir.LowLevel.u32_to_u16_try),
-                i32_to_i8_try = @intFromEnum(lir.LowLevel.i32_to_i8_try),
-                i32_to_i16_try = @intFromEnum(lir.LowLevel.i32_to_i16_try),
-                i32_to_u8_try = @intFromEnum(lir.LowLevel.i32_to_u8_try),
-                i32_to_u16_try = @intFromEnum(lir.LowLevel.i32_to_u16_try),
-                i32_to_u32_try = @intFromEnum(lir.LowLevel.i32_to_u32_try),
-                i32_to_u64_try = @intFromEnum(lir.LowLevel.i32_to_u64_try),
-                i32_to_u128_try = @intFromEnum(lir.LowLevel.i32_to_u128_try),
-                u64_to_i8_try = @intFromEnum(lir.LowLevel.u64_to_i8_try),
-                u64_to_i16_try = @intFromEnum(lir.LowLevel.u64_to_i16_try),
-                u64_to_i32_try = @intFromEnum(lir.LowLevel.u64_to_i32_try),
-                u64_to_i64_try = @intFromEnum(lir.LowLevel.u64_to_i64_try),
-                u64_to_u8_try = @intFromEnum(lir.LowLevel.u64_to_u8_try),
-                u64_to_u16_try = @intFromEnum(lir.LowLevel.u64_to_u16_try),
-                u64_to_u32_try = @intFromEnum(lir.LowLevel.u64_to_u32_try),
-                i64_to_i8_try = @intFromEnum(lir.LowLevel.i64_to_i8_try),
-                i64_to_i16_try = @intFromEnum(lir.LowLevel.i64_to_i16_try),
-                i64_to_i32_try = @intFromEnum(lir.LowLevel.i64_to_i32_try),
-                i64_to_u8_try = @intFromEnum(lir.LowLevel.i64_to_u8_try),
-                i64_to_u16_try = @intFromEnum(lir.LowLevel.i64_to_u16_try),
-                i64_to_u32_try = @intFromEnum(lir.LowLevel.i64_to_u32_try),
-                i64_to_u64_try = @intFromEnum(lir.LowLevel.i64_to_u64_try),
-                i64_to_u128_try = @intFromEnum(lir.LowLevel.i64_to_u128_try),
-                u128_to_i8_try = @intFromEnum(lir.LowLevel.u128_to_i8_try),
-                u128_to_i16_try = @intFromEnum(lir.LowLevel.u128_to_i16_try),
-                u128_to_i32_try = @intFromEnum(lir.LowLevel.u128_to_i32_try),
-                u128_to_i64_try = @intFromEnum(lir.LowLevel.u128_to_i64_try),
-                u128_to_i128_try = @intFromEnum(lir.LowLevel.u128_to_i128_try),
-                u128_to_u8_try = @intFromEnum(lir.LowLevel.u128_to_u8_try),
-                u128_to_u16_try = @intFromEnum(lir.LowLevel.u128_to_u16_try),
-                u128_to_u32_try = @intFromEnum(lir.LowLevel.u128_to_u32_try),
-                u128_to_u64_try = @intFromEnum(lir.LowLevel.u128_to_u64_try),
-                i128_to_i8_try = @intFromEnum(lir.LowLevel.i128_to_i8_try),
-                i128_to_i16_try = @intFromEnum(lir.LowLevel.i128_to_i16_try),
-                i128_to_i32_try = @intFromEnum(lir.LowLevel.i128_to_i32_try),
-                i128_to_i64_try = @intFromEnum(lir.LowLevel.i128_to_i64_try),
-                i128_to_u8_try = @intFromEnum(lir.LowLevel.i128_to_u8_try),
-                i128_to_u16_try = @intFromEnum(lir.LowLevel.i128_to_u16_try),
-                i128_to_u32_try = @intFromEnum(lir.LowLevel.i128_to_u32_try),
-                i128_to_u64_try = @intFromEnum(lir.LowLevel.i128_to_u64_try),
-                i128_to_u128_try = @intFromEnum(lir.LowLevel.i128_to_u128_try),
-            };
-            return switch (narrowEnum(IntTryOp, op)) {
-                .u8_to_i8_try => .{ .src_bits = 8, .src_signed = false, .tgt_bits = 8, .tgt_signed = true },
-                .i8_to_u8_try => .{ .src_bits = 8, .src_signed = true, .tgt_bits = 8, .tgt_signed = false },
-                .i8_to_u16_try => .{ .src_bits = 8, .src_signed = true, .tgt_bits = 16, .tgt_signed = false },
-                .i8_to_u32_try => .{ .src_bits = 8, .src_signed = true, .tgt_bits = 32, .tgt_signed = false },
-                .i8_to_u64_try => .{ .src_bits = 8, .src_signed = true, .tgt_bits = 64, .tgt_signed = false },
-                .i8_to_u128_try => .{ .src_bits = 8, .src_signed = true, .tgt_bits = 128, .tgt_signed = false },
-                .u16_to_i8_try => .{ .src_bits = 16, .src_signed = false, .tgt_bits = 8, .tgt_signed = true },
-                .u16_to_i16_try => .{ .src_bits = 16, .src_signed = false, .tgt_bits = 16, .tgt_signed = true },
-                .u16_to_u8_try => .{ .src_bits = 16, .src_signed = false, .tgt_bits = 8, .tgt_signed = false },
-                .i16_to_i8_try => .{ .src_bits = 16, .src_signed = true, .tgt_bits = 8, .tgt_signed = true },
-                .i16_to_u8_try => .{ .src_bits = 16, .src_signed = true, .tgt_bits = 8, .tgt_signed = false },
-                .i16_to_u16_try => .{ .src_bits = 16, .src_signed = true, .tgt_bits = 16, .tgt_signed = false },
-                .i16_to_u32_try => .{ .src_bits = 16, .src_signed = true, .tgt_bits = 32, .tgt_signed = false },
-                .i16_to_u64_try => .{ .src_bits = 16, .src_signed = true, .tgt_bits = 64, .tgt_signed = false },
-                .i16_to_u128_try => .{ .src_bits = 16, .src_signed = true, .tgt_bits = 128, .tgt_signed = false },
-                .u32_to_i8_try => .{ .src_bits = 32, .src_signed = false, .tgt_bits = 8, .tgt_signed = true },
-                .u32_to_i16_try => .{ .src_bits = 32, .src_signed = false, .tgt_bits = 16, .tgt_signed = true },
-                .u32_to_i32_try => .{ .src_bits = 32, .src_signed = false, .tgt_bits = 32, .tgt_signed = true },
-                .u32_to_u8_try => .{ .src_bits = 32, .src_signed = false, .tgt_bits = 8, .tgt_signed = false },
-                .u32_to_u16_try => .{ .src_bits = 32, .src_signed = false, .tgt_bits = 16, .tgt_signed = false },
-                .i32_to_i8_try => .{ .src_bits = 32, .src_signed = true, .tgt_bits = 8, .tgt_signed = true },
-                .i32_to_i16_try => .{ .src_bits = 32, .src_signed = true, .tgt_bits = 16, .tgt_signed = true },
-                .i32_to_u8_try => .{ .src_bits = 32, .src_signed = true, .tgt_bits = 8, .tgt_signed = false },
-                .i32_to_u16_try => .{ .src_bits = 32, .src_signed = true, .tgt_bits = 16, .tgt_signed = false },
-                .i32_to_u32_try => .{ .src_bits = 32, .src_signed = true, .tgt_bits = 32, .tgt_signed = false },
-                .i32_to_u64_try => .{ .src_bits = 32, .src_signed = true, .tgt_bits = 64, .tgt_signed = false },
-                .i32_to_u128_try => .{ .src_bits = 32, .src_signed = true, .tgt_bits = 128, .tgt_signed = false },
-                .u64_to_i8_try => .{ .src_bits = 64, .src_signed = false, .tgt_bits = 8, .tgt_signed = true },
-                .u64_to_i16_try => .{ .src_bits = 64, .src_signed = false, .tgt_bits = 16, .tgt_signed = true },
-                .u64_to_i32_try => .{ .src_bits = 64, .src_signed = false, .tgt_bits = 32, .tgt_signed = true },
-                .u64_to_i64_try => .{ .src_bits = 64, .src_signed = false, .tgt_bits = 64, .tgt_signed = true },
-                .u64_to_u8_try => .{ .src_bits = 64, .src_signed = false, .tgt_bits = 8, .tgt_signed = false },
-                .u64_to_u16_try => .{ .src_bits = 64, .src_signed = false, .tgt_bits = 16, .tgt_signed = false },
-                .u64_to_u32_try => .{ .src_bits = 64, .src_signed = false, .tgt_bits = 32, .tgt_signed = false },
-                .i64_to_i8_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 8, .tgt_signed = true },
-                .i64_to_i16_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 16, .tgt_signed = true },
-                .i64_to_i32_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 32, .tgt_signed = true },
-                .i64_to_u8_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 8, .tgt_signed = false },
-                .i64_to_u16_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 16, .tgt_signed = false },
-                .i64_to_u32_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 32, .tgt_signed = false },
-                .i64_to_u64_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 64, .tgt_signed = false },
-                .i64_to_u128_try => .{ .src_bits = 64, .src_signed = true, .tgt_bits = 128, .tgt_signed = false },
-                .u128_to_i8_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 8, .tgt_signed = true },
-                .u128_to_i16_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 16, .tgt_signed = true },
-                .u128_to_i32_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 32, .tgt_signed = true },
-                .u128_to_i64_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 64, .tgt_signed = true },
-                .u128_to_i128_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 128, .tgt_signed = true },
-                .u128_to_u8_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 8, .tgt_signed = false },
-                .u128_to_u16_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 16, .tgt_signed = false },
-                .u128_to_u32_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 32, .tgt_signed = false },
-                .u128_to_u64_try => .{ .src_bits = 128, .src_signed = false, .tgt_bits = 64, .tgt_signed = false },
-                .i128_to_i8_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 8, .tgt_signed = true },
-                .i128_to_i16_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 16, .tgt_signed = true },
-                .i128_to_i32_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 32, .tgt_signed = true },
-                .i128_to_i64_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 64, .tgt_signed = true },
-                .i128_to_u8_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 8, .tgt_signed = false },
-                .i128_to_u16_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 16, .tgt_signed = false },
-                .i128_to_u32_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 32, .tgt_signed = false },
-                .i128_to_u64_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 64, .tgt_signed = false },
-                .i128_to_u128_try => .{ .src_bits = 128, .src_signed = true, .tgt_bits = 128, .tgt_signed = false },
-            };
-        }
-
         /// Generate a checked integer conversion returning Ok(value) | Err(OutOfRange).
         fn generateIntTryConversion(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
             if (args.len != 1) unreachable;
@@ -11640,16 +11453,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const disc_offset: u32 = tu_data.discriminant_offset.get(ls.targetUsize());
             const payload_size: u32 = disc_offset; // payload is before discriminant
 
-            const info = intTryConvInfo(ll.op);
+            const spec = numeric_conversion.getConversionSpec(ll.op).?;
 
-            if (info.src_bits > 64) {
+            if (spec.src.bits() > 64) {
                 // 128-bit source: load as two registers, call 128-bit C wrapper
-                const parts = try self.getI128Parts(src_loc, if (info.src_signed) .signed else .unsigned);
+                const parts = try self.getI128Parts(src_loc, if (spec.src.isSigned()) .signed else .unsigned);
 
-                const builtin_fn = LowLevelBuiltins.intTryConvert(true, info.src_signed);
+                const builtin_fn = LowLevelBuiltins.intTryConvert(true, spec.src.isSigned());
 
-                const target_bits: u32 = info.tgt_bits;
-                const target_is_signed: u32 = if (info.tgt_signed) 1 else 0;
+                const target_bits: u32 = spec.dst.bits();
+                const target_is_signed: u32 = if (spec.dst.isSigned()) 1 else 0;
                 const base_reg = frame_ptr;
 
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -11669,9 +11482,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const src_reg = try self.ensureInGeneralReg(src_loc);
 
                 // Sign-extend or zero-extend source to fill 64-bit register
-                if (info.src_bits < 64) {
-                    const shift_amount: u8 = 64 - info.src_bits;
-                    if (info.src_signed) {
+                if (spec.src.bits() < 64) {
+                    const shift_amount: u8 = 64 - spec.src.bits();
+                    if (spec.src.isSigned()) {
                         // Sign-extend
                         try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
                         try self.emitAsrImm(.w64, src_reg, src_reg, shift_amount);
@@ -11682,22 +11495,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 }
 
-                if (info.src_signed) {
+                if (spec.src.isSigned()) {
                     // Signed source: call wrapIntTrySigned(out, val, min_val, max_val, payload_size, disc_offset)
-                    const min_val: i64 = if (info.tgt_signed) blk: {
-                        if (info.tgt_bits >= 64) break :blk std.math.minInt(i64);
-                        const shift: u6 = @intCast(info.tgt_bits - 1);
+                    const min_val: i64 = if (spec.dst.isSigned()) blk: {
+                        if (spec.dst.bits() >= 64) break :blk std.math.minInt(i64);
+                        const shift: u6 = @intCast(spec.dst.bits() - 1);
                         break :blk -(@as(i64, 1) << shift);
                     } else 0;
 
-                    const max_val: i64 = if (info.tgt_signed) blk: {
-                        if (info.tgt_bits >= 64) break :blk std.math.maxInt(i64);
-                        const shift: u6 = @intCast(info.tgt_bits - 1);
+                    const max_val: i64 = if (spec.dst.isSigned()) blk: {
+                        if (spec.dst.bits() >= 64) break :blk std.math.maxInt(i64);
+                        const shift: u6 = @intCast(spec.dst.bits() - 1);
                         break :blk (@as(i64, 1) << shift) - 1;
                     } else blk: {
                         // For unsigned targets >= 64 bits, any non-negative i64 fits
-                        if (info.tgt_bits >= 64) break :blk std.math.maxInt(i64);
-                        const shift: u6 = @intCast(info.tgt_bits);
+                        if (spec.dst.bits() >= 64) break :blk std.math.maxInt(i64);
+                        const shift: u6 = @intCast(spec.dst.bits());
                         break :blk (@as(i64, 1) << shift) - 1;
                     };
 
@@ -11712,13 +11525,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.callBuiltin(&builder, LowLevelBuiltins.intTryConvert(false, true));
                 } else {
                     // Unsigned source: call wrapIntTryUnsigned(out, val, max_val, payload_size, disc_offset)
-                    const max_val: u64 = if (info.tgt_signed) blk: {
-                        if (info.tgt_bits >= 64) break :blk @as(u64, @bitCast(@as(i64, std.math.maxInt(i64))));
-                        const shift: u6 = @intCast(info.tgt_bits - 1);
+                    const max_val: u64 = if (spec.dst.isSigned()) blk: {
+                        if (spec.dst.bits() >= 64) break :blk @as(u64, @bitCast(@as(i64, std.math.maxInt(i64))));
+                        const shift: u6 = @intCast(spec.dst.bits() - 1);
                         break :blk @as(u64, @intCast((@as(i64, 1) << shift) - 1));
                     } else blk: {
-                        if (info.tgt_bits >= 64) break :blk std.math.maxInt(u64);
-                        const shift: u6 = @intCast(info.tgt_bits);
+                        if (spec.dst.bits() >= 64) break :blk std.math.maxInt(u64);
+                        const shift: u6 = @intCast(spec.dst.bits());
                         break :blk (@as(u64, 1) << shift) - 1;
                     };
 
@@ -11744,7 +11557,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (args.len != 1) unreachable;
             const str_loc = try self.emitValueLocal(GuardedList.at(args, 0));
             const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-            const parse_spec = ll.op.numericParseSpec() orelse
+            const parse_spec = numeric_conversion.getNumericParseSpec(ll.op) orelse
                 std.debug.panic("generateNumFromStr: expected typed from_str op, got {s}", .{@tagName(ll.op)});
 
             const ls = self.layout_store;
@@ -11796,15 +11609,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .stack = .{ .offset = result_offset } };
         }
 
-        // ── Float/Dec try_unsafe conversion info ──
-
-        const FloatDecTryUnsafeInfo = struct {
-            src_kind: enum { f32, f64, dec },
-            tgt_kind: enum { int, f32, dec },
-            tgt_bits: u8,
-            tgt_signed: bool,
-        };
-
         const TryUnsafeOffsets = struct {
             success: u32,
             value: u32,
@@ -11822,79 +11626,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
-        fn floatDecTryUnsafeInfo(op: anytype) FloatDecTryUnsafeInfo {
-            const FloatDecTryUnsafeOp = enum(u16) {
-                f32_to_i8_try_unsafe = @intFromEnum(lir.LowLevel.f32_to_i8_try_unsafe),
-                f32_to_i16_try_unsafe = @intFromEnum(lir.LowLevel.f32_to_i16_try_unsafe),
-                f32_to_i32_try_unsafe = @intFromEnum(lir.LowLevel.f32_to_i32_try_unsafe),
-                f32_to_i64_try_unsafe = @intFromEnum(lir.LowLevel.f32_to_i64_try_unsafe),
-                f32_to_i128_try_unsafe = @intFromEnum(lir.LowLevel.f32_to_i128_try_unsafe),
-                f32_to_u8_try_unsafe = @intFromEnum(lir.LowLevel.f32_to_u8_try_unsafe),
-                f32_to_u16_try_unsafe = @intFromEnum(lir.LowLevel.f32_to_u16_try_unsafe),
-                f32_to_u32_try_unsafe = @intFromEnum(lir.LowLevel.f32_to_u32_try_unsafe),
-                f32_to_u64_try_unsafe = @intFromEnum(lir.LowLevel.f32_to_u64_try_unsafe),
-                f32_to_u128_try_unsafe = @intFromEnum(lir.LowLevel.f32_to_u128_try_unsafe),
-                f64_to_i8_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_i8_try_unsafe),
-                f64_to_i16_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_i16_try_unsafe),
-                f64_to_i32_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_i32_try_unsafe),
-                f64_to_i64_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_i64_try_unsafe),
-                f64_to_i128_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_i128_try_unsafe),
-                f64_to_u8_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_u8_try_unsafe),
-                f64_to_u16_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_u16_try_unsafe),
-                f64_to_u32_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_u32_try_unsafe),
-                f64_to_u64_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_u64_try_unsafe),
-                f64_to_u128_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_u128_try_unsafe),
-                f64_to_f32_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_f32_try_unsafe),
-                dec_to_i8_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_i8_try_unsafe),
-                dec_to_i16_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_i16_try_unsafe),
-                dec_to_i32_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_i32_try_unsafe),
-                dec_to_i64_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_i64_try_unsafe),
-                dec_to_u8_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_u8_try_unsafe),
-                dec_to_u16_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_u16_try_unsafe),
-                dec_to_u32_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_u32_try_unsafe),
-                dec_to_u64_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_u64_try_unsafe),
-                dec_to_u128_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_u128_try_unsafe),
-                dec_to_f32_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_f32_try_unsafe),
-                u128_to_dec_try_unsafe = @intFromEnum(lir.LowLevel.u128_to_dec_try_unsafe),
-                i128_to_dec_try_unsafe = @intFromEnum(lir.LowLevel.i128_to_dec_try_unsafe),
-            };
-            return switch (narrowEnum(FloatDecTryUnsafeOp, op)) {
-                .f32_to_i8_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 8, .tgt_signed = true },
-                .f32_to_i16_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 16, .tgt_signed = true },
-                .f32_to_i32_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 32, .tgt_signed = true },
-                .f32_to_i64_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 64, .tgt_signed = true },
-                .f32_to_i128_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 128, .tgt_signed = true },
-                .f32_to_u8_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 8, .tgt_signed = false },
-                .f32_to_u16_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 16, .tgt_signed = false },
-                .f32_to_u32_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 32, .tgt_signed = false },
-                .f32_to_u64_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 64, .tgt_signed = false },
-                .f32_to_u128_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 128, .tgt_signed = false },
-                .f64_to_i8_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 8, .tgt_signed = true },
-                .f64_to_i16_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 16, .tgt_signed = true },
-                .f64_to_i32_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 32, .tgt_signed = true },
-                .f64_to_i64_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 64, .tgt_signed = true },
-                .f64_to_i128_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 128, .tgt_signed = true },
-                .f64_to_u8_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 8, .tgt_signed = false },
-                .f64_to_u16_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 16, .tgt_signed = false },
-                .f64_to_u32_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 32, .tgt_signed = false },
-                .f64_to_u64_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 64, .tgt_signed = false },
-                .f64_to_u128_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 128, .tgt_signed = false },
-                .f64_to_f32_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .f32, .tgt_bits = 32, .tgt_signed = true },
-                .dec_to_i8_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 8, .tgt_signed = true },
-                .dec_to_i16_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 16, .tgt_signed = true },
-                .dec_to_i32_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 32, .tgt_signed = true },
-                .dec_to_i64_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 64, .tgt_signed = true },
-                .dec_to_u8_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 8, .tgt_signed = false },
-                .dec_to_u16_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 16, .tgt_signed = false },
-                .dec_to_u32_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 32, .tgt_signed = false },
-                .dec_to_u64_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 64, .tgt_signed = false },
-                .dec_to_u128_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 128, .tgt_signed = false },
-                .dec_to_f32_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .f32, .tgt_bits = 32, .tgt_signed = true },
-                .u128_to_dec_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .dec, .tgt_bits = 128, .tgt_signed = false },
-                .i128_to_dec_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .dec, .tgt_bits = 128, .tgt_signed = true },
-            };
-        }
-
         /// Generate a float/dec try_unsafe conversion returning a record.
         fn generateFloatDecTryUnsafeConversion(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
             if (args.len != 1) unreachable;
@@ -11906,17 +11637,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_offset = self.codegen.allocStackSlot(size_align.size);
             try self.zeroStackArea(result_offset, size_align.size);
 
-            const info = floatDecTryUnsafeInfo(ll.op);
+            const spec = numeric_conversion.getConversionSpec(ll.op).?;
             const offsets = self.tryUnsafeOffsets(ll.ret_layout);
 
-            switch (info.tgt_kind) {
+            switch (spec.dst.class()) {
                 .int => {
                     // Float/Dec to integer: call wrapper with (out, val, target_bits, target_is_signed, val_size)
-                    const val_size: u32 = @as(u32, info.tgt_bits) / 8;
-                    const target_bits: u32 = info.tgt_bits;
-                    const target_is_signed: u32 = if (info.tgt_signed) 1 else 0;
+                    const val_size: u32 = spec.dst.bytes();
+                    const target_bits: u32 = spec.dst.bits();
+                    const target_is_signed: u32 = if (spec.dst.isSigned()) 1 else 0;
 
-                    if (info.src_kind == .dec) {
+                    if (spec.src == .dec) {
                         // Dec source: get i128 parts, call Dec-to-int wrapper
                         const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
                         const base_reg = frame_ptr;
@@ -11940,7 +11671,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // integer args (val -> XMM1, target_bits -> R8), and only the
                         // builder tracks that. On aarch64 (AAPCS) FP args use v0-v7
                         // independently, so the single float arg goes in V0 directly.
-                        const src_width: FloatWidth = if (info.src_kind == .f32) .f32 else .f64;
+                        const src_width: FloatWidth = if (spec.src == .f32) .f32 else .f64;
                         const freg = try self.ensureInFloatReg(src_loc, src_width);
                         const base_reg = frame_ptr;
 
@@ -11966,9 +11697,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.codegen.freeFloat(freg);
                     }
                 },
-                .f32 => {
+                .float => {
                     // Float/Dec narrowing to f32: result is {val: F32, success: Bool}
-                    if (info.src_kind == .dec) {
+                    std.debug.assert(spec.dst == .f32);
+                    if (spec.src == .dec) {
                         // Dec to f32
                         const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
                         const base_reg = frame_ptr;
@@ -12008,8 +11740,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .dec => {
                     // Integer to Dec: result is { success: U8, val_or_memory_garbage: Dec }
-                    const parts = try self.getI128Parts(src_loc, if (info.tgt_signed) .signed else .unsigned);
-                    const builtin_fn: BuiltinFn = if (info.tgt_signed) .i128_to_dec_try_unsafe else .u128_to_dec_try_unsafe;
+                    std.debug.assert(spec.src.bits() == 128);
+                    const parts = try self.getI128Parts(src_loc, if (spec.src.isSigned()) .signed else .unsigned);
+                    const builtin_fn: BuiltinFn = if (spec.src.isSigned()) .i128_to_dec_try_unsafe else .u128_to_dec_try_unsafe;
                     const base_reg = frame_ptr;
 
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);

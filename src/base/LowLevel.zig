@@ -1460,32 +1460,4 @@ pub const LowLevel = enum(u16) {
         }
         return mask;
     }
-
-    pub const NumericParseSpec = union(enum) {
-        int: struct {
-            width_bytes: u8,
-            signed: bool,
-        },
-        float: struct {
-            width_bytes: u8,
-        },
-        dec,
-    };
-
-    pub fn numericParseSpec(self: LowLevel) ?NumericParseSpec {
-        if (self == .u8_from_str) return .{ .int = .{ .width_bytes = 1, .signed = false } };
-        if (self == .i8_from_str) return .{ .int = .{ .width_bytes = 1, .signed = true } };
-        if (self == .u16_from_str) return .{ .int = .{ .width_bytes = 2, .signed = false } };
-        if (self == .i16_from_str) return .{ .int = .{ .width_bytes = 2, .signed = true } };
-        if (self == .u32_from_str) return .{ .int = .{ .width_bytes = 4, .signed = false } };
-        if (self == .i32_from_str) return .{ .int = .{ .width_bytes = 4, .signed = true } };
-        if (self == .u64_from_str) return .{ .int = .{ .width_bytes = 8, .signed = false } };
-        if (self == .i64_from_str) return .{ .int = .{ .width_bytes = 8, .signed = true } };
-        if (self == .u128_from_str) return .{ .int = .{ .width_bytes = 16, .signed = false } };
-        if (self == .i128_from_str) return .{ .int = .{ .width_bytes = 16, .signed = true } };
-        if (self == .f32_from_str) return .{ .float = .{ .width_bytes = 4 } };
-        if (self == .f64_from_str) return .{ .float = .{ .width_bytes = 8 } };
-        if (self == .dec_from_str) return .dec;
-        return null;
-    }
 };
