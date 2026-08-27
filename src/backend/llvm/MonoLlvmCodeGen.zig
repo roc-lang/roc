@@ -293,6 +293,10 @@ pub const MonoLlvmCodeGen = struct {
     static_bytes: std.StringHashMap(LlvmBuilder.Value),
     static_refcounted_backings: std.AutoHashMap(u32, LlvmBuilder.Value),
     static_data_globals: std.AutoHashMap(u32, LlvmBuilder.Value),
+    /// Locals every write of which is image data, computed on first use.
+    /// Reference-count traffic on them can only ever decide to do nothing,
+    /// so no call is emitted. See `src/lir/immortal_locals.zig`.
+    immortal_locals: ?lir.ImmortalLocals.ImmortalLocals = null,
     runtime_error_func: ?LlvmBuilder.Function.Index = null,
     rc_helpers: std.AutoHashMap(u64, RcHelperEntry),
     /// Atomic helpers required by relocations in the separately emitted
@@ -551,6 +555,7 @@ pub const MonoLlvmCodeGen = struct {
         self.static_bytes.deinit();
         self.static_refcounted_backings.deinit();
         self.static_data_globals.deinit();
+        if (self.immortal_locals) |*set| set.deinit(self.allocator);
         self.rc_helpers.deinit();
         self.boxy_capture_drop_helpers.deinit();
         self.boxy_dict_thunks.deinit();
@@ -10711,6 +10716,10 @@ pub const MonoLlvmCodeGen = struct {
         switch (helper) {
             .concrete => |helper_key| try self.emitConcreteRcForLocal(helper_key, local, count, atomicity),
             .boxy => |desc| {
+                switch (op) {
+                    .incref, .decref => if (try self.localIsImmortal(local)) return,
+                    .free => {},
+                }
                 const ptr_ty = try self.ptrType();
                 try self.callBoxyVoid(
                     "roc_boxy_drop",
@@ -10748,9 +10757,28 @@ pub const MonoLlvmCodeGen = struct {
         try self.emitConcreteRcForLocal(helper_key, local, count, atomicity);
     }
 
+    /// Whether `local` holds image data, whose refcount word is
+    /// `REFCOUNT_STATIC_DATA`. Both `increfRcPtr` and `decrefRcPtr` return
+    /// without touching a count when they read that value, so the helper call
+    /// is a load and a compare that can only decide to do nothing.
+    fn localIsImmortal(self: *MonoLlvmCodeGen, local: LocalId) Error!bool {
+        if (self.immortal_locals == null) {
+            self.immortal_locals = lir.ImmortalLocals.compute(self.allocator, self.store) catch
+                return error.OutOfMemory;
+        }
+        return self.immortal_locals.?.contains(local);
+    }
+
     fn emitConcreteRcForLocal(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, local: LocalId, count: u16, atomicity: RcAtomicity) Error!void {
         const slot_v = self.slot(local);
         if (slot_v.size == 0) return;
+
+        // A `free` still runs: releasing image data is a bug in the placement
+        // rather than a no-op to elide, and eliding it would hide that.
+        switch (helper_key.op) {
+            .incref, .decref => if (try self.localIsImmortal(local)) return,
+            .free => {},
+        }
 
         if (self.deferredStrCapture(local) != null) {
             switch (helper_key.op) {
