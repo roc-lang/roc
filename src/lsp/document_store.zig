@@ -118,8 +118,10 @@ pub const DocumentStore = struct {
         const entry = self.entries.getPtr(uri) orelse return error.DocumentNotFound;
 
         var current = try self.allocator.dupe(u8, entry.text);
-        errdefer self.allocator.free(current);
-        var current_starts = try self.allocator.dupe(u32, entry.line_starts);
+        var current_starts = self.allocator.dupe(u32, entry.line_starts) catch |err| {
+            self.allocator.free(current);
+            return err;
+        };
         var current_owned = true;
         defer if (current_owned) {
             self.allocator.free(current);

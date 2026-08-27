@@ -124,6 +124,22 @@ test "document store frees temporary text when copying line starts fails" {
     try std.testing.expectEqualStrings("text", doc.text);
 }
 
+test "document store cleans up after allocating temporary copies" {
+    var store = DocumentStore.init(std.testing.allocator);
+    defer store.deinit();
+    try store.upsert("file:///test", 1, "text");
+
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 2 });
+    store.allocator = failing.allocator();
+    defer store.allocator = std.testing.allocator;
+
+    try std.testing.expectError(error.OutOfMemory, store.applyContentChanges("file:///test", 2, &.{.{ .text = "next" }}));
+
+    const doc = store.get("file:///test") orelse return error.MissingDocument;
+    try std.testing.expectEqual(@as(i64, 1), doc.version);
+    try std.testing.expectEqualStrings("text", doc.text);
+}
+
 test "document store applies batched incremental changes" {
     const allocator = std.testing.allocator;
     var store = DocumentStore.init(allocator);
