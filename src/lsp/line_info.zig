@@ -3,12 +3,15 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const position = @import("position.zig");
 
 /// Tracks line start offsets for efficient byte-to-position conversion.
 pub const LineInfo = struct {
     /// Byte offsets where each line starts. Index 0 is always 0.
     line_starts: []const u32,
     allocator: std.mem.Allocator,
+    /// The text the offsets describe, needed to count UTF-16 columns.
+    source: []const u8,
 
     /// Position in a document (0-indexed).
     pub const Position = struct {
@@ -22,6 +25,7 @@ pub const LineInfo = struct {
         return .{
             .line_starts = line_starts,
             .allocator = allocator,
+            .source = source,
         };
     }
 
@@ -40,8 +44,9 @@ pub const LineInfo = struct {
         const line = self.findLine(offset);
         const line_start = self.line_starts[line];
 
-        // Character is the offset from the start of the line
-        const character = offset - line_start;
+        // LSP counts columns in UTF-16 code units, not bytes; see issue #10948.
+        const text = position.lineText(self.source, self.line_starts, @intCast(line)) orelse return null;
+        const character = position.byteOffsetToUtf16Column(text, offset - line_start);
 
         return .{
             .line = @intCast(line),
@@ -53,7 +58,9 @@ pub const LineInfo = struct {
     /// Returns null if the position is invalid.
     pub fn offsetFromPosition(self: *const LineInfo, pos: Position) ?u32 {
         if (pos.line >= self.line_starts.len) return null;
-        return self.line_starts[pos.line] + pos.character;
+        const text = position.lineText(self.source, self.line_starts, pos.line) orelse return null;
+        const column = position.utf16ColumnToByteOffset(text, pos.character, .nearest) orelse return null;
+        return self.line_starts[pos.line] + @as(u32, @intCast(column));
     }
 
     /// Binary search to find which line contains the given offset.

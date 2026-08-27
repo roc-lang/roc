@@ -153,7 +153,9 @@ pub const Constants = struct {
     ///     module's own declaration.
     /// 66: Serialized canonicalization diagnostics retain the explicit codec
     ///     family for internal builtin types.
-    pub const CACHE_VERSION = 66;
+    /// 67: Annotation node payload packs its boolean flags into one byte and
+    ///     records the source region of the annotated name.
+    pub const CACHE_VERSION = 67;
 };
 
 /// Configuration for the Roc cache system.

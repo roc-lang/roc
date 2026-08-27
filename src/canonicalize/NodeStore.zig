@@ -2646,17 +2646,23 @@ pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CI
     const p = payload.annotation;
     const anno: CIR.TypeAnno.Idx = @enumFromInt(p.anno);
 
-    const where_clause = if (p.has_where)
+    const where_clause = if (p.flags.has_where)
         store.loadWhereClauseSpan(p.where_span2_idx)
     else
         null;
 
+    const name_region: ?base.Region = if (p.flags.has_name_region) blk: {
+        const span = store.span2_data.items.items[p.name_region_span2_idx];
+        break :blk base.Region.from_raw_offsets(span.start, span.start + span.len);
+    } else null;
+
     return CIR.Annotation{
         .anno = anno,
         .where = where_clause,
-        .mentions_type_var = p.mentions_type_var,
-        .introduces_type_var = p.introduces_type_var,
-        .contains_underscore = p.contains_underscore,
+        .name_region = name_region,
+        .mentions_type_var = p.flags.mentions_type_var,
+        .introduces_type_var = p.flags.introduces_type_var,
+        .contains_underscore = p.flags.contains_underscore,
     };
 }
 
@@ -3955,26 +3961,32 @@ pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base
     const introduces_type_var = store.typeAnnoHasTypeVar(annotation.anno, .introduced_only);
     const contains_underscore = store.annotationContainsUnderscore(annotation.anno, annotation.where);
 
-    if (annotation.where) |where_clause| {
-        const where_span2_idx = try store.storeWhereClauseSpan(where_clause);
-        node.setPayload(.{ .annotation = .{
-            .anno = @intFromEnum(annotation.anno),
-            .where_span2_idx = where_span2_idx,
-            .has_where = true,
+    const where_span2_idx: u32 = if (annotation.where) |where_clause|
+        try store.storeWhereClauseSpan(where_clause)
+    else
+        0;
+
+    const name_region_span2_idx: u32 = if (annotation.name_region) |name_region| blk: {
+        const idx: u32 = @intCast(store.span2_data.len());
+        _ = try store.span2_data.append(store.gpa, .{
+            .start = name_region.start.offset,
+            .len = name_region.end.offset - name_region.start.offset,
+        });
+        break :blk idx;
+    } else 0;
+
+    node.setPayload(.{ .annotation = .{
+        .anno = @intFromEnum(annotation.anno),
+        .where_span2_idx = where_span2_idx,
+        .name_region_span2_idx = name_region_span2_idx,
+        .flags = .{
+            .has_where = annotation.where != null,
             .mentions_type_var = mentions_type_var,
             .introduces_type_var = introduces_type_var,
             .contains_underscore = contains_underscore,
-        } });
-    } else {
-        node.setPayload(.{ .annotation = .{
-            .anno = @intFromEnum(annotation.anno),
-            .where_span2_idx = 0,
-            .has_where = false,
-            .mentions_type_var = mentions_type_var,
-            .introduces_type_var = introduces_type_var,
-            .contains_underscore = contains_underscore,
-        } });
-    }
+            .has_name_region = annotation.name_region != null,
+        },
+    } });
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);

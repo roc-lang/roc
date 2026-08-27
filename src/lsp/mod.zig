@@ -9,6 +9,7 @@ pub const syntax = @import("syntax.zig");
 pub const diagnostics = @import("diagnostics.zig");
 pub const document_store = @import("document_store.zig");
 pub const line_info = @import("line_info.zig");
+pub const position = @import("position.zig");
 pub const semantic_tokens = @import("semantic_tokens.zig");
 pub const scope_map = @import("scope_map.zig");
 pub const dependency_graph = @import("dependency_graph.zig");
@@ -19,6 +20,7 @@ pub const cir_queries = @import("cir_queries.zig");
 pub const completion = @import("completion/mod.zig");
 pub const module_lookup = @import("module_lookup.zig");
 pub const doc_comments = @import("doc_comments.zig");
+pub const rename = @import("rename.zig");
 /// Request handlers exposed for server wiring and LSP tests.
 pub const handlers = struct {
     pub const completion = @import("handlers/completion.zig");

@@ -4538,6 +4538,7 @@ pub fn canonicalizeFile(
                                     .anno_idx = type_anno_idx,
                                     .where = where_clauses,
                                     .anno_region = region,
+                                    .name_region = self.parse_ir.tokens.resolve(@intCast(ta.name)),
                                 });
                             } else {
                                 // Names don't match - create an anno-only def for this annotation
@@ -5119,7 +5120,7 @@ fn canonicalizeStmtDecl(
                 if (anno_info.name.eql(decl_ident)) {
                     // This declaration matches the type annotation
                     const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
-                    mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, anno_info.where, pattern_region);
+                    mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, anno_info.where, pattern_region, anno_info.name_region);
                 }
             }
             // Note: If resolveIdentifier returns null, the identifier token is malformed.
@@ -5168,6 +5169,10 @@ const TypeAnnoIdent = struct {
     /// The region of the type annotation line (e.g., "dog : Animal")
     /// Used to create a combined region covering both annotation and declaration
     anno_region: Region,
+    /// The region of just the annotated name token (the "dog" in "dog : Animal").
+    /// Recorded on the resulting `CIR.Annotation` so tooling can find the name
+    /// after the annotation is merged into the def it annotates.
+    name_region: Region,
 };
 
 fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allocator.Error!void {
@@ -9451,7 +9456,7 @@ fn scheduleBlockDeclContinuation(
             if (self.parse_ir.tokens.resolveIdentifier(pattern_ident.ident_tok)) |decl_ident| {
                 if (anno_info.name.eql(decl_ident)) {
                     const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
-                    mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, anno_info.where, pattern_region);
+                    mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, anno_info.where, pattern_region, anno_info.name_region);
                 }
             }
         }
@@ -9899,7 +9904,7 @@ fn canonicalizeStandaloneBlockDecl(
             if (self.parse_ir.tokens.resolveIdentifier(pattern_ident.ident_tok)) |decl_ident| {
                 if (anno_info.name.eql(decl_ident)) {
                     const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
-                    mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, anno_info.where, pattern_region);
+                    mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, anno_info.where, pattern_region, anno_info.name_region);
                 }
             }
         }
@@ -10072,6 +10077,7 @@ fn canonicalizeStandaloneTypeAnnoStatement(
         const annotation_idx = try self.env.addAnnotation(CIR.Annotation{
             .anno = type_anno_idx,
             .where = where_clauses,
+            .name_region = self.parse_ir.tokens.resolve(@intCast(type_anno.name)),
         }, region);
         return try self.createUninitializedVarStatement(name_ident, annotation_idx, region);
     }
@@ -11761,6 +11767,7 @@ fn runExprKernel(
                                         .anno_idx = type_anno_idx,
                                         .where = where_clauses,
                                         .anno_region = region,
+                                        .name_region = self.parse_ir.tokens.resolve(@intCast(ta.name)),
                                     }, type_var_scope);
                                     break :type_anno_blk;
                                 }
@@ -11776,6 +11783,7 @@ fn runExprKernel(
                                     const annotation_idx = try self.env.addAnnotation(CIR.Annotation{
                                         .anno = type_anno_idx,
                                         .where = where_clauses,
+                                        .name_region = self.parse_ir.tokens.resolve(@intCast(ta.name)),
                                     }, region);
 
                                     keep_type_var_scope_for_body = true;
@@ -11820,6 +11828,7 @@ fn runExprKernel(
                         const annotation_idx = try self.env.addAnnotation(CIR.Annotation{
                             .anno = type_anno_idx,
                             .where = where_clauses,
+                            .name_region = self.parse_ir.tokens.resolve(@intCast(ta.name)),
                         }, region);
                         break :blk try self.createUninitializedVarStatement(name_ident, annotation_idx, region);
                     } else try self.createBlockAnnoOnlyStatement(name_ident, type_anno_idx, where_clauses, region);
@@ -21314,12 +21323,17 @@ fn createAnnotationFromTypeAnno(
     type_anno_idx: TypeAnno.Idx,
     mb_where_clauses: ?CIR.WhereClause.Span,
     region: Region,
+    name_region: ?Region,
 ) std.mem.Allocator.Error!Annotation.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Create the annotation structure
-    const annotation = CIR.Annotation{ .anno = type_anno_idx, .where = mb_where_clauses };
+    const annotation = CIR.Annotation{
+        .anno = type_anno_idx,
+        .where = mb_where_clauses,
+        .name_region = name_region,
+    };
 
     // Add to NodeStore and return the index
     const annotation_idx = try self.env.addAnnotation(annotation, region);
