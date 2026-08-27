@@ -49140,6 +49140,129 @@ fn numeralTargetFromPrimitive(primitive: Type.Primitive) exact_numeral.Target {
     };
 }
 
+test "queued specialization skips a body claimed immediately before dispatch" {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator);
+    defer program.deinit();
+    const ty = try program.types.internZst(&program.names);
+    const template_ref = names.ProcTemplate{
+        .artifact = .{},
+        .proc_base = @enumFromInt(0),
+        .template = @enumFromInt(0),
+    };
+    const fn_template = Ast.FnTemplate{
+        .fn_def = .{ .local_template = template_ref },
+        .source_fn_ty = @enumFromInt(0),
+        .source_fn_key = .{},
+        .mono_fn_ty = ty,
+    };
+
+    var diagnostics: Diagnostics = .{};
+    var builder: Builder = undefined;
+    builder.active_graph = null;
+    builder.pending_spec_jobs = .empty;
+    defer builder.pending_spec_jobs.deinit(allocator);
+    builder.pending_spec_jobs_head = 0;
+    builder.next_spec_dispatch_index = 0;
+    builder.next_spec_accept_index = 0;
+    builder.counters = null;
+    builder.diagnostics = &diagnostics;
+    builder.spec_store = specialize.SpecBuilder.init(
+        allocator,
+        &program.names,
+        &program.types,
+        &program.specs,
+    );
+    defer builder.spec_store.deinit();
+    builder.lowered_templates = collections.DenseMap(Ast.FnId, LoweredTemplate).init(allocator);
+    defer builder.lowered_templates.deinit();
+
+    const makeReservedJob = struct {
+        fn make(
+            builder_: *Builder,
+            program_: *Ast.Program,
+            template_ref_: names.ProcTemplate,
+            fn_template_: Ast.FnTemplate,
+            ty_: Type.TypeId,
+            dispatch_index: u64,
+        ) Allocator.Error!PendingSpecJob {
+            const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(dispatch_index)));
+            const def_id: Ast.DefId = @enumFromInt(@as(u32, @intCast(dispatch_index)));
+            const identity = Ast.SpecIdentity{
+                .callable = .{ .generated = @enumFromInt(@as(u32, @intCast(dispatch_index))) },
+                .method_scope = .{},
+                .source_fn_ty_digest = .{},
+                .evidence_digest = .{},
+                .request_fn_ty_digest = .{},
+                .request_fn_ty = ty_,
+            };
+            const spec = try program_.addSpec(.{
+                .identity = identity,
+                .request_fn_ty = ty_,
+                .request_fn_ty_digest = identity.request_fn_ty_digest,
+                .solved_fn_ty = ty_,
+                .solved_fn_ty_digest = identity.request_fn_ty_digest,
+                .fn_id = fn_id,
+                .status = .reserved,
+            });
+            try builder_.lowered_templates.put(fn_id, .{
+                .def = def_id,
+                .spec = spec,
+                .evidence = &.{},
+            });
+
+            return .{
+                .dispatch_index = dispatch_index,
+                .spec = spec,
+                .reservation = .{
+                    .def = def_id,
+                    .fn_id = fn_id,
+                    .symbol = @enumFromInt(@as(u32, @intCast(dispatch_index))),
+                },
+                .fn_template = fn_template_,
+                .template_ref = template_ref_,
+                .method_scope = .{},
+                .source_fn_ty = @enumFromInt(0),
+                .source_fn_key = .{},
+                .fn_ty = ty_,
+                .evidence = &.{},
+                .signature_relation = .independent_roots,
+            };
+        }
+    }.make;
+
+    const first = try makeReservedJob(&builder, &program, template_ref, fn_template, ty, 0);
+    try builder.pending_spec_jobs.append(allocator, first);
+    builder.next_spec_dispatch_index += 1;
+    builder.countBodyDiagnostic("spec_jobs_enqueued");
+    const second = try makeReservedJob(&builder, &program, template_ref, fn_template, ty, 1);
+    try builder.pending_spec_jobs.append(allocator, second);
+    builder.next_spec_dispatch_index += 1;
+    builder.countBodyDiagnostic("spec_jobs_enqueued");
+    try std.testing.expectEqual(Ast.SpecStatus.reserved, builder.spec_store.recordStatus(first.spec));
+    try std.testing.expectEqual(Ast.SpecStatus.reserved, builder.spec_store.recordStatus(second.spec));
+
+    // Immediate representation-sensitive callers claim both reservations while
+    // their original FIFO entries remain queued.
+    builder.spec_store.markLowering(first.spec);
+    try builder.spec_store.markReady(first.spec, first.fn_ty, .{});
+    builder.spec_store.markLowering(second.spec);
+    try builder.spec_store.markReady(second.spec, second.fn_ty, .{});
+    try std.testing.expectEqual(Ast.SpecStatus.ready, builder.spec_store.recordStatus(first.spec));
+    try std.testing.expectEqual(Ast.SpecStatus.ready, builder.spec_store.recordStatus(second.spec));
+
+    try builder.drainPendingSpecJobs();
+
+    try std.testing.expectEqual(@as(u64, 2), builder.next_spec_accept_index);
+    try std.testing.expectEqual(@as(usize, 0), builder.pending_spec_jobs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), builder.pending_spec_jobs_head);
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.body.spec_jobs_enqueued);
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.body.spec_jobs_skipped_ready);
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.body.spec_jobs_executed);
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.body.spec_job_shards_lowered);
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.body.spec_job_shards_committed);
+}
+
 test "sealed record omission takes its default identity from the monotype field" {
     const expected: Type.FieldDefault = .{
         .module = @enumFromInt(17),
