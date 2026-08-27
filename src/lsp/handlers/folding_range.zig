@@ -8,6 +8,7 @@ const protocol = @import("../protocol.zig");
 const parse = @import("parse");
 const can = @import("can");
 const pos = @import("../position.zig");
+const LineIndex = @import("../line_index.zig").LineIndex;
 const Token = parse.tokenize.Token;
 
 /// Handler for `textDocument/foldingRange` requests.
@@ -72,6 +73,7 @@ fn extractFoldingRanges(allocator: std.mem.Allocator, source: []const u8) Alloca
     // Build line offset table
     const line_offsets = try pos.buildLineOffsets(allocator, source);
     defer line_offsets.deinit();
+    const index = LineIndex.fromLineOffsets(&line_offsets);
 
     // Track bracket positions for folding
     var ranges: std.ArrayList(FoldingRange) = .empty;
@@ -93,7 +95,7 @@ fn extractFoldingRanges(allocator: std.mem.Allocator, source: []const u8) Alloca
 
     for (tags, regions) |tag, region| {
         const offset = region.start.offset;
-        const line = line_offsets.lineAt(offset);
+        const line = (index.byteToUtf16(offset) orelse continue).line;
 
         // Opening brackets
         if (tag == .OpenCurly or tag == .OpenSquare or tag == .OpenRound) {

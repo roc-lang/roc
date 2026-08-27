@@ -1,9 +1,6 @@
 //! Helpers for converting between byte offsets and LSP line/character positions.
 
 const std = @import("std");
-const document_symbol_handler = @import("handlers/document_symbol.zig");
-const can = @import("can");
-const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 
 /// Dynamically-allocated table of byte offsets for line starts in a source buffer.
@@ -15,32 +12,6 @@ pub const LineOffsets = struct {
 
     pub fn deinit(self: *const LineOffsets) void {
         self.allocator.free(self.offsets);
-    }
-
-    /// Which line contains the given byte offset.
-    ///
-    /// Callers convert many offsets against one table—every occurrence of a
-    /// symbol, every foldable region—so this binary searches rather than
-    /// scanning from the top of the file for each one.
-    pub fn lineAt(self: *const LineOffsets, offset: u32) u32 {
-        var low: usize = 0;
-        var high: usize = self.offsets.len;
-        while (low < high) {
-            const mid = low + (high - low) / 2;
-            if (self.offsets[mid] <= offset) {
-                low = mid + 1;
-            } else {
-                high = mid;
-            }
-        }
-        // `low` is the first line starting after the offset.
-        return if (low > 0) @intCast(low - 1) else 0;
-    }
-
-    /// The byte offset of a line/character position, or null past the last line.
-    pub fn offsetAt(self: *const LineOffsets, line: u32, character: u32) ?u32 {
-        if (line >= self.offsets.len) return null;
-        return self.offsets[line] + character;
     }
 };
 
@@ -139,20 +110,24 @@ pub const Landing = enum {
     exact,
 };
 
+pub const OutOfBounds = enum {
+    clamp,
+    reject,
+};
+
 /// The byte offset inside one line of a UTF-16 column.
 ///
-/// Returns null when the column runs past the end of the line, or, under
-/// `.exact`, when it falls inside a character.
-pub fn utf16ColumnToByteOffset(line_text: []const u8, character: usize, landing: Landing) ?usize {
+/// Clamps or rejects a column past the end of the line according to
+/// `out_of_bounds`. Under `.exact`, a column inside a character is rejected.
+pub fn utf16ColumnToByteOffset(line_text: []const u8, character: usize, landing: Landing, out_of_bounds: OutOfBounds) ?usize {
     if (isAscii(line_text)) {
-        if (character > line_text.len) return null;
-        return character;
+        return if (character <= line_text.len or out_of_bounds == .clamp) @min(character, line_text.len) else null;
     }
 
     var units: usize = 0;
     var index: usize = 0;
     while (units < character) {
-        if (index >= line_text.len) return null;
+        if (index >= line_text.len) return if (out_of_bounds == .clamp) index else null;
         const sequence = utf8SequenceAt(line_text, index);
         const cp = sequence.codepoint orelse {
             if (landing == .exact) return null;
@@ -185,30 +160,4 @@ pub fn lineText(source: []const u8, line_starts: []const u32, line: u32) ?[]cons
     if (start > source.len) return null;
     const end = if (line + 1 < line_starts.len) line_starts[line + 1] else @as(u32, @intCast(source.len));
     return trimEol(source[start..@min(end, source.len)]);
-}
-
-/// Convert a byte offset into an LSP line/character position using cached line offsets.
-pub fn offsetToPosition(offset: u32, line_offsets: *const LineOffsets) document_symbol_handler.Position {
-    const line = line_offsets.lineAt(offset);
-    const text = lineText(line_offsets.source, line_offsets.offsets, line) orelse return .{
-        .line = line,
-        .character = 0,
-    };
-    return .{
-        .line = line,
-        .character = byteOffsetToUtf16Column(text, offset - line_offsets.offsets[line]),
-    };
-}
-
-/// Convert an LSP line/character position to a byte offset in the module source.
-///
-/// `character` is a UTF-16 code unit count, as the protocol specifies and as
-/// the server advertises with `positionEncoding`.
-pub fn positionToOffset(module_env: *ModuleEnv, line: u32, character: u32) ?u32 {
-    const line_starts = module_env.getLineStartsAll();
-    if (line >= line_starts.len) return null;
-
-    const text = lineText(module_env.common.source, line_starts, line) orelse return null;
-    const column = utf16ColumnToByteOffset(text, character, .nearest) orelse return null;
-    return line_starts[line] + @as(u32, @intCast(column));
 }

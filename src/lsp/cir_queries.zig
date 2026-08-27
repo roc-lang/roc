@@ -21,7 +21,7 @@ const VisitAction = @import("cir_visitor.zig").VisitAction;
 const types = @import("types");
 const base = @import("base");
 const Region = base.Region;
-const pos = @import("position.zig");
+const LineIndex = @import("line_index.zig").LineIndex;
 
 fn statementAnnotation(statement: CIR.Statement) ?CIR.Annotation.Idx {
     return switch (statement) {
@@ -195,42 +195,18 @@ fn fieldAccessSegmentReceiverVar(
     return ModuleEnv.varFrom(store.fieldAccessSegmentAt(segments, segment_position - 1));
 }
 
-/// Convert a Region to an LspRange using line starts from ModuleEnv.
+/// Convert a Region to an LspRange using the module's borrowed line index.
 pub fn regionToRange(module_env: *const ModuleEnv, region: Region) ?LspRange {
-    const line_starts = module_env.getLineStartsAll();
-    if (line_starts.len == 0) return null;
-
-    const start_offset = region.start.offset;
-    const end_offset = region.end.offset;
-
-    // Find line for start offset
-    var start_line: u32 = 0;
-    for (line_starts, 0..) |ls, i| {
-        if (ls > start_offset) break;
-        start_line = @intCast(i);
-    }
-
-    // Find line for end offset
-    var end_line: u32 = 0;
-    for (line_starts, 0..) |ls, i| {
-        if (ls > end_offset) break;
-        end_line = @intCast(i);
-    }
-
-    // LSP columns are UTF-16 code units, not bytes. The two agree until a line
-    // holds a character outside ASCII, after which every column to its right
-    // differs; see issue #10948.
-    const source = module_env.common.source;
-    const start_text = pos.lineText(source, line_starts, start_line) orelse return null;
-    const end_text = pos.lineText(source, line_starts, end_line) orelse return null;
-    const start_col = pos.byteOffsetToUtf16Column(start_text, start_offset - line_starts[start_line]);
-    const end_col = pos.byteOffsetToUtf16Column(end_text, end_offset - line_starts[end_line]);
-
+    const index = LineIndex{
+        .source = module_env.common.source,
+        .line_starts = module_env.getLineStartsAll(),
+    };
+    const range = index.rangeFromBytes(region.start.offset, region.end.offset) orelse return null;
     return .{
-        .start_line = start_line,
-        .start_col = start_col,
-        .end_line = end_line,
-        .end_col = end_col,
+        .start_line = range.start.line,
+        .start_col = range.start.character,
+        .end_line = range.end.line,
+        .end_col = range.end.character,
     };
 }
 

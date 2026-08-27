@@ -27,6 +27,7 @@ const completion_builder = @import("completion/builder.zig");
 const BuildEnvHandle = @import("build_env_handle.zig").BuildEnvHandle;
 const doc_comments = @import("doc_comments.zig");
 const rename_rules = @import("rename.zig");
+const LineIndex = @import("line_index.zig").LineIndex;
 
 const BuildEnv = compile.BuildEnv;
 const CacheManager = compile.CacheManager;
@@ -35,6 +36,13 @@ const CacheConfig = compile.CacheConfig;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Region = base.Region;
+
+fn lineIndex(module_env: *const ModuleEnv) LineIndex {
+    return .{
+        .source = module_env.common.source,
+        .line_starts = module_env.getLineStartsAll(),
+    };
+}
 
 pub const DebugFlags = @import("debug.zig").DebugFlags;
 
@@ -876,7 +884,7 @@ pub const SyntaxChecker = struct {
     }
 
     fn reportToDiagnostic(self: *SyntaxChecker, rep: reporting.Report) (Allocator.Error || error{WriteFailed})!Diagnostics.Diagnostic {
-        const range = self.rangeFromReport(rep);
+        const range = rangeFromReport(rep);
         const severity: u32 = switch (rep.severity) {
             .warning => 2,
             .runtime_error, .fatal => 1,
@@ -897,30 +905,20 @@ pub const SyntaxChecker = struct {
         };
     }
 
-    fn rangeFromReport(_: *SyntaxChecker, rep: reporting.Report) Diagnostics.Range {
-        var start = Diagnostics.Position{ .line = 0, .character = 0 };
-        var end = Diagnostics.Position{ .line = 0, .character = 0 };
-
+    fn rangeFromReport(rep: reporting.Report) Diagnostics.Range {
         var idx: usize = 0;
         while (idx < rep.document.elementCount()) : (idx += 1) {
             const maybe_element = rep.document.getElement(idx) orelse break;
             switch (maybe_element) {
-                .source_code_region => |region| {
-                    start = .{ .line = saturatingMinusOne(region.start_line), .character = saturatingMinusOne(region.start_column) };
-                    end = .{ .line = saturatingMinusOne(region.end_line), .character = saturatingMinusOne(region.end_column) };
-                    break;
-                },
-                .source_code_with_underlines => |region| {
-                    start = .{ .line = saturatingMinusOne(region.display_region.start_line), .character = saturatingMinusOne(region.display_region.start_column) };
-                    end = .{ .line = saturatingMinusOne(region.display_region.end_line), .character = saturatingMinusOne(region.display_region.end_column) };
-                    break;
+                .source_code_region => |region| return rangeFromReportText(region.line_text, region.start_line, region.start_line, region.start_column, region.end_line, region.end_column),
+                .source_code_with_underlines => |with_underlines| {
+                    const region = with_underlines.display_region;
+                    return rangeFromReportText(region.line_text, region.start_line, region.start_line, region.start_column, region.end_line, region.end_column);
                 },
                 .source_code_multi_region => |multi| {
                     if (multi.regions.len > 0) {
                         const region = multi.regions[0];
-                        start = .{ .line = saturatingMinusOne(region.start_line), .character = saturatingMinusOne(region.start_column) };
-                        end = .{ .line = saturatingMinusOne(region.end_line), .character = saturatingMinusOne(region.end_column) };
-                        break;
+                        return rangeFromReportText(multi.source, 1, region.start_line, region.start_column, region.end_line, region.end_column);
                     }
                 },
                 .line_break,
@@ -941,7 +939,33 @@ pub const SyntaxChecker = struct {
             }
         }
 
-        return .{ .start = start, .end = end };
+        return .{
+            .start = .{ .line = 0, .character = 0 },
+            .end = .{ .line = 0, .character = 0 },
+        };
+    }
+
+    /// Reporting stores one-based byte columns. Its source snippets start at
+    /// `source_start_line`, so convert each selected line to an LSP UTF-16 column.
+    fn rangeFromReportText(source: []const u8, source_start_line: u32, start_line: u32, start_column: u32, end_line: u32, end_column: u32) Diagnostics.Range {
+        return .{
+            .start = reportPosition(source, source_start_line, start_line, start_column),
+            .end = reportPosition(source, source_start_line, end_line, end_column),
+        };
+    }
+
+    fn reportPosition(source: []const u8, source_start_line: u32, line: u32, column: u32) Diagnostics.Position {
+        var lines = std.mem.splitScalar(u8, source, '\n');
+        var remaining = line -| source_start_line;
+        var line_text = lines.next() orelse return .{ .line = 0, .character = 0 };
+        while (remaining > 0) : (remaining -= 1) {
+            line_text = lines.next() orelse return .{ .line = saturatingMinusOne(line), .character = 0 };
+        }
+
+        return .{
+            .line = saturatingMinusOne(line),
+            .character = pos.byteOffsetToUtf16Column(pos.trimEol(line_text), saturatingMinusOne(column)),
+        };
     }
 
     fn saturatingMinusOne(value: u32) u32 {
@@ -1094,7 +1118,7 @@ pub const SyntaxChecker = struct {
 
         // Convert LSP position (0-based line/col) to byte offset
         // LSP uses 0-based line and UTF-16 code units for character
-        const target_offset = pos.positionToOffset(module_env, line, character) orelse return null;
+        const target_offset = lineIndex(module_env).utf16ToByte(line, character, .nearest) orelse return null;
 
         // Find the expression at this position
         const result = cir_queries.findTypeAtOffset(module_env, target_offset) orelse return null;
@@ -1171,7 +1195,7 @@ pub const SyntaxChecker = struct {
             if (def_loc_opt) |def_loc| {
                 defer def_loc.deinit(self.allocator);
                 if (std.mem.eql(u8, def_loc.uri, uri)) {
-                    if (pos.positionToOffset(module_env, def_loc.range.start_line, def_loc.range.start_col)) |def_offset| {
+                    if (lineIndex(module_env).utf16ToByte(def_loc.range.start_line, def_loc.range.start_col, .nearest)) |def_offset| {
                         if (cir_queries.findPatternAtOffset(module_env, def_offset)) |pattern_idx| {
                             hover_type_var = ModuleEnv.varFrom(pattern_idx);
                             documentation = try doc_comments.extractDocCommentBefore(
@@ -1600,7 +1624,7 @@ pub const SyntaxChecker = struct {
         const module_env = build.getModuleEnv() orelse return null;
 
         // Convert LSP position to byte offset
-        const target_offset = pos.positionToOffset(module_env, line, character) orelse return null;
+        const target_offset = lineIndex(module_env).utf16ToByte(line, character, .nearest) orelse return null;
 
         // Find the definition at this position
         var oom: ?Allocator.Error = null;
@@ -1611,8 +1635,6 @@ pub const SyntaxChecker = struct {
 
         return result;
     }
-
-    // positionToOffset moved to position.zig
 
     // regionToRange moved to cir_queries module
 
@@ -2944,7 +2966,7 @@ pub const SyntaxChecker = struct {
         const module_env = build.getModuleEnv() orelse return null;
 
         // Convert LSP position to byte offset
-        const target_offset = pos.positionToOffset(module_env, line, character) orelse return null;
+        const target_offset = lineIndex(module_env).utf16ToByte(line, character, .nearest) orelse return null;
 
         // Resolve the symbol at this position. The cursor may sit on the
         // definition or on any reference to it; both resolve to the pattern
@@ -3017,7 +3039,7 @@ pub const SyntaxChecker = struct {
         }
 
         const module_env = build.getModuleEnv() orelse return null;
-        const target_offset = pos.positionToOffset(module_env, line, character) orelse return null;
+        const target_offset = lineIndex(module_env).utf16ToByte(line, character, .nearest) orelse return null;
         const target_pattern = cir_queries.resolveSymbolAtOffset(module_env, target_offset) orelse return null;
 
         var regions: std.ArrayList(LspRange) = .empty;
@@ -3172,7 +3194,7 @@ pub const SyntaxChecker = struct {
         }
 
         const module_env = build.getModuleEnv() orelse return null;
-        const target_offset = pos.positionToOffset(module_env, line, character) orelse return null;
+        const target_offset = lineIndex(module_env).utf16ToByte(line, character, .nearest) orelse return null;
         const target = renameTargetAt(module_env, target_offset) orelse return null;
         if (cir_queries.declarationNameRegion(module_env, target.pattern) == null) return null;
 
@@ -3217,7 +3239,7 @@ pub const SyntaxChecker = struct {
         }
 
         const module_env = build.getModuleEnv() orelse return null;
-        const target_offset = pos.positionToOffset(module_env, line, character) orelse return null;
+        const target_offset = lineIndex(module_env).utf16ToByte(line, character, .nearest) orelse return null;
 
         const target = renameTargetAt(module_env, target_offset) orelse
             return RenameOutcome{ .rejected = .not_a_local_binding };
@@ -3276,6 +3298,7 @@ pub const SyntaxChecker = struct {
         // Build line offset table
         const line_offsets = try pos.buildLineOffsets(allocator, source);
         defer line_offsets.deinit();
+        const index = LineIndex.fromLineOffsets(&line_offsets);
 
         var symbols: std.ArrayList(SymbolInformation) = .empty;
         errdefer {
@@ -3293,7 +3316,7 @@ pub const SyntaxChecker = struct {
         });
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
-            if (extractSymbolFromDecl(module_env, def.pattern, def.expr, source, uri, &line_offsets)) |symbol| {
+            if (extractSymbolFromDecl(module_env, def.pattern, def.expr, source, uri, &index)) |symbol| {
                 self.logDebug(.build, "symbols: found def symbol '{s}'", .{symbol.name});
                 try appendOwnedSymbol(allocator, &symbols, symbol);
             }
@@ -3305,21 +3328,21 @@ pub const SyntaxChecker = struct {
             const stmt = module_env.store.getStatement(stmt_idx);
             const stmt_tag = std.meta.activeTag(stmt);
             if (stmt_tag == .s_alias_decl) {
-                if (extractSymbolFromTypeDecl(module_env, stmt.s_alias_decl.header, stmt_idx, uri, &line_offsets, .class)) |symbol| {
+                if (extractSymbolFromTypeDecl(module_env, stmt.s_alias_decl.header, stmt_idx, uri, &index, .class)) |symbol| {
                     self.logDebug(.build, "symbols: found alias symbol '{s}'", .{symbol.name});
                     try appendOwnedSymbol(allocator, &symbols, symbol);
                 }
                 continue;
             }
             if (stmt_tag == .s_nominal_decl) {
-                if (extractSymbolFromTypeDecl(module_env, stmt.s_nominal_decl.header, stmt_idx, uri, &line_offsets, .@"struct")) |symbol| {
+                if (extractSymbolFromTypeDecl(module_env, stmt.s_nominal_decl.header, stmt_idx, uri, &index, .@"struct")) |symbol| {
                     self.logDebug(.build, "symbols: found nominal symbol '{s}'", .{symbol.name});
                     try appendOwnedSymbol(allocator, &symbols, symbol);
                 }
                 continue;
             }
             if (stmt_tag == .s_where_alias_decl) {
-                if (extractSymbolFromTypeDecl(module_env, stmt.s_where_alias_decl.header, stmt_idx, uri, &line_offsets, .interface)) |symbol| {
+                if (extractSymbolFromTypeDecl(module_env, stmt.s_where_alias_decl.header, stmt_idx, uri, &index, .interface)) |symbol| {
                     self.logDebug(.build, "symbols: found where alias symbol '{s}'", .{symbol.name});
                     try appendOwnedSymbol(allocator, &symbols, symbol);
                 }
@@ -3330,11 +3353,11 @@ pub const SyntaxChecker = struct {
 
             if (stmt_parts.pattern) |pattern_idx| {
                 if (stmt_parts.expr) |expr_idx| {
-                    if (extractSymbolFromDecl(module_env, pattern_idx, expr_idx, source, uri, &line_offsets)) |symbol| {
+                    if (extractSymbolFromDecl(module_env, pattern_idx, expr_idx, source, uri, &index)) |symbol| {
                         self.logDebug(.build, "symbols: found stmt symbol '{s}'", .{symbol.name});
                         try appendOwnedSymbol(allocator, &symbols, symbol);
                     }
-                } else if (extractSymbolFromPattern(module_env, pattern_idx, uri, &line_offsets, .variable)) |symbol| {
+                } else if (extractSymbolFromPattern(module_env, pattern_idx, uri, &index, .variable)) |symbol| {
                     self.logDebug(.build, "symbols: found pattern symbol '{s}'", .{symbol.name});
                     try appendOwnedSymbol(allocator, &symbols, symbol);
                 }
@@ -3871,16 +3894,17 @@ fn symbolFromRegion(
     kind: document_symbol_handler.SymbolKind,
     uri: []const u8,
     region: Region,
-    line_offsets: *const pos.LineOffsets,
-) document_symbol_handler.SymbolInformation {
+    index: *const LineIndex,
+) ?document_symbol_handler.SymbolInformation {
+    const range = index.rangeFromBytes(region.start.offset, region.end.offset) orelse return null;
     return .{
         .name = name,
         .kind = kind,
         .location = .{
             .uri = uri,
             .range = .{
-                .start = pos.offsetToPosition(region.start.offset, line_offsets),
-                .end = pos.offsetToPosition(region.end.offset, line_offsets),
+                .start = .{ .line = range.start.line, .character = range.start.character },
+                .end = .{ .line = range.end.line, .character = range.end.character },
             },
         },
     };
@@ -3890,7 +3914,7 @@ fn extractSymbolFromPattern(
     module_env: *ModuleEnv,
     pattern_idx: CIR.Pattern.Idx,
     uri: []const u8,
-    line_offsets: *const pos.LineOffsets,
+    index: *const LineIndex,
     kind: document_symbol_handler.SymbolKind,
 ) ?document_symbol_handler.SymbolInformation {
     const ident_idx = module_lookup.extractIdentFromPattern(&module_env.store, pattern_idx) orelse return null;
@@ -3902,7 +3926,7 @@ fn extractSymbolFromPattern(
         kind,
         uri,
         module_env.store.getPatternRegion(pattern_idx),
-        line_offsets,
+        index,
     );
 }
 
@@ -3911,7 +3935,7 @@ fn extractSymbolFromTypeDecl(
     header_idx: CIR.TypeHeader.Idx,
     stmt_idx: CIR.Statement.Idx,
     uri: []const u8,
-    line_offsets: *const pos.LineOffsets,
+    index: *const LineIndex,
     kind: document_symbol_handler.SymbolKind,
 ) ?document_symbol_handler.SymbolInformation {
     const header = module_env.store.getTypeHeader(header_idx);
@@ -3923,7 +3947,7 @@ fn extractSymbolFromTypeDecl(
         kind,
         uri,
         module_env.store.getStatementRegion(stmt_idx),
-        line_offsets,
+        index,
     );
 }
 
@@ -3933,7 +3957,7 @@ fn extractSymbolFromDecl(
     expr_idx: CIR.Expr.Idx,
     _: []const u8,
     uri: []const u8,
-    line_offsets: *const pos.LineOffsets,
+    index: *const LineIndex,
 ) ?document_symbol_handler.SymbolInformation {
     // Check if RHS is a function
     const expr = module_env.store.getExpr(expr_idx);
@@ -3944,7 +3968,7 @@ fn extractSymbolFromDecl(
         module_env,
         pattern_idx,
         uri,
-        line_offsets,
+        index,
         if (is_function) .function else .variable,
     );
 }
@@ -3993,4 +4017,45 @@ fn rangeContaining(regions: []const cir_queries.LspRange, line: u32, character: 
         if (character >= range.start_col and character <= range.end_col) return range;
     }
     return null;
+}
+
+test "report ranges convert byte columns to UTF-16" {
+    const allocator = std.testing.allocator;
+
+    var direct = try reporting.Report.init(allocator, "Direct Report", "direct", .fatal);
+    defer direct.deinit();
+    try direct.document.addSourceRegion(
+        .{ .start_line_idx = 3, .start_col_idx = 2, .end_line_idx = 3, .end_col_idx = 6 },
+        .error_highlight,
+        null,
+        "a\nb\nc\né😀x",
+        &[_]u32{ 0, 2, 4, 6 },
+    );
+    const direct_range = SyntaxChecker.rangeFromReport(direct);
+    try std.testing.expectEqual(Diagnostics.Position{ .line = 3, .character = 1 }, direct_range.start);
+    try std.testing.expectEqual(Diagnostics.Position{ .line = 3, .character = 3 }, direct_range.end);
+
+    var underlined = try reporting.Report.init(allocator, "Underlined Report", "underlined", .fatal);
+    defer underlined.deinit();
+    try underlined.document.addSourceCodeWithUnderlines(.{
+        .line_text = try allocator.dupe(u8, "é😀x\r\n😀z"),
+        .start_line = 4,
+        .start_column = 3,
+        .end_line = 5,
+        .end_column = 5,
+        .region_annotation = .error_highlight,
+        .filename = null,
+    }, &.{});
+    const underlined_range = SyntaxChecker.rangeFromReport(underlined);
+    try std.testing.expectEqual(Diagnostics.Position{ .line = 3, .character = 1 }, underlined_range.start);
+    try std.testing.expectEqual(Diagnostics.Position{ .line = 4, .character = 2 }, underlined_range.end);
+
+    var multi = try reporting.Report.init(allocator, "Multi Report", "multi", .fatal);
+    defer multi.deinit();
+    try multi.document.addSourceMultiRegion("é😀x", &.{
+        .{ .start_line = 1, .start_column = 3, .end_line = 1, .end_column = 7, .annotation = .error_highlight },
+    }, null);
+    const multi_range = SyntaxChecker.rangeFromReport(multi);
+    try std.testing.expectEqual(Diagnostics.Position{ .line = 0, .character = 1 }, multi_range.start);
+    try std.testing.expectEqual(Diagnostics.Position{ .line = 0, .character = 3 }, multi_range.end);
 }

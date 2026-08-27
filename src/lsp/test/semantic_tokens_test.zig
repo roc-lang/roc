@@ -2,24 +2,28 @@
 
 const std = @import("std");
 const semantic_tokens = @import("lsp").semantic_tokens;
-const line_info = @import("lsp").line_info;
+const LineIndex = @import("lsp").line_index.LineIndex;
+const position = @import("lsp").position;
 const tokenize = @import("parse").tokenize;
 
 const Token = tokenize.Token;
 const SemanticToken = semantic_tokens.SemanticToken;
 const SemanticType = semantic_tokens.SemanticType;
-const LineInfo = line_info.LineInfo;
+
+fn makeLineIndex(allocator: std.mem.Allocator, source: []const u8) !position.LineOffsets {
+    return position.buildLineOffsets(allocator, source);
+}
 
 test "semantic tokens do not read file imports" {
     const allocator = std.testing.allocator;
     const source = "import \"does-not-exist.txt\" as input : Str\nmain = input";
 
-    var info = try LineInfo.init(allocator, source);
-    defer info.deinit();
+    const offsets = try makeLineIndex(allocator, source);
+    defer offsets.deinit();
+    const info = LineIndex.fromLineOffsets(&offsets);
 
     const tokens = try semantic_tokens.extractSemanticTokensWithImports(
         allocator,
-        source,
         &info,
         null,
     );
@@ -265,10 +269,11 @@ test "extractSemanticTokens simple expression" {
     const allocator = std.testing.allocator;
     const source = "x = 42";
 
-    var info = try LineInfo.init(allocator, source);
-    defer info.deinit();
+    const offsets = try makeLineIndex(allocator, source);
+    defer offsets.deinit();
+    const info = LineIndex{ .source = source, .line_starts = offsets.offsets };
 
-    const tokens = try semantic_tokens.extractSemanticTokens(allocator, source, &info);
+    const tokens = try semantic_tokens.extractSemanticTokens(allocator, &info);
     defer allocator.free(tokens);
 
     // Should have: variable "x", operator "=", number "42"
@@ -306,10 +311,11 @@ test "extractSemanticTokens keeps field access and method calls distinct" {
     const allocator = std.testing.allocator;
     const source = "field = value.field\nmethod = value.method()";
 
-    var info = try LineInfo.init(allocator, source);
-    defer info.deinit();
+    const offsets = try makeLineIndex(allocator, source);
+    defer offsets.deinit();
+    const info = LineIndex{ .source = source, .line_starts = offsets.offsets };
 
-    const tokens = try semantic_tokens.extractSemanticTokens(allocator, source, &info);
+    const tokens = try semantic_tokens.extractSemanticTokens(allocator, &info);
     defer allocator.free(tokens);
 
     var found_field = false;
@@ -331,10 +337,11 @@ test "extractSemanticTokens multiline" {
     const allocator = std.testing.allocator;
     const source = "x = 1\ny = 2";
 
-    var info = try LineInfo.init(allocator, source);
-    defer info.deinit();
+    const offsets = try makeLineIndex(allocator, source);
+    defer offsets.deinit();
+    const info = LineIndex{ .source = source, .line_starts = offsets.offsets };
 
-    const tokens = try semantic_tokens.extractSemanticTokens(allocator, source, &info);
+    const tokens = try semantic_tokens.extractSemanticTokens(allocator, &info);
     defer allocator.free(tokens);
 
     // Should have tokens on both lines
@@ -354,10 +361,11 @@ test "extractSemanticTokens handles keywords" {
     const allocator = std.testing.allocator;
     const source = "if x else y";
 
-    var info = try LineInfo.init(allocator, source);
-    defer info.deinit();
+    const offsets = try makeLineIndex(allocator, source);
+    defer offsets.deinit();
+    const info = LineIndex{ .source = source, .line_starts = offsets.offsets };
 
-    const tokens = try semantic_tokens.extractSemanticTokens(allocator, source, &info);
+    const tokens = try semantic_tokens.extractSemanticTokens(allocator, &info);
     defer allocator.free(tokens);
 
     // Should have: keyword "if", variable "x", keyword "else", variable "y"
@@ -381,10 +389,11 @@ test "extractSemanticTokens handles types" {
     const allocator = std.testing.allocator;
     const source = "x : Int";
 
-    var info = try LineInfo.init(allocator, source);
-    defer info.deinit();
+    const offsets = try makeLineIndex(allocator, source);
+    defer offsets.deinit();
+    const info = LineIndex{ .source = source, .line_starts = offsets.offsets };
 
-    const tokens = try semantic_tokens.extractSemanticTokens(allocator, source, &info);
+    const tokens = try semantic_tokens.extractSemanticTokens(allocator, &info);
     defer allocator.free(tokens);
 
     // Should have: variable "x", operator ":", type "Int"
@@ -404,10 +413,11 @@ test "extractSemanticTokens empty source" {
     const allocator = std.testing.allocator;
     const source = "";
 
-    var info = try LineInfo.init(allocator, source);
-    defer info.deinit();
+    const offsets = try makeLineIndex(allocator, source);
+    defer offsets.deinit();
+    const info = LineIndex{ .source = source, .line_starts = offsets.offsets };
 
-    const tokens = try semantic_tokens.extractSemanticTokens(allocator, source, &info);
+    const tokens = try semantic_tokens.extractSemanticTokens(allocator, &info);
     defer allocator.free(tokens);
 
     // Empty source should produce no semantic tokens
@@ -422,16 +432,35 @@ test "semantic tokens survive invalid utf8 in the source" {
     // server instead of returning a column.
     const source = "main = \"a\xffb\"\nnext = 1";
 
-    var info = try LineInfo.init(allocator, source);
-    defer info.deinit();
+    const offsets = try makeLineIndex(allocator, source);
+    defer offsets.deinit();
+    const info = LineIndex{ .source = source, .line_starts = offsets.offsets };
 
     const tokens = try semantic_tokens.extractSemanticTokensWithImports(
         allocator,
-        source,
         &info,
         null,
     );
     defer allocator.free(tokens);
 
     try std.testing.expect(tokens.len > 0);
+}
+
+test "semantic token lengths use UTF-16 code units" {
+    const allocator = std.testing.allocator;
+    const source = "value = \"é😀\"";
+    const offsets = try makeLineIndex(allocator, source);
+    defer offsets.deinit();
+    const info = LineIndex{ .source = source, .line_starts = offsets.offsets };
+
+    const tokens = try semantic_tokens.extractSemanticTokens(allocator, &info);
+    defer allocator.free(tokens);
+
+    var found_content = false;
+    for (tokens) |token| {
+        if (token.token_type == @intFromEnum(SemanticType.string) and token.length == 3) {
+            found_content = true;
+        }
+    }
+    try std.testing.expect(found_content);
 }
