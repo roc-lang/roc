@@ -1949,7 +1949,7 @@ const PendingTemplateBody = struct {
 /// Keeping graph and draft ownership together makes every graph-local and
 /// draft-local id valid until the existing relocation commit consumes it.
 /// Type/name stores and builder caches remain shared in this first slice; later
-/// shards move those semantic stores behind the same ownership boundary.
+/// shards move those Monotype and name stores behind the same ownership boundary.
 const CompletedSpecJobShard = struct {
     dispatch_index: u64,
     graph: *InstGraph,
@@ -2234,7 +2234,7 @@ const Builder = struct {
     next_spec_dispatch_index: u64 = 0,
     /// Next logical queue entry the coordinator may accept. This first boundary
     /// validates FIFO accounting; later worker results also buffer ordinary
-    /// body publication behind this index.
+    /// body appends behind this index.
     next_spec_accept_index: u64 = 0,
     /// Exact constructor-keyed interning for parser result types synthesized
     /// after graph sealing. These types never mutate, so the reused ids are
@@ -4006,7 +4006,7 @@ const Builder = struct {
     }
 
     /// Lower one ordinary queued specialization into independently owned graph
-    /// and syntax state. Coordinator-owned sealing and publication deliberately
+    /// and syntax state. Coordinator-owned type sealing and program appends
     /// happen only after this result is returned. Representation-sensitive
     /// immediate callees still complete synchronously until inline outputs also
     /// move into the shard protocol.
