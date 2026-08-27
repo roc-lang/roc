@@ -1,21 +1,21 @@
 # META
 ~~~ini
-description=List.sortWith - sorting lists with custom comparison functions
+description=List.sort_with - sorting lists with custom comparison functions
 type=repl
 ~~~
 # SOURCE
 ~~~roc
-» List.len(List.sortWith([3, 1, 2], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
-» List.len(List.sortWith([5, 2, 8, 1, 9], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
-» List.len(List.sortWith(List.drop_first([0], 1), |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
-» List.len(List.sortWith([42], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
-» List.first(List.sortWith([3, 1, 2], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
-» List.first(List.sortWith([5, 2, 8, 1, 9], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
-» List.first(List.sortWith([5, 4, 3, 2, 1], |a, b| if a > b FirstBeforeSecond else if a < b SecondBeforeFirst else Equivalent))
-» List.len(List.sortWith([1, 1, 1, 1], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
-» List.first(List.sortWith([1, 1, 1, 1], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
-» List.len(List.sortWith([2, 1], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
-» List.first(List.sortWith([2, 1], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
+» List.len(List.sort_with([3, 1, 2], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
+» List.len(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
+» List.len(List.sort_with(List.drop_first([0], 1), |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
+» List.len(List.sort_with([42], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
+» List.first(List.sort_with([3, 1, 2], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
+» List.first(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
+» List.first(List.sort_with([5, 4, 3, 2, 1], |a, b| if a > b FirstBeforeSecond else if a < b SecondBeforeFirst else Equivalent))
+» List.len(List.sort_with([1, 1, 1, 1], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
+» List.first(List.sort_with([1, 1, 1, 1], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
+» List.len(List.sort_with([2, 1], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
+» List.first(List.sort_with([2, 1], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
 ~~~
 # OUTPUT
 3

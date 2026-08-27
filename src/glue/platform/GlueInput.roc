@@ -49,7 +49,7 @@ GlueInput := {
 		}
 
 		{
-			hosted_functions: List.sortWith($hosted_functions, compare_by_index),
+			hosted_functions: List.sort_with($hosted_functions, compare_by_index),
 			provides_entries: $provides_entries,
 			types: $types,
 		}

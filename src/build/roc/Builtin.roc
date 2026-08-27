@@ -3870,36 +3870,36 @@ Builtin :: [].{
 
 		## Sort a list by a projected field. The projection is evaluated once per item,
 		## and items with equal fields retain their input order.
-		sortBy : List(item), (item -> field) -> List(item)
+		sort_by : List(item), (item -> field) -> List(item)
 			where [field.Sort]
-		sortBy = |list, project| {
+		sort_by = |list, project| {
 			decorated = List.map(list, |item| (project(item), item))
 			sorted = sort_impl(decorated, |(left, _), (right, _)| left.default_cmp(right))
 			List.map(sorted, |(_, item)| item)
 		}
 
 		## Sort a list using a custom three-way comparison function.
-		sortWith : List(item), (item, item -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]) -> List(item)
-		sortWith = |list, compare_items| sort_impl(list, compare_items)
+		sort_with : List(item), (item, item -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]) -> List(item)
+		sort_with = |list, compare_items| sort_impl(list, compare_items)
 
 		## Sort a list in reverse using its items' default ordering.
-		sortReversed : List(item) -> List(item)
+		sort_reversed : List(item) -> List(item)
 			where [item.Sort]
-		sortReversed = |list| sort_impl(list, |left, right| reverse_order(left.default_cmp(right)))
+		sort_reversed = |list| sort_impl(list, |left, right| reverse_order(left.default_cmp(right)))
 
 		## Sort a list in reverse by a projected field. The projection is evaluated
 		## once per item, and items with equal fields retain their input order.
-		sortByReversed : List(item), (item -> field) -> List(item)
+		sort_by_reversed : List(item), (item -> field) -> List(item)
 			where [field.Sort]
-		sortByReversed = |list, project| {
+		sort_by_reversed = |list, project| {
 			decorated = List.map(list, |item| (project(item), item))
 			sorted = sort_impl(decorated, |(left, _), (right, _)| reverse_order(left.default_cmp(right)))
 			List.map(sorted, |(_, item)| item)
 		}
 
 		## Sort a list in reverse using a custom three-way comparison function.
-		sortWithReversed : List(item), (item, item -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]) -> List(item)
-		sortWithReversed = |list, compare_items|
+		sort_with_reversed : List(item), (item, item -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]) -> List(item)
+		sort_with_reversed = |list, compare_items|
 			sort_impl(list, |left, right| reverse_order(compare_items(left, right)))
 
 		## Returns `True` if the two lists have the same length and their items are pairwise equal.
