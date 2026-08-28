@@ -2198,13 +2198,6 @@ const Builder = struct {
     symbols: Common.SymbolGen = .{},
     next_instantiation_scope: u64 = 0,
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
-    /// Outermost checked-type lowering owns one atomic store transaction;
-    /// recursive children only append to its speculative suffix.
-    active_type_transaction: ?Type.Store.Transaction = null,
-    /// Cache addresses inserted while `active_type_transaction` is open. The
-    /// owner remaps exactly these entries on commit and evicts exactly these
-    /// on abort, so neither path scales with the whole cache.
-    active_type_transaction_addresses: std.ArrayList(CheckedTypeAddress) = .empty,
     /// Deterministic FIFO of reserved specializations awaiting body lowering.
     /// Wave drains execute entries in dispatch order; an executing body may
     /// append new entries, which the same drain then reaches.
@@ -2419,7 +2412,6 @@ const Builder = struct {
         self.spec_store.deinit();
         self.uninhabited_type_cache.deinit();
         self.pending_spec_jobs.deinit(self.allocator);
-        self.active_type_transaction_addresses.deinit(self.allocator);
         self.generated_try_types.deinit();
         self.parse_result_ok_types.deinit();
         self.type_cache.deinit();
@@ -4701,42 +4693,6 @@ const Builder = struct {
     fn lowerType(self: *Builder, view: ModuleView, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
         const address = checkedTypeAddress(view, checked_ty);
         if (self.type_cache.get(address)) |cached| return cached;
-        if (self.active_type_transaction != null) {
-            return try self.lowerTypeSpeculative(address, view, checked_ty);
-        }
-
-        const transaction = self.program.types.beginTransaction();
-        self.active_type_transaction = transaction;
-        defer self.active_type_transaction = null;
-        errdefer {
-            transaction.abort(&self.program.types);
-            // Evict only this transaction's entries; ids cached by earlier
-            // commits are durable and stay valid.
-            for (self.active_type_transaction_addresses.items) |cached_address| {
-                _ = self.type_cache.remove(cached_address);
-            }
-            self.active_type_transaction_addresses.clearRetainingCapacity();
-        }
-
-        const speculative = try self.lowerTypeSpeculative(address, view, checked_ty);
-        var result = try self.program.types.commitTransaction(&self.program.names, transaction, speculative);
-        defer result.deinit();
-        for (self.active_type_transaction_addresses.items) |cached_address| {
-            const cached = self.type_cache.getPtr(cached_address) orelse
-                Common.compilerBug("checked-type cache entry recorded in a transaction disappeared before commit");
-            cached.* = result.remapType(cached.*);
-        }
-        self.active_type_transaction_addresses.clearRetainingCapacity();
-        return result.root;
-    }
-
-    fn lowerTypeSpeculative(
-        self: *Builder,
-        address: CheckedTypeAddress,
-        view: ModuleView,
-        checked_ty: checked.CheckedTypeId,
-    ) Allocator.Error!Type.TypeId {
-        if (self.type_cache.get(address)) |cached| return cached;
         const raw = @intFromEnum(checked_ty);
         if (raw >= view.types.payloadCount()) Common.invariant("checked type id outside checked type store");
 
@@ -4747,11 +4703,6 @@ const Builder = struct {
             checked_ty: checked.CheckedTypeId,
 
             fn fill(context: @This(), reserved: Type.TypeId) Allocator.Error!Type.Content {
-                // Recorded before the put so a failed put leaves at worst a
-                // recorded address with no cache entry, which eviction
-                // tolerates and commit never sees; the reverse order could
-                // strand a speculative id in the cache past the owner's abort.
-                try context.builder.active_type_transaction_addresses.append(context.builder.allocator, context.address);
                 try context.builder.type_cache.put(context.address, reserved);
                 return try context.builder.lowerTypePayload(context.view, context.checked_ty, context.view.types.payload(context.checked_ty));
             }
@@ -5945,7 +5896,7 @@ const Builder = struct {
                 fn_ctx.evidence = try fn_ctx.materializeConstFnEvidence(fn_value);
                 try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
                 const draft = FinalBodyOutputGuard.begin(self);
-                const request_fn_node = try graph.importMono(fn_template.mono_fn_ty);
+                const request_fn_node = try graph.importMonoIndependent(fn_template.mono_fn_ty);
                 const nested = switch (fn_template.fn_def) {
                     .nested => |value| value,
                     .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => unreachable,
@@ -21213,7 +21164,7 @@ const BodyContext = struct {
         mono_fn_ty: Type.TypeId,
     ) Allocator.Error!NodeId {
         const checked_node = try self.instNode(checked_fn_ty);
-        const request_node = try self.graph.importMono(mono_fn_ty);
+        const request_node = try self.graph.importMonoIndependent(mono_fn_ty);
         const related = try checkedMonoRequestNode(self.graph, checked_node, request_node, .construction);
         return related;
     }
@@ -28847,7 +28798,7 @@ const BodyContext = struct {
         requested_ty: checked.CheckedTypeId,
     ) Allocator.Error!Type.TypeId {
         const stored_ty = try self.lowerConstCaptureType(store_view, stored.root_type);
-        _ = try self.relateCheckedNodeToProducedValue(try self.instNode(requested_ty), try self.graph.importMono(stored_ty));
+        _ = try self.relateCheckedNodeToProducedValue(try self.instNode(requested_ty), try self.graph.importMonoIndependent(stored_ty));
         return stored_ty;
     }
 
@@ -28864,7 +28815,7 @@ const BodyContext = struct {
         const stored_ty = try self.lowerConstCaptureType(store_view, stored.root_type);
         return try self.relateCheckedNodeToProducedValue(
             try self.instNode(requested_ty),
-            try self.graph.importMono(stored_ty),
+            try self.graph.importMonoIndependent(stored_ty),
         );
     }
 
