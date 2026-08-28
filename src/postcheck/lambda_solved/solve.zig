@@ -3280,6 +3280,45 @@ test "lambda solved erased callable digest includes record field default identit
     try std.testing.expect(!std.mem.eql(u8, first_default_digest.bytes[0..], second_default_digest.bytes[0..]));
 }
 
+test "inspectable backing unification isolates the structural type variable once" {
+    const allocator = std.testing.allocator;
+
+    var program: Ast.Program = undefined;
+    program.types = Type.Store.init(allocator);
+    defer program.types.deinit();
+
+    const structural = try program.types.add(.{ .primitive = .u64 });
+    var backing = try program.types.add(.{ .primitive = .u64 });
+    for (0..4) |_| {
+        backing = try program.types.add(.{ .named = .{
+            .named_type = undefined,
+            .def = undefined,
+            .kind = .nominal,
+            .args = .empty(),
+            .backing = .{ .ty = backing, .use = .inspectable },
+        } });
+    }
+    const outer_named = backing;
+    const vars_before_unify = program.types.vars.items.len;
+
+    var solver: Solver = undefined;
+    solver.allocator = allocator;
+    solver.program = &program;
+    solver.active_unifications = std.AutoHashMap(UnifyPair, void).init(allocator);
+    defer solver.active_unifications.deinit();
+    solver.unify_stack = .empty;
+    defer solver.unify_stack.deinit(allocator);
+    solver.solved_set_pool = collections.DenseMapPool(Type.TypeVarId, void).init(allocator);
+    defer solver.solved_set_pool.deinit();
+    solver.mono_set_pool = collections.DenseMapPool(MonoType.TypeId, void).init(allocator);
+    defer solver.mono_set_pool.deinit();
+
+    try solver.unify(structural, outer_named);
+
+    try std.testing.expectEqual(vars_before_unify + 1, program.types.vars.items.len);
+    try std.testing.expectEqual(program.types.root(outer_named), program.types.root(structural));
+}
+
 test "lambda solved solve declarations are referenced" {
     std.testing.refAllDecls(@This());
 }

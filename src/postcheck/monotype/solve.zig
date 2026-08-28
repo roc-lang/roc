@@ -7326,7 +7326,7 @@ test "construction row relation absorbs only explicit optional or defaulted fiel
     try std.testing.expectEqual(b, absorbed_empty.fields[0].name);
 }
 
-test "imported closed tag row rejects additional evidence without mutating shared import" {
+test "independent closed tag-row imports have distinct solver nodes" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -7349,22 +7349,22 @@ test "imported closed tag row rejects additional evidence without mutating share
     defer graph.destroy();
 
     const request_node = try graph.importMono(requested);
-    const shared_request_node = try graph.importMono(requested);
-    try std.testing.expectEqual(request_node, shared_request_node);
+    const independent_request_node = try graph.importMono(requested);
+    try std.testing.expect(request_node != independent_request_node);
 
     const imported = graph.content(request_node).tag_union;
     const additional_tags = [_]InstTag{.{ .name = b, .checked_name = b, .payloads = &.{} }};
     try std.testing.expect(graph.rowAdditionConflicts(imported.ext, additional_tags.len, .tag_union));
     try std.testing.expectEqual(InstNode.empty_tag_union, graph.content(imported.ext));
 
-    const retained = graph.content(shared_request_node).tag_union;
+    const retained = graph.content(independent_request_node).tag_union;
     try std.testing.expectEqual(@as(usize, 1), retained.tags.len);
     try std.testing.expectEqual(a, retained.tags[0].name);
     try std.testing.expect(retained.tags[0].name != b);
     try std.testing.expectEqual(InstNode.empty_tag_union, graph.content(retained.ext));
 }
 
-test "imported closed record row rejects additional evidence without mutating shared import" {
+test "independent closed record-row imports have distinct solver nodes" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -7387,8 +7387,8 @@ test "imported closed record row rejects additional evidence without mutating sh
     defer graph.destroy();
 
     const request_node = try graph.importMono(requested);
-    const shared_request_node = try graph.importMono(requested);
-    try std.testing.expectEqual(request_node, shared_request_node);
+    const independent_request_node = try graph.importMono(requested);
+    try std.testing.expect(request_node != independent_request_node);
 
     const imported = graph.content(request_node).record;
     const additional_fields = [_]InstField{.{
@@ -7399,7 +7399,7 @@ test "imported closed record row rejects additional evidence without mutating sh
     try std.testing.expect(graph.rowAdditionConflicts(imported.ext, additional_fields.len, .record));
     try std.testing.expectEqual(InstNode.empty_record, graph.content(imported.ext));
 
-    const retained = graph.content(shared_request_node).record;
+    const retained = graph.content(independent_request_node).record;
     try std.testing.expectEqual(@as(usize, 1), retained.fields.len);
     try std.testing.expectEqual(value, retained.fields[0].name);
     try std.testing.expect(retained.fields[0].name != extra);
