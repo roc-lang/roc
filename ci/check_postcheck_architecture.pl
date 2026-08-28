@@ -272,7 +272,13 @@ sub check_active_body_draft_seal_access {
             $fn_depth = 0;
         }
 
-        if (!$in_test && ($current_fn // '') ne 'sealActiveBodyDraft') {
+        # `sealActiveBodyDraft` composes the synchronous path, while
+        # `commitFinalizedBodyDraft` is the same ordered commit suffix used
+        # after a queued shard crosses the coordinator handoff.
+        my $owns_body_draft_commit =
+            ($current_fn // '') eq 'sealActiveBodyDraft' ||
+            ($current_fn // '') eq 'commitFinalizedBodyDraft';
+        if (!$in_test && !$owns_body_draft_commit) {
             if ($line =~ /\b[A-Za-z_][A-Za-z0-9_]*\.sealCoreIntoProgram\(/) {
                 push @violations, "$rel:$line_no: active-body-draft-seal-bypass: $line";
             }
