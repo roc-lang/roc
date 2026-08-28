@@ -5921,6 +5921,7 @@ pub const Interpreter = struct {
 
         return switch (ll.op) {
             .num_plus, .num_minus, .num_times => unreachable,
+            .list_sort_with => self.evalListSortWith(args[0], args[1], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
             // ── String ops ──
             .str_is_eq => blk: {
                 const result = builtins.str.strEqual(valueToRocStr(args[0]), valueToRocStr(args[1]));
@@ -7945,7 +7946,7 @@ pub const Interpreter = struct {
 
     fn evalCompare(self: *LirInterpreter, a: Value, b: Value, arg_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
-        // Runtime tag order for [LT, EQ, GT]: EQ=0, GT=1, LT=2.
+        // Runtime tag order for [Before, Same, After]: After=0, Before=1, Same=2.
         const result: u8 = switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
                 8 => cmpOrder(u8, a.read(u8), b.read(u8)),
@@ -8745,6 +8746,38 @@ pub const Interpreter = struct {
         return self.rocListToValue(result, ret_layout);
     }
 
+    fn evalListSortWith(self: *LirInterpreter, list_arg: Value, callable_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
+        const rl = self.valueToRocListForLayout(list_arg, list_layout);
+        const info = self.listElemInfo(list_layout);
+        if (info.width == 0) return self.rocListToValue(canonicalZstList(rl.len()), ret_layout);
+        const callable = self.readBoxedDataPointer(callable_arg) orelse return self.invariantFailedError(
+            "LIR/interpreter invariant violated: list_sort_with received a null erased callable",
+            .{},
+        );
+        const elems_rc = self.builtinListElemRc(list_layout);
+        var crash_boundary = self.enterCrashBoundary();
+        defer crash_boundary.deinit();
+        const sj = crash_boundary.set();
+        if (sj != 0) return error.Crash;
+        var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
+        const result = builtins.list.listSortWith(
+            rl,
+            callable,
+            info.alignment,
+            info.width,
+            elems_rc,
+            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+            if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+            if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
+            update_mode,
+            false,
+            null,
+            &self.roc_ops,
+        );
+        return self.rocListToValue(result, ret_layout);
+    }
+
     fn evalListSplitFirst(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
         const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
@@ -9008,9 +9041,9 @@ pub const Interpreter = struct {
     }
 
     fn cmpOrder(comptime T: type, av: T, bv: T) u8 {
-        if (av == bv) return 0; // EQ
-        if (av > bv) return 1; // GT
-        return 2; // LT
+        if (av == bv) return 2; // Same
+        if (av < bv) return 1; // Before
+        return 0; // After
     }
 
     fn shiftOp(comptime T: type, av: T, amount: u8, op: ShiftOp) T {

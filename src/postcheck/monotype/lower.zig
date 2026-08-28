@@ -49,6 +49,65 @@ const DraftRequestEvidenceMode = enum {
     synthesized,
 };
 
+/// Coordinator-facing view of one frozen graph's finalized types. Keeping this
+/// boundary explicit prevents program output from depending on the graph's
+/// store ownership. The current identity mode preserves the shared-store path;
+/// queued private stores attach a cumulative relocation at ordered commit.
+const CommittedGraphTypes = struct {
+    graph: *InstGraph,
+    sealer: *GraphTypeFinals,
+    destination: ?struct {
+        store: *Type.Store,
+        names: *names.NameStore,
+        relocation: *Type.Store.TypeRelocation,
+    } = null,
+
+    fn shared(graph: *InstGraph, sealer: *GraphTypeFinals) CommittedGraphTypes {
+        return .{ .graph = graph, .sealer = sealer };
+    }
+
+    fn relocated(
+        graph: *InstGraph,
+        sealer: *GraphTypeFinals,
+        destination: *Type.Store,
+        destination_names: *names.NameStore,
+        relocation: *Type.Store.TypeRelocation,
+    ) CommittedGraphTypes {
+        return .{
+            .graph = graph,
+            .sealer = sealer,
+            .destination = .{
+                .store = destination,
+                .names = destination_names,
+                .relocation = relocation,
+            },
+        };
+    }
+
+    fn commitType(self: *CommittedGraphTypes, ty: Type.TypeId) Allocator.Error!Type.TypeId {
+        try self.graph.assertTypeHasNoActiveSnapshots(ty);
+        const destination = self.destination orelse return ty;
+        if (destination.relocation.get(self.graph.types, ty)) |mapped| return mapped;
+        var imported = try destination.store.importTypes(
+            destination.names,
+            self.graph.types,
+            self.graph.name_store,
+            destination.relocation,
+            &.{ty},
+        );
+        defer imported.deinit();
+        return imported.roots[0];
+    }
+
+    fn sealNode(self: *CommittedGraphTypes, node: NodeId) Allocator.Error!Type.TypeId {
+        return self.commitType(try self.sealer.sealNode(node));
+    }
+
+    fn sealType(self: *CommittedGraphTypes, ty: Type.TypeId) Allocator.Error!Type.TypeId {
+        return self.commitType(try self.sealer.sealType(ty));
+    }
+};
+
 /// A deferred request is counted at its caller-facing draft edge. Resolving
 /// that edge after the caller seals must not count the same logical request a
 /// second time.
@@ -358,6 +417,8 @@ pub const BodyDiagnostics = struct {
     spec_jobs_enqueued: u64 = 0,
     spec_jobs_executed: u64 = 0,
     spec_jobs_skipped_ready: u64 = 0,
+    spec_job_shards_lowered: u64 = 0,
+    spec_job_shards_committed: u64 = 0,
     cross_root_template_reuses: u64 = 0,
     caller_owned_template_bodies_lowered: u64 = 0,
     deferred_template_reuses: u64 = 0,
@@ -1917,8 +1978,9 @@ const TemplateBodyScheduling = enum { immediate, queued };
 /// outlives the requesting graph and draft.
 const PendingSpecJob = struct {
     /// Logical enqueue order across the whole build. The inline executor
-    /// accepts jobs strictly in this order; a parallel executor later buffers
-    /// specialization-body outputs until their dispatch index is next.
+    /// accepts queue entries strictly in this order. Representation-sensitive
+    /// immediate claims are completed as inline work of the executing body;
+    /// their stale queue entry is accepted later as a ready skip.
     dispatch_index: u64,
     spec: Ast.SpecId,
     reservation: TemplateReservation,
@@ -1932,11 +1994,9 @@ const PendingSpecJob = struct {
     signature_relation: Ast.SignatureRelation,
 };
 
-/// One root body lowered into a shared root batch. Its checked type graph is
-/// still instantiated in a fresh scope; only the graph and draft stores are
-/// shared so an exact specialization discovered by an earlier root can be
-/// reused before another root replays and lowers it.
-const PendingRootTemplateBody = struct {
+/// One reserved template body lowered into graph-local and draft-local state,
+/// before its final ids and solved root type are committed.
+const PendingTemplateBody = struct {
     reservation: TemplateReservation,
     fn_template: Ast.FnTemplate,
     signature_relation: Ast.SignatureRelation,
@@ -1944,10 +2004,28 @@ const PendingRootTemplateBody = struct {
     lowered: LoweredTemplateBody,
 };
 
+/// Owned handoff between queued body lowering and ordered coordinator commit.
+/// Deferred relation production and graph validation finish before this handoff,
+/// so commit only seals durable types, relocates ids, and appends program data.
+/// Type/name stores, deferred preparation, and builder caches remain shared in
+/// this transitional slice; later shards move them behind the same boundary.
+const CompletedSpecJobShard = struct {
+    dispatch_index: u64,
+    graph: *InstGraph,
+    body_draft: BodyDraftStore,
+    pending: PendingTemplateBody,
+
+    fn deinit(self: *CompletedSpecJobShard) void {
+        self.body_draft.deinit();
+        self.graph.destroy();
+        self.* = undefined;
+    }
+};
+
 const RootTemplateBatch = struct {
     graph: *InstGraph,
     draft: *BodyDraftStore,
-    pending: std.ArrayList(PendingRootTemplateBody) = .empty,
+    pending: std.ArrayList(PendingTemplateBody) = .empty,
 };
 
 const FinalBodyOutputCounts = struct {
@@ -2198,19 +2276,16 @@ const Builder = struct {
     symbols: Common.SymbolGen = .{},
     next_instantiation_scope: u64 = 0,
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
-    /// Outermost checked-type lowering owns one atomic store transaction;
-    /// recursive children only append to its speculative suffix.
-    active_type_transaction: ?Type.Store.Transaction = null,
-    /// Cache addresses inserted while `active_type_transaction` is open. The
-    /// owner remaps exactly these entries on commit and evicts exactly these
-    /// on abort, so neither path scales with the whole cache.
-    active_type_transaction_addresses: std.ArrayList(CheckedTypeAddress) = .empty,
     /// Deterministic FIFO of reserved specializations awaiting body lowering.
     /// Wave drains execute entries in dispatch order; an executing body may
     /// append new entries, which the same drain then reaches.
     pending_spec_jobs: std.ArrayList(PendingSpecJob) = .empty,
     pending_spec_jobs_head: usize = 0,
     next_spec_dispatch_index: u64 = 0,
+    /// Next logical queue entry the coordinator may accept. This first boundary
+    /// validates FIFO accounting; later worker results also buffer ordinary
+    /// body appends behind this index.
+    next_spec_accept_index: u64 = 0,
     /// Exact constructor-keyed interning for parser result types synthesized
     /// after graph sealing. These types never mutate, so the reused ids are
     /// valid for the lifetime of the program builder.
@@ -2419,7 +2494,6 @@ const Builder = struct {
         self.spec_store.deinit();
         self.uninhabited_type_cache.deinit();
         self.pending_spec_jobs.deinit(self.allocator);
-        self.active_type_transaction_addresses.deinit(self.allocator);
         self.generated_try_types.deinit();
         self.parse_result_ok_types.deinit();
         self.type_cache.deinit();
@@ -2484,14 +2558,14 @@ const Builder = struct {
 
     fn sealedCaptureAbiDigest(
         self: *Builder,
-        sealer: *GraphTypeFinals,
+        committed_types: *CommittedGraphTypes,
         capture_nodes: []const NodeId,
     ) Allocator.Error!names.TypeDigest {
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
         hasher.update("roc.monotype.capture_abi");
         hashU32(&hasher, @intCast(capture_nodes.len));
         for (capture_nodes) |node| {
-            const ty = try sealer.sealNode(node);
+            const ty = try committed_types.sealNode(node);
             const digest = self.program.types.typeDigest(&self.program.names, ty);
             hasher.update(&digest.bytes);
         }
@@ -3660,9 +3734,7 @@ const Builder = struct {
                 if (retained_topology != null) {
                     Common.invariant("queued Monotype specialization request cannot carry a retained lexical topology");
                 }
-                self.countBodyDiagnostic("spec_jobs_enqueued");
                 const dispatch_index = self.next_spec_dispatch_index;
-                self.next_spec_dispatch_index += 1;
                 try self.pending_spec_jobs.append(self.allocator, .{
                     .dispatch_index = dispatch_index,
                     .spec = reserved.spec,
@@ -3676,6 +3748,8 @@ const Builder = struct {
                     .evidence = spec_evidence,
                     .signature_relation = signature_relation,
                 });
+                self.next_spec_dispatch_index += 1;
+                self.countBodyDiagnostic("spec_jobs_enqueued");
                 return reservation.def;
             },
         }
@@ -3900,11 +3974,15 @@ const Builder = struct {
         }
         self.pending_spec_jobs.clearRetainingCapacity();
         self.pending_spec_jobs_head = 0;
+        self.requirePendingSpecJobsDrained();
     }
 
     fn requirePendingSpecJobsDrained(self: *Builder) void {
         if (self.pending_spec_jobs_head != self.pending_spec_jobs.items.len) {
-            Common.invariant("Monotype specialization queue was not drained at a wave boundary");
+            Common.compilerBug("Monotype specialization queue was not drained at a wave boundary");
+        }
+        if (self.next_spec_accept_index != self.next_spec_dispatch_index) {
+            Common.compilerBug("Monotype specialization queue entries were not accepted through the wave boundary");
         }
     }
 
@@ -3912,6 +3990,7 @@ const Builder = struct {
         if (self.active_graph != null) {
             Common.invariant("Monotype specialization job executed during an active body draft");
         }
+        self.requireNextSpecAcceptance(job.dispatch_index);
         switch (self.spec_store.recordStatus(job.spec)) {
             // An immediate caller claimed and completed this reservation after
             // it was queued; the queued duplicate is skipped, not re-lowered.
@@ -3922,6 +4001,7 @@ const Builder = struct {
                         Common.invariant("completed Monotype specialization lost its lowering state");
                     std.debug.assert(specEvidenceVectorEql(existing.evidence, job.evidence));
                 }
+                self.acceptSpecDispatch(job.dispatch_index);
                 return;
             },
             .reserved => {},
@@ -3929,19 +4009,127 @@ const Builder = struct {
         }
         self.countBodyDiagnostic("spec_jobs_executed");
         self.spec_store.markLowering(job.spec);
-        try self.completeTemplateReservation(
+        const view = self.moduleForDigest(names.procTemplateModuleDigest(job.template_ref));
+        const template = view.templates.get(job.template_ref.template);
+        switch (template.target) {
+            // Hosted completion has no Roc graph/draft pair to transfer. Keep
+            // it on the coordinator side while ordinary bodies establish that
+            // ownership handoff.
+            .hosted => {
+                try self.completeTemplateReservation(
+                    job.reservation,
+                    job.fn_template,
+                    job.template_ref,
+                    self.moduleForId(job.method_scope),
+                    job.source_fn_ty,
+                    job.source_fn_key,
+                    job.fn_ty,
+                    job.evidence,
+                    null,
+                    job.signature_relation,
+                    null,
+                );
+                self.acceptSpecDispatch(job.dispatch_index);
+            },
+            .roc,
+            .intrinsic,
+            .entry,
+            .comptime_only,
+            => {
+                var shard = try self.lowerPendingSpecJobToShard(job, view, template);
+                defer shard.deinit();
+                try self.commitCompletedSpecJobShard(&shard);
+            },
+        }
+    }
+
+    fn requireNextSpecAcceptance(self: *Builder, dispatch_index: u64) void {
+        if (dispatch_index != self.next_spec_accept_index) {
+            Common.compilerBug("Monotype specialization queue entry reached the coordinator out of dispatch order");
+        }
+    }
+
+    fn acceptSpecDispatch(self: *Builder, dispatch_index: u64) void {
+        self.requireNextSpecAcceptance(dispatch_index);
+        self.next_spec_accept_index += 1;
+    }
+
+    /// Lower one ordinary queued specialization into independently owned frozen
+    /// graph and prepared syntax state. Coordinator-owned type sealing and
+    /// program appends happen only after this result is returned.
+    ///
+    /// Deferred preparation and iterator identity calculation still use shared
+    /// Builder/type/name state and execute serially here. Representation-sensitive
+    /// immediate callees also complete synchronously until those outputs move
+    /// into the shard protocol.
+    fn lowerPendingSpecJobToShard(
+        self: *Builder,
+        job: PendingSpecJob,
+        view: ModuleView,
+        template: checked.CheckedProcedureTemplate,
+    ) Allocator.Error!CompletedSpecJobShard {
+        switch (template.target) {
+            .roc,
+            .intrinsic,
+            .entry,
+            .comptime_only,
+            => {},
+            .hosted => Common.compilerBug("hosted specialization entered Roc body shard lowering"),
+        }
+
+        const graph = try self.createGraph();
+        errdefer graph.destroy();
+        var body_draft = BodyDraftStore.init(self.allocator);
+        errdefer body_draft.deinit();
+        const final_guard = FinalBodyOutputGuard.begin(self);
+        const pending = try self.lowerReservedTemplateBodyIntoDraft(
+            graph,
+            &body_draft,
             job.reservation,
             job.fn_template,
             job.template_ref,
+            view,
             self.moduleForId(job.method_scope),
-            job.source_fn_ty,
+            template,
             job.source_fn_key,
             job.fn_ty,
             job.evidence,
             null,
             job.signature_relation,
+        );
+        const final_end = final_guard.end(self);
+        try self.finalizeBodyDraftGraph(graph, &body_draft, final_guard, final_end);
+        self.countBodyDiagnostic("spec_job_shards_lowered");
+        return .{
+            .dispatch_index = job.dispatch_index,
+            .graph = graph,
+            .body_draft = body_draft,
+            .pending = pending,
+        };
+    }
+
+    /// Accept one frozen shard in logical dispatch order and reuse the existing
+    /// exhaustive draft-to-program relocation commit.
+    fn commitCompletedSpecJobShard(
+        self: *Builder,
+        shard: *CompletedSpecJobShard,
+    ) Allocator.Error!void {
+        self.requireNextSpecAcceptance(shard.dispatch_index);
+        const sealed = try self.commitFinalizedBodyDraft(
+            shard.graph,
+            &shard.body_draft,
+            shard.pending.root_node,
+            &.{},
+            null,
+            null,
             null,
         );
+        defer sealed.deinit(self.allocator);
+        var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
+        defer completion_timing_scope.end();
+        try self.finishReservedTemplateBody(shard.pending, sealed.ids, sealed.root_ty.?);
+        self.countBodyDiagnostic("spec_job_shards_committed");
+        self.acceptSpecDispatch(shard.dispatch_index);
     }
 
     fn lowerReservedTemplateBodyIntoDraft(
@@ -3959,7 +4147,7 @@ const Builder = struct {
         spec_evidence: []const SpecEvidence,
         retained_topology: ?EvidenceChain,
         signature_relation: Ast.SignatureRelation,
-    ) Allocator.Error!PendingRootTemplateBody {
+    ) Allocator.Error!PendingTemplateBody {
         var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
         defer graph_setup_timing_scope.end();
         const saved_graph = self.active_graph;
@@ -4033,7 +4221,7 @@ const Builder = struct {
 
     fn finishReservedTemplateBody(
         self: *Builder,
-        pending: PendingRootTemplateBody,
+        pending: PendingTemplateBody,
         body_ids: FinalIdOffsets,
         final_fn_ty: Type.TypeId,
     ) Allocator.Error!void {
@@ -4701,42 +4889,6 @@ const Builder = struct {
     fn lowerType(self: *Builder, view: ModuleView, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
         const address = checkedTypeAddress(view, checked_ty);
         if (self.type_cache.get(address)) |cached| return cached;
-        if (self.active_type_transaction != null) {
-            return try self.lowerTypeSpeculative(address, view, checked_ty);
-        }
-
-        const transaction = self.program.types.beginTransaction();
-        self.active_type_transaction = transaction;
-        defer self.active_type_transaction = null;
-        errdefer {
-            transaction.abort(&self.program.types);
-            // Evict only this transaction's entries; ids cached by earlier
-            // commits are durable and stay valid.
-            for (self.active_type_transaction_addresses.items) |cached_address| {
-                _ = self.type_cache.remove(cached_address);
-            }
-            self.active_type_transaction_addresses.clearRetainingCapacity();
-        }
-
-        const speculative = try self.lowerTypeSpeculative(address, view, checked_ty);
-        var result = try self.program.types.commitTransaction(&self.program.names, transaction, speculative);
-        defer result.deinit();
-        for (self.active_type_transaction_addresses.items) |cached_address| {
-            const cached = self.type_cache.getPtr(cached_address) orelse
-                Common.compilerBug("checked-type cache entry recorded in a transaction disappeared before commit");
-            cached.* = result.remapType(cached.*);
-        }
-        self.active_type_transaction_addresses.clearRetainingCapacity();
-        return result.root;
-    }
-
-    fn lowerTypeSpeculative(
-        self: *Builder,
-        address: CheckedTypeAddress,
-        view: ModuleView,
-        checked_ty: checked.CheckedTypeId,
-    ) Allocator.Error!Type.TypeId {
-        if (self.type_cache.get(address)) |cached| return cached;
         const raw = @intFromEnum(checked_ty);
         if (raw >= view.types.payloadCount()) Common.invariant("checked type id outside checked type store");
 
@@ -4747,11 +4899,6 @@ const Builder = struct {
             checked_ty: checked.CheckedTypeId,
 
             fn fill(context: @This(), reserved: Type.TypeId) Allocator.Error!Type.Content {
-                // Recorded before the put so a failed put leaves at worst a
-                // recorded address with no cache entry, which eviction
-                // tolerates and commit never sees; the reverse order could
-                // strand a speculative id in the cache past the owner's abort.
-                try context.builder.active_type_transaction_addresses.append(context.builder.allocator, context.address);
                 try context.builder.type_cache.put(context.address, reserved);
                 return try context.builder.lowerTypePayload(context.view, context.checked_ty, context.view.types.payload(context.checked_ty));
             }
@@ -5945,7 +6092,7 @@ const Builder = struct {
                 fn_ctx.evidence = try fn_ctx.materializeConstFnEvidence(fn_value);
                 try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
                 const draft = FinalBodyOutputGuard.begin(self);
-                const request_fn_node = try graph.importMono(fn_template.mono_fn_ty);
+                const request_fn_node = try graph.importMonoIndependent(fn_template.mono_fn_ty);
                 const nested = switch (fn_template.fn_def) {
                     .nested => |value| value,
                     .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => unreachable,
@@ -7255,7 +7402,8 @@ const Builder = struct {
         self: *Builder,
         body_draft: *BodyDraftStore,
         spec_index: usize,
-        fn_ty: Type.TypeId,
+        draft_fn_ty: Type.TypeId,
+        coordinator_fn_ty: Type.TypeId,
         body_scheduling: TemplateBodyScheduling,
     ) Allocator.Error!void {
         if (spec_index >= body_draft.template_specs.items.len) {
@@ -7265,7 +7413,7 @@ const Builder = struct {
         if (spec.state != .deferred) return;
 
         const draft_fn = &body_draft.fns.items[@intFromEnum(spec.fn_id)];
-        draft_fn.source.mono_fn_ty = .{ .sealed = fn_ty };
+        draft_fn.source.mono_fn_ty = .{ .sealed = draft_fn_ty };
         const signature_relation = draft_fn.signature_relation;
 
         const requested_evidence = StoredConstFnEvidence{
@@ -7273,13 +7421,13 @@ const Builder = struct {
             .frames = self.program.constFnEvidenceFrames(draft_fn.source.const_evidence_frames),
             .head = draft_fn.source.const_evidence_frame_head,
         };
-        const request_digest = self.specializationTypeDigest(fn_ty);
+        const request_digest = self.specializationTypeDigest(coordinator_fn_ty);
         const identity = templateSpecIdentity(
             spec.template_ref,
             spec.method_scope,
             spec.source_fn_key,
             draft_fn.source.evidence_digest,
-            fn_ty,
+            coordinator_fn_ty,
             request_digest,
         );
 
@@ -7320,7 +7468,7 @@ const Builder = struct {
                 self.moduleForId(spec.method_scope),
                 spec.source_fn_ty,
                 spec.source_fn_key,
-                fn_ty,
+                coordinator_fn_ty,
                 spec.evidence,
                 signature_relation,
                 .already_counted,
@@ -7345,17 +7493,24 @@ const Builder = struct {
     fn resolveDeferredTemplateSpecs(
         self: *Builder,
         body_draft: *BodyDraftStore,
-        sealer: *GraphTypeFinals,
+        committed_types: *CommittedGraphTypes,
     ) Allocator.Error!void {
         var spec_index: usize = 0;
         while (spec_index < body_draft.template_specs.items.len) : (spec_index += 1) {
             const state = body_draft.template_specs.items[spec_index].state;
             if (state != .deferred) continue;
             const request_fn_node = body_draft.template_specs.items[spec_index].request_fn_node;
-            const fn_ty = try sealer.sealNode(request_fn_node);
+            const draft_fn_ty = try committed_types.sealer.sealNode(request_fn_node);
+            const coordinator_fn_ty = try committed_types.commitType(draft_fn_ty);
             // Seal-time requests are symbolic: they reserve the callee's id
             // for call-site patching and queue the body for the wave drain.
-            try self.resolveDeferredTemplateSpecAtType(body_draft, spec_index, fn_ty, .queued);
+            try self.resolveDeferredTemplateSpecAtType(
+                body_draft,
+                spec_index,
+                draft_fn_ty,
+                coordinator_fn_ty,
+                .queued,
+            );
         }
     }
 
@@ -7363,7 +7518,7 @@ const Builder = struct {
         self: *Builder,
         body_draft: *BodyDraftStore,
         graph: *InstGraph,
-        sealer: *GraphTypeFinals,
+        committed_types: *CommittedGraphTypes,
         base_ids: FinalIdOffsets,
     ) Allocator.Error!DraftCommitMap {
         var ids = base_ids;
@@ -7389,7 +7544,7 @@ const Builder = struct {
         @memset(allow_identity_merge, true);
 
         for (body_draft.nested_specs.items) |*spec| {
-            spec.capture_abi_digest = try self.sealedCaptureAbiDigest(sealer, spec.capture_entry_guards);
+            spec.capture_abi_digest = try self.sealedCaptureAbiDigest(committed_types, spec.capture_entry_guards);
         }
 
         var next_fn: u32 = @intCast(self.program.fnCount());
@@ -7401,7 +7556,7 @@ const Builder = struct {
             if (template_spec) |spec| {
                 if (spec.state == .resolved) {
                     if (spec.eager_resolution) |eager| {
-                        const final_request_ty = try sealer.sealNode(eager.request_fn_node);
+                        const final_request_ty = try committed_types.sealNode(eager.request_fn_node);
                         if (!try self.program.types.typeEql(
                             &self.program.names,
                             eager.fn_ty,
@@ -7417,7 +7572,7 @@ const Builder = struct {
                 }
             }
 
-            const sealed_template = try BodyDraftStore.sealFnTemplate(graph, sealer, fn_.source);
+            const sealed_template = try BodyDraftStore.sealFnTemplate(graph, committed_types, fn_.source);
             const fn_ty = sealed_template.mono_fn_ty;
             const digest = self.specializationTypeDigest(fn_ty);
             const requested_evidence = StoredConstFnEvidence{
@@ -7584,6 +7739,31 @@ const Builder = struct {
         root_def: ?DraftDefId,
         root_fn: ?DraftFnId,
     ) Allocator.Error!ActiveBodyDraftSeal {
+        try self.finalizeBodyDraftGraph(graph, body_draft, final_guard, final_end);
+        return self.commitFinalizedBodyDraft(
+            graph,
+            body_draft,
+            root_node,
+            root_nodes,
+            extra_ty,
+            root_def,
+            root_fn,
+        );
+    }
+
+    /// Finish every relation-producing draft operation and freeze the graph
+    /// before an owned specialization result can cross the coordinator handoff.
+    ///
+    /// Deferred preparation remains serialized because it can reenter lowering
+    /// and mutate shared Builder state. Iterator identity calculation also still
+    /// reads the graph's shared type and name stores in this transitional slice.
+    fn finalizeBodyDraftGraph(
+        self: *Builder,
+        graph: *InstGraph,
+        body_draft: *BodyDraftStore,
+        final_guard: FinalBodyOutputGuard,
+        final_end: FinalBodyOutputGuard.End,
+    ) Allocator.Error!void {
         var timing_scope = ProcedureTimingScope.begin(self.timing, .body_finalization);
         defer timing_scope.end();
 
@@ -7591,6 +7771,7 @@ const Builder = struct {
         if (body_draft.active_callable_eval_bindings.items.len != 0) {
             Common.invariant("unfinished callable eval binding reached Monotype body sealing");
         }
+        const finalization_guard = FinalBodyOutputGuard.begin(self);
         try self.prepareDraftDeferredExprs(body_draft, graph);
         try graph.finalizeGeneratedIteratorRepresentations();
         try graph.finalizeGeneratedIteratorIdentities();
@@ -7604,26 +7785,43 @@ const Builder = struct {
             }
         }
         try verifySpecReuseDemands(body_draft, graph, &impossibility_evaluator);
+        finalization_guard.assertNoFinalBodyOutput(finalization_guard.end(self));
+    }
+
+    /// Seal one already-frozen graph into durable coordinator-owned ids and
+    /// append its retained draft ranges to the final program.
+    fn commitFinalizedBodyDraft(
+        self: *Builder,
+        graph: *InstGraph,
+        body_draft: *BodyDraftStore,
+        root_node: ?NodeId,
+        root_nodes: []const NodeId,
+        extra_ty: ?Type.TypeId,
+        root_def: ?DraftDefId,
+        root_fn: ?DraftFnId,
+    ) Allocator.Error!ActiveBodyDraftSeal {
+        var timing_scope = ProcedureTimingScope.begin(self.timing, .body_finalization);
+        defer timing_scope.end();
+
         var sealer = GraphTypeFinals.init(graph);
         defer sealer.deinit();
         try self.emitDraftDeferredStructuralSerializations(body_draft, graph, &sealer);
         try self.emitDraftDeferredCallsiteIntrinsics(body_draft, graph, &sealer);
         try self.emitDraftDeferredStructuralEqs(body_draft, graph, &sealer);
         try self.emitDraftDeferredInspects(body_draft, graph, &sealer);
-        const sealed_root = if (root_node) |node| try sealer.sealNode(node) else null;
-        if (sealed_root) |ty| try graph.assertTypeHasNoActiveSnapshots(ty);
+        var committed_types = CommittedGraphTypes.shared(graph, &sealer);
+        const sealed_root = if (root_node) |node| try committed_types.sealNode(node) else null;
         const sealed_roots = try self.allocator.alloc(Type.TypeId, root_nodes.len);
         errdefer self.allocator.free(sealed_roots);
         for (root_nodes, sealed_roots) |node, *ty| {
-            ty.* = try sealer.sealNode(node);
-            try graph.assertTypeHasNoActiveSnapshots(ty.*);
+            ty.* = try committed_types.sealNode(node);
         }
         try body_draft.finishOwnerRuns();
-        try self.resolveDeferredTemplateSpecs(body_draft, &sealer);
+        try self.resolveDeferredTemplateSpecs(body_draft, &committed_types);
         var commit_map = try self.buildDraftCommitMap(
             body_draft,
             graph,
-            &sealer,
+            &committed_types,
             BodyDraftStore.finalIdOffsets(self.program),
         );
         defer commit_map.deinit(self.allocator);
@@ -7632,7 +7830,7 @@ const Builder = struct {
         try body_draft.sealCoreIntoProgramWithMap(
             self.program,
             graph,
-            &sealer,
+            &committed_types,
             body_ids,
             commit_map.emit_fns,
             commit_map.emit_defs,
@@ -7640,9 +7838,7 @@ const Builder = struct {
         );
         self.final_body_output_allowance.addDelta(output_before, FinalBodyOutputCounts.fromProgram(self.program));
         const sealed_extra = if (extra_ty) |ty| blk: {
-            const sealed = try sealer.sealType(ty);
-            try graph.assertTypeHasNoActiveSnapshots(sealed);
-            break :blk sealed;
+            break :blk try committed_types.sealType(ty);
         } else null;
         try self.markDraftNestedReady(body_draft, body_ids);
         verifyDraftTemplateSpecsResolved(body_draft);
@@ -9467,6 +9663,20 @@ const DraftTypeCell = union(enum) {
                 try graph.assertTypeHasNoActiveSnapshots(sealed);
                 break :blk sealed;
             },
+        };
+    }
+
+    fn sealCommitted(
+        self: DraftTypeCell,
+        graph: *InstGraph,
+        committed_types: *CommittedGraphTypes,
+    ) Allocator.Error!Type.TypeId {
+        if (graph != committed_types.graph) {
+            Common.compilerBug("body draft type committed through an unrelated graph");
+        }
+        return switch (self) {
+            .graph_node => |node| try committed_types.sealNode(node),
+            .sealed => |ty| try committed_types.sealType(ty),
         };
     }
 
@@ -11657,10 +11867,11 @@ const BodyDraftStore = struct {
         graph: *InstGraph,
         sealer: *GraphTypeFinals,
     ) Allocator.Error!void {
+        var committed_types = CommittedGraphTypes.shared(graph, sealer);
         return try self.sealCoreIntoProgramWithMap(
             program,
             graph,
-            sealer,
+            &committed_types,
             BodyDraftStore.finalIdOffsets(program),
             null,
             null,
@@ -11672,7 +11883,7 @@ const BodyDraftStore = struct {
         self: *const BodyDraftStore,
         program: *Ast.Program,
         graph: *InstGraph,
-        sealer: *GraphTypeFinals,
+        committed_types: *CommittedGraphTypes,
         ids: FinalIdOffsets,
         emit_fns: ?[]const bool,
         emit_defs: ?[]const bool,
@@ -11785,7 +11996,7 @@ const BodyDraftStore = struct {
         for (self.locals.items, 0..) |local, index| {
             if (!ids.retained(.locals, index)) continue;
             const expected = ids.local(@enumFromInt(@as(u32, @intCast(index))));
-            const sealed_ty = try local.ty.seal(graph, sealer);
+            const sealed_ty = try local.ty.sealCommitted(graph, committed_types);
             const durable_capture_id = if (local.capture_id) |provisional| blk: {
                 const final_index = @intFromEnum(expected);
                 if (final_index > checked.CaptureId.max_generated_index) {
@@ -11812,7 +12023,7 @@ const BodyDraftStore = struct {
             if (!ids.retained(.typed_locals, index)) continue;
             program.typed_locals.appendAssumeCapacity(.{
                 .local = ids.local(typed.local),
-                .ty = try typed.ty.seal(graph, sealer),
+                .ty = try typed.ty.sealCommitted(graph, committed_types),
             });
         }
 
@@ -11820,7 +12031,7 @@ const BodyDraftStore = struct {
         for (self.pats.items, 0..) |pat, index| {
             if (!ids.retained(.pats, index)) continue;
             program.pats.appendAssumeCapacity(.{
-                .ty = try pat.ty.seal(graph, sealer),
+                .ty = try pat.ty.sealCommitted(graph, committed_types),
                 .data = BodyDraftStore.sealCorePatData(ids, pat.data),
             });
         }
@@ -11838,8 +12049,8 @@ const BodyDraftStore = struct {
         try program.expr_regions.ensureUnusedCapacity(program.allocator, retained_expr_count);
         for (self.exprs.items, 0..) |expr, index| {
             if (!ids.retained(.exprs, index)) continue;
-            const sealed_ty = try expr.ty.seal(graph, sealer);
-            const sealed_data = try self.sealCoreExprData(program, ids, graph, sealer, expr.data);
+            const sealed_ty = try expr.ty.sealCommitted(graph, committed_types);
+            const sealed_data = try self.sealCoreExprData(program, ids, graph, committed_types, expr.data);
             const loc = ids.sourceLoc(self.expr_locs.items[index]);
             const region = self.expr_regions.items[index];
             const sealed_expr = try BodyDraftStore.sealConstructorExprWithNominalBackings(
@@ -11869,7 +12080,7 @@ const BodyDraftStore = struct {
         try program.stmt_regions.ensureUnusedCapacity(program.allocator, self.stmts.items.len);
         for (self.stmts.items, 0..) |stmt, index| {
             if (!ids.retained(.stmts, index)) continue;
-            program.stmts.appendAssumeCapacity(try BodyDraftStore.sealCoreStmt(ids, graph, sealer, stmt));
+            program.stmts.appendAssumeCapacity(try BodyDraftStore.sealCoreStmt(ids, graph, committed_types, stmt));
             program.stmt_locs.appendAssumeCapacity(ids.sourceLoc(self.stmt_locs.items[index]));
             program.stmt_regions.appendAssumeCapacity(self.stmt_regions.items[index]);
         }
@@ -11878,7 +12089,7 @@ const BodyDraftStore = struct {
         for (self.fns.items, 0..) |fn_, index| {
             if (emit_fns) |emit| if (!emit[index]) continue;
             program.fns.appendAssumeCapacity(.{
-                .source = try BodyDraftStore.sealFnTemplate(graph, sealer, fn_.source),
+                .source = try BodyDraftStore.sealFnTemplate(graph, committed_types, fn_.source),
                 .signature_relation = fn_.signature_relation,
             });
         }
@@ -11886,7 +12097,7 @@ const BodyDraftStore = struct {
         try program.defs.ensureUnusedCapacity(program.allocator, self.defs.items.len);
         for (self.defs.items, 0..) |def, index| {
             if (emit_defs) |emit| if (!emit[index]) continue;
-            const sealed_fn_def = if (def.fn_def) |template| try BodyDraftStore.sealFnTemplate(graph, sealer, template) else null;
+            const sealed_fn_def = if (def.fn_def) |template| try BodyDraftStore.sealFnTemplate(graph, committed_types, template) else null;
             const sealed_fn_id = if (def.fn_id) |fn_id| ids.fnTarget(fn_id) else null;
             if (sealed_fn_def) |template| {
                 if (sealed_fn_id) |fn_id| {
@@ -11899,14 +12110,14 @@ const BodyDraftStore = struct {
                 .fn_id = sealed_fn_id,
                 .args = ids.typedLocalSpan(def.args),
                 .body = ids.fnBody(def.body),
-                .ret = try def.ret.seal(graph, sealer),
+                .ret = try def.ret.sealCommitted(graph, committed_types),
             });
         }
 
         try program.nested_defs.ensureUnusedCapacity(program.allocator, self.nested_defs.items.len);
         for (self.nested_defs.items, 0..) |def, index| {
             if (emit_nested_defs) |emit| if (!emit[index]) continue;
-            const sealed_fn_def = try BodyDraftStore.sealFnTemplate(graph, sealer, def.fn_def);
+            const sealed_fn_def = try BodyDraftStore.sealFnTemplate(graph, committed_types, def.fn_def);
             const sealed_fn_id = ids.fnTarget(def.fn_id);
             program.setFnSource(sealed_fn_id, sealed_fn_def);
             program.nested_defs.appendAssumeCapacity(.{
@@ -11915,7 +12126,7 @@ const BodyDraftStore = struct {
                 .fn_id = sealed_fn_id,
                 .args = ids.typedLocalSpan(def.args),
                 .body = ids.expr(def.body),
-                .ret = try def.ret.seal(graph, sealer),
+                .ret = try def.ret.sealCommitted(graph, committed_types),
             });
         }
 
@@ -11938,7 +12149,7 @@ const BodyDraftStore = struct {
             if (!ids.retained(.layout_requests, index)) continue;
             program.layout_requests.appendAssumeCapacity(.{
                 .checked_type = request.checked_type,
-                .ty = try request.ty.seal(graph, sealer),
+                .ty = try request.ty.sealCommitted(graph, committed_types),
                 .def = if (request.def) |def_id| ids.def(def_id) else null,
                 .const_locator = request.const_locator,
             });
@@ -11949,7 +12160,7 @@ const BodyDraftStore = struct {
             if (!ids.retained(.runtime_schema_requests, index)) continue;
             program.runtime_schema_requests.appendAssumeCapacity(.{
                 .def = request.def,
-                .ty = try request.ty.seal(graph, sealer),
+                .ty = try request.ty.sealCommitted(graph, committed_types),
             });
         }
     }
@@ -11977,14 +12188,14 @@ const BodyDraftStore = struct {
 
     fn sealFnTemplate(
         graph: *InstGraph,
-        sealer: *GraphTypeFinals,
+        committed_types: *CommittedGraphTypes,
         template: DraftFnTemplate,
     ) Allocator.Error!Ast.FnTemplate {
         return .{
             .fn_def = template.fn_def,
             .source_fn_ty = template.source_fn_ty,
             .source_fn_key = template.source_fn_key,
-            .mono_fn_ty = try template.mono_fn_ty.seal(graph, sealer),
+            .mono_fn_ty = try template.mono_fn_ty.sealCommitted(graph, committed_types),
             .evidence_digest = template.evidence_digest,
             .const_evidence = template.const_evidence,
             .const_evidence_frames = template.const_evidence_frames,
@@ -12027,10 +12238,10 @@ const BodyDraftStore = struct {
         };
     }
 
-    fn sealCoreReturn(ids: FinalIdOffsets, graph: *InstGraph, sealer: *GraphTypeFinals, ret: DraftReturn) Allocator.Error!Ast.Return {
+    fn sealCoreReturn(ids: FinalIdOffsets, graph: *InstGraph, committed_types: *CommittedGraphTypes, ret: DraftReturn) Allocator.Error!Ast.Return {
         return .{
             .value = ids.expr(ret.value),
-            .target = try ret.target.seal(graph, sealer),
+            .target = try ret.target.sealCommitted(graph, committed_types),
         };
     }
 
@@ -12233,7 +12444,7 @@ const BodyDraftStore = struct {
         program: *Ast.Program,
         ids: FinalIdOffsets,
         graph: *InstGraph,
-        sealer: *GraphTypeFinals,
+        committed_types: *CommittedGraphTypes,
         data: DraftExprData,
     ) Allocator.Error!Ast.ExprData {
         return switch (data) {
@@ -12366,7 +12577,7 @@ const BodyDraftStore = struct {
             .continue_ => |continue_| .{ .continue_ = .{
                 .values = ids.exprSpan(continue_.values),
             } },
-            .return_ => |ret| .{ .return_ = try BodyDraftStore.sealCoreReturn(ids, graph, sealer, ret) },
+            .return_ => |ret| .{ .return_ = try BodyDraftStore.sealCoreReturn(ids, graph, committed_types, ret) },
             .crash => |literal| .{ .crash = ids.stringLiteral(literal) },
             .comptime_branch_taken => |taken| .{ .comptime_branch_taken = .{
                 .site = ids.comptimeSite(taken.site),
@@ -12383,7 +12594,7 @@ const BodyDraftStore = struct {
         };
     }
 
-    fn sealCoreStmt(ids: FinalIdOffsets, graph: *InstGraph, sealer: *GraphTypeFinals, stmt: DraftStmt) Allocator.Error!Ast.Stmt {
+    fn sealCoreStmt(ids: FinalIdOffsets, graph: *InstGraph, committed_types: *CommittedGraphTypes, stmt: DraftStmt) Allocator.Error!Ast.Stmt {
         return switch (stmt) {
             .uninitialized => |pat| .{ .uninitialized = ids.pat(pat) },
             .let_ => |let_| .{ .let_ = .{
@@ -12395,7 +12606,7 @@ const BodyDraftStore = struct {
             .expr => |expr| .{ .expr = ids.expr(expr) },
             .expect => |expr| .{ .expect = ids.expr(expr) },
             .dbg => |expr| .{ .dbg = ids.expr(expr) },
-            .return_ => |ret| .{ .return_ = try BodyDraftStore.sealCoreReturn(ids, graph, sealer, ret) },
+            .return_ => |ret| .{ .return_ = try BodyDraftStore.sealCoreReturn(ids, graph, committed_types, ret) },
             .crash => |literal| .{ .crash = ids.stringLiteral(literal) },
         };
     }
@@ -21213,7 +21424,7 @@ const BodyContext = struct {
         mono_fn_ty: Type.TypeId,
     ) Allocator.Error!NodeId {
         const checked_node = try self.instNode(checked_fn_ty);
-        const request_node = try self.graph.importMono(mono_fn_ty);
+        const request_node = try self.graph.importMonoIndependent(mono_fn_ty);
         const related = try checkedMonoRequestNode(self.graph, checked_node, request_node, .construction);
         return related;
     }
@@ -28620,7 +28831,13 @@ const BodyContext = struct {
         const request_fn_ty = try self.activeTypeFromNode(spec.request_fn_node);
         // Iterator-inline completion consumes the callee's solved private
         // representation, so the body must lower now rather than queue.
-        try self.builder.resolveDeferredTemplateSpecAtType(self.draft, spec_index, request_fn_ty, .immediate);
+        try self.builder.resolveDeferredTemplateSpecAtType(
+            self.draft,
+            spec_index,
+            request_fn_ty,
+            request_fn_ty,
+            .immediate,
+        );
         self.draft.template_specs.items[spec_index].eager_resolution = .{
             .request_fn_node = spec.request_fn_node,
             .fn_ty = request_fn_ty,
@@ -28847,7 +29064,7 @@ const BodyContext = struct {
         requested_ty: checked.CheckedTypeId,
     ) Allocator.Error!Type.TypeId {
         const stored_ty = try self.lowerConstCaptureType(store_view, stored.root_type);
-        _ = try self.relateCheckedNodeToProducedValue(try self.instNode(requested_ty), try self.graph.importMono(stored_ty));
+        _ = try self.relateCheckedNodeToProducedValue(try self.instNode(requested_ty), try self.graph.importMonoIndependent(stored_ty));
         return stored_ty;
     }
 
@@ -28864,7 +29081,7 @@ const BodyContext = struct {
         const stored_ty = try self.lowerConstCaptureType(store_view, stored.root_type);
         return try self.relateCheckedNodeToProducedValue(
             try self.instNode(requested_ty),
-            try self.graph.importMono(stored_ty),
+            try self.graph.importMonoIndependent(stored_ty),
         );
     }
 
@@ -49001,6 +49218,132 @@ fn numeralTargetFromPrimitive(primitive: Type.Primitive) exact_numeral.Target {
     };
 }
 
+test "queued specialization skips a body claimed immediately before dispatch" {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator);
+    defer program.deinit();
+    const ty = try program.types.internZst(&program.names);
+    const template_ref = names.ProcTemplate{
+        .artifact = .{},
+        // Both fields are only carried by jobs that are skipped below.
+        .proc_base = undefined,
+        .template = undefined,
+    };
+    const fn_template = Ast.FnTemplate{
+        .fn_def = .{ .local_template = template_ref },
+        // This test never lowers the template, so its checked type is not read.
+        .source_fn_ty = undefined,
+        .source_fn_key = .{},
+        .mono_fn_ty = ty,
+    };
+
+    var diagnostics: Diagnostics = .{};
+    var builder: Builder = undefined;
+    builder.active_graph = null;
+    builder.pending_spec_jobs = .empty;
+    defer builder.pending_spec_jobs.deinit(allocator);
+    builder.pending_spec_jobs_head = 0;
+    builder.next_spec_dispatch_index = 0;
+    builder.next_spec_accept_index = 0;
+    builder.counters = null;
+    builder.diagnostics = &diagnostics;
+    builder.spec_store = specialize.SpecBuilder.init(
+        allocator,
+        &program.names,
+        &program.types,
+        &program.specs,
+    );
+    defer builder.spec_store.deinit();
+    builder.lowered_templates = collections.DenseMap(Ast.FnId, LoweredTemplate).init(allocator);
+    defer builder.lowered_templates.deinit();
+
+    const makeReservedJob = struct {
+        fn make(
+            builder_: *Builder,
+            program_: *Ast.Program,
+            template_ref_: names.ProcTemplate,
+            fn_template_: Ast.FnTemplate,
+            ty_: Type.TypeId,
+            dispatch_index: u64,
+        ) Allocator.Error!PendingSpecJob {
+            const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(dispatch_index)));
+            const def_id: Ast.DefId = @enumFromInt(@as(u32, @intCast(dispatch_index)));
+            const identity = Ast.SpecIdentity{
+                .callable = .{ .generated = @enumFromInt(@as(u32, @intCast(dispatch_index))) },
+                .method_scope = .{},
+                .source_fn_ty_digest = .{},
+                .evidence_digest = .{},
+                .request_fn_ty_digest = .{},
+                .request_fn_ty = ty_,
+            };
+            const spec = try program_.addSpec(.{
+                .identity = identity,
+                .request_fn_ty = ty_,
+                .request_fn_ty_digest = identity.request_fn_ty_digest,
+                .solved_fn_ty = ty_,
+                .solved_fn_ty_digest = identity.request_fn_ty_digest,
+                .fn_id = fn_id,
+                .status = .reserved,
+            });
+            try builder_.lowered_templates.put(fn_id, .{
+                .def = def_id,
+                .spec = spec,
+                .evidence = &.{},
+            });
+
+            return .{
+                .dispatch_index = dispatch_index,
+                .spec = spec,
+                .reservation = .{
+                    .def = def_id,
+                    .fn_id = fn_id,
+                    .symbol = @enumFromInt(@as(u32, @intCast(dispatch_index))),
+                },
+                .fn_template = fn_template_,
+                .template_ref = template_ref_,
+                .method_scope = .{},
+                // The job is marked ready before draining, so its type is not read.
+                .source_fn_ty = undefined,
+                .source_fn_key = .{},
+                .fn_ty = ty_,
+                .evidence = &.{},
+                .signature_relation = .independent_roots,
+            };
+        }
+    }.make;
+
+    const first = try makeReservedJob(&builder, &program, template_ref, fn_template, ty, 0);
+    try builder.pending_spec_jobs.append(allocator, first);
+    builder.next_spec_dispatch_index += 1;
+    builder.countBodyDiagnostic("spec_jobs_enqueued");
+    const second = try makeReservedJob(&builder, &program, template_ref, fn_template, ty, 1);
+    try builder.pending_spec_jobs.append(allocator, second);
+    builder.next_spec_dispatch_index += 1;
+    builder.countBodyDiagnostic("spec_jobs_enqueued");
+    try std.testing.expectEqual(Ast.SpecStatus.reserved, builder.spec_store.recordStatus(first.spec));
+    try std.testing.expectEqual(Ast.SpecStatus.reserved, builder.spec_store.recordStatus(second.spec));
+
+    // Immediate representation-sensitive callers claim both reservations while
+    // their original FIFO entries remain queued.
+    builder.spec_store.markLowering(first.spec);
+    try builder.spec_store.markReady(first.spec, first.fn_ty, .{});
+    builder.spec_store.markLowering(second.spec);
+    try builder.spec_store.markReady(second.spec, second.fn_ty, .{});
+    try std.testing.expectEqual(Ast.SpecStatus.ready, builder.spec_store.recordStatus(first.spec));
+    try std.testing.expectEqual(Ast.SpecStatus.ready, builder.spec_store.recordStatus(second.spec));
+
+    try builder.drainPendingSpecJobs();
+
+    try std.testing.expectEqual(@as(u64, 2), builder.next_spec_accept_index);
+    try std.testing.expectEqual(@as(usize, 0), builder.pending_spec_jobs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), builder.pending_spec_jobs_head);
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.body.spec_jobs_enqueued);
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.body.spec_jobs_skipped_ready);
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.body.spec_jobs_executed);
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.body.spec_job_shards_lowered);
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.body.spec_job_shards_committed);
+}
+
 test "sealed record omission takes its default identity from the monotype field" {
     const expected: Type.FieldDefault = .{
         .module = @enumFromInt(17),
@@ -51664,6 +52007,76 @@ test "body draft store appends draft-local ids spans and type cells" {
         try std.testing.expectEqual(sealed_expr, let_.value);
         try std.testing.expectEqual(@as(?Ast.ComptimeSiteId, sealed_site), let_.comptime_site);
     }
+}
+
+test "body draft commit relocates core type fields out of a private graph store" {
+    const allocator = std.testing.allocator;
+
+    var program = Ast.Program.init(allocator);
+    defer program.deinit();
+    _ = try program.types.internPrimitive(&program.names, .bool);
+
+    var private_types = Type.Store.init(allocator);
+    defer private_types.deinit();
+    const graph = try InstGraph.create(allocator, &private_types, &program.names);
+    defer graph.destroy();
+
+    var draft = BodyDraftStore.init(allocator);
+    defer draft.deinit();
+    const unit_node = try graph.newNode(.zst);
+    const list_node = try graph.newNode(.{ .list = unit_node });
+    const unit_cell = DraftTypeCell.fromGraphNode(unit_node);
+    const list_cell = DraftTypeCell.fromGraphNode(list_node);
+
+    var symbol_gen = Common.SymbolGen{};
+    const local = try draft.addLocal(symbol_gen.fresh(), list_cell, null, null);
+    _ = try draft.addPat(.{ .ty = list_cell, .data = .{ .bind = local } });
+    const expr = try draft.addExpr(.{ .ty = list_cell, .data = .{ .local = local } });
+    _ = try draft.addTypedLocalSpan(&.{.{ .local = local, .ty = list_cell }});
+    _ = try draft.addStmt(.{ .return_ = .{ .value = expr, .target = unit_cell } });
+
+    try graph.freezeRelations();
+    var sealer = GraphTypeFinals.init(graph);
+    defer sealer.deinit();
+    var relocation = Type.Store.TypeRelocation.init(
+        allocator,
+        &private_types,
+        &program.names,
+        &program.types,
+        &program.names,
+    );
+    defer relocation.deinit();
+    var committed_types = CommittedGraphTypes.relocated(
+        graph,
+        &sealer,
+        &program.types,
+        &program.names,
+        &relocation,
+    );
+    try draft.sealCoreIntoProgramWithMap(
+        &program,
+        graph,
+        &committed_types,
+        BodyDraftStore.finalIdOffsets(&program),
+        null,
+        null,
+        null,
+    );
+
+    const sealed_list = program.getLocal(@enumFromInt(@intFromEnum(local))).ty;
+    const sealed_unit = switch (program.types.get(sealed_list)) {
+        .list => |element| element,
+        .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => return error.TestExpectedEqual,
+    };
+    try std.testing.expectEqual(.zst, program.types.get(sealed_unit));
+    try std.testing.expectEqual(sealed_list, program.getPatAt(0).ty);
+    try std.testing.expectEqual(sealed_list, program.getExprAt(0).ty);
+    try std.testing.expectEqual(sealed_list, GuardedList.at(program.typedLocalSpan(.{ .start = 0, .len = 1 }), 0).ty);
+    const sealed_stmt = program.getStmtAt(0);
+    if (sealed_stmt != .return_) return error.TestExpectedEqual;
+    try std.testing.expectEqual(sealed_unit, sealed_stmt.return_.target);
+    program.freeze();
+    try std.testing.expectEqual(@as(?Ast.CompletedTypeIdVerifyError, null), program.view().verifyCompletedTypeIds());
 }
 
 test "body draft ownership runs restore the parent across nested lowering" {
