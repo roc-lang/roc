@@ -438,9 +438,12 @@ pub const InstGraph = struct {
     /// performs one exact global invalidation, coalescing mutation bursts that
     /// do not inspect an intermediate graph state.
     current_snapshots_dirty: bool,
-    /// Reverse active-snapshot links, also the import memo: a Monotype already
-    /// connected to this graph reuses its node instead of being copied.
-    linked_type_nodes: collections.DenseMap(Type.TypeId, NodeId),
+    /// Reverse links for immutable active snapshots. Finished Monotype imports
+    /// use a per-import memo instead: equal interned types at independent
+    /// occurrences must not share mutable solver nodes.
+    active_snapshot_nodes: collections.DenseMap(Type.TypeId, NodeId),
+    /// Finished Monotypes already imported into the current ownership scope.
+    imported_type_nodes: collections.DenseMap(Type.TypeId, NodeId),
     /// Exact immutable Monotype snapshot imported at each permanent node.
     /// Unlike `node_snapshots`, these are producer-owned representation
     /// witnesses. Keeping the direct node association lets consumers of an
@@ -514,7 +517,8 @@ pub const InstGraph = struct {
             .node_snapshots = collections.DenseMap(NodeId, std.ArrayList(Type.TypeId)).init(allocator),
             .current_snapshots = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
             .current_snapshots_dirty = false,
-            .linked_type_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
+            .active_snapshot_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
+            .imported_type_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
             .imported_monos = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
             .row_exts = .empty,
             .row_parents = collections.DenseMap(NodeId, std.ArrayList(NodeId)).init(allocator),
@@ -583,7 +587,8 @@ pub const InstGraph = struct {
         self.row_parents.deinit();
         self.row_exts.deinit(allocator);
         self.imported_monos.deinit();
-        self.linked_type_nodes.deinit();
+        self.active_snapshot_nodes.deinit();
+        self.imported_type_nodes.deinit();
         self.processed_relations.deinit();
         self.class_member_tail.deinit(allocator);
         self.class_member_head.deinit(allocator);
@@ -4632,36 +4637,74 @@ pub const InstGraph = struct {
         }
     }
 
-    /// Import a Monotype into the graph. A Monotype already linked to a node
-    /// reconnects to it; an unlinked one copies in as closed structure, so a
-    /// later attempt to widen it is a unification conflict rather than a silent
-    /// mutation of another specialization's final type.
+    /// Import one independent occurrence of a finished Monotype. Internal
+    /// sharing and recursion are preserved by the import-local memo, while a
+    /// second root import receives distinct mutable solver nodes. Active graph
+    /// snapshots reconnect to their existing nodes.
     pub fn importMono(self: *InstGraph, ty: Type.TypeId) Allocator.Error!NodeId {
         self.requireRelationProduction();
         self.countDiagnostic("mono_import_requests");
-        if (self.linked_type_nodes.get(ty)) |existing| {
+        if (self.active_snapshot_nodes.get(ty)) |existing| {
+            self.countDiagnostic("mono_import_hits");
+            return self.find(existing);
+        }
+        if (self.imported_type_nodes.get(ty)) |existing| {
             self.countDiagnostic("mono_import_hits");
             return self.find(existing);
         }
         self.countDiagnostic("mono_import_misses");
+        return try self.importMonoInner(ty, null);
+    }
+
+    /// Import a finished Monotype root as a distinct occurrence. Descendants
+    /// reconnect through the ownership-scope memo, while a recursive edge back
+    /// to the root reconnects through the import-local memo.
+    pub fn importMonoIndependent(self: *InstGraph, ty: Type.TypeId) Allocator.Error!NodeId {
+        self.requireRelationProduction();
+        var imported = collections.DenseMap(Type.TypeId, NodeId).init(self.allocator);
+        defer imported.deinit();
+        return try self.importMonoInner(ty, &imported);
+    }
+
+    fn importMonoInner(
+        self: *InstGraph,
+        ty: Type.TypeId,
+        imported_types: ?*collections.DenseMap(Type.TypeId, NodeId),
+    ) Allocator.Error!NodeId {
+        if (imported_types) |local| {
+            if (local.get(ty)) |existing| return existing;
+            if (local.count() != 0) {
+                // Only the explicitly requested occurrence root is
+                // independent. Its component types still carry the
+                // ownership-scope identity used by checked constructor slots
+                // and their evidence.
+                return try self.importMonoInner(ty, null);
+            }
+        } else if (self.imported_type_nodes.get(ty)) |existing| {
+            return self.find(existing);
+        }
         const node = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
         // One-way memo: every import is a finished Monotype from outside this
         // graph (ids materialized here hit the memo above), so it enters as a
         // snapshot. Registering a view would let this specialization's
         // evidence rewrite another specialization's final type, destabilizing
         // every digest taken from it.
-        try self.linked_type_nodes.put(ty, node);
+        if (imported_types) |local| {
+            try local.put(ty, node);
+        } else {
+            try self.imported_type_nodes.put(ty, node);
+        }
         try self.imported_monos.put(node, ty);
 
         const types = self.types;
         const imported: InstNode = switch (types.get(ty)) {
             .primitive => |primitive| .{ .primitive = primitive },
-            .list => |elem| .{ .list = try self.importMono(elem) },
-            .box => |elem| .{ .box = try self.importMono(elem) },
-            .tuple => |items| .{ .tuple = try self.importMonoSlice(types.span(items)) },
+            .list => |elem| .{ .list = try self.importMonoInner(elem, imported_types) },
+            .box => |elem| .{ .box = try self.importMonoInner(elem, imported_types) },
+            .tuple => |items| .{ .tuple = try self.importMonoSlice(types.span(items), imported_types) },
             .func => |func| .{ .func = .{
-                .args = try self.importMonoSlice(types.span(func.args)),
-                .ret = try self.importMono(func.ret),
+                .args = try self.importMonoSlice(types.span(func.args), imported_types),
+                .ret = try self.importMonoInner(func.ret, imported_types),
             } },
             .tag_union => |tags| blk: {
                 const span = types.tagSpan(tags);
@@ -4674,7 +4717,7 @@ pub const InstGraph = struct {
                     inst_tags[index] = .{
                         .name = tag.name,
                         .checked_name = tag.checked_name,
-                        .payloads = try self.importMonoSlice(types.span(tag.payloads)),
+                        .payloads = try self.importMonoSlice(types.span(tag.payloads), imported_types),
                     };
                 }
                 break :blk .{ .tag_union = .{
@@ -4692,12 +4735,12 @@ pub const InstGraph = struct {
                         Common.invariant("finished Monotype import received a provisional record field");
                     }
                     const value_ty = if (field.value_ty) |value_ty|
-                        try self.importMono(value_ty)
+                        try self.importMonoInner(value_ty, imported_types)
                     else
                         null;
                     inst_fields[index] = .{
                         .name = field.name,
-                        .ty = try self.importMono(field.ty),
+                        .ty = try self.importMonoInner(field.ty, imported_types),
                         .value_ty = value_ty,
                         .kind = if (value_ty != null)
                             .optional
@@ -4718,13 +4761,13 @@ pub const InstGraph = struct {
                 .def = named.def,
                 .kind = named.kind,
                 .builtin_owner = named.builtin_owner,
-                .args = try self.importMonoSlice(types.span(named.args)),
+                .args = try self.importMonoSlice(types.span(named.args), imported_types),
                 .backing = if (named.backing) |backing| .{
-                    .node = try self.importMono(backing.ty),
+                    .node = try self.importMonoInner(backing.ty, imported_types),
                     .use = backing.use,
                     .authority = backing.authority,
                 } else null,
-                .declared_order = try self.importDeclaredFields(named.declared_order),
+                .declared_order = try self.importDeclaredFields(named.declared_order, imported_types),
             } },
             .erased => |digest| .{ .erased = digest },
             .zst => .zst,
@@ -4883,16 +4926,24 @@ pub const InstGraph = struct {
         return out;
     }
 
-    fn importMonoSlice(self: *InstGraph, tys: anytype) Allocator.Error![]NodeId {
+    fn importMonoSlice(
+        self: *InstGraph,
+        tys: anytype,
+        imported_types: ?*collections.DenseMap(Type.TypeId, NodeId),
+    ) Allocator.Error![]NodeId {
         const out = try self.arena().alloc(NodeId, tys.len);
         for (0..tys.len) |index| {
             const ty = GuardedList.at(tys, index);
-            out[index] = try self.importMono(ty);
+            out[index] = try self.importMonoInner(ty, imported_types);
         }
         return out;
     }
 
-    fn importDeclaredFields(self: *InstGraph, span: Type.Span) Allocator.Error![]const InstDeclaredField {
+    fn importDeclaredFields(
+        self: *InstGraph,
+        span: Type.Span,
+        imported_types: ?*collections.DenseMap(Type.TypeId, NodeId),
+    ) Allocator.Error![]const InstDeclaredField {
         const fields = self.types.declaredFieldSpan(span);
         if (fields.len == 0) return &.{};
         const out = try self.arena().alloc(InstDeclaredField, fields.len);
@@ -4900,7 +4951,7 @@ pub const InstGraph = struct {
             const field = GuardedList.at(fields, index);
             out[index] = switch (field) {
                 .named => |name| .{ .named = name },
-                .padding => |ty| .{ .padding = try self.importMono(ty) },
+                .padding => |ty| .{ .padding = try self.importMonoInner(ty, imported_types) },
             };
         }
         return out;
@@ -4986,7 +5037,7 @@ pub const InstGraph = struct {
             const entry = try self.node_snapshots.getOrPut(snapshot_node);
             if (!entry.found_existing) entry.value_ptr.* = .empty;
             try entry.value_ptr.append(self.allocator, snapshot_ty);
-            try self.linked_type_nodes.put(snapshot_ty, snapshot_node);
+            try self.active_snapshot_nodes.put(snapshot_ty, snapshot_node);
             try self.current_snapshots.put(snapshot_node, snapshot_ty);
         }
         return ty;
@@ -5096,7 +5147,7 @@ pub const InstGraph = struct {
     }
 
     fn isActiveSnapshotType(self: *InstGraph, ty: Type.TypeId) bool {
-        const raw_node = self.linked_type_nodes.get(ty) orelse return false;
+        const raw_node = self.active_snapshot_nodes.get(ty) orelse return false;
         const views = self.node_snapshots.get(raw_node) orelse return false;
         for (views.items) |view| {
             if (view == ty) return true;
@@ -5107,7 +5158,7 @@ pub const InstGraph = struct {
     /// Return the current root node for a TypeId that is one of this graph's
     /// immutable active snapshots. Closed imported TypeIds return null.
     pub fn activeSnapshotNode(self: *InstGraph, ty: Type.TypeId) ?NodeId {
-        const raw_node = self.linked_type_nodes.get(ty) orelse return null;
+        const raw_node = self.active_snapshot_nodes.get(ty) orelse return null;
         const views = self.node_snapshots.get(raw_node) orelse return null;
         for (views.items) |view| {
             if (view == ty) return self.find(raw_node);
@@ -5178,7 +5229,7 @@ pub const GraphTypeFinals = struct {
     }
 
     pub fn sealType(self: *GraphTypeFinals, ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        if (self.graph.linked_type_nodes.get(ty)) |raw_node| {
+        if (self.graph.active_snapshot_nodes.get(ty)) |raw_node| {
             if (self.graph.node_snapshots.get(raw_node)) |views| {
                 for (views.items) |view| {
                     if (view == ty) return try self.sealNode(raw_node);
@@ -6629,14 +6680,14 @@ test "union resolves immutable snapshot provenance without reindexing" {
     for (&snapshots, &owners) |*snapshot, *owner| {
         const node = try graph.newNode(.{ .primitive = .u64 });
         snapshot.* = try graph.activeTypeViewForNode(node);
-        owner.* = graph.linked_type_nodes.get(snapshot.*).?;
+        owner.* = graph.active_snapshot_nodes.get(snapshot.*).?;
         try graph.union_(winner, node);
     }
 
     for (snapshots, owners) |snapshot, owner| {
         // The reverse index remains stable instead of rewriting every prior
         // snapshot on each union. Root resolution happens only when queried.
-        try std.testing.expectEqual(owner, graph.linked_type_nodes.get(snapshot).?);
+        try std.testing.expectEqual(owner, graph.active_snapshot_nodes.get(snapshot).?);
         try std.testing.expectEqual(winner, graph.activeSnapshotNode(snapshot).?);
     }
 }
@@ -7329,7 +7380,7 @@ test "construction row relation absorbs only explicit optional or defaulted fiel
     try std.testing.expectEqual(b, absorbed_empty.fields[0].name);
 }
 
-test "imported closed tag row rejects additional evidence without mutating shared import" {
+test "independent closed tag-row imports have distinct solver nodes" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -7351,23 +7402,23 @@ test "imported closed tag row rejects additional evidence without mutating share
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const request_node = try graph.importMono(requested);
-    const shared_request_node = try graph.importMono(requested);
-    try std.testing.expectEqual(request_node, shared_request_node);
+    const request_node = try graph.importMonoIndependent(requested);
+    const independent_request_node = try graph.importMonoIndependent(requested);
+    try std.testing.expect(request_node != independent_request_node);
 
     const imported = graph.content(request_node).tag_union;
     const additional_tags = [_]InstTag{.{ .name = b, .checked_name = b, .payloads = &.{} }};
     try std.testing.expect(graph.rowAdditionConflicts(imported.ext, additional_tags.len, .tag_union));
     try std.testing.expectEqual(InstNode.empty_tag_union, graph.content(imported.ext));
 
-    const retained = graph.content(shared_request_node).tag_union;
+    const retained = graph.content(independent_request_node).tag_union;
     try std.testing.expectEqual(@as(usize, 1), retained.tags.len);
     try std.testing.expectEqual(a, retained.tags[0].name);
     try std.testing.expect(retained.tags[0].name != b);
     try std.testing.expectEqual(InstNode.empty_tag_union, graph.content(retained.ext));
 }
 
-test "imported closed record row rejects additional evidence without mutating shared import" {
+test "independent closed record-row imports have distinct solver nodes" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -7389,9 +7440,9 @@ test "imported closed record row rejects additional evidence without mutating sh
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const request_node = try graph.importMono(requested);
-    const shared_request_node = try graph.importMono(requested);
-    try std.testing.expectEqual(request_node, shared_request_node);
+    const request_node = try graph.importMonoIndependent(requested);
+    const independent_request_node = try graph.importMonoIndependent(requested);
+    try std.testing.expect(request_node != independent_request_node);
 
     const imported = graph.content(request_node).record;
     const additional_fields = [_]InstField{.{
@@ -7402,7 +7453,7 @@ test "imported closed record row rejects additional evidence without mutating sh
     try std.testing.expect(graph.rowAdditionConflicts(imported.ext, additional_fields.len, .record));
     try std.testing.expectEqual(InstNode.empty_record, graph.content(imported.ext));
 
-    const retained = graph.content(shared_request_node).record;
+    const retained = graph.content(independent_request_node).record;
     try std.testing.expectEqual(@as(usize, 1), retained.fields.len);
     try std.testing.expectEqual(value, retained.fields[0].name);
     try std.testing.expect(retained.fields[0].name != extra);

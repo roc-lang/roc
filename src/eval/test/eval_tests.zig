@@ -6323,17 +6323,17 @@ const core_tests = [_]TestCase{
         .source =
         \\{
         \\    (
-        \\        U8.compare(0, U8.highest) == LT and U8.compare(U8.highest, U8.highest) == EQ and U8.compare(U8.highest, 0) == GT,
-        \\        I8.compare(I8.lowest, 0) == LT and I8.compare(0, 0) == EQ and I8.compare(I8.highest, 0) == GT,
-        \\        U16.compare(0, U16.highest) == LT and U16.compare(U16.highest, U16.highest) == EQ and U16.compare(U16.highest, 0) == GT,
-        \\        I16.compare(I16.lowest, 0) == LT and I16.compare(0, 0) == EQ and I16.compare(I16.highest, 0) == GT,
-        \\        U32.compare(0, U32.highest) == LT and U32.compare(U32.highest, U32.highest) == EQ and U32.compare(U32.highest, 0) == GT,
-        \\        I32.compare(I32.lowest, 0) == LT and I32.compare(0, 0) == EQ and I32.compare(I32.highest, 0) == GT,
-        \\        U64.compare(0, U64.highest) == LT and U64.compare(U64.highest, U64.highest) == EQ and U64.compare(U64.highest, 0) == GT,
-        \\        I64.compare(I64.lowest, 0) == LT and I64.compare(0, 0) == EQ and I64.compare(I64.highest, 0) == GT,
-        \\        U128.compare(0, U128.highest) == LT and U128.compare(U128.highest, U128.highest) == EQ and U128.compare(U128.highest, 0) == GT,
-        \\        I128.compare(I128.lowest, 0) == LT and I128.compare(0, 0) == EQ and I128.compare(I128.highest, 0) == GT,
-        \\        Dec.compare(Dec.lowest, 0.0) == LT and Dec.compare(0.0, 0.0) == EQ and Dec.compare(Dec.highest, 0.0) == GT,
+        \\        U8.order_relative_to(0, U8.highest) == Before and U8.order_relative_to(U8.highest, U8.highest) == Same and U8.order_relative_to(U8.highest, 0) == After,
+        \\        I8.order_relative_to(I8.lowest, 0) == Before and I8.order_relative_to(0, 0) == Same and I8.order_relative_to(I8.highest, 0) == After,
+        \\        U16.order_relative_to(0, U16.highest) == Before and U16.order_relative_to(U16.highest, U16.highest) == Same and U16.order_relative_to(U16.highest, 0) == After,
+        \\        I16.order_relative_to(I16.lowest, 0) == Before and I16.order_relative_to(0, 0) == Same and I16.order_relative_to(I16.highest, 0) == After,
+        \\        U32.order_relative_to(0, U32.highest) == Before and U32.order_relative_to(U32.highest, U32.highest) == Same and U32.order_relative_to(U32.highest, 0) == After,
+        \\        I32.order_relative_to(I32.lowest, 0) == Before and I32.order_relative_to(0, 0) == Same and I32.order_relative_to(I32.highest, 0) == After,
+        \\        U64.order_relative_to(0, U64.highest) == Before and U64.order_relative_to(U64.highest, U64.highest) == Same and U64.order_relative_to(U64.highest, 0) == After,
+        \\        I64.order_relative_to(I64.lowest, 0) == Before and I64.order_relative_to(0, 0) == Same and I64.order_relative_to(I64.highest, 0) == After,
+        \\        U128.order_relative_to(0, U128.highest) == Before and U128.order_relative_to(U128.highest, U128.highest) == Same and U128.order_relative_to(U128.highest, 0) == After,
+        \\        I128.order_relative_to(I128.lowest, 0) == Before and I128.order_relative_to(0, 0) == Same and I128.order_relative_to(I128.highest, 0) == After,
+        \\        Dec.order_relative_to(Dec.lowest, 0.0) == Before and Dec.order_relative_to(0.0, 0.0) == Same and Dec.order_relative_to(Dec.highest, 0.0) == After,
         \\    )
         \\}
         ,

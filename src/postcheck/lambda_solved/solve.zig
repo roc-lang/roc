@@ -61,6 +61,7 @@ const UnifyFrame = union(enum) {
     process: struct {
         lhs: Type.TypeVarId,
         rhs: Type.TypeVarId,
+        structural_isolated: bool,
     },
     finish: struct {
         pair: UnifyPair,
@@ -1681,7 +1682,12 @@ const Solver = struct {
         while (self.unify_stack.items.len > base) {
             const frame = self.unify_stack.pop().?;
             switch (frame) {
-                .process => |process| try self.processUnifyPair(&self.unify_stack, process.lhs, process.rhs),
+                .process => |process| try self.processUnifyPair(
+                    &self.unify_stack,
+                    process.lhs,
+                    process.rhs,
+                    process.structural_isolated,
+                ),
                 .finish => |finish| {
                     self.applyUnifyFinish(finish.action);
                     _ = self.active_unifications.remove(finish.pair);
@@ -1696,7 +1702,24 @@ const Solver = struct {
         lhs: Type.TypeVarId,
         rhs: Type.TypeVarId,
     ) Allocator.Error!void {
-        try stack.append(self.allocator, .{ .process = .{ .lhs = lhs, .rhs = rhs } });
+        try stack.append(self.allocator, .{ .process = .{
+            .lhs = lhs,
+            .rhs = rhs,
+            .structural_isolated = false,
+        } });
+    }
+
+    fn pushIsolatedStructuralPair(
+        self: *Solver,
+        stack: *std.ArrayList(UnifyFrame),
+        structural_ty: Type.TypeVarId,
+        backing_ty: Type.TypeVarId,
+    ) Allocator.Error!void {
+        try stack.append(self.allocator, .{ .process = .{
+            .lhs = structural_ty,
+            .rhs = backing_ty,
+            .structural_isolated = true,
+        } });
     }
 
     fn processUnifyPair(
@@ -1704,6 +1727,7 @@ const Solver = struct {
         stack: *std.ArrayList(UnifyFrame),
         lhs: Type.TypeVarId,
         rhs: Type.TypeVarId,
+        structural_isolated: bool,
     ) Allocator.Error!void {
         const a = self.program.types.rootCompressed(lhs);
         const b = self.program.types.rootCompressed(rhs);
@@ -1743,7 +1767,7 @@ const Solver = struct {
         // and retires `pair` once every type it scheduled has been unified.
         const finish_index = stack.items.len;
         try stack.append(self.allocator, .{ .finish = .{ .pair = pair, .action = .none } });
-        try self.unifyRoots(stack, finish_index, a, b, left, right);
+        try self.unifyRoots(stack, finish_index, a, b, left, right, structural_isolated);
     }
 
     fn unifyRoots(
@@ -1754,6 +1778,7 @@ const Solver = struct {
         b: Type.TypeVarId,
         left: Type.Content,
         right: Type.Content,
+        structural_isolated: bool,
     ) Allocator.Error!void {
         if (transparentAliasBacking(left)) |backing| {
             stack.items[finish_index].finish.action = .{ .link_var_to_root = .{ .var_ = a, .target = backing } };
@@ -1773,8 +1798,8 @@ const Solver = struct {
             self.program.types.set(b, .{ .link = a });
             return;
         }
-        if (try self.unifyInspectableNamedBacking(a, b, left, right)) return;
-        if (try self.unifyInspectableNamedBacking(b, a, right, left)) return;
+        if (try self.unifyInspectableNamedBacking(stack, finish_index, a, b, left, right, structural_isolated)) return;
+        if (try self.unifyInspectableNamedBacking(stack, finish_index, b, a, right, left, structural_isolated)) return;
         if (try self.unifyPublicNamedBacking(a, b, right)) return;
         if (try self.unifyPublicNamedBacking(b, a, left)) return;
 
@@ -2051,10 +2076,13 @@ const Solver = struct {
 
     fn unifyInspectableNamedBacking(
         self: *Solver,
+        stack: *std.ArrayList(UnifyFrame),
+        finish_index: usize,
         structural_ty: Type.TypeVarId,
         named_ty: Type.TypeVarId,
         structural_content: Type.Content,
         named_content: Type.Content,
+        structural_isolated: bool,
     ) Allocator.Error!bool {
         const structural_tag = std.meta.activeTag(structural_content);
         if (structural_tag == .named or structural_tag == .link or structural_tag == .unbound or structural_tag == .forall) return false;
@@ -2064,13 +2092,15 @@ const Solver = struct {
         const backing = named.backing orelse return false;
         if (backing.use != .inspectable) return false;
 
-        const moved_structural = try self.program.types.add(structural_content);
-        try self.unify(moved_structural, backing.ty);
-        const structural_root = self.program.types.rootCompressed(structural_ty);
-        const named_root = self.program.types.rootCompressed(named_ty);
-        if (structural_root != named_root) {
-            self.program.types.set(structural_root, .{ .link = named_root });
-        }
+        const working_structural = if (structural_isolated)
+            structural_ty
+        else
+            try self.program.types.add(structural_content);
+        stack.items[finish_index].finish.action = .{ .link_var_to_root = .{
+            .var_ = structural_ty,
+            .target = named_ty,
+        } };
+        try self.pushIsolatedStructuralPair(stack, working_structural, backing.ty);
         return true;
     }
 
@@ -3278,6 +3308,45 @@ test "lambda solved erased callable digest includes record field default identit
     const second_default_digest = try solver.solvedTypeDigest(second_default_ty);
     try std.testing.expect(!std.mem.eql(u8, plain_digest.bytes[0..], first_default_digest.bytes[0..]));
     try std.testing.expect(!std.mem.eql(u8, first_default_digest.bytes[0..], second_default_digest.bytes[0..]));
+}
+
+test "inspectable backing unification isolates the structural type variable once" {
+    const allocator = std.testing.allocator;
+
+    var program: Ast.Program = undefined;
+    program.types = Type.Store.init(allocator);
+    defer program.types.deinit();
+
+    const structural = try program.types.add(.{ .primitive = .u64 });
+    var backing = try program.types.add(.{ .primitive = .u64 });
+    for (0..4) |_| {
+        backing = try program.types.add(.{ .named = .{
+            .named_type = undefined,
+            .def = undefined,
+            .kind = .nominal,
+            .args = .empty(),
+            .backing = .{ .ty = backing, .use = .inspectable },
+        } });
+    }
+    const outer_named = backing;
+    const vars_before_unify = program.types.vars.items.len;
+
+    var solver: Solver = undefined;
+    solver.allocator = allocator;
+    solver.program = &program;
+    solver.active_unifications = std.AutoHashMap(UnifyPair, void).init(allocator);
+    defer solver.active_unifications.deinit();
+    solver.unify_stack = .empty;
+    defer solver.unify_stack.deinit(allocator);
+    solver.solved_set_pool = collections.DenseMapPool(Type.TypeVarId, void).init(allocator);
+    defer solver.solved_set_pool.deinit();
+    solver.mono_set_pool = collections.DenseMapPool(MonoType.TypeId, void).init(allocator);
+    defer solver.mono_set_pool.deinit();
+
+    try solver.unify(structural, outer_named);
+
+    try std.testing.expectEqual(vars_before_unify + 1, program.types.vars.items.len);
+    try std.testing.expectEqual(program.types.root(outer_named), program.types.root(structural));
 }
 
 test "lambda solved solve declarations are referenced" {

@@ -55,14 +55,14 @@ GlueInput := {
 		}
 	}
 
-	compare_by_index : HostedFunctionInfo, HostedFunctionInfo -> [LT, EQ, GT]
+	compare_by_index : HostedFunctionInfo, HostedFunctionInfo -> [Before, Same, After]
 	compare_by_index = |a, b| {
 		if a.index < b.index {
-			return LT
+			return Before
 		}
 		if a.index > b.index {
-			return GT
+			return After
 		}
-		EQ
+		Same
 	}
 }

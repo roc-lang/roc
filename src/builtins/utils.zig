@@ -962,11 +962,12 @@ pub fn unsafeReallocate(
     return new_source;
 }
 
-/// Represents comparison results: equal, greater than, or less than
+/// States which comparison argument comes first, without coupling ordering to
+/// "less than" or to Roc's `<` and `>` operators.
 pub const Ordering = enum(u8) {
-    EQ = 0,
-    GT = 1,
-    LT = 2,
+    After = 0,
+    Before = 1,
+    Same = 2,
 };
 
 /// Specifies whether updates should create new data or modify existing data

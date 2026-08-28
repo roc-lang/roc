@@ -6366,6 +6366,12 @@ no type id that is visible in Monotype IR is later refilled or changed. This is
 ordinary type solving inside one stage. Once Monotype IR is output, no
 unresolved node remains reachable and no later stage may change a type.
 
+Direct lowering from checked types preserves `CheckedTypeAddress` identity in
+the immutable Monotype store. The checked cache already provides the explicit
+recursive construction identity for those nodes; content interning must not
+replace it with equality identity. Compiler-produced Monotype structures that
+have no checked occurrence identity remain content-interned.
+
 Instantiation-graph row relations carry the checker's width mode explicitly.
 An exact relation rejects every field added to a closed record. A construction
 relation may instead absorb an unmatched field only when its graph field kind
@@ -6391,7 +6397,11 @@ decision.
 A Monotype imported into another specialization graph is a finished snapshot,
 never a refreshable view: a specialization that needs more than its requested
 type is a unification conflict, not a silent rewrite of another group's final
-type. Every context-free procedure-template request defers until the requesting
+type. Each explicitly independent request or restored-constant occurrence
+receives fresh mutable graph cells while preserving the snapshot's internal
+sharing and recursion within that occurrence. Repeated imports inside one
+ownership scope reconnect to its cells. Equal interned content is not occurrence
+identity; only explicit ownership selects either operation. Every context-free procedure-template request defers until the requesting
 graph is final, when its specialization key is stable. Constraints formerly
 owned only by an unresolved callee body are present in the checked interface
 program and have already participated in the request's relation closure.
@@ -7481,6 +7491,12 @@ The solver:
 - solves recursive groups as groups, not by accidental declaration order
 - verifies each lifted jump is lexically scoped and unifies its arguments with
   the corresponding join-point parameter types
+
+Structural unification, including inspectable nominal-backing relations, runs
+on one explicit work stack. A backing relation isolates an interned structural
+operand once, schedules that working variable against the backing, and defers
+its link action. Nested backing relations reuse the isolated variable instead
+of recursively entering the unifier or cloning it again at each nominal layer.
 
 Monotype may carry both the definition-private nominal view and the opaque
 interface view of one checked `TypeDef`. Lambda solving relates those views only

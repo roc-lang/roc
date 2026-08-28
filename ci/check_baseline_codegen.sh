@@ -45,6 +45,11 @@ x86_mnemonics() { # binary -> distinct mnemonics in .text
         | sort -u
 }
 
+x86_above_baseline_mnemonics() { # read mnemonics on stdin
+    # VERR and VERW predate x86-64; their leading `v` does not denote AVX.
+    grep -E "$x86_above_baseline" | grep -Ev '^(verr|verw)$'
+}
+
 check_x86() {
     if [[ "$(uname -m)" != "x86_64" ]]; then
         echo "skipping x86-64 baseline check: needs an x86-64 host to run the binaries"
@@ -61,15 +66,15 @@ check_x86() {
             echo "x64v1musl --opt=$opt disassembled to nothing; the check cannot pass vacuously" >&2
             exit 1
         fi
-        if grep -Eq "$x86_above_baseline" <<<"$mnemonics"; then
+        if x86_above_baseline_mnemonics <<<"$mnemonics" | grep -q .; then
             echo "x64v1musl --opt=$opt emitted instructions above the x86-64 baseline:" >&2
-            grep -E "$x86_above_baseline" <<<"$mnemonics" >&2
+            x86_above_baseline_mnemonics <<<"$mnemonics" >&2
             exit 1
         fi
 
         # Positive control: the same program at the default level must contain
         # some of them, or the pattern above matches nothing and proves nothing.
-        if ! x86_mnemonics "$tmp_dir/default-$opt" | grep -Eq "$x86_above_baseline"; then
+        if ! x86_mnemonics "$tmp_dir/default-$opt" | x86_above_baseline_mnemonics | grep -q .; then
             echo "x64musl --opt=$opt emitted no above-baseline instruction; the check is not discriminating" >&2
             exit 1
         fi
