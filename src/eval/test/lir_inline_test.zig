@@ -2079,6 +2079,8 @@ test "deferred specialization bodies queue once and drain at the wave boundary" 
     try std.testing.expect(diagnostics.body.spec_jobs_enqueued >= 2);
     try std.testing.expectEqual(diagnostics.body.spec_jobs_enqueued, diagnostics.body.spec_jobs_executed);
     try std.testing.expectEqual(@as(u64, 0), diagnostics.body.spec_jobs_skipped_ready);
+    try std.testing.expectEqual(diagnostics.body.spec_jobs_executed, diagnostics.body.spec_job_shards_lowered);
+    try std.testing.expectEqual(diagnostics.body.spec_job_shards_lowered, diagnostics.body.spec_job_shards_committed);
     try std.testing.expect(diagnostics.body.deferred_template_reuses >= 1);
 }
 

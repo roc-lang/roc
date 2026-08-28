@@ -358,6 +358,8 @@ pub const BodyDiagnostics = struct {
     spec_jobs_enqueued: u64 = 0,
     spec_jobs_executed: u64 = 0,
     spec_jobs_skipped_ready: u64 = 0,
+    spec_job_shards_lowered: u64 = 0,
+    spec_job_shards_committed: u64 = 0,
     cross_root_template_reuses: u64 = 0,
     caller_owned_template_bodies_lowered: u64 = 0,
     deferred_template_reuses: u64 = 0,
@@ -1917,8 +1919,9 @@ const TemplateBodyScheduling = enum { immediate, queued };
 /// outlives the requesting graph and draft.
 const PendingSpecJob = struct {
     /// Logical enqueue order across the whole build. The inline executor
-    /// accepts jobs strictly in this order; a parallel executor later buffers
-    /// specialization-body outputs until their dispatch index is next.
+    /// accepts queue entries strictly in this order. Representation-sensitive
+    /// immediate claims are completed as inline work of the executing body;
+    /// their stale queue entry is accepted later as a ready skip.
     dispatch_index: u64,
     spec: Ast.SpecId,
     reservation: TemplateReservation,
@@ -1932,11 +1935,9 @@ const PendingSpecJob = struct {
     signature_relation: Ast.SignatureRelation,
 };
 
-/// One root body lowered into a shared root batch. Its checked type graph is
-/// still instantiated in a fresh scope; only the graph and draft stores are
-/// shared so an exact specialization discovered by an earlier root can be
-/// reused before another root replays and lowers it.
-const PendingRootTemplateBody = struct {
+/// One reserved template body lowered into graph-local and draft-local state,
+/// before its final ids and solved root type are committed.
+const PendingTemplateBody = struct {
     reservation: TemplateReservation,
     fn_template: Ast.FnTemplate,
     signature_relation: Ast.SignatureRelation,
@@ -1944,10 +1945,30 @@ const PendingRootTemplateBody = struct {
     lowered: LoweredTemplateBody,
 };
 
+/// Owned handoff between queued body lowering and ordered coordinator commit.
+/// Keeping graph and draft ownership together makes every graph-local and
+/// draft-local id valid until the existing relocation commit consumes it.
+/// Type/name stores and builder caches remain shared in this first slice; later
+/// shards move those Monotype and name stores behind the same ownership boundary.
+const CompletedSpecJobShard = struct {
+    dispatch_index: u64,
+    graph: *InstGraph,
+    body_draft: BodyDraftStore,
+    pending: PendingTemplateBody,
+    final_guard: FinalBodyOutputGuard,
+    final_end: FinalBodyOutputGuard.End,
+
+    fn deinit(self: *CompletedSpecJobShard) void {
+        self.body_draft.deinit();
+        self.graph.destroy();
+        self.* = undefined;
+    }
+};
+
 const RootTemplateBatch = struct {
     graph: *InstGraph,
     draft: *BodyDraftStore,
-    pending: std.ArrayList(PendingRootTemplateBody) = .empty,
+    pending: std.ArrayList(PendingTemplateBody) = .empty,
 };
 
 const FinalBodyOutputCounts = struct {
@@ -2204,6 +2225,10 @@ const Builder = struct {
     pending_spec_jobs: std.ArrayList(PendingSpecJob) = .empty,
     pending_spec_jobs_head: usize = 0,
     next_spec_dispatch_index: u64 = 0,
+    /// Next logical queue entry the coordinator may accept. This first boundary
+    /// validates FIFO accounting; later worker results also buffer ordinary
+    /// body appends behind this index.
+    next_spec_accept_index: u64 = 0,
     /// Exact constructor-keyed interning for parser result types synthesized
     /// after graph sealing. These types never mutate, so the reused ids are
     /// valid for the lifetime of the program builder.
@@ -3652,9 +3677,7 @@ const Builder = struct {
                 if (retained_topology != null) {
                     Common.invariant("queued Monotype specialization request cannot carry a retained lexical topology");
                 }
-                self.countBodyDiagnostic("spec_jobs_enqueued");
                 const dispatch_index = self.next_spec_dispatch_index;
-                self.next_spec_dispatch_index += 1;
                 try self.pending_spec_jobs.append(self.allocator, .{
                     .dispatch_index = dispatch_index,
                     .spec = reserved.spec,
@@ -3668,6 +3691,8 @@ const Builder = struct {
                     .evidence = spec_evidence,
                     .signature_relation = signature_relation,
                 });
+                self.next_spec_dispatch_index += 1;
+                self.countBodyDiagnostic("spec_jobs_enqueued");
                 return reservation.def;
             },
         }
@@ -3892,11 +3917,15 @@ const Builder = struct {
         }
         self.pending_spec_jobs.clearRetainingCapacity();
         self.pending_spec_jobs_head = 0;
+        self.requirePendingSpecJobsDrained();
     }
 
     fn requirePendingSpecJobsDrained(self: *Builder) void {
         if (self.pending_spec_jobs_head != self.pending_spec_jobs.items.len) {
-            Common.invariant("Monotype specialization queue was not drained at a wave boundary");
+            Common.compilerBug("Monotype specialization queue was not drained at a wave boundary");
+        }
+        if (self.next_spec_accept_index != self.next_spec_dispatch_index) {
+            Common.compilerBug("Monotype specialization queue entries were not accepted through the wave boundary");
         }
     }
 
@@ -3904,6 +3933,7 @@ const Builder = struct {
         if (self.active_graph != null) {
             Common.invariant("Monotype specialization job executed during an active body draft");
         }
+        self.requireNextSpecAcceptance(job.dispatch_index);
         switch (self.spec_store.recordStatus(job.spec)) {
             // An immediate caller claimed and completed this reservation after
             // it was queued; the queued duplicate is skipped, not re-lowered.
@@ -3914,6 +3944,7 @@ const Builder = struct {
                         Common.invariant("completed Monotype specialization lost its lowering state");
                     std.debug.assert(specEvidenceVectorEql(existing.evidence, job.evidence));
                 }
+                self.acceptSpecDispatch(job.dispatch_index);
                 return;
             },
             .reserved => {},
@@ -3921,19 +3952,127 @@ const Builder = struct {
         }
         self.countBodyDiagnostic("spec_jobs_executed");
         self.spec_store.markLowering(job.spec);
-        try self.completeTemplateReservation(
+        const view = self.moduleForDigest(names.procTemplateModuleDigest(job.template_ref));
+        const template = view.templates.get(job.template_ref.template);
+        switch (template.target) {
+            // Hosted completion has no Roc graph/draft pair to transfer. Keep
+            // it on the coordinator side while ordinary bodies establish that
+            // ownership handoff.
+            .hosted => {
+                try self.completeTemplateReservation(
+                    job.reservation,
+                    job.fn_template,
+                    job.template_ref,
+                    self.moduleForId(job.method_scope),
+                    job.source_fn_ty,
+                    job.source_fn_key,
+                    job.fn_ty,
+                    job.evidence,
+                    null,
+                    job.signature_relation,
+                    null,
+                );
+                self.acceptSpecDispatch(job.dispatch_index);
+            },
+            .roc,
+            .intrinsic,
+            .entry,
+            .comptime_only,
+            => {
+                var shard = try self.lowerPendingSpecJobToShard(job, view, template);
+                defer shard.deinit();
+                try self.commitCompletedSpecJobShard(&shard);
+            },
+        }
+    }
+
+    fn requireNextSpecAcceptance(self: *Builder, dispatch_index: u64) void {
+        if (dispatch_index != self.next_spec_accept_index) {
+            Common.compilerBug("Monotype specialization queue entry reached the coordinator out of dispatch order");
+        }
+    }
+
+    fn acceptSpecDispatch(self: *Builder, dispatch_index: u64) void {
+        self.requireNextSpecAcceptance(dispatch_index);
+        self.next_spec_accept_index += 1;
+    }
+
+    /// Lower one ordinary queued specialization into independently owned graph
+    /// and syntax state. Coordinator-owned type sealing and program appends
+    /// happen only after this result is returned. Representation-sensitive
+    /// immediate callees still complete synchronously until inline outputs also
+    /// move into the shard protocol.
+    fn lowerPendingSpecJobToShard(
+        self: *Builder,
+        job: PendingSpecJob,
+        view: ModuleView,
+        template: checked.CheckedProcedureTemplate,
+    ) Allocator.Error!CompletedSpecJobShard {
+        switch (template.target) {
+            .roc,
+            .intrinsic,
+            .entry,
+            .comptime_only,
+            => {},
+            .hosted => Common.compilerBug("hosted specialization entered Roc body shard lowering"),
+        }
+
+        const graph = try self.createGraph();
+        errdefer graph.destroy();
+        var body_draft = BodyDraftStore.init(self.allocator);
+        errdefer body_draft.deinit();
+        const final_guard = FinalBodyOutputGuard.begin(self);
+        const pending = try self.lowerReservedTemplateBodyIntoDraft(
+            graph,
+            &body_draft,
             job.reservation,
             job.fn_template,
             job.template_ref,
+            view,
             self.moduleForId(job.method_scope),
-            job.source_fn_ty,
+            template,
             job.source_fn_key,
             job.fn_ty,
             job.evidence,
             null,
             job.signature_relation,
+        );
+        const final_end = final_guard.end(self);
+        self.countBodyDiagnostic("spec_job_shards_lowered");
+        return .{
+            .dispatch_index = job.dispatch_index,
+            .graph = graph,
+            .body_draft = body_draft,
+            .pending = pending,
+            .final_guard = final_guard,
+            .final_end = final_end,
+        };
+    }
+
+    /// Accept one completed shard in logical dispatch order and reuse the
+    /// existing exhaustive draft-to-program relocation commit.
+    fn commitCompletedSpecJobShard(
+        self: *Builder,
+        shard: *CompletedSpecJobShard,
+    ) Allocator.Error!void {
+        self.requireNextSpecAcceptance(shard.dispatch_index);
+        const sealed = try self.sealActiveBodyDraft(
+            shard.graph,
+            &shard.body_draft,
+            shard.final_guard,
+            shard.final_end,
+            shard.pending.root_node,
+            &.{},
+            null,
+            null,
             null,
         );
+        defer sealed.deinit(self.allocator);
+        var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
+        defer completion_timing_scope.end();
+        try self.finishReservedTemplateBody(shard.pending, sealed.ids, sealed.root_ty.?);
+        self.countBodyDiagnostic("spec_job_shards_committed");
+        self.acceptSpecDispatch(shard.dispatch_index);
     }
 
     fn lowerReservedTemplateBodyIntoDraft(
@@ -3951,7 +4090,7 @@ const Builder = struct {
         spec_evidence: []const SpecEvidence,
         retained_topology: ?EvidenceChain,
         signature_relation: Ast.SignatureRelation,
-    ) Allocator.Error!PendingRootTemplateBody {
+    ) Allocator.Error!PendingTemplateBody {
         var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
         defer graph_setup_timing_scope.end();
         const saved_graph = self.active_graph;
@@ -4025,7 +4164,7 @@ const Builder = struct {
 
     fn finishReservedTemplateBody(
         self: *Builder,
-        pending: PendingRootTemplateBody,
+        pending: PendingTemplateBody,
         body_ids: FinalIdOffsets,
         final_fn_ty: Type.TypeId,
     ) Allocator.Error!void {
@@ -48950,6 +49089,132 @@ fn numeralTargetFromPrimitive(primitive: Type.Primitive) exact_numeral.Target {
         .bool, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => Common.invariant("non-numeric Monotype primitive has no numeral target"),
         inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => |p| @field(exact_numeral.Target, @tagName(p)),
     };
+}
+
+test "queued specialization skips a body claimed immediately before dispatch" {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator);
+    defer program.deinit();
+    const ty = try program.types.internZst(&program.names);
+    const template_ref = names.ProcTemplate{
+        .artifact = .{},
+        // Both fields are only carried by jobs that are skipped below.
+        .proc_base = undefined,
+        .template = undefined,
+    };
+    const fn_template = Ast.FnTemplate{
+        .fn_def = .{ .local_template = template_ref },
+        // This test never lowers the template, so its checked type is not read.
+        .source_fn_ty = undefined,
+        .source_fn_key = .{},
+        .mono_fn_ty = ty,
+    };
+
+    var diagnostics: Diagnostics = .{};
+    var builder: Builder = undefined;
+    builder.active_graph = null;
+    builder.pending_spec_jobs = .empty;
+    defer builder.pending_spec_jobs.deinit(allocator);
+    builder.pending_spec_jobs_head = 0;
+    builder.next_spec_dispatch_index = 0;
+    builder.next_spec_accept_index = 0;
+    builder.counters = null;
+    builder.diagnostics = &diagnostics;
+    builder.spec_store = specialize.SpecBuilder.init(
+        allocator,
+        &program.names,
+        &program.types,
+        &program.specs,
+    );
+    defer builder.spec_store.deinit();
+    builder.lowered_templates = collections.DenseMap(Ast.FnId, LoweredTemplate).init(allocator);
+    defer builder.lowered_templates.deinit();
+
+    const makeReservedJob = struct {
+        fn make(
+            builder_: *Builder,
+            program_: *Ast.Program,
+            template_ref_: names.ProcTemplate,
+            fn_template_: Ast.FnTemplate,
+            ty_: Type.TypeId,
+            dispatch_index: u64,
+        ) Allocator.Error!PendingSpecJob {
+            const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(dispatch_index)));
+            const def_id: Ast.DefId = @enumFromInt(@as(u32, @intCast(dispatch_index)));
+            const identity = Ast.SpecIdentity{
+                .callable = .{ .generated = @enumFromInt(@as(u32, @intCast(dispatch_index))) },
+                .method_scope = .{},
+                .source_fn_ty_digest = .{},
+                .evidence_digest = .{},
+                .request_fn_ty_digest = .{},
+                .request_fn_ty = ty_,
+            };
+            const spec = try program_.addSpec(.{
+                .identity = identity,
+                .request_fn_ty = ty_,
+                .request_fn_ty_digest = identity.request_fn_ty_digest,
+                .solved_fn_ty = ty_,
+                .solved_fn_ty_digest = identity.request_fn_ty_digest,
+                .fn_id = fn_id,
+                .status = .reserved,
+            });
+            try builder_.lowered_templates.put(fn_id, .{
+                .def = def_id,
+                .spec = spec,
+                .evidence = &.{},
+            });
+
+            return .{
+                .dispatch_index = dispatch_index,
+                .spec = spec,
+                .reservation = .{
+                    .def = def_id,
+                    .fn_id = fn_id,
+                    .symbol = @enumFromInt(@as(u32, @intCast(dispatch_index))),
+                },
+                .fn_template = fn_template_,
+                .template_ref = template_ref_,
+                .method_scope = .{},
+                // The job is marked ready before draining, so its type is not read.
+                .source_fn_ty = undefined,
+                .source_fn_key = .{},
+                .fn_ty = ty_,
+                .evidence = &.{},
+                .signature_relation = .independent_roots,
+            };
+        }
+    }.make;
+
+    const first = try makeReservedJob(&builder, &program, template_ref, fn_template, ty, 0);
+    try builder.pending_spec_jobs.append(allocator, first);
+    builder.next_spec_dispatch_index += 1;
+    builder.countBodyDiagnostic("spec_jobs_enqueued");
+    const second = try makeReservedJob(&builder, &program, template_ref, fn_template, ty, 1);
+    try builder.pending_spec_jobs.append(allocator, second);
+    builder.next_spec_dispatch_index += 1;
+    builder.countBodyDiagnostic("spec_jobs_enqueued");
+    try std.testing.expectEqual(Ast.SpecStatus.reserved, builder.spec_store.recordStatus(first.spec));
+    try std.testing.expectEqual(Ast.SpecStatus.reserved, builder.spec_store.recordStatus(second.spec));
+
+    // Immediate representation-sensitive callers claim both reservations while
+    // their original FIFO entries remain queued.
+    builder.spec_store.markLowering(first.spec);
+    try builder.spec_store.markReady(first.spec, first.fn_ty, .{});
+    builder.spec_store.markLowering(second.spec);
+    try builder.spec_store.markReady(second.spec, second.fn_ty, .{});
+    try std.testing.expectEqual(Ast.SpecStatus.ready, builder.spec_store.recordStatus(first.spec));
+    try std.testing.expectEqual(Ast.SpecStatus.ready, builder.spec_store.recordStatus(second.spec));
+
+    try builder.drainPendingSpecJobs();
+
+    try std.testing.expectEqual(@as(u64, 2), builder.next_spec_accept_index);
+    try std.testing.expectEqual(@as(usize, 0), builder.pending_spec_jobs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), builder.pending_spec_jobs_head);
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.body.spec_jobs_enqueued);
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.body.spec_jobs_skipped_ready);
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.body.spec_jobs_executed);
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.body.spec_job_shards_lowered);
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.body.spec_job_shards_committed);
 }
 
 test "sealed record omission takes its default identity from the monotype field" {
