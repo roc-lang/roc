@@ -827,12 +827,19 @@ pub const Store = struct {
             return self.map.count();
         }
 
-        /// Translate an id owned by the relocation's exact source store.
-        pub fn remapType(self: *const TypeRelocation, source: *const Store, ty: TypeId) TypeId {
+        /// Return the destination id when this exact source id was imported.
+        /// Callers use this to avoid starting an import for roots whose closure
+        /// was already absorbed by a cumulative relocation.
+        pub fn get(self: *const TypeRelocation, source: *const Store, ty: TypeId) ?TypeId {
             if (source != self.source) {
                 Common.compilerBug("Monotype relocation used with an unrelated source store");
             }
-            return self.map.get(ty) orelse
+            return self.map.get(ty);
+        }
+
+        /// Translate an id owned by the relocation's exact source store.
+        pub fn remapType(self: *const TypeRelocation, source: *const Store, ty: TypeId) TypeId {
+            return self.get(source, ty) orelse
                 Common.compilerBug("Monotype relocation requested for an unreachable source id");
         }
 

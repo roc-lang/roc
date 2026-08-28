@@ -49,6 +49,65 @@ const DraftRequestEvidenceMode = enum {
     synthesized,
 };
 
+/// Coordinator-facing view of one frozen graph's finalized types. Keeping this
+/// boundary explicit prevents program output from depending on the graph's
+/// store ownership. The current identity mode preserves the shared-store path;
+/// queued private stores attach a cumulative relocation at ordered commit.
+const CommittedGraphTypes = struct {
+    graph: *InstGraph,
+    sealer: *GraphTypeFinals,
+    destination: ?struct {
+        store: *Type.Store,
+        names: *names.NameStore,
+        relocation: *Type.Store.TypeRelocation,
+    } = null,
+
+    fn shared(graph: *InstGraph, sealer: *GraphTypeFinals) CommittedGraphTypes {
+        return .{ .graph = graph, .sealer = sealer };
+    }
+
+    fn relocated(
+        graph: *InstGraph,
+        sealer: *GraphTypeFinals,
+        destination: *Type.Store,
+        destination_names: *names.NameStore,
+        relocation: *Type.Store.TypeRelocation,
+    ) CommittedGraphTypes {
+        return .{
+            .graph = graph,
+            .sealer = sealer,
+            .destination = .{
+                .store = destination,
+                .names = destination_names,
+                .relocation = relocation,
+            },
+        };
+    }
+
+    fn commitType(self: *CommittedGraphTypes, ty: Type.TypeId) Allocator.Error!Type.TypeId {
+        try self.graph.assertTypeHasNoActiveSnapshots(ty);
+        const destination = self.destination orelse return ty;
+        if (destination.relocation.get(self.graph.types, ty)) |mapped| return mapped;
+        var imported = try destination.store.importTypes(
+            destination.names,
+            self.graph.types,
+            self.graph.name_store,
+            destination.relocation,
+            &.{ty},
+        );
+        defer imported.deinit();
+        return imported.roots[0];
+    }
+
+    fn sealNode(self: *CommittedGraphTypes, node: NodeId) Allocator.Error!Type.TypeId {
+        return self.commitType(try self.sealer.sealNode(node));
+    }
+
+    fn sealType(self: *CommittedGraphTypes, ty: Type.TypeId) Allocator.Error!Type.TypeId {
+        return self.commitType(try self.sealer.sealType(ty));
+    }
+};
+
 /// A deferred request is counted at its caller-facing draft edge. Resolving
 /// that edge after the caller seals must not count the same logical request a
 /// second time.
@@ -2499,14 +2558,14 @@ const Builder = struct {
 
     fn sealedCaptureAbiDigest(
         self: *Builder,
-        sealer: *GraphTypeFinals,
+        committed_types: *CommittedGraphTypes,
         capture_nodes: []const NodeId,
     ) Allocator.Error!names.TypeDigest {
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
         hasher.update("roc.monotype.capture_abi");
         hashU32(&hasher, @intCast(capture_nodes.len));
         for (capture_nodes) |node| {
-            const ty = try sealer.sealNode(node);
+            const ty = try committed_types.sealNode(node);
             const digest = self.program.types.typeDigest(&self.program.names, ty);
             hasher.update(&digest.bytes);
         }
@@ -7343,7 +7402,8 @@ const Builder = struct {
         self: *Builder,
         body_draft: *BodyDraftStore,
         spec_index: usize,
-        fn_ty: Type.TypeId,
+        draft_fn_ty: Type.TypeId,
+        coordinator_fn_ty: Type.TypeId,
         body_scheduling: TemplateBodyScheduling,
     ) Allocator.Error!void {
         if (spec_index >= body_draft.template_specs.items.len) {
@@ -7353,7 +7413,7 @@ const Builder = struct {
         if (spec.state != .deferred) return;
 
         const draft_fn = &body_draft.fns.items[@intFromEnum(spec.fn_id)];
-        draft_fn.source.mono_fn_ty = .{ .sealed = fn_ty };
+        draft_fn.source.mono_fn_ty = .{ .sealed = draft_fn_ty };
         const signature_relation = draft_fn.signature_relation;
 
         const requested_evidence = StoredConstFnEvidence{
@@ -7361,13 +7421,13 @@ const Builder = struct {
             .frames = self.program.constFnEvidenceFrames(draft_fn.source.const_evidence_frames),
             .head = draft_fn.source.const_evidence_frame_head,
         };
-        const request_digest = self.specializationTypeDigest(fn_ty);
+        const request_digest = self.specializationTypeDigest(coordinator_fn_ty);
         const identity = templateSpecIdentity(
             spec.template_ref,
             spec.method_scope,
             spec.source_fn_key,
             draft_fn.source.evidence_digest,
-            fn_ty,
+            coordinator_fn_ty,
             request_digest,
         );
 
@@ -7408,7 +7468,7 @@ const Builder = struct {
                 self.moduleForId(spec.method_scope),
                 spec.source_fn_ty,
                 spec.source_fn_key,
-                fn_ty,
+                coordinator_fn_ty,
                 spec.evidence,
                 signature_relation,
                 .already_counted,
@@ -7433,17 +7493,24 @@ const Builder = struct {
     fn resolveDeferredTemplateSpecs(
         self: *Builder,
         body_draft: *BodyDraftStore,
-        sealer: *GraphTypeFinals,
+        committed_types: *CommittedGraphTypes,
     ) Allocator.Error!void {
         var spec_index: usize = 0;
         while (spec_index < body_draft.template_specs.items.len) : (spec_index += 1) {
             const state = body_draft.template_specs.items[spec_index].state;
             if (state != .deferred) continue;
             const request_fn_node = body_draft.template_specs.items[spec_index].request_fn_node;
-            const fn_ty = try sealer.sealNode(request_fn_node);
+            const draft_fn_ty = try committed_types.sealer.sealNode(request_fn_node);
+            const coordinator_fn_ty = try committed_types.commitType(draft_fn_ty);
             // Seal-time requests are symbolic: they reserve the callee's id
             // for call-site patching and queue the body for the wave drain.
-            try self.resolveDeferredTemplateSpecAtType(body_draft, spec_index, fn_ty, .queued);
+            try self.resolveDeferredTemplateSpecAtType(
+                body_draft,
+                spec_index,
+                draft_fn_ty,
+                coordinator_fn_ty,
+                .queued,
+            );
         }
     }
 
@@ -7451,7 +7518,7 @@ const Builder = struct {
         self: *Builder,
         body_draft: *BodyDraftStore,
         graph: *InstGraph,
-        sealer: *GraphTypeFinals,
+        committed_types: *CommittedGraphTypes,
         base_ids: FinalIdOffsets,
     ) Allocator.Error!DraftCommitMap {
         var ids = base_ids;
@@ -7477,7 +7544,7 @@ const Builder = struct {
         @memset(allow_identity_merge, true);
 
         for (body_draft.nested_specs.items) |*spec| {
-            spec.capture_abi_digest = try self.sealedCaptureAbiDigest(sealer, spec.capture_entry_guards);
+            spec.capture_abi_digest = try self.sealedCaptureAbiDigest(committed_types, spec.capture_entry_guards);
         }
 
         var next_fn: u32 = @intCast(self.program.fnCount());
@@ -7489,7 +7556,7 @@ const Builder = struct {
             if (template_spec) |spec| {
                 if (spec.state == .resolved) {
                     if (spec.eager_resolution) |eager| {
-                        const final_request_ty = try sealer.sealNode(eager.request_fn_node);
+                        const final_request_ty = try committed_types.sealNode(eager.request_fn_node);
                         if (!try self.program.types.typeEql(
                             &self.program.names,
                             eager.fn_ty,
@@ -7505,7 +7572,7 @@ const Builder = struct {
                 }
             }
 
-            const sealed_template = try BodyDraftStore.sealFnTemplate(graph, sealer, fn_.source);
+            const sealed_template = try BodyDraftStore.sealFnTemplate(graph, committed_types, fn_.source);
             const fn_ty = sealed_template.mono_fn_ty;
             const digest = self.specializationTypeDigest(fn_ty);
             const requested_evidence = StoredConstFnEvidence{
@@ -7742,20 +7809,19 @@ const Builder = struct {
         try self.emitDraftDeferredCallsiteIntrinsics(body_draft, graph, &sealer);
         try self.emitDraftDeferredStructuralEqs(body_draft, graph, &sealer);
         try self.emitDraftDeferredInspects(body_draft, graph, &sealer);
-        const sealed_root = if (root_node) |node| try sealer.sealNode(node) else null;
-        if (sealed_root) |ty| try graph.assertTypeHasNoActiveSnapshots(ty);
+        var committed_types = CommittedGraphTypes.shared(graph, &sealer);
+        const sealed_root = if (root_node) |node| try committed_types.sealNode(node) else null;
         const sealed_roots = try self.allocator.alloc(Type.TypeId, root_nodes.len);
         errdefer self.allocator.free(sealed_roots);
         for (root_nodes, sealed_roots) |node, *ty| {
-            ty.* = try sealer.sealNode(node);
-            try graph.assertTypeHasNoActiveSnapshots(ty.*);
+            ty.* = try committed_types.sealNode(node);
         }
         try body_draft.finishOwnerRuns();
-        try self.resolveDeferredTemplateSpecs(body_draft, &sealer);
+        try self.resolveDeferredTemplateSpecs(body_draft, &committed_types);
         var commit_map = try self.buildDraftCommitMap(
             body_draft,
             graph,
-            &sealer,
+            &committed_types,
             BodyDraftStore.finalIdOffsets(self.program),
         );
         defer commit_map.deinit(self.allocator);
@@ -7764,7 +7830,7 @@ const Builder = struct {
         try body_draft.sealCoreIntoProgramWithMap(
             self.program,
             graph,
-            &sealer,
+            &committed_types,
             body_ids,
             commit_map.emit_fns,
             commit_map.emit_defs,
@@ -7772,9 +7838,7 @@ const Builder = struct {
         );
         self.final_body_output_allowance.addDelta(output_before, FinalBodyOutputCounts.fromProgram(self.program));
         const sealed_extra = if (extra_ty) |ty| blk: {
-            const sealed = try sealer.sealType(ty);
-            try graph.assertTypeHasNoActiveSnapshots(sealed);
-            break :blk sealed;
+            break :blk try committed_types.sealType(ty);
         } else null;
         try self.markDraftNestedReady(body_draft, body_ids);
         verifyDraftTemplateSpecsResolved(body_draft);
@@ -9599,6 +9663,20 @@ const DraftTypeCell = union(enum) {
                 try graph.assertTypeHasNoActiveSnapshots(sealed);
                 break :blk sealed;
             },
+        };
+    }
+
+    fn sealCommitted(
+        self: DraftTypeCell,
+        graph: *InstGraph,
+        committed_types: *CommittedGraphTypes,
+    ) Allocator.Error!Type.TypeId {
+        if (graph != committed_types.graph) {
+            Common.compilerBug("body draft type committed through an unrelated graph");
+        }
+        return switch (self) {
+            .graph_node => |node| try committed_types.sealNode(node),
+            .sealed => |ty| try committed_types.sealType(ty),
         };
     }
 
@@ -11789,10 +11867,11 @@ const BodyDraftStore = struct {
         graph: *InstGraph,
         sealer: *GraphTypeFinals,
     ) Allocator.Error!void {
+        var committed_types = CommittedGraphTypes.shared(graph, sealer);
         return try self.sealCoreIntoProgramWithMap(
             program,
             graph,
-            sealer,
+            &committed_types,
             BodyDraftStore.finalIdOffsets(program),
             null,
             null,
@@ -11804,7 +11883,7 @@ const BodyDraftStore = struct {
         self: *const BodyDraftStore,
         program: *Ast.Program,
         graph: *InstGraph,
-        sealer: *GraphTypeFinals,
+        committed_types: *CommittedGraphTypes,
         ids: FinalIdOffsets,
         emit_fns: ?[]const bool,
         emit_defs: ?[]const bool,
@@ -11917,7 +11996,7 @@ const BodyDraftStore = struct {
         for (self.locals.items, 0..) |local, index| {
             if (!ids.retained(.locals, index)) continue;
             const expected = ids.local(@enumFromInt(@as(u32, @intCast(index))));
-            const sealed_ty = try local.ty.seal(graph, sealer);
+            const sealed_ty = try local.ty.sealCommitted(graph, committed_types);
             const durable_capture_id = if (local.capture_id) |provisional| blk: {
                 const final_index = @intFromEnum(expected);
                 if (final_index > checked.CaptureId.max_generated_index) {
@@ -11944,7 +12023,7 @@ const BodyDraftStore = struct {
             if (!ids.retained(.typed_locals, index)) continue;
             program.typed_locals.appendAssumeCapacity(.{
                 .local = ids.local(typed.local),
-                .ty = try typed.ty.seal(graph, sealer),
+                .ty = try typed.ty.sealCommitted(graph, committed_types),
             });
         }
 
@@ -11952,7 +12031,7 @@ const BodyDraftStore = struct {
         for (self.pats.items, 0..) |pat, index| {
             if (!ids.retained(.pats, index)) continue;
             program.pats.appendAssumeCapacity(.{
-                .ty = try pat.ty.seal(graph, sealer),
+                .ty = try pat.ty.sealCommitted(graph, committed_types),
                 .data = BodyDraftStore.sealCorePatData(ids, pat.data),
             });
         }
@@ -11970,8 +12049,8 @@ const BodyDraftStore = struct {
         try program.expr_regions.ensureUnusedCapacity(program.allocator, retained_expr_count);
         for (self.exprs.items, 0..) |expr, index| {
             if (!ids.retained(.exprs, index)) continue;
-            const sealed_ty = try expr.ty.seal(graph, sealer);
-            const sealed_data = try self.sealCoreExprData(program, ids, graph, sealer, expr.data);
+            const sealed_ty = try expr.ty.sealCommitted(graph, committed_types);
+            const sealed_data = try self.sealCoreExprData(program, ids, graph, committed_types, expr.data);
             const loc = ids.sourceLoc(self.expr_locs.items[index]);
             const region = self.expr_regions.items[index];
             const sealed_expr = try BodyDraftStore.sealConstructorExprWithNominalBackings(
@@ -12001,7 +12080,7 @@ const BodyDraftStore = struct {
         try program.stmt_regions.ensureUnusedCapacity(program.allocator, self.stmts.items.len);
         for (self.stmts.items, 0..) |stmt, index| {
             if (!ids.retained(.stmts, index)) continue;
-            program.stmts.appendAssumeCapacity(try BodyDraftStore.sealCoreStmt(ids, graph, sealer, stmt));
+            program.stmts.appendAssumeCapacity(try BodyDraftStore.sealCoreStmt(ids, graph, committed_types, stmt));
             program.stmt_locs.appendAssumeCapacity(ids.sourceLoc(self.stmt_locs.items[index]));
             program.stmt_regions.appendAssumeCapacity(self.stmt_regions.items[index]);
         }
@@ -12010,7 +12089,7 @@ const BodyDraftStore = struct {
         for (self.fns.items, 0..) |fn_, index| {
             if (emit_fns) |emit| if (!emit[index]) continue;
             program.fns.appendAssumeCapacity(.{
-                .source = try BodyDraftStore.sealFnTemplate(graph, sealer, fn_.source),
+                .source = try BodyDraftStore.sealFnTemplate(graph, committed_types, fn_.source),
                 .signature_relation = fn_.signature_relation,
             });
         }
@@ -12018,7 +12097,7 @@ const BodyDraftStore = struct {
         try program.defs.ensureUnusedCapacity(program.allocator, self.defs.items.len);
         for (self.defs.items, 0..) |def, index| {
             if (emit_defs) |emit| if (!emit[index]) continue;
-            const sealed_fn_def = if (def.fn_def) |template| try BodyDraftStore.sealFnTemplate(graph, sealer, template) else null;
+            const sealed_fn_def = if (def.fn_def) |template| try BodyDraftStore.sealFnTemplate(graph, committed_types, template) else null;
             const sealed_fn_id = if (def.fn_id) |fn_id| ids.fnTarget(fn_id) else null;
             if (sealed_fn_def) |template| {
                 if (sealed_fn_id) |fn_id| {
@@ -12031,14 +12110,14 @@ const BodyDraftStore = struct {
                 .fn_id = sealed_fn_id,
                 .args = ids.typedLocalSpan(def.args),
                 .body = ids.fnBody(def.body),
-                .ret = try def.ret.seal(graph, sealer),
+                .ret = try def.ret.sealCommitted(graph, committed_types),
             });
         }
 
         try program.nested_defs.ensureUnusedCapacity(program.allocator, self.nested_defs.items.len);
         for (self.nested_defs.items, 0..) |def, index| {
             if (emit_nested_defs) |emit| if (!emit[index]) continue;
-            const sealed_fn_def = try BodyDraftStore.sealFnTemplate(graph, sealer, def.fn_def);
+            const sealed_fn_def = try BodyDraftStore.sealFnTemplate(graph, committed_types, def.fn_def);
             const sealed_fn_id = ids.fnTarget(def.fn_id);
             program.setFnSource(sealed_fn_id, sealed_fn_def);
             program.nested_defs.appendAssumeCapacity(.{
@@ -12047,7 +12126,7 @@ const BodyDraftStore = struct {
                 .fn_id = sealed_fn_id,
                 .args = ids.typedLocalSpan(def.args),
                 .body = ids.expr(def.body),
-                .ret = try def.ret.seal(graph, sealer),
+                .ret = try def.ret.sealCommitted(graph, committed_types),
             });
         }
 
@@ -12070,7 +12149,7 @@ const BodyDraftStore = struct {
             if (!ids.retained(.layout_requests, index)) continue;
             program.layout_requests.appendAssumeCapacity(.{
                 .checked_type = request.checked_type,
-                .ty = try request.ty.seal(graph, sealer),
+                .ty = try request.ty.sealCommitted(graph, committed_types),
                 .def = if (request.def) |def_id| ids.def(def_id) else null,
                 .const_locator = request.const_locator,
             });
@@ -12081,7 +12160,7 @@ const BodyDraftStore = struct {
             if (!ids.retained(.runtime_schema_requests, index)) continue;
             program.runtime_schema_requests.appendAssumeCapacity(.{
                 .def = request.def,
-                .ty = try request.ty.seal(graph, sealer),
+                .ty = try request.ty.sealCommitted(graph, committed_types),
             });
         }
     }
@@ -12109,14 +12188,14 @@ const BodyDraftStore = struct {
 
     fn sealFnTemplate(
         graph: *InstGraph,
-        sealer: *GraphTypeFinals,
+        committed_types: *CommittedGraphTypes,
         template: DraftFnTemplate,
     ) Allocator.Error!Ast.FnTemplate {
         return .{
             .fn_def = template.fn_def,
             .source_fn_ty = template.source_fn_ty,
             .source_fn_key = template.source_fn_key,
-            .mono_fn_ty = try template.mono_fn_ty.seal(graph, sealer),
+            .mono_fn_ty = try template.mono_fn_ty.sealCommitted(graph, committed_types),
             .evidence_digest = template.evidence_digest,
             .const_evidence = template.const_evidence,
             .const_evidence_frames = template.const_evidence_frames,
@@ -12159,10 +12238,10 @@ const BodyDraftStore = struct {
         };
     }
 
-    fn sealCoreReturn(ids: FinalIdOffsets, graph: *InstGraph, sealer: *GraphTypeFinals, ret: DraftReturn) Allocator.Error!Ast.Return {
+    fn sealCoreReturn(ids: FinalIdOffsets, graph: *InstGraph, committed_types: *CommittedGraphTypes, ret: DraftReturn) Allocator.Error!Ast.Return {
         return .{
             .value = ids.expr(ret.value),
-            .target = try ret.target.seal(graph, sealer),
+            .target = try ret.target.sealCommitted(graph, committed_types),
         };
     }
 
@@ -12365,7 +12444,7 @@ const BodyDraftStore = struct {
         program: *Ast.Program,
         ids: FinalIdOffsets,
         graph: *InstGraph,
-        sealer: *GraphTypeFinals,
+        committed_types: *CommittedGraphTypes,
         data: DraftExprData,
     ) Allocator.Error!Ast.ExprData {
         return switch (data) {
@@ -12498,7 +12577,7 @@ const BodyDraftStore = struct {
             .continue_ => |continue_| .{ .continue_ = .{
                 .values = ids.exprSpan(continue_.values),
             } },
-            .return_ => |ret| .{ .return_ = try BodyDraftStore.sealCoreReturn(ids, graph, sealer, ret) },
+            .return_ => |ret| .{ .return_ = try BodyDraftStore.sealCoreReturn(ids, graph, committed_types, ret) },
             .crash => |literal| .{ .crash = ids.stringLiteral(literal) },
             .comptime_branch_taken => |taken| .{ .comptime_branch_taken = .{
                 .site = ids.comptimeSite(taken.site),
@@ -12515,7 +12594,7 @@ const BodyDraftStore = struct {
         };
     }
 
-    fn sealCoreStmt(ids: FinalIdOffsets, graph: *InstGraph, sealer: *GraphTypeFinals, stmt: DraftStmt) Allocator.Error!Ast.Stmt {
+    fn sealCoreStmt(ids: FinalIdOffsets, graph: *InstGraph, committed_types: *CommittedGraphTypes, stmt: DraftStmt) Allocator.Error!Ast.Stmt {
         return switch (stmt) {
             .uninitialized => |pat| .{ .uninitialized = ids.pat(pat) },
             .let_ => |let_| .{ .let_ = .{
@@ -12527,7 +12606,7 @@ const BodyDraftStore = struct {
             .expr => |expr| .{ .expr = ids.expr(expr) },
             .expect => |expr| .{ .expect = ids.expr(expr) },
             .dbg => |expr| .{ .dbg = ids.expr(expr) },
-            .return_ => |ret| .{ .return_ = try BodyDraftStore.sealCoreReturn(ids, graph, sealer, ret) },
+            .return_ => |ret| .{ .return_ = try BodyDraftStore.sealCoreReturn(ids, graph, committed_types, ret) },
             .crash => |literal| .{ .crash = ids.stringLiteral(literal) },
         };
     }
@@ -28752,7 +28831,13 @@ const BodyContext = struct {
         const request_fn_ty = try self.activeTypeFromNode(spec.request_fn_node);
         // Iterator-inline completion consumes the callee's solved private
         // representation, so the body must lower now rather than queue.
-        try self.builder.resolveDeferredTemplateSpecAtType(self.draft, spec_index, request_fn_ty, .immediate);
+        try self.builder.resolveDeferredTemplateSpecAtType(
+            self.draft,
+            spec_index,
+            request_fn_ty,
+            request_fn_ty,
+            .immediate,
+        );
         self.draft.template_specs.items[spec_index].eager_resolution = .{
             .request_fn_node = spec.request_fn_node,
             .fn_ty = request_fn_ty,
@@ -51922,6 +52007,76 @@ test "body draft store appends draft-local ids spans and type cells" {
         try std.testing.expectEqual(sealed_expr, let_.value);
         try std.testing.expectEqual(@as(?Ast.ComptimeSiteId, sealed_site), let_.comptime_site);
     }
+}
+
+test "body draft commit relocates core type fields out of a private graph store" {
+    const allocator = std.testing.allocator;
+
+    var program = Ast.Program.init(allocator);
+    defer program.deinit();
+    _ = try program.types.internPrimitive(&program.names, .bool);
+
+    var private_types = Type.Store.init(allocator);
+    defer private_types.deinit();
+    const graph = try InstGraph.create(allocator, &private_types, &program.names);
+    defer graph.destroy();
+
+    var draft = BodyDraftStore.init(allocator);
+    defer draft.deinit();
+    const unit_node = try graph.newNode(.zst);
+    const list_node = try graph.newNode(.{ .list = unit_node });
+    const unit_cell = DraftTypeCell.fromGraphNode(unit_node);
+    const list_cell = DraftTypeCell.fromGraphNode(list_node);
+
+    var symbol_gen = Common.SymbolGen{};
+    const local = try draft.addLocal(symbol_gen.fresh(), list_cell, null, null);
+    _ = try draft.addPat(.{ .ty = list_cell, .data = .{ .bind = local } });
+    const expr = try draft.addExpr(.{ .ty = list_cell, .data = .{ .local = local } });
+    _ = try draft.addTypedLocalSpan(&.{.{ .local = local, .ty = list_cell }});
+    _ = try draft.addStmt(.{ .return_ = .{ .value = expr, .target = unit_cell } });
+
+    try graph.freezeRelations();
+    var sealer = GraphTypeFinals.init(graph);
+    defer sealer.deinit();
+    var relocation = Type.Store.TypeRelocation.init(
+        allocator,
+        &private_types,
+        &program.names,
+        &program.types,
+        &program.names,
+    );
+    defer relocation.deinit();
+    var committed_types = CommittedGraphTypes.relocated(
+        graph,
+        &sealer,
+        &program.types,
+        &program.names,
+        &relocation,
+    );
+    try draft.sealCoreIntoProgramWithMap(
+        &program,
+        graph,
+        &committed_types,
+        BodyDraftStore.finalIdOffsets(&program),
+        null,
+        null,
+        null,
+    );
+
+    const sealed_list = program.getLocal(@enumFromInt(@intFromEnum(local))).ty;
+    const sealed_unit = switch (program.types.get(sealed_list)) {
+        .list => |element| element,
+        .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => return error.TestExpectedEqual,
+    };
+    try std.testing.expectEqual(.zst, program.types.get(sealed_unit));
+    try std.testing.expectEqual(sealed_list, program.getPatAt(0).ty);
+    try std.testing.expectEqual(sealed_list, program.getExprAt(0).ty);
+    try std.testing.expectEqual(sealed_list, GuardedList.at(program.typedLocalSpan(.{ .start = 0, .len = 1 }), 0).ty);
+    const sealed_stmt = program.getStmtAt(0);
+    if (sealed_stmt != .return_) return error.TestExpectedEqual;
+    try std.testing.expectEqual(sealed_unit, sealed_stmt.return_.target);
+    program.freeze();
+    try std.testing.expectEqual(@as(?Ast.CompletedTypeIdVerifyError, null), program.view().verifyCompletedTypeIds());
 }
 
 test "body draft ownership runs restore the parent across nested lowering" {

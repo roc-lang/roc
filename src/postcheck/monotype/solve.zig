@@ -409,6 +409,9 @@ const GeneratedIteratorDepthFrame = struct {
 pub const InstGraph = struct {
     allocator: Allocator,
     relation_state: RelationState,
+    /// Sole owner domain for every `TypeId` retained by this graph, including
+    /// imported monotypes, active snapshots, and final sealing caches. Callers
+    /// must relocate external ids before passing them to graph operations.
     types: *Type.Store,
     name_store: *const names.NameStore,
     diagnostics: ?*GraphDiagnostics,
