@@ -2114,18 +2114,11 @@ const ConstExprAddress = struct {
     mono_ty: u32,
 };
 
-const StaticDataUseType = union(enum) {
-    committed: Type.TypeId,
-    /// Open graph cells cannot be compared across body lifetimes, so they are
-    /// deliberately excluded from the coordinator's durable deduplication map.
-    unresolved,
-};
-
 const StaticDataUse = struct {
     module: checked.ModuleId,
     node: checked.ConstNodeId,
     checked_type: checked.CheckedTypeId,
-    type_ref: StaticDataUseType,
+    ty: Type.TypeId,
 };
 
 const ConstNodeAddress = struct {
@@ -2306,10 +2299,9 @@ const Builder = struct {
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
     static_data_ids: std.AutoHashMap(StaticDataUse, Common.StaticDataId),
-    /// Static-data uses indexed by `StaticDataId`. Raw Monotype ids
-    /// are only a fast exact-key path; exact structural equality below is the
-    /// authority for reusing one representation across equivalent
-    /// instantiations.
+    /// Static-data uses indexed by `StaticDataId`. These types have crossed the
+    /// ordered commit boundary; raw ids are only a fast exact-key path, while
+    /// structural equality remains the reuse authority across instantiations.
     static_data_uses: std.ArrayList(StaticDataUse),
     static_data_eligibility: std.AutoHashMap(ConstNodeAddress, bool),
     inspect_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
@@ -5687,47 +5679,40 @@ const Builder = struct {
         };
     }
 
-    fn staticDataValue(
+    fn commitStaticDataValue(
         self: *Builder,
         const_locator: checked.ConstLocator,
         node: ?checked.ConstNodeId,
         checked_type: checked.CheckedTypeId,
-        type_ref: StaticDataUseType,
+        ty: Type.TypeId,
     ) Allocator.Error!Common.StaticDataId {
         const const_node = self.constNode(const_locator, node);
         const use = StaticDataUse{
             .module = const_node.module.key,
             .node = const_node.id,
             .checked_type = checked_type,
-            .type_ref = type_ref,
+            .ty = ty,
         };
-        if (use.type_ref == .committed) {
-            if (self.static_data_ids.get(use)) |existing| return existing;
-        }
+        if (self.static_data_ids.get(use)) |existing| return existing;
 
-        // Structural dedup can only compare committed types; graph cells keep
-        // their reuse within the graph-owned body draft.
-        if (use.type_ref == .committed) {
-            for (self.static_data_uses.items, 0..) |existing, index| {
-                if (!moduleBytesEqual(existing.module.bytes, use.module.bytes) or
-                    existing.node != use.node or
-                    existing.checked_type != use.checked_type)
-                {
-                    continue;
-                }
-                const existing_ty = switch (existing.type_ref) {
-                    .committed => |ty| ty,
-                    .unresolved => continue,
-                };
-                if (!try self.program.types.typeEql(&self.program.names, existing_ty, use.type_ref.committed)) continue;
-
-                const id: Common.StaticDataId = @enumFromInt(@as(u32, @intCast(index)));
-                try self.static_data_ids.put(use, id);
-                return id;
+        for (self.static_data_uses.items, 0..) |existing, index| {
+            if (!moduleBytesEqual(existing.module.bytes, use.module.bytes) or
+                existing.node != use.node or
+                existing.checked_type != use.checked_type)
+            {
+                continue;
             }
+            if (!try self.program.types.typeEql(&self.program.names, existing.ty, use.ty)) continue;
+
+            const id: Common.StaticDataId = @enumFromInt(@as(u32, @intCast(index)));
+            try self.static_data_ids.put(use, id);
+            return id;
         }
 
-        const id = try self.program.addStaticDataValue(.{
+        try self.program.ensureStaticDataValueCapacity(1);
+        try self.static_data_uses.ensureUnusedCapacity(self.allocator, 1);
+        try self.static_data_ids.ensureUnusedCapacity(1);
+        const id = self.program.addStaticDataValueAssumeCapacity(.{
             .const_locator = const_locator,
             .node = node,
             .checked_type = checked_type,
@@ -5735,8 +5720,8 @@ const Builder = struct {
         if (@intFromEnum(id) != self.static_data_uses.items.len) {
             Common.invariant("Monotype static-data use index diverged from program id");
         }
-        try self.static_data_uses.append(self.allocator, use);
-        if (use.type_ref == .committed) try self.static_data_ids.put(use, id);
+        self.static_data_uses.appendAssumeCapacity(use);
+        self.static_data_ids.putAssumeCapacityNoClobber(use, id);
         return id;
     }
 
@@ -6600,6 +6585,7 @@ const Builder = struct {
         emit_fns: []bool,
         emit_defs: []bool,
         emit_nested_defs: []bool,
+        static_data_ids: []Common.StaticDataId,
 
         fn deinit(self: DraftCommitMap, allocator: Allocator) void {
             if (self.core_maps) |maps| {
@@ -6611,6 +6597,7 @@ const Builder = struct {
             allocator.free(self.emit_fns);
             allocator.free(self.emit_defs);
             allocator.free(self.emit_nested_defs);
+            allocator.free(self.static_data_ids);
         }
     };
 
@@ -7530,6 +7517,21 @@ const Builder = struct {
         base_ids: FinalIdOffsets,
     ) Allocator.Error!DraftCommitMap {
         var ids = base_ids;
+        const static_data_ids =
+            try self.allocator.alloc(Common.StaticDataId, body_draft.static_data_requests.items.len);
+        errdefer self.allocator.free(static_data_ids);
+        // Static-data requests are result intents, not function-range members.
+        // Absorb all of them even if identity merging later discards a duplicate
+        // function body, preserving the previous eager-publication semantics.
+        for (body_draft.static_data_requests.items, static_data_ids) |request, *id| {
+            const coordinator_ty = try request.ty.sealCommitted(graph, committed_types);
+            id.* = try self.commitStaticDataValue(
+                request.const_locator,
+                request.node,
+                request.checked_type,
+                coordinator_ty,
+            );
+        }
         const fn_slots = try self.allocator.alloc(?Ast.FnSlot, body_draft.fns.items.len);
         errdefer self.allocator.free(fn_slots);
         @memset(fn_slots, null);
@@ -7733,6 +7735,7 @@ const Builder = struct {
             .emit_fns = emit_fns,
             .emit_defs = emit_defs,
             .emit_nested_defs = emit_nested_defs,
+            .static_data_ids = static_data_ids,
         };
     }
 
@@ -7851,6 +7854,7 @@ const Builder = struct {
             self.program,
             graph,
             &committed_types,
+            commit_map.static_data_ids,
             body_ids,
             commit_map.emit_fns,
             commit_map.emit_defs,
@@ -9686,6 +9690,7 @@ const DraftDefId = enum(u32) { _ };
 const DraftNestedDefId = enum(u32) { _ };
 const DraftComptimeSiteId = enum(u32) { _ };
 const DraftStringLiteralId = enum(u32) { _ };
+const DraftStaticDataId = enum(u32) { _ };
 
 fn DraftSpan(comptime _: type) type {
     return extern struct {
@@ -9885,7 +9890,7 @@ const DraftReturn = struct {
 };
 
 const DraftStaticDataCandidate = struct {
-    static_data: Common.StaticDataId,
+    static_data: DraftStaticDataId,
     runtime_expr: DraftExprId,
 };
 
@@ -11105,18 +11110,26 @@ const CheckedStringLiteralAddress = struct {
 };
 
 const StaticDataCandidateAddress = struct {
-    static_data: Common.StaticDataId,
+    static_data: DraftStaticDataId,
     owner: DraftOwner,
 };
 
-/// An open static-data request is meaningful only within its owning body graph.
-/// Keeping this memo on the draft prevents raw graph node ids from entering the
-/// coordinator's durable static-data identity.
-const UnresolvedStaticDataUseAddress = struct {
+/// Draft-local static-data identity. Graph types remain qualified by the body
+/// that owns them until ordered commit seals the request into program storage.
+const DraftStaticDataRequestAddress = struct {
     module: checked.ModuleId,
     node: checked.ConstNodeId,
     checked_type: checked.CheckedTypeId,
-    request_node: NodeId,
+    ty: DraftTypeCell,
+};
+
+const DraftStaticDataRequest = struct {
+    const_locator: checked.ConstLocator,
+    node: ?checked.ConstNodeId,
+    module: checked.ModuleId,
+    const_node: checked.ConstNodeId,
+    checked_type: checked.CheckedTypeId,
+    ty: DraftTypeCell,
 };
 
 const BodyDraftStore = struct {
@@ -11195,10 +11208,14 @@ const BodyDraftStore = struct {
     current_owner: DraftOwner,
     owner_starts: DraftCoreLengths,
     owner_runs: std.ArrayList(DraftOwnerRun),
-    /// Closed static-data candidates are shared by child lowering contexts
-    /// only within the body that owns their explicit runtime expression.
+    /// Exact static-data requests are shared by child lowering contexts only
+    /// within the body that owns their explicit runtime expression.
     static_data_candidate_exprs: std.AutoHashMap(StaticDataCandidateAddress, DraftExprId),
-    unresolved_static_data_ids: std.AutoHashMap(UnresolvedStaticDataUseAddress, Common.StaticDataId),
+    /// Static-data requests are coordinator intents. Keeping them draft-local
+    /// prevents graph-owned types and durable StaticDataIds from crossing the
+    /// private-body boundary before ordered commit.
+    static_data_requests: std.ArrayList(DraftStaticDataRequest),
+    static_data_request_ids: std.AutoHashMap(DraftStaticDataRequestAddress, DraftStaticDataId),
     /// These memoized TypeIds belong to this draft's graph, so their lifetime
     /// cannot exceed the body that owns that graph. Type-store entries are
     /// immutable snapshots: later graph refinement allocates a new TypeId
@@ -11287,7 +11304,8 @@ const BodyDraftStore = struct {
             .owner_starts = @splat(0),
             .owner_runs = .empty,
             .static_data_candidate_exprs = std.AutoHashMap(StaticDataCandidateAddress, DraftExprId).init(allocator),
-            .unresolved_static_data_ids = std.AutoHashMap(UnresolvedStaticDataUseAddress, Common.StaticDataId).init(allocator),
+            .static_data_requests = .empty,
+            .static_data_request_ids = std.AutoHashMap(DraftStaticDataRequestAddress, DraftStaticDataId).init(allocator),
             .parse_result_ok_types = std.AutoHashMap(GeneratedParseResultOkTypeAddress, Type.TypeId).init(allocator),
             .generated_try_types = std.AutoHashMap(GeneratedTryTypeAddress, Type.TypeId).init(allocator),
             .uninhabited_type_cache = collections.DenseMap(Type.TypeId, bool).init(allocator),
@@ -11367,7 +11385,8 @@ const BodyDraftStore = struct {
         self.uninhabited_type_cache.deinit();
         self.generated_try_types.deinit();
         self.parse_result_ok_types.deinit();
-        self.unresolved_static_data_ids.deinit();
+        self.static_data_request_ids.deinit();
+        self.static_data_requests.deinit(self.allocator);
         self.static_data_candidate_exprs.deinit();
         self.stmt_regions.deinit(self.allocator);
         self.stmt_locs.deinit(self.allocator);
@@ -11913,6 +11932,7 @@ const BodyDraftStore = struct {
             program,
             graph,
             &committed_types,
+            &.{},
             BodyDraftStore.finalIdOffsets(program),
             null,
             null,
@@ -11925,6 +11945,7 @@ const BodyDraftStore = struct {
         program: *Ast.Program,
         graph: *InstGraph,
         committed_types: *CommittedGraphTypes,
+        static_data_ids: []const Common.StaticDataId,
         ids: FinalIdOffsets,
         emit_fns: ?[]const bool,
         emit_defs: ?[]const bool,
@@ -12091,7 +12112,14 @@ const BodyDraftStore = struct {
         for (self.exprs.items, 0..) |expr, index| {
             if (!ids.retained(.exprs, index)) continue;
             const sealed_ty = try expr.ty.sealCommitted(graph, committed_types);
-            const sealed_data = try self.sealCoreExprData(program, ids, graph, committed_types, expr.data);
+            const sealed_data = try self.sealCoreExprData(
+                program,
+                ids,
+                graph,
+                committed_types,
+                static_data_ids,
+                expr.data,
+            );
             const loc = ids.sourceLoc(self.expr_locs.items[index]);
             const region = self.expr_regions.items[index];
             const sealed_expr = try BodyDraftStore.sealConstructorExprWithNominalBackings(
@@ -12486,6 +12514,7 @@ const BodyDraftStore = struct {
         ids: FinalIdOffsets,
         graph: *InstGraph,
         committed_types: *CommittedGraphTypes,
+        static_data_ids: []const Common.StaticDataId,
         data: DraftExprData,
     ) Allocator.Error!Ast.ExprData {
         return switch (data) {
@@ -12501,10 +12530,16 @@ const BodyDraftStore = struct {
                 .len = literal.len,
                 .element = literal.element,
             } },
-            .static_data_candidate => |candidate| .{ .static_data_candidate = .{
-                .static_data = candidate.static_data,
-                .runtime_expr = ids.expr(candidate.runtime_expr),
-            } },
+            .static_data_candidate => |candidate| blk: {
+                const index = @intFromEnum(candidate.static_data);
+                if (index >= static_data_ids.len) {
+                    Common.invariant("Monotype body draft static-data request was not committed");
+                }
+                break :blk .{ .static_data_candidate = .{
+                    .static_data = static_data_ids[index],
+                    .runtime_expr = ids.expr(candidate.runtime_expr),
+                } };
+            },
             .list => |span| .{ .list = ids.exprSpan(span) },
             .tuple => |span| .{ .tuple = ids.exprSpan(span) },
             .record => |span| .{ .record = ids.fieldExprSpan(span) },
@@ -13615,6 +13650,42 @@ const BodyContext = struct {
         );
         defer imported.deinit();
         return imported.roots[0];
+    }
+
+    /// Record a graph-qualified static-data intent without allocating a durable
+    /// program id. Ordered commit seals the type and performs global interning.
+    fn draftStaticDataRequest(
+        self: *BodyContext,
+        const_locator: checked.ConstLocator,
+        node: ?checked.ConstNodeId,
+        checked_type: checked.CheckedTypeId,
+        ty: DraftTypeCell,
+    ) Allocator.Error!DraftStaticDataId {
+        const const_node = self.builder.constNode(const_locator, node);
+        const address: DraftStaticDataRequestAddress = .{
+            .module = const_node.module.key,
+            .node = const_node.id,
+            .checked_type = checked_type,
+            .ty = ty,
+        };
+        if (self.draft.static_data_request_ids.get(address)) |existing| return existing;
+
+        try self.draft.static_data_requests.ensureUnusedCapacity(self.allocator, 1);
+        const entry = try self.draft.static_data_request_ids.getOrPut(address);
+        if (entry.found_existing) return entry.value_ptr.*;
+        errdefer _ = self.draft.static_data_request_ids.remove(address);
+        const id: DraftStaticDataId =
+            @enumFromInt(@as(u32, @intCast(self.draft.static_data_requests.items.len)));
+        self.draft.static_data_requests.appendAssumeCapacity(.{
+            .const_locator = const_locator,
+            .node = node,
+            .module = const_node.module.key,
+            .const_node = const_node.id,
+            .checked_type = checked_type,
+            .ty = ty,
+        });
+        entry.value_ptr.* = id;
+        return id;
     }
 
     /// Crossing from a committed function signature into the active graph is
@@ -29663,12 +29734,11 @@ const BodyContext = struct {
             try self.builder.constNodeHasStableStaticDataRepresentation(store_view, node) and
             self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn))
         {
-            const coordinator_ty = try self.commitGraphType(ty);
-            const id = try self.builder.staticDataValue(
+            const id = try self.draftStaticDataRequest(
                 const_locator,
                 node,
                 checked_type,
-                .{ .committed = coordinator_ty },
+                DraftTypeCell.fromSealed(ty),
             );
             const address: StaticDataCandidateAddress = .{
                 .static_data = id,
@@ -29712,32 +29782,12 @@ const BodyContext = struct {
             try self.builder.constNodeHasStableStaticDataRepresentation(store_view, node) and
             self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn))
         {
-            // A resolved request can cross to the coordinator and share one
-            // static allocation with equivalent uses. An unresolved request
-            // remains qualified by its graph and keeps its own allocation.
-            const request_resolved = try self.graph.typeIsResolved(request_node);
-            const id = if (request_resolved) try self.builder.staticDataValue(
+            const id = try self.draftStaticDataRequest(
                 const_locator,
                 node,
                 checked_type,
-                .{ .committed = try self.commitGraphType(try self.resolvedTypeViewForNode(request_node)) },
-            ) else blk: {
-                const address: UnresolvedStaticDataUseAddress = .{
-                    .module = store_view.key,
-                    .node = node,
-                    .checked_type = checked_type,
-                    .request_node = request_node,
-                };
-                if (self.draft.unresolved_static_data_ids.get(address)) |existing| break :blk existing;
-                const created = try self.builder.staticDataValue(
-                    const_locator,
-                    node,
-                    checked_type,
-                    .unresolved,
-                );
-                try self.draft.unresolved_static_data_ids.put(address, created);
-                break :blk created;
-            };
+                DraftTypeCell.fromGraphNode(request_node),
+            );
             return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(request_node), .{ .static_data_candidate = .{
                 .static_data = id,
                 .runtime_expr = runtime_expr,
@@ -52448,6 +52498,41 @@ test "body draft store appends draft-local ids spans and type cells" {
     }
 }
 
+test "body draft static data candidates use ordered commit ids" {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator);
+    defer program.deinit();
+    const graph = try InstGraph.create(allocator, &program.types, &program.names);
+    defer graph.destroy();
+    try graph.freezeRelations();
+    var sealer = GraphTypeFinals.init(graph);
+    defer sealer.deinit();
+    var committed_types = CommittedGraphTypes.shared(graph, &sealer);
+    var draft = BodyDraftStore.init(allocator);
+    defer draft.deinit();
+
+    const draft_static: DraftStaticDataId = @enumFromInt(@as(u32, @intCast(0)));
+    const draft_runtime: DraftExprId = @enumFromInt(@as(u32, @intCast(0)));
+    const committed_static: Common.StaticDataId = @enumFromInt(@as(u32, @intCast(17)));
+    const sealed = try draft.sealCoreExprData(
+        &program,
+        BodyDraftStore.finalIdOffsets(&program),
+        graph,
+        &committed_types,
+        &.{committed_static},
+        .{ .static_data_candidate = .{
+            .static_data = draft_static,
+            .runtime_expr = draft_runtime,
+        } },
+    );
+    if (sealed != .static_data_candidate) return error.TestExpectedEqual;
+    try std.testing.expectEqual(committed_static, sealed.static_data_candidate.static_data);
+    try std.testing.expectEqual(
+        @as(Ast.ExprId, @enumFromInt(@as(u32, @intCast(0)))),
+        sealed.static_data_candidate.runtime_expr,
+    );
+}
+
 test "body draft commit relocates core type fields out of a private graph store" {
     const allocator = std.testing.allocator;
 
@@ -52498,6 +52583,7 @@ test "body draft commit relocates core type fields out of a private graph store"
             &program,
             graph,
             &committed_types,
+            &.{},
             BodyDraftStore.finalIdOffsets(&program),
             null,
             null,
