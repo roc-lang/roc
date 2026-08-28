@@ -7522,7 +7522,7 @@ const Builder = struct {
         errdefer self.allocator.free(static_data_ids);
         // Static-data requests are result intents, not function-range members.
         // Absorb all of them even if identity merging later discards a duplicate
-        // function body, preserving the previous eager-publication semantics.
+        // function body, preserving the prior eager assignment of durable ids.
         for (body_draft.static_data_requests.items, static_data_ids) |request, *id| {
             const coordinator_ty = try request.ty.sealCommitted(graph, committed_types);
             id.* = try self.commitStaticDataValue(
