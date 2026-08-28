@@ -304,11 +304,11 @@ pub const tests = [_]TestCase{
             \\sort_desc = |list| {
             \\    list.sort_with(
             \\        |a, b| if a < b {
-            \\            SecondBeforeFirst
+            \\            After
             \\        } else if a > b {
-            \\            FirstBeforeSecond
+            \\            Before
             \\        } else {
-            \\            Equivalent
+            \\            Same
             \\        },
             \\    )
             \\}

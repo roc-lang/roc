@@ -73,15 +73,11 @@ fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) 
     const a = @as(*i64, @ptrCast(@alignCast(a_ptr))).*;
     const b = @as(*i64, @ptrCast(@alignCast(b_ptr))).*;
 
-    const gt = @as(u8, @intFromBool(a > b));
-    const lt = @as(u8, @intFromBool(a < b));
-
     std.debug.assert(@as(*isize, @ptrCast(@alignCast(count_ptr))).* > 0);
     @as(*isize, @ptrCast(@alignCast(count_ptr))).* -= 1;
-    // Eq = 0
-    // FirstBeforeSecond = 1
-    // SecondBeforeFirst = 2
-    return lt + gt + gt;
+    if (a < b) return @intFromEnum(utils.Ordering.Before);
+    if (a > b) return @intFromEnum(utils.Ordering.After);
+    return @intFromEnum(utils.Ordering.Same);
 }
 
 fn test_i64_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.c) void {

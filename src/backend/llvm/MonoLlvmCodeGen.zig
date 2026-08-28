@@ -4945,12 +4945,12 @@ pub const MonoLlvmCodeGen = struct {
         const lhs = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, layout_idx);
         const rhs = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, layout_idx);
         const signed = layout_idx.isSigned();
-        const gt_cond: LlvmBuilder.Value = wip.icmp(if (signed) .sgt else .ugt, lhs, rhs, "") catch return error.OutOfMemory;
+        const same_cond: LlvmBuilder.Value = wip.icmp(.eq, lhs, rhs, "") catch return error.OutOfMemory;
         const lt_cond: LlvmBuilder.Value = wip.icmp(if (signed) .slt else .ult, lhs, rhs, "") catch return error.OutOfMemory;
-        const gt = wip.conv(.unsigned, gt_cond, .i8, "") catch return error.OutOfMemory;
+        const same = wip.conv(.unsigned, same_cond, .i8, "") catch return error.OutOfMemory;
         const lt = wip.conv(.unsigned, lt_cond, .i8, "") catch return error.OutOfMemory;
-        const gt_tag = wip.bin(.mul, gt, builder.intValue(.i8, 2) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-        const tag = wip.bin(.add, lt, gt_tag, "") catch return error.OutOfMemory;
+        const same_tag = wip.bin(.mul, same, builder.intValue(.i8, 2) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const tag = wip.bin(.add, lt, same_tag, "") catch return error.OutOfMemory;
         try self.storeIntToLayout(self.slot(target).ptr, tag, self.localLayout(target));
     }
 

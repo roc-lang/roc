@@ -5006,16 +5006,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (args.len != 2) unreachable;
                     const operand_layout = self.valueLayout(GuardedList.at(args, 0));
 
-                    const gt_loc = if (operand_layout == .dec or operand_layout == .i128 or operand_layout == .u128) blk: {
+                    const same_loc = if (operand_layout == .dec or operand_layout == .i128 or operand_layout == .u128) blk: {
                         const lhs_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                         const rhs_loc = try self.emitValueLocal(GuardedList.at(args, 1));
                         const adj_lhs = if (lhs_loc == .stack) ValueLocation{ .stack_i128 = lhs_loc.stack.offset } else lhs_loc;
                         const adj_rhs = if (rhs_loc == .stack) ValueLocation{ .stack_i128 = rhs_loc.stack.offset } else rhs_loc;
-                        break :blk try self.generateI128Binop(.num_is_gt, adj_lhs, adj_rhs, operand_layout);
+                        break :blk try self.generateI128Binop(.num_is_eq, adj_lhs, adj_rhs, operand_layout);
                     } else blk: {
                         const lhs_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                         const rhs_loc = try self.emitValueLocal(GuardedList.at(args, 1));
-                        break :blk try self.generateIntBinop(.num_is_gt, lhs_loc, rhs_loc, operand_layout);
+                        break :blk try self.generateIntBinop(.num_is_eq, lhs_loc, rhs_loc, operand_layout);
                     };
 
                     const lt_loc = if (operand_layout == .dec or operand_layout == .i128 or operand_layout == .u128) blk: {
@@ -5030,12 +5030,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         break :blk try self.generateIntBinop(.num_is_lt, lhs_loc, rhs_loc, operand_layout);
                     };
 
-                    const gt_reg = try self.ensureInGeneralReg(gt_loc);
+                    const same_reg = try self.ensureInGeneralReg(same_loc);
                     const lt_reg = try self.ensureInGeneralReg(lt_loc);
-                    try self.emitShlImm(.w64, gt_reg, gt_reg, 1);
-                    try self.emitAddRegs(.w64, gt_reg, gt_reg, lt_reg);
+                    try self.emitShlImm(.w64, same_reg, same_reg, 1);
+                    try self.emitAddRegs(.w64, same_reg, same_reg, lt_reg);
                     self.codegen.freeGeneral(lt_reg);
-                    return .{ .general_reg = gt_reg };
+                    return .{ .general_reg = same_reg };
                 },
 
                 // Resolved before backend codegen: builtin `from_numeral` is
@@ -13505,7 +13505,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.codegen.emitNeg(.w64, neg_reg, reg);
 
             if (comptime target.toCpuArch() == .aarch64) {
-                // CMP reg, #0; CSEL result, neg_reg, reg, FirstBeforeSecond
+                // CMP reg, #0; CSEL result, neg_reg, reg, Before
                 try self.codegen.emit.cmpRegImm12(.w64, reg, 0);
                 try self.codegen.emit.csel(.w64, neg_reg, neg_reg, reg, .lt);
             } else {

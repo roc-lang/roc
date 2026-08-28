@@ -147,7 +147,7 @@ pub const Tag = enum {
     /// * extra_data format (if has_where == 0): [[type_arg node index]{num_type_args}, type_term node_index]
     type_decl_opaque,
     /// A where alias declaration, naming a reusable set of method constraints
-    /// Example: `a.Sortable : where [a.compare : a -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]]`
+    /// Example: `a.Sortable : where [a.order_relative_to : a -> [Before, Same, After]]`
     /// * main_token - extra_data token (0 when there is neither a where clause nor an associated block)
     /// * lhs - type header node index (its name token is the dotted upper ident)
     /// * rhs - receiver type variable node index
