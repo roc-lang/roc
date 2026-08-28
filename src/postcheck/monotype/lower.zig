@@ -2007,9 +2007,9 @@ const PendingTemplateBody = struct {
 /// Owned handoff between queued body lowering and ordered coordinator commit.
 /// Deferred relation production and graph validation finish before this handoff,
 /// so commit only seals durable types, relocates ids, and appends program data.
-/// Canonical names, deferred preparation, and builder caches remain shared in
-/// this transitional slice; the graph and every TypeId it retains belong to the
-/// shard's private type store.
+/// The program name store, deferred preparation, and builder caches remain
+/// shared in this transitional slice; the graph and every TypeId it retains
+/// belong to the shard's private type store.
 const CompletedSpecJobShard = struct {
     allocator: Allocator,
     dispatch_index: u64,
@@ -4069,8 +4069,8 @@ const Builder = struct {
     /// happen only after this result is returned; explicitly synchronous
     /// coordinator operations may import an immutable graph snapshot earlier.
     ///
-    /// Deferred preparation still uses shared Builder coordination and canonical
-    /// names, so it executes serially here. Representation-sensitive immediate
+    /// Deferred preparation still uses shared Builder coordination and the
+    /// program name store, so it executes serially here. Representation-sensitive immediate
     /// callees also complete synchronously until those outputs move into the
     /// shard protocol; their durable types cross the explicit store boundary.
     fn lowerPendingSpecJobToShard(
@@ -7766,7 +7766,7 @@ const Builder = struct {
     ///
     /// Deferred preparation remains serialized because it can reenter lowering
     /// and mutate shared Builder state. Iterator identity calculation uses the
-    /// graph-owned type store and the shared canonical name store.
+    /// graph-owned type store and the shared program name store.
     fn finalizeBodyDraftGraph(
         self: *Builder,
         graph: *InstGraph,
@@ -11305,7 +11305,7 @@ const BodyDraftStore = struct {
             Common.invariant("shared-store body requested a graph-to-program type relocation");
         }
         if (graph.name_store != &program.names) {
-            Common.invariant("private Monotype body commit requires the graph and program to share canonical names");
+            Common.invariant("private Monotype body commit requires the graph and program to share one NameStore");
         }
         if (self.committed_type_relocation == null) {
             self.committed_type_relocation = Type.Store.TypeRelocation.init(
