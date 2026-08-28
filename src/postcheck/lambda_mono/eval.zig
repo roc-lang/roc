@@ -1741,15 +1741,15 @@ pub const Evaluator = struct {
             .str => return self.unsupported_("compare on string"),
             .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return self.unsupported_("compare on SIMD vector"),
         };
-        // Result ordering tag union sorts as Equivalent, SecondBeforeFirst, FirstBeforeSecond (alphabetical), matching
-        // the interpreter's runtime discriminants Equivalent=0, FirstBeforeSecond=1, SecondBeforeFirst=2.
+        // Result ordering tag union sorts as After, Before, Same (alphabetical), matching
+        // the interpreter's runtime discriminants After=0, Before=1, Same=2.
         return .{ .tag = .{ .discriminant = order, .payloads = &.{} } };
     }
 
     fn cmpOrder(comptime T: type, a: T, b: T) u8 {
-        if (a == b) return 0; // Equivalent
-        if (a < b) return 1; // FirstBeforeSecond
-        return 2; // SecondBeforeFirst
+        if (a == b) return 2; // Same
+        if (a < b) return 1; // Before
+        return 0; // After
     }
 
     // numeric arithmetic

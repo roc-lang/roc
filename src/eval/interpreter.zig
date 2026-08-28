@@ -7946,7 +7946,7 @@ pub const Interpreter = struct {
 
     fn evalCompare(self: *LirInterpreter, a: Value, b: Value, arg_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
-        // Runtime tag order for [FirstBeforeSecond, Equivalent, SecondBeforeFirst]: Equivalent=0, FirstBeforeSecond=1, SecondBeforeFirst=2.
+        // Runtime tag order for [Before, Same, After]: After=0, Before=1, Same=2.
         const result: u8 = switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
                 8 => cmpOrder(u8, a.read(u8), b.read(u8)),
@@ -9041,9 +9041,9 @@ pub const Interpreter = struct {
     }
 
     fn cmpOrder(comptime T: type, av: T, bv: T) u8 {
-        if (av == bv) return 0; // Equivalent
-        if (av < bv) return 1; // FirstBeforeSecond
-        return 2; // SecondBeforeFirst
+        if (av == bv) return 2; // Same
+        if (av < bv) return 1; // Before
+        return 0; // After
     }
 
     fn shiftOp(comptime T: type, av: T, amount: u8, op: ShiftOp) T {

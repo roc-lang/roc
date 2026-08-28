@@ -965,9 +965,9 @@ pub fn unsafeReallocate(
 /// States which comparison argument comes first, without coupling ordering to
 /// "less than" or to Roc's `<` and `>` operators.
 pub const Ordering = enum(u8) {
-    Equivalent = 0,
-    FirstBeforeSecond = 1,
-    SecondBeforeFirst = 2,
+    After = 0,
+    Before = 1,
+    Same = 2,
 };
 
 /// Specifies whether updates should create new data or modify existing data

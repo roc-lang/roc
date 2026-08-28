@@ -19,8 +19,8 @@ describe : a -> Str where [a.Str.Utf8Problem]
                             ^^^^^^^^^^^^^^^^
 
 A where alias names a set of method constraints, declared like a.Sortable :
-where [a.compare : a -> [FirstBeforeSecond, Equivalent, SecondBeforeFirst]] and
-written in a where clause as where [a.Sortable]
+where [a.order_relative_to : a -> [Before, Same, After]] and written in a where
+clause as where [a.Sortable]
 
 # TOKENS
 ~~~zig

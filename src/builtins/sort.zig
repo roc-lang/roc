@@ -7,7 +7,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const SecondBeforeFirst = Ordering.SecondBeforeFirst;
+const After = Ordering.After;
 const utils = @import("utils.zig");
 const Ordering = utils.Ordering;
 const RocOps = @import("host_abi.zig").RocOps;
@@ -183,19 +183,19 @@ fn flux_analyze(
 
     if (quad1 < quad2) {
         // Must inc here, due to being in a branch.
-        const gt = compare_inc(cmp, cmp_data, ptr_b, ptr_b + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst;
+        const gt = compare_inc(cmp, cmp_data, ptr_b, ptr_b + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After;
         balance_b += @intFromBool(gt);
         ptr_b += element_width;
     }
     if (quad1 < quad3) {
         // Must inc here, due to being in a branch.
-        const gt = compare_inc(cmp, cmp_data, ptr_c, ptr_c + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst;
+        const gt = compare_inc(cmp, cmp_data, ptr_c, ptr_c + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After;
         balance_c += @intFromBool(gt);
         ptr_c += element_width;
     }
     if (quad1 < quad4) {
         // Must inc here, due to being in a branch.
-        balance_d += @intFromBool(compare_inc(cmp, cmp_data, ptr_d, ptr_d + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst);
+        balance_d += @intFromBool(compare_inc(cmp, cmp_data, ptr_d, ptr_d + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After);
         ptr_d += element_width;
     }
 
@@ -210,13 +210,13 @@ fn flux_analyze(
         var sum_c: u8 = 0;
         var sum_d: u8 = 0;
         for (0..32) |_| {
-            sum_a += @intFromBool(compare(cmp, cmp_data, ptr_a, ptr_a + element_width, indirect) == SecondBeforeFirst);
+            sum_a += @intFromBool(compare(cmp, cmp_data, ptr_a, ptr_a + element_width, indirect) == After);
             ptr_a += element_width;
-            sum_b += @intFromBool(compare(cmp, cmp_data, ptr_b, ptr_b + element_width, indirect) == SecondBeforeFirst);
+            sum_b += @intFromBool(compare(cmp, cmp_data, ptr_b, ptr_b + element_width, indirect) == After);
             ptr_b += element_width;
-            sum_c += @intFromBool(compare(cmp, cmp_data, ptr_c, ptr_c + element_width, indirect) == SecondBeforeFirst);
+            sum_c += @intFromBool(compare(cmp, cmp_data, ptr_c, ptr_c + element_width, indirect) == After);
             ptr_c += element_width;
-            sum_d += @intFromBool(compare(cmp, cmp_data, ptr_d, ptr_d + element_width, indirect) == SecondBeforeFirst);
+            sum_d += @intFromBool(compare(cmp, cmp_data, ptr_d, ptr_d + element_width, indirect) == After);
             ptr_d += element_width;
         }
         balance_a += sum_a;
@@ -253,13 +253,13 @@ fn flux_analyze(
         }
     }
     while (count > 7) : (count -= 4) {
-        balance_a += @intFromBool(compare(cmp, cmp_data, ptr_a, ptr_a + element_width, indirect) == SecondBeforeFirst);
+        balance_a += @intFromBool(compare(cmp, cmp_data, ptr_a, ptr_a + element_width, indirect) == After);
         ptr_a += element_width;
-        balance_b += @intFromBool(compare(cmp, cmp_data, ptr_b, ptr_b + element_width, indirect) == SecondBeforeFirst);
+        balance_b += @intFromBool(compare(cmp, cmp_data, ptr_b, ptr_b + element_width, indirect) == After);
         ptr_b += element_width;
-        balance_c += @intFromBool(compare(cmp, cmp_data, ptr_c, ptr_c + element_width, indirect) == SecondBeforeFirst);
+        balance_c += @intFromBool(compare(cmp, cmp_data, ptr_c, ptr_c + element_width, indirect) == After);
         ptr_c += element_width;
-        balance_d += @intFromBool(compare(cmp, cmp_data, ptr_d, ptr_d + element_width, indirect) == SecondBeforeFirst);
+        balance_d += @intFromBool(compare(cmp, cmp_data, ptr_d, ptr_d + element_width, indirect) == After);
         ptr_d += element_width;
     }
 
@@ -267,9 +267,9 @@ fn flux_analyze(
 
     if (count == 0) {
         // The whole list may be ordered. Cool!
-        if (compare_inc(cmp, cmp_data, ptr_a, ptr_a + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst and
-            compare_inc(cmp, cmp_data, ptr_b, ptr_b + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst and
-            compare_inc(cmp, cmp_data, ptr_c, ptr_c + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst)
+        if (compare_inc(cmp, cmp_data, ptr_a, ptr_a + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After and
+            compare_inc(cmp, cmp_data, ptr_b, ptr_b + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After and
+            compare_inc(cmp, cmp_data, ptr_c, ptr_c + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After)
             return;
     }
 
@@ -285,9 +285,9 @@ fn flux_analyze(
         if (data_is_owned) {
             inc_n_data(inc_n_context, cmp_data, 3);
         }
-        const span1: u3 = @intFromBool(reversed_a and reversed_b) * @intFromBool(compare(cmp, cmp_data, ptr_a, ptr_a + element_width, indirect) == SecondBeforeFirst);
-        const span2: u3 = @intFromBool(reversed_b and reversed_c) * @intFromBool(compare(cmp, cmp_data, ptr_b, ptr_b + element_width, indirect) == SecondBeforeFirst);
-        const span3: u3 = @intFromBool(reversed_c and reversed_d) * @intFromBool(compare(cmp, cmp_data, ptr_c, ptr_c + element_width, indirect) == SecondBeforeFirst);
+        const span1: u3 = @intFromBool(reversed_a and reversed_b) * @intFromBool(compare(cmp, cmp_data, ptr_a, ptr_a + element_width, indirect) == After);
+        const span2: u3 = @intFromBool(reversed_b and reversed_c) * @intFromBool(compare(cmp, cmp_data, ptr_b, ptr_b + element_width, indirect) == After);
+        const span3: u3 = @intFromBool(reversed_c and reversed_d) * @intFromBool(compare(cmp, cmp_data, ptr_c, ptr_c + element_width, indirect) == After);
 
         switch (span1 | (span2 << 1) | (span3 << 2)) {
             0 => {},
@@ -441,9 +441,9 @@ fn flux_analyze(
         },
     }
     // Final Merging of sorted partitions.
-    if (compare_inc(cmp, cmp_data, ptr_a, ptr_a + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst) {
-        if (compare_inc(cmp, cmp_data, ptr_c, ptr_c + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst) {
-            if (compare_inc(cmp, cmp_data, ptr_b, ptr_b + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst) {
+    if (compare_inc(cmp, cmp_data, ptr_a, ptr_a + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After) {
+        if (compare_inc(cmp, cmp_data, ptr_c, ptr_c + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After) {
+            if (compare_inc(cmp, cmp_data, ptr_b, ptr_b + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After) {
                 // Lucky us, everything sorted.
                 return;
             }
@@ -454,7 +454,7 @@ fn flux_analyze(
             @memcpy(swap[0..(half1 * element_width)], array[0..(half1 * element_width)]);
         }
     } else {
-        if (compare_inc(cmp, cmp_data, ptr_c, ptr_c + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst) {
+        if (compare_inc(cmp, cmp_data, ptr_c, ptr_c + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After) {
             // First half needs merge, second half sorted.
             @memcpy((swap + half1 * element_width)[0..(half2 * element_width)], (array + half1 * element_width)[0..(half2 * element_width)]);
             cross_merge(swap, array, quad1, quad2, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_context, inc_n_data, indirect);
@@ -510,7 +510,7 @@ fn flux_partition(
             }
         }
 
-        if (arr_len != 0 and compare_inc(cmp, cmp_data, pivot_ptr + element_width, pivot_ptr, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst) {
+        if (arr_len != 0 and compare_inc(cmp, cmp_data, pivot_ptr + element_width, pivot_ptr, data_is_owned, inc_n_context, inc_n_data, indirect) != After) {
             // pivot equals the last pivot, reverse partition and everything is done.
             flux_reverse_partition(array, swap, array, pivot_ptr, len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_context, inc_n_data, indirect);
             return;
@@ -586,7 +586,7 @@ pub fn flux_default_partition(
     var a: usize = 8;
     while (a <= len) : (a += 8) {
         inline for (0..8) |_| {
-            const from = if (compare(cmp, cmp_data, x_ptr, pivot_ptr, indirect) != SecondBeforeFirst) &arr_ptr else &swap_ptr;
+            const from = if (compare(cmp, cmp_data, x_ptr, pivot_ptr, indirect) != After) &arr_ptr else &swap_ptr;
             copy(from.*, x_ptr, element_width);
             from.* += element_width;
             x_ptr += element_width;
@@ -596,7 +596,7 @@ pub fn flux_default_partition(
             run = a;
     }
     for (0..(len % 8)) |_| {
-        const from = if (compare(cmp, cmp_data, x_ptr, pivot_ptr, indirect) != SecondBeforeFirst) &arr_ptr else &swap_ptr;
+        const from = if (compare(cmp, cmp_data, x_ptr, pivot_ptr, indirect) != After) &arr_ptr else &swap_ptr;
         copy(from.*, x_ptr, element_width);
         from.* += element_width;
         x_ptr += element_width;
@@ -654,14 +654,14 @@ pub fn flux_reverse_partition(
     }
     for (0..(len / 8)) |_| {
         inline for (0..8) |_| {
-            const from = if (compare(cmp, cmp_data, pivot_ptr, x_ptr, indirect) == SecondBeforeFirst) &arr_ptr else &swap_ptr;
+            const from = if (compare(cmp, cmp_data, pivot_ptr, x_ptr, indirect) == After) &arr_ptr else &swap_ptr;
             copy(from.*, x_ptr, element_width);
             from.* += element_width;
             x_ptr += element_width;
         }
     }
     for (0..(len % 8)) |_| {
-        const from = if (compare(cmp, cmp_data, pivot_ptr, x_ptr, indirect) == SecondBeforeFirst) &arr_ptr else &swap_ptr;
+        const from = if (compare(cmp, cmp_data, pivot_ptr, x_ptr, indirect) == After) &arr_ptr else &swap_ptr;
         copy(from.*, x_ptr, element_width);
         from.* += element_width;
         x_ptr += element_width;
@@ -720,7 +720,7 @@ pub fn median_of_cube_root(
     quadsort_swap(swap_ptr, cbrt, swap_ptr + cbrt * 2 * element_width, cbrt, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_context, inc_n_data, indirect);
     quadsort_swap(swap_ptr + cbrt * element_width, cbrt, swap_ptr + cbrt * 2 * element_width, cbrt, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_context, inc_n_data, indirect);
 
-    generic.* = compare_inc(cmp, cmp_data, swap_ptr + (cbrt * 2 - 1) * element_width, swap_ptr, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst and compare_inc(cmp, cmp_data, swap_ptr + (cbrt - 1) * element_width, swap_ptr, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst;
+    generic.* = compare_inc(cmp, cmp_data, swap_ptr + (cbrt * 2 - 1) * element_width, swap_ptr, data_is_owned, inc_n_context, inc_n_data, indirect) != After and compare_inc(cmp, cmp_data, swap_ptr + (cbrt - 1) * element_width, swap_ptr, data_is_owned, inc_n_context, inc_n_data, indirect) != After;
 
     binary_median(swap_ptr, swap_ptr + cbrt * element_width, cbrt, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_context, inc_n_data, out, indirect);
 }
@@ -764,9 +764,9 @@ pub fn median_of_nine(
     if (data_is_owned) {
         inc_n_data(inc_n_context, cmp_data, 3);
     }
-    const x: usize = @intFromBool(compare(cmp, cmp_data, swap_ptr + 0 * element_width, swap_ptr + 1 * element_width, indirect) == SecondBeforeFirst);
-    const y: usize = @intFromBool(compare(cmp, cmp_data, swap_ptr + 0 * element_width, swap_ptr + 2 * element_width, indirect) == SecondBeforeFirst);
-    const z: usize = @intFromBool(compare(cmp, cmp_data, swap_ptr + 1 * element_width, swap_ptr + 2 * element_width, indirect) == SecondBeforeFirst);
+    const x: usize = @intFromBool(compare(cmp, cmp_data, swap_ptr + 0 * element_width, swap_ptr + 1 * element_width, indirect) == After);
+    const y: usize = @intFromBool(compare(cmp, cmp_data, swap_ptr + 0 * element_width, swap_ptr + 2 * element_width, indirect) == After);
+    const z: usize = @intFromBool(compare(cmp, cmp_data, swap_ptr + 1 * element_width, swap_ptr + 2 * element_width, indirect) == After);
 
     const index = @intFromBool(x == y) + (x ^ z);
     copy(out, swap_ptr + index * element_width, element_width);
@@ -794,7 +794,7 @@ pub fn trim_four(
     }
     var ptr_a = initial_ptr_a;
     {
-        const gt = compare(cmp, cmp_data, ptr_a, ptr_a + element_width, indirect) == SecondBeforeFirst;
+        const gt = compare(cmp, cmp_data, ptr_a, ptr_a + element_width, indirect) == After;
         const x = if (gt) element_width else 0;
         const not_x = if (!gt) element_width else 0;
         copy(tmp_ptr, ptr_a + not_x, element_width);
@@ -803,7 +803,7 @@ pub fn trim_four(
         ptr_a += 2 * element_width;
     }
     {
-        const gt = compare(cmp, cmp_data, ptr_a, ptr_a + element_width, indirect) == SecondBeforeFirst;
+        const gt = compare(cmp, cmp_data, ptr_a, ptr_a + element_width, indirect) == After;
         const x = if (gt) element_width else 0;
         const not_x = if (!gt) element_width else 0;
         copy(tmp_ptr, ptr_a + not_x, element_width);
@@ -812,13 +812,13 @@ pub fn trim_four(
         ptr_a -= 2 * element_width;
     }
     {
-        const lte = compare(cmp, cmp_data, ptr_a, ptr_a + 2 * element_width, indirect) != SecondBeforeFirst;
+        const lte = compare(cmp, cmp_data, ptr_a, ptr_a + 2 * element_width, indirect) != After;
         const x = if (lte) 2 * element_width else 0;
         copy(ptr_a + 2 * element_width, ptr_a + x, element_width);
         ptr_a += element_width;
     }
     {
-        const gt = compare(cmp, cmp_data, ptr_a, ptr_a + 2 * element_width, indirect) == SecondBeforeFirst;
+        const gt = compare(cmp, cmp_data, ptr_a, ptr_a + 2 * element_width, indirect) == After;
         const x = if (gt) 2 * element_width else 0;
         copy(ptr_a, ptr_a + x, element_width);
     }
@@ -850,13 +850,13 @@ pub fn binary_median(
     var ptr_b = initial_ptr_b;
     len /= 2;
     while (len != 0) : (len /= 2) {
-        if (compare(cmp, cmp_data, ptr_a, ptr_b, indirect) != SecondBeforeFirst) {
+        if (compare(cmp, cmp_data, ptr_a, ptr_b, indirect) != After) {
             ptr_a += len * element_width;
         } else {
             ptr_b += len * element_width;
         }
     }
-    const from = if (compare(cmp, cmp_data, ptr_a, ptr_b, indirect) == SecondBeforeFirst) ptr_a else ptr_b;
+    const from = if (compare(cmp, cmp_data, ptr_a, ptr_b, indirect) == After) ptr_a else ptr_b;
     copy(out, from, element_width);
 }
 
@@ -1044,7 +1044,7 @@ fn rotate_merge_block(
     if (data_is_owned) {
         inc_n_data(inc_n_context, cmp_data, 1);
     }
-    if (compare(cmp, cmp_data, array + (left_block - 1) * element_width, array + left_block * element_width, indirect) != SecondBeforeFirst) {
+    if (compare(cmp, cmp_data, array + (left_block - 1) * element_width, array + left_block * element_width, indirect) != After) {
         // Lucky us, already sorted.
         return;
     }
@@ -1115,13 +1115,13 @@ pub fn monobound_binary_first(
     while (top > 1) {
         const mid = top / 2;
 
-        if (compare(cmp, cmp_data, value_ptr, end_ptr - mid * element_width, indirect) != SecondBeforeFirst) {
+        if (compare(cmp, cmp_data, value_ptr, end_ptr - mid * element_width, indirect) != After) {
             end_ptr -= mid * element_width;
         }
         top -= mid;
     }
 
-    if (compare(cmp, cmp_data, value_ptr, end_ptr - element_width, indirect) != SecondBeforeFirst) {
+    if (compare(cmp, cmp_data, value_ptr, end_ptr - element_width, indirect) != After) {
         end_ptr -= element_width;
     }
     return (@intFromPtr(end_ptr) - @intFromPtr(array)) / element_width;
@@ -1352,7 +1352,7 @@ pub fn partial_backwards_merge(
     if (data_is_owned) {
         inc_n_data(inc_n_context, cmp_data, 1);
     }
-    if (compare(cmp, cmp_data, left_tail, left_tail + element_width, indirect) != SecondBeforeFirst) {
+    if (compare(cmp, cmp_data, left_tail, left_tail + element_width, indirect) != After) {
         // Lucky case, blocks happen to be sorted.
         return;
     }
@@ -1375,7 +1375,7 @@ pub fn partial_backwards_merge(
     // For backwards, we first try to do really large chunks, of 16 elements.
     outer: while (@intFromPtr(left_tail) > @intFromPtr(array + 16 * element_width) and @intFromPtr(right_tail) > @intFromPtr(swap + 16 * element_width)) {
         // Due to if looping, these must use `compare_inc`
-        while (compare_inc(cmp, cmp_data, left_tail, right_tail - 15 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst) {
+        while (compare_inc(cmp, cmp_data, left_tail, right_tail - 15 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After) {
             inline for (0..16) |_| {
                 copy(dest_tail, right_tail, element_width);
                 dest_tail -= element_width;
@@ -1385,7 +1385,7 @@ pub fn partial_backwards_merge(
                 break :outer;
         }
         // Due to if looping, these must use `compare_inc`
-        while (compare_inc(cmp, cmp_data, left_tail - 15 * element_width, right_tail, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst) {
+        while (compare_inc(cmp, cmp_data, left_tail - 15 * element_width, right_tail, data_is_owned, inc_n_context, inc_n_data, indirect) == After) {
             inline for (0..16) |_| {
                 copy(dest_tail, left_tail, element_width);
                 dest_tail -= element_width;
@@ -1398,13 +1398,13 @@ pub fn partial_backwards_merge(
         var loops: usize = 8;
         while (true) {
             // Due to if else chain and uncertain calling, these must use `compare_inc`
-            if (compare_inc(cmp, cmp_data, left_tail, right_tail - element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst) {
+            if (compare_inc(cmp, cmp_data, left_tail, right_tail - element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After) {
                 inline for (0..2) |_| {
                     copy(dest_tail, right_tail, element_width);
                     dest_tail -= element_width;
                     right_tail -= element_width;
                 }
-            } else if (compare_inc(cmp, cmp_data, left_tail - element_width, right_tail, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst) {
+            } else if (compare_inc(cmp, cmp_data, left_tail - element_width, right_tail, data_is_owned, inc_n_context, inc_n_data, indirect) == After) {
                 inline for (0..2) |_| {
                     copy(dest_tail, left_tail, element_width);
                     dest_tail -= element_width;
@@ -1416,7 +1416,7 @@ pub fn partial_backwards_merge(
                 if (data_is_owned) {
                     inc_n_data(inc_n_context, cmp_data, 2);
                 }
-                const lte = compare(cmp, cmp_data, left_tail, right_tail, indirect) != SecondBeforeFirst;
+                const lte = compare(cmp, cmp_data, left_tail, right_tail, indirect) != After;
                 const x = if (lte) element_width else 0;
                 const not_x = if (!lte) element_width else 0;
                 dest_tail -= element_width;
@@ -1451,7 +1451,7 @@ pub fn partial_backwards_merge(
             inc_n_data(inc_n_context, cmp_data, 2);
         }
         // Couldn't move two elements, do a cross swap and continue.
-        const lte = compare(cmp, cmp_data, left_tail, right_tail, indirect) != SecondBeforeFirst;
+        const lte = compare(cmp, cmp_data, left_tail, right_tail, indirect) != After;
         const x = if (lte) element_width else 0;
         const not_x = if (!lte) element_width else 0;
         dest_tail -= element_width;
@@ -1498,7 +1498,7 @@ fn partial_forward_merge_right_tail_2(
     inc_n_data: IncN,
     comptime indirect: bool,
 ) bool {
-    if (compare_inc(cmp, cmp_data, left_tail.*, right_tail.* - element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst) {
+    if (compare_inc(cmp, cmp_data, left_tail.*, right_tail.* - element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After) {
         inline for (0..2) |_| {
             copy(dest.*, right_tail.*, element_width);
             dest.* -= element_width;
@@ -1509,7 +1509,7 @@ fn partial_forward_merge_right_tail_2(
         }
         return true;
     }
-    if (compare_inc(cmp, cmp_data, left_tail.* - element_width, right_tail.*, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst) {
+    if (compare_inc(cmp, cmp_data, left_tail.* - element_width, right_tail.*, data_is_owned, inc_n_context, inc_n_data, indirect) == After) {
         inline for (0..2) |_| {
             copy(dest.*, left_tail.*, element_width);
             dest.* -= element_width;
@@ -1538,7 +1538,7 @@ fn partial_forward_merge_left_tail_2(
     inc_n_data: IncN,
     comptime indirect: bool,
 ) bool {
-    if (compare_inc(cmp, cmp_data, left_tail.* - element_width, right_tail.*, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst) {
+    if (compare_inc(cmp, cmp_data, left_tail.* - element_width, right_tail.*, data_is_owned, inc_n_context, inc_n_data, indirect) == After) {
         inline for (0..2) |_| {
             copy(dest.*, left_tail.*, element_width);
             dest.* -= element_width;
@@ -1549,7 +1549,7 @@ fn partial_forward_merge_left_tail_2(
         }
         return true;
     }
-    if (compare_inc(cmp, cmp_data, left_tail.*, right_tail.* - element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst) {
+    if (compare_inc(cmp, cmp_data, left_tail.*, right_tail.* - element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After) {
         inline for (0..2) |_| {
             copy(dest.*, right_tail.*, element_width);
             dest.* -= element_width;
@@ -1594,7 +1594,7 @@ pub fn partial_forward_merge(
     if (data_is_owned) {
         inc_n_data(inc_n_context, cmp_data, 1);
     }
-    if (compare(cmp, cmp_data, right_head - element_width, right_head, indirect) != SecondBeforeFirst) {
+    if (compare(cmp, cmp_data, right_head - element_width, right_head, indirect) != After) {
         // Lucky case, blocks happen to be sorted.
         return;
     }
@@ -1621,7 +1621,7 @@ pub fn partial_forward_merge(
             inc_n_data(inc_n_context, cmp_data, 2);
         }
         // Couldn't move two elements, do a cross swap and continue.
-        const lte = compare(cmp, cmp_data, left_head, right_head, indirect) != SecondBeforeFirst;
+        const lte = compare(cmp, cmp_data, left_head, right_head, indirect) != After;
         const x = if (lte) element_width else 0;
         const not_x = if (!lte) element_width else 0;
         copy(dest_head + x, right_head, element_width);
@@ -1667,7 +1667,7 @@ fn partial_forward_merge_right_head_2(
     inc_n_data: IncN,
     comptime indirect: bool,
 ) bool {
-    if (compare_inc(cmp, cmp_data, left_head.*, right_head.* + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst) {
+    if (compare_inc(cmp, cmp_data, left_head.*, right_head.* + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After) {
         inline for (0..2) |_| {
             copy(dest.*, right_head.*, element_width);
             dest.* += element_width;
@@ -1678,7 +1678,7 @@ fn partial_forward_merge_right_head_2(
         }
         return true;
     }
-    if (compare_inc(cmp, cmp_data, left_head.* + element_width, right_head.*, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst) {
+    if (compare_inc(cmp, cmp_data, left_head.* + element_width, right_head.*, data_is_owned, inc_n_context, inc_n_data, indirect) != After) {
         inline for (0..2) |_| {
             copy(dest.*, left_head.*, element_width);
             dest.* += element_width;
@@ -1707,7 +1707,7 @@ fn partial_forward_merge_left_head_2(
     inc_n_data: IncN,
     comptime indirect: bool,
 ) bool {
-    if (compare_inc(cmp, cmp_data, left_head.* + element_width, right_head.*, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst) {
+    if (compare_inc(cmp, cmp_data, left_head.* + element_width, right_head.*, data_is_owned, inc_n_context, inc_n_data, indirect) != After) {
         inline for (0..2) |_| {
             copy(dest.*, left_head.*, element_width);
             dest.* += element_width;
@@ -1718,7 +1718,7 @@ fn partial_forward_merge_left_head_2(
         }
         return true;
     }
-    if (compare_inc(cmp, cmp_data, left_head.*, right_head.* + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst) {
+    if (compare_inc(cmp, cmp_data, left_head.*, right_head.* + element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After) {
         inline for (0..2) |_| {
             copy(dest.*, right_head.*, element_width);
             dest.* += element_width;
@@ -1799,8 +1799,8 @@ pub fn quad_merge_block(
     if (data_is_owned) {
         inc_n_data(inc_n_context, cmp_data, 2);
     }
-    const in_order_1_2: u2 = @intFromBool(compare(cmp, cmp_data, block2 - element_width, block2, indirect) != SecondBeforeFirst);
-    const in_order_3_4: u2 = @intFromBool(compare(cmp, cmp_data, block4 - element_width, block4, indirect) != SecondBeforeFirst);
+    const in_order_1_2: u2 = @intFromBool(compare(cmp, cmp_data, block2 - element_width, block2, indirect) != After);
+    const in_order_3_4: u2 = @intFromBool(compare(cmp, cmp_data, block4 - element_width, block4, indirect) != After);
 
     switch (in_order_1_2 | (in_order_3_4 << 1)) {
         0 => {
@@ -1823,7 +1823,7 @@ pub fn quad_merge_block(
             if (data_is_owned) {
                 inc_n_data(inc_n_context, cmp_data, 1);
             }
-            const in_order_2_3 = compare(cmp, cmp_data, block3 - element_width, block3, indirect) != SecondBeforeFirst;
+            const in_order_2_3 = compare(cmp, cmp_data, block3 - element_width, block3, indirect) != After;
             if (in_order_2_3)
                 // Lucky, all sorted.
                 return;
@@ -1862,7 +1862,7 @@ pub fn cross_merge(
     if (left_len + 1 >= right_len and right_len + 1 >= left_len and left_len >= 32) {
         const offset = 15 * element_width;
         // Due to short circuit logic, these must use `compare_inc`
-        if (compare_inc(cmp, cmp_data, left_head + offset, right_head, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst and compare_inc(cmp, cmp_data, left_head, right_head + offset, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst and compare_inc(cmp, cmp_data, left_tail, right_tail - offset, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst and compare_inc(cmp, cmp_data, left_tail - offset, right_tail, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst) {
+        if (compare_inc(cmp, cmp_data, left_head + offset, right_head, data_is_owned, inc_n_context, inc_n_data, indirect) == After and compare_inc(cmp, cmp_data, left_head, right_head + offset, data_is_owned, inc_n_context, inc_n_data, indirect) != After and compare_inc(cmp, cmp_data, left_tail, right_tail - offset, data_is_owned, inc_n_context, inc_n_data, indirect) == After and compare_inc(cmp, cmp_data, left_tail - offset, right_tail, data_is_owned, inc_n_context, inc_n_data, indirect) != After) {
             parity_merge(dest, src, left_len, right_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_context, inc_n_data, indirect);
             return;
         }
@@ -1876,7 +1876,7 @@ pub fn cross_merge(
         if (@as(isize, @intCast(@intFromPtr(left_tail))) - @as(isize, @intCast(@intFromPtr(left_head))) > @as(isize, @intCast(8 * element_width))) {
             // 8 elements all less than or equal to and can be moved together.
             // Due to looping, these must use `compare_inc`
-            while (compare_inc(cmp, cmp_data, left_head + 7 * element_width, right_head, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst) {
+            while (compare_inc(cmp, cmp_data, left_head + 7 * element_width, right_head, data_is_owned, inc_n_context, inc_n_data, indirect) != After) {
                 inline for (0..8) |_| {
                     copy(dest_head, left_head, element_width);
                     dest_head += element_width;
@@ -1889,7 +1889,7 @@ pub fn cross_merge(
             // Attempt to do the same from the tail.
             // 8 elements all greater than and can be moved together.
             // Due to looping, these must use `compare_inc`
-            while (compare_inc(cmp, cmp_data, left_tail - 7 * element_width, right_tail, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst) {
+            while (compare_inc(cmp, cmp_data, left_tail - 7 * element_width, right_tail, data_is_owned, inc_n_context, inc_n_data, indirect) == After) {
                 inline for (0..8) |_| {
                     copy(dest_tail, left_tail, element_width);
                     dest_tail -= element_width;
@@ -1905,7 +1905,7 @@ pub fn cross_merge(
         if (@as(isize, @intCast(@intFromPtr(right_tail))) - @as(isize, @intCast(@intFromPtr(right_head))) > @as(isize, @intCast(8 * element_width))) {
             // left greater than 8 elements right and can be moved together.
             // Due to looping, these must use `compare_inc`
-            while (compare_inc(cmp, cmp_data, left_head, right_head + 7 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst) {
+            while (compare_inc(cmp, cmp_data, left_head, right_head + 7 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After) {
                 inline for (0..8) |_| {
                     copy(dest_head, right_head, element_width);
                     dest_head += element_width;
@@ -1918,7 +1918,7 @@ pub fn cross_merge(
             // Attempt to do the same from the tail.
             // left less than or equalt to 8 elements right and can be moved together.
             // Due to looping, these must use `compare_inc`
-            while (compare_inc(cmp, cmp_data, left_tail, right_tail - 7 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst) {
+            while (compare_inc(cmp, cmp_data, left_tail, right_tail - 7 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After) {
                 inline for (0..8) |_| {
                     copy(dest_tail, right_tail, element_width);
                     dest_tail -= element_width;
@@ -2036,10 +2036,10 @@ pub fn quad_swap(
         if (data_is_owned) {
             inc_n_data(inc_n_context, cmp_data, 4);
         }
-        var v1: u4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 0 * element_width, arr_ptr + 1 * element_width, indirect) == SecondBeforeFirst);
-        var v2: u4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width, indirect) == SecondBeforeFirst);
-        var v3: u4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 4 * element_width, arr_ptr + 5 * element_width, indirect) == SecondBeforeFirst);
-        var v4: u4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 6 * element_width, arr_ptr + 7 * element_width, indirect) == SecondBeforeFirst);
+        var v1: u4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 0 * element_width, arr_ptr + 1 * element_width, indirect) == After);
+        var v2: u4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width, indirect) == After);
+        var v3: u4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 4 * element_width, arr_ptr + 5 * element_width, indirect) == After);
+        var v4: u4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 6 * element_width, arr_ptr + 7 * element_width, indirect) == After);
 
         // This is an attempt at computed gotos in zig.
         // Not yet sure if it will optimize as well as the raw gotos in C.
@@ -2049,7 +2049,7 @@ pub fn quad_swap(
                 0 => {
                     // potentially already ordered, check rest!
                     // Due to short circuit logic, these must use `compare_inc`
-                    if (compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst) {
+                    if (compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After) {
                         break :switch_state .ordered;
                     }
                     // 16 guaranteed compares.
@@ -2064,7 +2064,7 @@ pub fn quad_swap(
                 15 => {
                     // potentially already reverse ordered, check rest!
                     // Due to short circuit logic, these must use `compare_inc`
-                    if (compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst) {
+                    if (compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After) {
                         reverse_head = arr_ptr;
                         break :switch_state .reversed;
                     }
@@ -2107,14 +2107,14 @@ pub fn quad_swap(
                         if (data_is_owned) {
                             inc_n_data(inc_n_context, cmp_data, 4);
                         }
-                        v1 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 0 * element_width, arr_ptr + 1 * element_width, indirect) == SecondBeforeFirst);
-                        v2 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width, indirect) == SecondBeforeFirst);
-                        v3 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 4 * element_width, arr_ptr + 5 * element_width, indirect) == SecondBeforeFirst);
-                        v4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 6 * element_width, arr_ptr + 7 * element_width, indirect) == SecondBeforeFirst);
+                        v1 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 0 * element_width, arr_ptr + 1 * element_width, indirect) == After);
+                        v2 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width, indirect) == After);
+                        v3 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 4 * element_width, arr_ptr + 5 * element_width, indirect) == After);
+                        v4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 6 * element_width, arr_ptr + 7 * element_width, indirect) == After);
                         if (v1 | v2 | v3 | v4 != 0) {
                             // Sadly not ordered still, maybe reversed though?
                             // Due to short circuit logic, these must use `compare_inc`
-                            if (v1 + v2 + v3 + v4 == 4 and compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst) {
+                            if (v1 + v2 + v3 + v4 == 4 and compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After) {
                                 reverse_head = arr_ptr;
                                 state = .reversed;
                                 continue;
@@ -2123,7 +2123,7 @@ pub fn quad_swap(
                             continue;
                         }
                         // Due to short circuit logic, these must use `compare_inc`
-                        if (compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst) {
+                        if (compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After) {
                             state = .ordered;
                             continue;
                         }
@@ -2148,17 +2148,17 @@ pub fn quad_swap(
                         if (data_is_owned) {
                             inc_n_data(inc_n_context, cmp_data, 4);
                         }
-                        v1 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 0 * element_width, arr_ptr + 1 * element_width, indirect) != SecondBeforeFirst);
-                        v2 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width, indirect) != SecondBeforeFirst);
-                        v3 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 4 * element_width, arr_ptr + 5 * element_width, indirect) != SecondBeforeFirst);
-                        v4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 6 * element_width, arr_ptr + 7 * element_width, indirect) != SecondBeforeFirst);
+                        v1 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 0 * element_width, arr_ptr + 1 * element_width, indirect) != After);
+                        v2 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width, indirect) != After);
+                        v3 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 4 * element_width, arr_ptr + 5 * element_width, indirect) != After);
+                        v4 = @intFromBool(compare(cmp, cmp_data, arr_ptr + 6 * element_width, arr_ptr + 7 * element_width, indirect) != After);
                         if (v1 | v2 | v3 | v4 != 0) {
                             // Sadly not still reversed.
                             // So we just need to reverse upto this point, but not the current 8 element block.
                         } else {
                             // This also checks the boundary between this and the last block.
                             // Due to short circuit logic, these must use `compare_inc`
-                            if (compare_inc(cmp, cmp_data, arr_ptr - 1 * element_width, arr_ptr + 0 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst and compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst) {
+                            if (compare_inc(cmp, cmp_data, arr_ptr - 1 * element_width, arr_ptr + 0 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After and compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After) {
                                 // Row multiple reversed blocks in a row!
                                 state = .reversed;
                                 continue;
@@ -2169,12 +2169,12 @@ pub fn quad_swap(
 
                         // Since we already have v1 to v4, check the next block state.
                         // Due to short circuit logic, these must use `compare_inc`
-                        if (v1 + v2 + v3 + v4 == 4 and compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst) {
+                        if (v1 + v2 + v3 + v4 == 4 and compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After) {
                             state = .ordered;
                             continue;
                         }
                         // Due to short circuit logic, these must use `compare_inc`
-                        if (v1 + v2 + v3 + v4 == 0 and compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst) {
+                        if (v1 + v2 + v3 + v4 == 0 and compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After) {
                             reverse_head = arr_ptr;
                             state = .reversed;
                             continue;
@@ -2192,7 +2192,7 @@ pub fn quad_swap(
                         arr_ptr -= 8 * element_width;
 
                         // Due to short circuit logic, these must use `compare_inc`
-                        if (compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst or compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst or compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == SecondBeforeFirst) {
+                        if (compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After or compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After or compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) == After) {
                             // 16 guaranteed compares.
                             if (data_is_owned) {
                                 inc_n_data(inc_n_context, cmp_data, 16);
@@ -2207,19 +2207,19 @@ pub fn quad_swap(
                     const rem = len % 8;
                     reverse_block: {
                         // Due to chance of breaking and not running, must use `compare_inc`.
-                        if (rem == 7 and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst)
+                        if (rem == 7 and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After)
                             break :reverse_block;
-                        if (rem >= 6 and compare_inc(cmp, cmp_data, arr_ptr + 4 * element_width, arr_ptr + 5 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst)
+                        if (rem >= 6 and compare_inc(cmp, cmp_data, arr_ptr + 4 * element_width, arr_ptr + 5 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After)
                             break :reverse_block;
-                        if (rem >= 5 and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst)
+                        if (rem >= 5 and compare_inc(cmp, cmp_data, arr_ptr + 3 * element_width, arr_ptr + 4 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After)
                             break :reverse_block;
-                        if (rem >= 4 and compare_inc(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst)
+                        if (rem >= 4 and compare_inc(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After)
                             break :reverse_block;
-                        if (rem >= 3 and compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst)
+                        if (rem >= 3 and compare_inc(cmp, cmp_data, arr_ptr + 1 * element_width, arr_ptr + 2 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After)
                             break :reverse_block;
-                        if (rem >= 2 and compare_inc(cmp, cmp_data, arr_ptr + 0 * element_width, arr_ptr + 1 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst)
+                        if (rem >= 2 and compare_inc(cmp, cmp_data, arr_ptr + 0 * element_width, arr_ptr + 1 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After)
                             break :reverse_block;
-                        if (rem >= 1 and compare_inc(cmp, cmp_data, arr_ptr - 1 * element_width, arr_ptr + 0 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst)
+                        if (rem >= 1 and compare_inc(cmp, cmp_data, arr_ptr - 1 * element_width, arr_ptr + 0 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After)
                             break :reverse_block;
                         quad_reversal(reverse_head, arr_ptr + rem * element_width - element_width, element_width, copy);
 
@@ -2250,7 +2250,7 @@ pub fn quad_swap(
         arr_ptr += 32 * element_width;
     }) {
         // Due to short circuit logic, these must use `compare_inc`
-        if (compare_inc(cmp, cmp_data, arr_ptr + 7 * element_width, arr_ptr + 8 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst and compare_inc(cmp, cmp_data, arr_ptr + 15 * element_width, arr_ptr + 16 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst and compare_inc(cmp, cmp_data, arr_ptr + 23 * element_width, arr_ptr + 24 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst) {
+        if (compare_inc(cmp, cmp_data, arr_ptr + 7 * element_width, arr_ptr + 8 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After and compare_inc(cmp, cmp_data, arr_ptr + 15 * element_width, arr_ptr + 16 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After and compare_inc(cmp, cmp_data, arr_ptr + 23 * element_width, arr_ptr + 24 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After) {
             // Already in order.
             continue;
         }
@@ -2375,7 +2375,7 @@ pub fn tail_swap(
     tail_swap(arr_ptr, quad4, swap, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_context, inc_n_data, indirect);
 
     // Due to short circuit logic, these must use `compare_inc`
-    if (compare_inc(cmp, cmp_data, array + (quad1 - 1) * element_width, array + quad1 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst and compare_inc(cmp, cmp_data, array + (half1 - 1) * element_width, array + half1 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst and compare_inc(cmp, cmp_data, arr_ptr - 1 * element_width, arr_ptr, data_is_owned, inc_n_context, inc_n_data, indirect) != SecondBeforeFirst) {
+    if (compare_inc(cmp, cmp_data, array + (quad1 - 1) * element_width, array + quad1 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After and compare_inc(cmp, cmp_data, array + (half1 - 1) * element_width, array + half1 * element_width, data_is_owned, inc_n_context, inc_n_data, indirect) != After and compare_inc(cmp, cmp_data, arr_ptr - 1 * element_width, arr_ptr, data_is_owned, inc_n_context, inc_n_data, indirect) != After) {
         return;
     }
 
@@ -2500,7 +2500,7 @@ inline fn head_guarded_merge(
     // exactly as [head_branchless_merge] would spend it.
     const probe_left = if (left_available) left.* else right.*;
     const probe_right = if (right_available) right.* else left.*;
-    const lte = compare(cmp, cmp_data, probe_left, probe_right, indirect) != SecondBeforeFirst;
+    const lte = compare(cmp, cmp_data, probe_left, probe_right, indirect) != After;
 
     const take_left = if (!right_available) true else if (!left_available) false else lte;
     const from = if (take_left) left else right;
@@ -2532,7 +2532,7 @@ inline fn tail_guarded_merge(
     // See [head_guarded_merge] for why a spent run is not read.
     const probe_left = if (left_available) left.* else right.*;
     const probe_right = if (right_available) right.* else left.*;
-    const gt = compare(cmp, cmp_data, probe_left, probe_right, indirect) == SecondBeforeFirst;
+    const gt = compare(cmp, cmp_data, probe_left, probe_right, indirect) == After;
 
     const take_left = if (!right_available) true else if (!left_available) false else gt;
     const from = if (take_left) left else right;
@@ -2627,7 +2627,7 @@ fn parity_swap_four(
     swap_branchless(arr_ptr, tmp_ptr, cmp, cmp_data, element_width, copy, indirect);
     arr_ptr -= element_width;
 
-    const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width, indirect) == SecondBeforeFirst;
+    const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width, indirect) == After;
     if (gt) {
         // 3 guaranteed compares.
         if (data_is_owned) {
@@ -2718,7 +2718,7 @@ fn parity_swap_six(
     arr_ptr = array;
 
     {
-        const lte = compare(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width, indirect) != SecondBeforeFirst;
+        const lte = compare(cmp, cmp_data, arr_ptr + 2 * element_width, arr_ptr + 3 * element_width, indirect) != After;
         if (lte) {
             // 2 guaranteed compares.
             if (data_is_owned) {
@@ -2736,7 +2736,7 @@ fn parity_swap_six(
         inc_n_data(inc_n_context, cmp_data, 8);
     }
     {
-        const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width, indirect) == SecondBeforeFirst;
+        const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width, indirect) == After;
         const x = if (gt) element_width else 0;
         const not_x = if (!gt) element_width else 0;
         copy(swap, arr_ptr + x, element_width);
@@ -2745,7 +2745,7 @@ fn parity_swap_six(
         arr_ptr += 4 * element_width;
     }
     {
-        const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width, indirect) == SecondBeforeFirst;
+        const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width, indirect) == After;
         const x = if (gt) element_width else 0;
         const not_x = if (!gt) element_width else 0;
         copy(swap + 4 * element_width, arr_ptr + x, element_width);
@@ -2822,7 +2822,7 @@ fn parity_swap_seven(
     arr_ptr = array;
 
     {
-        const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width, indirect) == SecondBeforeFirst;
+        const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width, indirect) == After;
         const x = if (gt) element_width else 0;
         const not_x = if (!gt) element_width else 0;
         copy(swap, arr_ptr + x, element_width);
@@ -2831,7 +2831,7 @@ fn parity_swap_seven(
         arr_ptr += 3 * element_width;
     }
     {
-        const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width, indirect) == SecondBeforeFirst;
+        const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width, indirect) == After;
         const x = if (gt) element_width else 0;
         const not_x = if (!gt) element_width else 0;
         copy(swap + 3 * element_width, arr_ptr + x, element_width);
@@ -2839,7 +2839,7 @@ fn parity_swap_seven(
         arr_ptr += 2 * element_width;
     }
     {
-        const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width, indirect) == SecondBeforeFirst;
+        const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width, indirect) == After;
         const x = if (gt) element_width else 0;
         const not_x = if (!gt) element_width else 0;
         copy(swap + 5 * element_width, arr_ptr + x, element_width);
@@ -2974,7 +2974,7 @@ pub inline fn head_branchless_merge(
     // Note equivalent c code:
     //    *pt_d++ = cmp(pt_l, ptr) <= 0 ? *pt_l++ : *pt_r++;
     // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
-    const lte = compare(cmp, cmp_data, left.*, right.*, indirect) != SecondBeforeFirst;
+    const lte = compare(cmp, cmp_data, left.*, right.*, indirect) != After;
     const from = if (lte) left else right;
     copy(dest.*, from.*, element_width);
     from.* += element_width;
@@ -2999,7 +2999,7 @@ pub inline fn tail_branchless_merge(
     // Note equivalent c code:
     //    *tpd-- = cmp(tpl, tpr) > 0 ? *tpl-- : *tpr--;
     // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
-    const gt = compare(cmp, cmp_data, left.*, right.*, indirect) == SecondBeforeFirst;
+    const gt = compare(cmp, cmp_data, left.*, right.*, indirect) == After;
     const from = if (gt) left else right;
     copy(dest.*, from.*, element_width);
     from.* -= element_width;
@@ -3037,7 +3037,7 @@ inline fn swap_branchless_return_gt(
     comptime indirect: bool,
 ) u8 {
     // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
-    const gt = compare(cmp, cmp_data, ptr, ptr + element_width, indirect) == SecondBeforeFirst;
+    const gt = compare(cmp, cmp_data, ptr, ptr + element_width, indirect) == After;
     const x = if (gt) element_width else 0;
     const from = if (gt) ptr else ptr + element_width;
     copy(tmp, from, element_width);
@@ -3097,28 +3097,20 @@ fn test_i64_compare(_: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
     const a: *const i64 = utils.alignedPtrCast(*const i64, a_ptr.?, @src());
     const b: *const i64 = utils.alignedPtrCast(*const i64, b_ptr.?, @src());
 
-    const gt = @as(u8, @intFromBool(a.* > b.*));
-    const lt = @as(u8, @intFromBool(a.* < b.*));
-
-    // Eq = 0
-    // FirstBeforeSecond = 1
-    // SecondBeforeFirst = 2
-    return lt + gt + gt;
+    if (a.* < b.*) return @intFromEnum(Ordering.Before);
+    if (a.* > b.*) return @intFromEnum(Ordering.After);
+    return @intFromEnum(Ordering.Same);
 }
 
 fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
     const a: *const i64 = utils.alignedPtrCast(*const i64, a_ptr.?, @src());
     const b: *const i64 = utils.alignedPtrCast(*const i64, b_ptr.?, @src());
 
-    const gt = @as(u8, @intFromBool(a.* > b.*));
-    const lt = @as(u8, @intFromBool(a.* < b.*));
-
     const count: *isize = utils.alignedPtrCast(*isize, count_ptr.?, @src());
     count.* -= 1;
-    // Eq = 0
-    // FirstBeforeSecond = 1
-    // SecondBeforeFirst = 2
-    return lt + gt + gt;
+    if (a.* < b.*) return @intFromEnum(Ordering.Before);
+    if (a.* > b.*) return @intFromEnum(Ordering.After);
+    return @intFromEnum(Ordering.Same);
 }
 
 fn test_i64_copy(dst_ptr: Opaque, src_ptr: Opaque, _: usize) callconv(.c) void {
@@ -3140,9 +3132,9 @@ const StableItem = struct {
 fn test_stable_item_compare(_: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
     const a = utils.alignedPtrCast(*const StableItem, a_ptr.?, @src());
     const b = utils.alignedPtrCast(*const StableItem, b_ptr.?, @src());
-    if (a.key < b.key) return @intFromEnum(Ordering.FirstBeforeSecond);
-    if (a.key > b.key) return @intFromEnum(Ordering.SecondBeforeFirst);
-    return @intFromEnum(Ordering.Equivalent);
+    if (a.key < b.key) return @intFromEnum(Ordering.Before);
+    if (a.key > b.key) return @intFromEnum(Ordering.After);
+    return @intFromEnum(Ordering.Same);
 }
 
 fn test_stable_item_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
@@ -3170,9 +3162,9 @@ comptime {
 fn test_large_stable_item_compare(_: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
     const a = utils.alignedPtrCast(*const LargeStableItem, a_ptr.?, @src());
     const b = utils.alignedPtrCast(*const LargeStableItem, b_ptr.?, @src());
-    if (a.item.key < b.item.key) return @intFromEnum(Ordering.FirstBeforeSecond);
-    if (a.item.key > b.item.key) return @intFromEnum(Ordering.SecondBeforeFirst);
-    return @intFromEnum(Ordering.Equivalent);
+    if (a.item.key < b.item.key) return @intFromEnum(Ordering.Before);
+    if (a.item.key > b.item.key) return @intFromEnum(Ordering.After);
+    return @intFromEnum(Ordering.Same);
 }
 
 fn test_large_stable_item_copy(dst_ptr: Opaque, src_ptr: Opaque, _: usize) callconv(.c) void {
@@ -3314,9 +3306,9 @@ const Probe32 = struct {
 fn probe32Compare(_: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
     const a = utils.alignedPtrCast(*const Probe32, a_ptr.?, @src());
     const b = utils.alignedPtrCast(*const Probe32, b_ptr.?, @src());
-    if (a.key < b.key) return @intFromEnum(Ordering.FirstBeforeSecond);
-    if (a.key > b.key) return @intFromEnum(Ordering.SecondBeforeFirst);
-    return @intFromEnum(Ordering.Equivalent);
+    if (a.key < b.key) return @intFromEnum(Ordering.Before);
+    if (a.key > b.key) return @intFromEnum(Ordering.After);
+    return @intFromEnum(Ordering.Same);
 }
 
 fn probe32CompareOwned(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
@@ -3423,9 +3415,9 @@ fn test_hostile_compare(seed_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv
     const seed = utils.alignedPtrCast(*const u64, seed_ptr.?, @src()).*;
     const mixed = a.key *% 31 +% b.key *% 7 +% seed;
     return switch (mixed % 3) {
-        0 => @intFromEnum(Ordering.FirstBeforeSecond),
-        1 => @intFromEnum(Ordering.Equivalent),
-        else => @intFromEnum(Ordering.SecondBeforeFirst),
+        0 => @intFromEnum(Ordering.Before),
+        1 => @intFromEnum(Ordering.Same),
+        else => @intFromEnum(Ordering.After),
     };
 }
 
@@ -3435,9 +3427,9 @@ fn test_hostile_large_compare(seed_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) ca
     const seed = utils.alignedPtrCast(*const u64, seed_ptr.?, @src()).*;
     const mixed = a.item.key *% 31 +% b.item.key *% 7 +% seed;
     return switch (mixed % 3) {
-        0 => @intFromEnum(Ordering.FirstBeforeSecond),
-        1 => @intFromEnum(Ordering.Equivalent),
-        else => @intFromEnum(Ordering.SecondBeforeFirst),
+        0 => @intFromEnum(Ordering.Before),
+        1 => @intFromEnum(Ordering.Same),
+        else => @intFromEnum(Ordering.After),
     };
 }
 

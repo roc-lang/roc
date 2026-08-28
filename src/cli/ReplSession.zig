@@ -3085,8 +3085,8 @@ test "Repl - range_to" {
 }
 
 test "Repl - list_sort_with lengths" {
-    try expectAllNative("List.len(List.sort_with([3, 1, 2], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))", "3");
-    try expectAllNative("List.len(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))", "5");
+    try expectAllNative("List.len(List.sort_with([3, 1, 2], |a, b| if a < b Before else if a > b After else Same))", "3");
+    try expectAllNative("List.len(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b Before else if a > b After else Same))", "5");
 }
 
 test "Repl - list_sort_with empty" {
@@ -3094,13 +3094,13 @@ test "Repl - list_sort_with empty" {
         \\{
         \\    xs : List(I64)
         \\    xs = []
-        \\    List.len(List.sort_with(xs, |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))
+        \\    List.len(List.sort_with(xs, |a, b| if a < b Before else if a > b After else Same))
         \\}
     , "0");
 }
 
 test "Repl - list_sort_with single" {
-    try expectAllNative("List.len(List.sort_with([42], |a, b| if a < b FirstBeforeSecond else if a > b SecondBeforeFirst else Equivalent))", "1");
+    try expectAllNative("List.len(List.sort_with([42], |a, b| if a < b Before else if a > b After else Same))", "1");
 }
 
 test "Repl - list fold with concat" {
