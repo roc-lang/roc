@@ -106,6 +106,7 @@ my @RULES = (
     { category => 'text-identity-public-api-dep', regex => qr/\bisSelfPublicApiModuleName\b/, allowed => {} },
     { category => 'text-identity-glue-def-probe', regex => qr/\bfindTopLevelDefByName\b/, allowed => {} },
     { category => 'text-identity-artifact-env-match', regex => qr/\bmoduleEnvNameMatches\b/, allowed => {} },
+    { category => 'body-const-global-type-owner', regex => qr/\bconstBuilder\b/, allowed => {} },
 );
 
 sub iter_zig_files {
@@ -140,7 +141,10 @@ for my $rel (iter_zig_files()) {
 
         for my $rule (@RULES) {
             next if $rule->{allowed}{$rel};
-            if ($line =~ $rule->{regex}) {
+            # Architecture rules constrain Zig tokens, not prose or fixture
+            # strings. A rule must opt in explicitly if raw source text matters.
+            my $subject = $rule->{raw_text} ? $line : zig_code_line($line);
+            if ($subject =~ $rule->{regex}) {
                 push @violations, "$rel:$line_no: $rule->{category}: $line";
             }
         }
@@ -149,10 +153,95 @@ for my $rel (iter_zig_files()) {
     close $fh or die "failed to close $rel: $!\n";
 }
 
-sub brace_delta {
+sub zig_code_line {
     my ($line) = @_;
-    my $opens = ($line =~ tr/{/{/);
-    my $closes = ($line =~ tr/}/}/);
+
+    # Zig multiline string contents start with `\\` after indentation and run
+    # through the end of that source line.
+    return '' if $line =~ /^\s*\\\\/;
+
+    my $code = '';
+    my $quote;
+    my $quoted_identifier = 0;
+    my $escaped = 0;
+    for (my $index = 0; $index < length($line); ++$index) {
+        my $char = substr($line, $index, 1);
+        if (defined $quote) {
+            if ($escaped) {
+                $escaped = 0;
+                next;
+            }
+            if ($char eq '\\') {
+                $escaped = 1;
+                next;
+            }
+            if ($char eq $quote) {
+                undef $quote;
+                $quoted_identifier = 0;
+            } elsif ($quoted_identifier && $char ne '{' && $char ne '}') {
+                $code .= $char;
+            }
+            next;
+        }
+
+        if ($char eq '"' || $char eq "'") {
+            $quote = $char;
+            $quoted_identifier = $char eq '"' && $index > 0 && substr($line, $index - 1, 1) eq '@';
+            next;
+        }
+        if ($char eq '/' && substr($line, $index + 1, 1) eq '/') {
+            last;
+        }
+        $code .= $char;
+    }
+
+    return $code;
+}
+
+sub zig_code_line_with_strings {
+    my ($line) = @_;
+
+    return '' if $line =~ /^\s*\\\\/;
+
+    my $code = '';
+    my $quote;
+    my $escaped = 0;
+    for (my $index = 0; $index < length($line); ++$index) {
+        my $char = substr($line, $index, 1);
+        if (defined $quote) {
+            $code .= $char;
+            if ($escaped) {
+                $escaped = 0;
+                next;
+            }
+            if ($char eq '\\') {
+                $escaped = 1;
+                next;
+            }
+            if ($char eq $quote) {
+                undef $quote;
+            }
+            next;
+        }
+
+        if ($char eq '"' || $char eq "'") {
+            $quote = $char;
+            $code .= $char;
+            next;
+        }
+        if ($char eq '/' && substr($line, $index + 1, 1) eq '/') {
+            last;
+        }
+        $code .= $char;
+    }
+
+    return $code;
+}
+
+sub brace_delta {
+    my ($code) = @_;
+    my $opens = ($code =~ tr/{/{/);
+    my $closes = ($code =~ tr/}/}/);
     return $opens - $closes;
 }
 
@@ -188,8 +277,20 @@ sub check_body_context_output_access {
         patData
         localType
     );
+    my %allowed_global_type_ingress = map { $_ => 1 } qw(
+        lowerType
+        lowerTypeFromView
+        primitiveType
+    );
+    my %allowed_global_type_access = map { $_ => 1 } qw(
+        importProgramType
+        programFnSourceTypeNode
+    );
 
     my $direct_output = qr/self\.builder\.program\.(?:addExpr|addPat|addLocal|addLocalWithBinder|addFn|addExprSpan|addPatSpan|addTypedLocalSpan|addStmt|addStmtSpan|addFieldExprSpan|addRecordDestructSpan|addBranchSpan|addIfBranchSpan|addStrPatternStepSpan|addStringLiteral|addStringView|addComptimeSite|defs\.append|defs\.items|exprs\.items|pats\.items|locals\.items)\b/;
+    my $global_type_access = qr/(?:\.builder\.program\.(?:fnSource|types)|self\.builder\.(?:constBoxPayloadType|constListElemType|constRecordFields|errorRowIsIncludedIn|functionShape|namedBackingType|nominalConstructionLayer|nominalExprBackingType|optionalFieldSlot|optionalSlotInfo|recordField|recordFieldByTextOptional|recordFieldType|recordFieldsSpan|shapeContent|singleTypeArg|specializationTypeDigest|tagByName|tagPayloadTypes|tagUnionTags|tupleItemTypes|typeHasBuiltinOwner|typeIsProvenUninhabited))\b/;
+    my $global_type_ingress = qr/self\.builder\.(?:lowerType|primitiveType)\b/;
+    my $global_type_cache = qr/\.builder\.(?:type_cache|parse_result_ok_types|generated_try_types|uninhabited_type_cache)\.(?:get|getPtr|getOrPut|put|remove)\b/;
 
     my $in_body_context = 0;
     my $body_depth = 0;
@@ -201,30 +302,40 @@ sub check_body_context_output_access {
     while (my $line = <$fh>) {
         ++$line_no;
         chomp $line;
+        my $code = zig_code_line($line);
 
         if (!$in_body_context) {
-            if ($line =~ /^\s*const\s+BodyContext\s*=\s*struct\s*\{/) {
+            if ($code =~ /^\s*const\s+BodyContext\s*=\s*struct\s*\{/) {
                 $in_body_context = 1;
-                $body_depth = brace_delta($line);
+                $body_depth = brace_delta($code);
             }
             next;
         }
 
-        if (!defined $current_fn && $line =~ /^\s+fn\s+([A-Za-z0-9_]+)\b/) {
+        if (!defined $current_fn && $code =~ /^\s+(?:pub\s+)?fn\s+([A-Za-z0-9_]+)\b/) {
             $current_fn = $1;
             $fn_started = 0;
             $fn_depth = 0;
         }
 
-        if ($line =~ $direct_output && !$allowed_fn{$current_fn // ''}) {
+        if ($code =~ $direct_output && !$allowed_fn{$current_fn // ''}) {
             push @violations, "$rel:$line_no: body-context-final-output: $line";
         }
+        if ($code =~ $global_type_access && !$allowed_global_type_access{$current_fn // ''}) {
+            push @violations, "$rel:$line_no: body-context-global-type-store: $line";
+        }
+        if ($code =~ $global_type_ingress && !$allowed_global_type_ingress{$current_fn // ''}) {
+            push @violations, "$rel:$line_no: body-context-global-type-ingress: $line";
+        }
+        if ($code =~ $global_type_cache) {
+            push @violations, "$rel:$line_no: body-context-builder-global-type-cache: $line";
+        }
 
-        my $delta = brace_delta($line);
+        my $delta = brace_delta($code);
         $body_depth += $delta;
 
         if (defined $current_fn) {
-            if (!$fn_started && $line =~ /\{/) {
+            if (!$fn_started && $code =~ /\{/) {
                 $fn_started = 1;
             }
             $fn_depth += $delta if $fn_started;
@@ -235,13 +346,65 @@ sub check_body_context_output_access {
             }
         }
 
-        last if $body_depth <= 0;
+        # Helper strategy structs declared after BodyContext receive
+        # `self: *BodyContext` and share the same ownership restrictions. Keep
+        # scanning the rest of the module so they cannot bypass this boundary.
+        $body_depth = 0 if $body_depth <= 0;
     }
 
     close $fh or die "failed to close $rel: $!\n";
 }
 
 check_body_context_output_access();
+
+sub check_body_context_bridge_type_access {
+    my $rel = 'src/postcheck/monotype/lower.zig';
+    my $path = File::Spec->catfile($ROOT, $rel);
+    open my $fh, '<', $path or die "failed to read $rel: $!\n";
+
+    my %bridge_fn = map { $_ => 1 } qw(
+        lowerDraftNestedFromContext
+        lowerDraftTemplateFromContext
+    );
+    my $global_type_access = qr/self\.(?:program\.types|specializationTypeDigest)\b/;
+    my $current_fn;
+    my $fn_started = 0;
+    my $fn_depth = 0;
+    my $line_no = 0;
+
+    while (my $line = <$fh>) {
+        ++$line_no;
+        chomp $line;
+        my $code = zig_code_line($line);
+
+        if (!defined $current_fn && $code =~ /^\s+fn\s+([A-Za-z0-9_]+)\b/) {
+            $current_fn = $1;
+            $fn_started = 0;
+            $fn_depth = 0;
+        }
+
+        if ($bridge_fn{$current_fn // ''} && $code =~ $global_type_access) {
+            push @violations, "$rel:$line_no: body-context-bridge-global-type-store: $line";
+        }
+
+        my $delta = brace_delta($code);
+        if (defined $current_fn) {
+            if (!$fn_started && $code =~ /\{/) {
+                $fn_started = 1;
+            }
+            $fn_depth += $delta if $fn_started;
+            if ($fn_started && $fn_depth <= 0) {
+                undef $current_fn;
+                $fn_started = 0;
+                $fn_depth = 0;
+            }
+        }
+    }
+
+    close $fh or die "failed to close $rel: $!\n";
+}
+
+check_body_context_bridge_type_access();
 
 sub check_active_body_draft_seal_access {
     my $rel = 'src/postcheck/monotype/lower.zig';
@@ -259,14 +422,15 @@ sub check_active_body_draft_seal_access {
     while (my $line = <$fh>) {
         ++$line_no;
         chomp $line;
+        my $code = zig_code_line($line);
 
-        if (!$in_test && $line =~ /^\s*test\s+"/) {
+        if (!$in_test && $code =~ /^\s*test\s+/) {
             $in_test = 1;
             $test_started = 0;
             $test_depth = 0;
         }
 
-        if (!$in_test && !defined $current_fn && $line =~ /^\s+fn\s+([A-Za-z0-9_]+)\b/) {
+        if (!$in_test && !defined $current_fn && $code =~ /^\s+fn\s+([A-Za-z0-9_]+)\b/) {
             $current_fn = $1;
             $fn_started = 0;
             $fn_depth = 0;
@@ -279,29 +443,29 @@ sub check_active_body_draft_seal_access {
             ($current_fn // '') eq 'sealActiveBodyDraft' ||
             ($current_fn // '') eq 'commitFinalizedBodyDraft';
         if (!$in_test && !$owns_body_draft_commit) {
-            if ($line =~ /\b[A-Za-z_][A-Za-z0-9_]*\.sealCoreIntoProgram\(/) {
+            if ($code =~ /\b[A-Za-z_][A-Za-z0-9_]*\.sealCoreIntoProgram\(/) {
                 push @violations, "$rel:$line_no: active-body-draft-seal-bypass: $line";
             }
-            if ($line =~ /\b[A-Za-z_][A-Za-z0-9_]*\.markNestedReady\(/) {
+            if ($code =~ /\b[A-Za-z_][A-Za-z0-9_]*\.markNestedReady\(/) {
                 push @violations, "$rel:$line_no: active-body-draft-seal-bypass: $line";
             }
-            if ($line =~ /\b[A-Za-z_][A-Za-z0-9_]*\.seal\(self,\s*graph,\s*&sealer/) {
+            if ($code =~ /\b[A-Za-z_][A-Za-z0-9_]*\.seal\(self,\s*graph,\s*&sealer/) {
                 push @violations, "$rel:$line_no: active-body-draft-seal-bypass: $line";
             }
-            if ($line =~ /\bBodyDraftStore\.finalIdOffsets\(self\.program\)/) {
+            if ($code =~ /\bBodyDraftStore\.finalIdOffsets\(self\.program\)/) {
                 push @violations, "$rel:$line_no: active-body-draft-seal-bypass: $line";
             }
         }
         if (!$in_test && ($current_fn // '') ne 'activeTypeFromNode') {
-            if ($line =~ /\bactiveTypeViewForNode\(/) {
+            if ($code =~ /\bactiveTypeViewForNode\(/) {
                 push @violations, "$rel:$line_no: active-graph-view-bypass: $line";
             }
         }
 
-        my $delta = brace_delta($line);
+        my $delta = brace_delta($code);
 
         if ($in_test) {
-            if (!$test_started && $line =~ /\{/) {
+            if (!$test_started && $code =~ /\{/) {
                 $test_started = 1;
             }
             $test_depth += $delta if $test_started;
@@ -313,7 +477,7 @@ sub check_active_body_draft_seal_access {
         }
 
         if (defined $current_fn) {
-            if (!$fn_started && $line =~ /\{/) {
+            if (!$fn_started && $code =~ /\{/) {
                 $fn_started = 1;
             }
             $fn_depth += $delta if $fn_started;
@@ -344,17 +508,19 @@ sub check_iterator_lowering_uses_explicit_ids {
     while (my $line = <$fh>) {
         ++$line_no;
         chomp $line;
+        my $code = zig_code_line($line);
+        my $code_with_strings = zig_code_line_with_strings($line);
 
-        if (!defined $current_fn && $line =~ /^\s+(?:pub\s+)?fn\s+([A-Za-z0-9_]+)\b/) {
+        if (!defined $current_fn && $code =~ /^\s+(?:pub\s+)?fn\s+([A-Za-z0-9_]+)\b/) {
             $current_fn = $1;
             $fn_started = 0;
             $fn_depth = 0;
         }
 
         if (defined $current_fn) {
-            push @{$bodies{$current_fn}}, [$line_no, $line];
-            my $delta = brace_delta($line);
-            if (!$fn_started && $line =~ /\{/) {
+            push @{$bodies{$current_fn}}, [$line_no, $line, $code_with_strings];
+            my $delta = brace_delta($code);
+            if (!$fn_started && $code =~ /\{/) {
                 $fn_started = 1;
             }
             $fn_depth += $delta if $fn_started;
@@ -376,13 +542,13 @@ sub check_iterator_lowering_uses_explicit_ids {
     my $tag_role = qr/(?:Known|Unknown|One|Skip)/;
     for my $fn (keys %bodies) {
         for my $entry (@{$bodies{$fn}}) {
-            my ($source_line, $line) = @$entry;
+            my ($source_line, $line, $code) = @$entry;
             my $recovers_by_text =
-                $line =~ /\brecordFieldByText(?:Optional)?\s*\([^\)]*"$field_role"/ ||
-                $line =~ /\bmonoTagByText(?:Optional)?\s*\([^\)]*"$tag_role"/ ||
-                $line =~ /\bmonoTagByText(?:Optional)?\s*\([^,]*step[^,]*,\s*"Done"/ ||
-                $line =~ /\b(?:recordFieldLabelTextEql|tagLabelTextEql)\s*\([^\)]*"(?:$field_role|$tag_role)"/ ||
-                $line =~ /\bIdent\.textEql\s*\([^\)]*"(?:$field_role|$tag_role)"/;
+                $code =~ /\brecordFieldByText(?:Optional)?\s*\([^\)]*"$field_role"/ ||
+                $code =~ /\bmonoTagByText(?:Optional)?\s*\([^\)]*"$tag_role"/ ||
+                $code =~ /\bmonoTagByText(?:Optional)?\s*\([^,]*step[^,]*,\s*"Done"/ ||
+                $code =~ /\b(?:recordFieldLabelTextEql|tagLabelTextEql)\s*\([^\)]*"(?:$field_role|$tag_role)"/ ||
+                $code =~ /\bIdent\.textEql\s*\([^\)]*"(?:$field_role|$tag_role)"/;
             if ($recovers_by_text) {
                 push @violations, "$rel:$source_line: iterator-text-shape-recognition: $line";
             }
