@@ -2208,6 +2208,35 @@ test "independent same-name method requirements specialize separately" {
     _ = try monotypeCountersForModule(allocator, source);
 }
 
+test "independent same-name iterator requirements specialize separately" {
+    const allocator = std.testing.allocator;
+    // Empty.iter quantifies its element beyond the dispatcher, so the two
+    // loops instantiate the shared iter evidence at different element types.
+    const source =
+        \\Empty := [E].{
+        \\    iter : Empty -> Iter(item)
+        \\    iter = |_| List.iter([])
+        \\}
+        \\
+        \\g = |e| {
+        \\    var $a = 0.U64
+        \\    for x in e {
+        \\        $a = $a + x
+        \\    }
+        \\    var $b = 0.U128
+        \\    for x in e {
+        \\        $b = $b + x
+        \\    }
+        \\    ($a, $b)
+        \\}
+        \\
+        \\main : {} -> (U64, U128)
+        \\main = |_| g(Empty.E)
+    ;
+
+    _ = try monotypeCountersForModule(allocator, source);
+}
+
 test "specialization interface replay follows returned local functions through wrappers" {
     const allocator = std.testing.allocator;
     const source =

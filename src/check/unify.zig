@@ -3388,8 +3388,11 @@ const Unifier = struct {
     };
 
     /// Match relations that deliberately share one callable type while leaving
-    /// independent same-name method calls separate. Keeping those calls separate
-    /// lets each use instantiate a selected rank-1 method scheme independently.
+    /// independent same-name method calls separate. When a same-name group
+    /// contains any declarative relation (where clause, literal, or operator),
+    /// the whole group unifies through one representative declarative; a group
+    /// of dot calls alone stays separate so each use can instantiate a selected
+    /// rank-1 method scheme independently.
     fn partitionStaticDispatchConstraints(
         self: *const Self,
         a_constraints_range: StaticDispatchConstraint.SafeList.Range,
@@ -3546,83 +3549,53 @@ const Unifier = struct {
                 b_non_method_end += 1;
             }
 
-            var a_non_method = a_group_start;
-            var b_non_method = b_group_start;
-            while (a_non_method < a_non_method_end and b_non_method < b_non_method_end) {
-                _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, .{
-                    .a = a_constraints[a_indices[a_non_method]],
-                    .b = b_constraints[b_indices[b_non_method]],
-                });
-                a_non_method += 1;
-                b_non_method += 1;
-            }
-
-            var a_method = a_non_method_end;
-            var b_method = b_non_method_end;
-            while (a_non_method < a_non_method_end and b_method < b_group_end) {
-                _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, .{
-                    .a = a_constraints[a_indices[a_non_method]],
-                    .b = b_constraints[b_indices[b_method]],
-                });
-                a_non_method += 1;
-                b_method += 1;
-            }
-            while (a_method < a_group_end and b_non_method < b_non_method_end) {
-                _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, .{
-                    .a = a_constraints[a_indices[a_method]],
-                    .b = b_constraints[b_indices[b_non_method]],
-                });
-                a_method += 1;
-                b_non_method += 1;
-            }
-
-            // A written/defaulting requirement describes the method available
-            // to the body, so every independent call on the other side must
-            // satisfy it. Reuse one representative after the one-to-one matches;
-            // this checks every call without unifying independent inferred calls
-            // when neither side supplies a declaration.
-            if (a_non_method_end > a_group_start) {
-                const representative = a_constraints[a_indices[a_group_start]];
-                while (b_method < b_group_end) : (b_method += 1) {
+            const a_has_declarative = a_non_method_end > a_group_start;
+            const b_has_declarative = b_non_method_end > b_group_start;
+            if (a_has_declarative or b_has_declarative) {
+                // A written/defaulting requirement describes the one method
+                // available to the body, so every same-name declarative must
+                // agree on a single callable type and every independent call
+                // on either side must satisfy it. Pair each constraint against
+                // one representative declarative: unification is transitive,
+                // so the whole group shares one callable type, and each pair
+                // keeps its second constraint, so the merged range keeps every
+                // constraint but the representative exactly once.
+                const representative = if (a_has_declarative)
+                    a_constraints[a_indices[a_group_start]]
+                else
+                    b_constraints[b_indices[b_group_start]];
+                var a_index = if (a_has_declarative) a_group_start + 1 else a_group_start;
+                while (a_index < a_group_end) : (a_index += 1) {
                     _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, .{
                         .a = representative,
-                        .b = b_constraints[b_indices[b_method]],
+                        .b = a_constraints[a_indices[a_index]],
                     });
                 }
-            }
-            if (b_non_method_end > b_group_start) {
-                const representative = b_constraints[b_indices[b_group_start]];
-                while (a_method < a_group_end) : (a_method += 1) {
+                var b_index = if (a_has_declarative) b_group_start else b_group_start + 1;
+                while (b_index < b_group_end) : (b_index += 1) {
                     _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, .{
-                        .a = a_constraints[a_indices[a_method]],
-                        .b = representative,
+                        .a = representative,
+                        .b = b_constraints[b_indices[b_index]],
                     });
                 }
-            }
-
-            while (a_non_method < a_non_method_end) : (a_non_method += 1) {
-                _ = try scratch.only_in_a_static_dispatch_constraints.append(
-                    scratch.gpa,
-                    a_constraints[a_indices[a_non_method]],
-                );
-            }
-            while (a_method < a_group_end) : (a_method += 1) {
-                _ = try scratch.only_in_a_static_dispatch_constraints.append(
-                    scratch.gpa,
-                    a_constraints[a_indices[a_method]],
-                );
-            }
-            while (b_non_method < b_non_method_end) : (b_non_method += 1) {
-                _ = try scratch.only_in_b_static_dispatch_constraints.append(
-                    scratch.gpa,
-                    b_constraints[b_indices[b_non_method]],
-                );
-            }
-            while (b_method < b_group_end) : (b_method += 1) {
-                _ = try scratch.only_in_b_static_dispatch_constraints.append(
-                    scratch.gpa,
-                    b_constraints[b_indices[b_method]],
-                );
+            } else {
+                // Only independent dot-call relations: keep each side's calls
+                // separate so every use can instantiate the selected rank-1
+                // method scheme at its own type.
+                var a_index = a_group_start;
+                while (a_index < a_group_end) : (a_index += 1) {
+                    _ = try scratch.only_in_a_static_dispatch_constraints.append(
+                        scratch.gpa,
+                        a_constraints[a_indices[a_index]],
+                    );
+                }
+                var b_index = b_group_start;
+                while (b_index < b_group_end) : (b_index += 1) {
+                    _ = try scratch.only_in_b_static_dispatch_constraints.append(
+                        scratch.gpa,
+                        b_constraints[b_indices[b_index]],
+                    );
+                }
             }
 
             a_group_start = a_group_end;

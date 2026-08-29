@@ -47211,7 +47211,14 @@ const BodyContext = struct {
                 .target => |target| .{
                     .view = target.view,
                     .target = target.target,
-                    .instantiation = target.instantiation,
+                    // Shared evidence carries the callable instantiation of
+                    // whichever same-name relation the caller materialized.
+                    // An independent relation supplies only the target
+                    // identity and instantiates against its own plan.
+                    .instantiation = if (dependent.independent_callable)
+                        null
+                    else
+                        target.instantiation,
                     .local_proc_context = target.local_proc_context,
                 },
                 .structural, .unreachable_value, .checked_error => Common.invariant("iterator dispatch evidence was not a callable target"),
