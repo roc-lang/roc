@@ -3291,55 +3291,14 @@ const Unifier = struct {
 
         const top: u32 = @intCast(self.types_store.static_dispatch_constraints.len());
 
-        // Ensure we have enough memory for the new contiguous list.
-        const capacity = partitioned.in_both.len() + partitioned.only_in_a.len() + partitioned.only_in_b.len();
+        // Shared pairs validate callable compatibility. The partitioner places
+        // every constraint that must survive into one of the retained ranges.
+        const capacity = partitioned.only_in_a.len() + partitioned.only_in_b.len();
         try self.types_store.static_dispatch_constraints.items.ensureUnusedCapacity(
             self.types_store.gpa,
             capacity,
         );
 
-        for (self.scratch.in_both_static_dispatch_constraints.sliceRange(partitioned.in_both)) |two_constraints| {
-            var constraint = two_constraints.b;
-            if (two_constraints.a.origin == .from_literal and two_constraints.b.origin == .from_literal) {
-                if (mergeFromNumeralLiteralInfo(
-                    two_constraints.a.origin.numeralInfo(),
-                    two_constraints.b.origin.numeralInfo(),
-                )) |merged| {
-                    constraint.origin = .{ .from_literal = .{ .numeral = merged } };
-                }
-            }
-            // Preserve a body-forced where-clause across unification. The bit only
-            // exists on a `where_clause` origin, so it survives only by keeping that
-            // origin—or by promoting a payload-less `method_call` to it (the gap the
-            // ambiguity judgment would otherwise miss when a same-named direct call
-            // wins the merge). A `from_literal`/operator origin is left intact: its
-            // payload (numeral info, binop negation) is load-bearing for defaulting
-            // and reporting, and such a receiver is pinned by defaulting rather than
-            // judged ambiguous, so dropping the bit there is correct (overwriting it
-            // breaks e.g. ranges).
-            {
-                const a_forced = two_constraints.a.origin == .where_clause and two_constraints.a.origin.where_clause.body_required;
-                const b_forced = two_constraints.b.origin == .where_clause and two_constraints.b.origin.where_clause.body_required;
-                if (a_forced or b_forced) {
-                    switch (constraint.origin) {
-                        .where_clause => constraint.origin.where_clause.body_required = true,
-                        .method_call => constraint.origin = .{ .where_clause = .{ .body_required = true } },
-                        .from_literal, .desugared_binop, .desugared_unaryop => {},
-                    }
-                }
-            }
-            // Provenance is metadata (excluded from constraint identity): merge it
-            // field-wise, keeping the winner's value and falling back to the other
-            // side's so an introducing site recorded on either constraint
-            // survives the merge.
-            if (constraint.provenance.intro_expr == .none) {
-                constraint.provenance.intro_expr = two_constraints.a.provenance.intro_expr;
-            }
-            if (!constraint.interpolation.isPresent()) {
-                constraint.interpolation = two_constraints.a.interpolation;
-            }
-            self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(constraint);
-        }
         for (self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a)) |only_a| {
             self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_a);
         }
@@ -3386,6 +3345,22 @@ const Unifier = struct {
         only_in_b: StaticDispatchConstraint.SafeList.Range,
         in_both: TwoStaticDispatchConstraints.SafeList.Range,
     };
+
+    fn retainDeclarativeStaticDispatchConstraint(
+        self: *const Self,
+        retained_group_start: usize,
+        constraint: StaticDispatchConstraint,
+    ) Error!void {
+        for (self.scratch.only_in_a_static_dispatch_constraints.items.items[retained_group_start..]) |*existing| {
+            if (!sameDeclarativeOriginClass(existing.origin, constraint.origin)) continue;
+            existing.* = mergeStaticDispatchConstraintMetadata(constraint, existing.*);
+            return;
+        }
+        _ = try self.scratch.only_in_a_static_dispatch_constraints.append(
+            self.scratch.gpa,
+            constraint,
+        );
+    }
 
     /// Match relations that deliberately share one callable type while leaving
     /// independent same-name method calls separate. When a same-name group
@@ -3546,15 +3521,29 @@ const Unifier = struct {
                 // A written/defaulting requirement describes the one method
                 // available to the body, so every same-name declarative must
                 // agree on a single callable type and every independent call
-                // on either side must satisfy it. Pair each constraint against
-                // one representative declarative: unification is transitive,
-                // so the whole group shares one callable type, and each pair
-                // keeps its second constraint, so the merged range keeps every
-                // constraint but the representative exactly once.
+                // on either side must satisfy it. Retain one metadata-bearing
+                // declarative per semantic origin, then validate every callable
+                // against one representative. Method-call entries are subsumed
+                // by that relation; their function vars remain unified with it.
                 const representative = if (a_has_declarative)
                     a_constraints[a_indices[a_group_start]]
                 else
                     b_constraints[b_indices[b_group_start]];
+                const retained_group_start = scratch.only_in_a_static_dispatch_constraints.len();
+                var a_declarative = a_group_start;
+                while (a_declarative < a_non_method_end) : (a_declarative += 1) {
+                    try self.retainDeclarativeStaticDispatchConstraint(
+                        retained_group_start,
+                        a_constraints[a_indices[a_declarative]],
+                    );
+                }
+                var b_declarative = b_group_start;
+                while (b_declarative < b_non_method_end) : (b_declarative += 1) {
+                    try self.retainDeclarativeStaticDispatchConstraint(
+                        retained_group_start,
+                        b_constraints[b_indices[b_declarative]],
+                    );
+                }
                 var a_index = if (a_has_declarative) a_group_start + 1 else a_group_start;
                 while (a_index < a_group_end) : (a_index += 1) {
                     _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, .{
@@ -3649,6 +3638,54 @@ const Unifier = struct {
         }
     }
 };
+
+fn sameDeclarativeOriginClass(
+    a: StaticDispatchConstraint.Origin,
+    b: StaticDispatchConstraint.Origin,
+) bool {
+    return switch (a) {
+        .method_call => false,
+        .where_clause => b == .where_clause,
+        .desugared_unaryop => b == .desugared_unaryop,
+        .desugared_binop => |a_binop| b == .desugared_binop and
+            a_binop.negated == b.desugared_binop.negated,
+        .from_literal => |a_literal| b == .from_literal and
+            std.meta.activeTag(a_literal) == std.meta.activeTag(b.from_literal),
+    };
+}
+
+fn mergeStaticDispatchConstraintMetadata(
+    other: StaticDispatchConstraint,
+    retained: StaticDispatchConstraint,
+) StaticDispatchConstraint {
+    var merged = retained;
+    if (other.origin == .from_literal and retained.origin == .from_literal) {
+        if (mergeFromNumeralLiteralInfo(
+            other.origin.numeralInfo(),
+            retained.origin.numeralInfo(),
+        )) |numeral_info| {
+            merged.origin = .{ .from_literal = .{ .numeral = numeral_info } };
+        }
+    }
+
+    const other_forced = other.origin == .where_clause and other.origin.where_clause.body_required;
+    const retained_forced = retained.origin == .where_clause and retained.origin.where_clause.body_required;
+    if (other_forced or retained_forced) {
+        std.debug.assert(merged.origin == .where_clause);
+        merged.origin.where_clause.body_required = true;
+    }
+
+    // Provenance is excluded from constraint identity. Keep the retained
+    // relation's metadata and fill any missing introducing site from the
+    // equivalent relation being folded into it.
+    if (merged.provenance.intro_expr == .none) {
+        merged.provenance.intro_expr = other.provenance.intro_expr;
+    }
+    if (!merged.interpolation.isPresent()) {
+        merged.interpolation = other.interpolation;
+    }
+    return merged;
+}
 
 fn mergeFromNumeralLiteralInfo(
     a: ?types_mod.NumeralInfo,
