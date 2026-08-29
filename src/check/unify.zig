@@ -3542,7 +3542,9 @@ const Unifier = struct {
                     a_constraints[a_indices[a_group_start]]
                 else
                     b_constraints[b_indices[b_group_start]];
-                const retained_group_start = scratch.only_in_a_static_dispatch_constraints.len();
+                const retained_group_start: usize = @intCast(
+                    scratch.only_in_a_static_dispatch_constraints.len(),
+                );
                 var a_declarative = a_group_start;
                 while (a_declarative < a_non_method_end) : (a_declarative += 1) {
                     try self.retainDeclarativeStaticDispatchConstraint(
