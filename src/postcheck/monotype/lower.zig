@@ -2004,13 +2004,114 @@ const PendingTemplateBody = struct {
     lowered: LoweredTemplateBody,
 };
 
-/// Owned handoff between queued body lowering and ordered coordinator commit.
-/// Deferred relation production and graph validation finish before this handoff,
-/// so commit only seals durable types, relocates ids, and appends program data.
-/// Type/name stores, deferred preparation, and builder caches remain shared in
-/// this transitional slice; later shards move them behind the same boundary.
+const SpecJobEpoch = enum(u64) { _ };
+
+/// Persistent private type domain for serialized ordinary specialization jobs.
+/// Exactly one graph/draft epoch may borrow it at a time; cumulative relocation
+/// keeps repeated crossings proportional to newly reached type closures.
+const SpecJobWorkspace = struct {
+    allocator: Allocator,
+    types: Type.Store,
+    program: ?*Ast.Program = null,
+    program_to_workspace: ?Type.Store.TypeRelocation = null,
+    workspace_to_program: ?Type.Store.TypeRelocation = null,
+    next_epoch: u64 = 0,
+    active_epoch: ?SpecJobEpoch = null,
+
+    fn init(allocator: Allocator) SpecJobWorkspace {
+        return .{
+            .allocator = allocator,
+            .types = Type.Store.init(allocator),
+        };
+    }
+
+    fn bindProgram(self: *SpecJobWorkspace, program: *Ast.Program) void {
+        if (self.program) |bound| {
+            if (bound != program) {
+                Common.compilerBug("Monotype specialization workspace changed coordinator programs");
+            }
+        } else {
+            self.program = program;
+        }
+    }
+
+    fn beginEpoch(self: *SpecJobWorkspace, program: *Ast.Program) SpecJobEpoch {
+        self.bindProgram(program);
+        if (self.active_epoch != null) {
+            Common.compilerBug("Monotype specialization workspace began overlapping epochs");
+        }
+        if (self.next_epoch == std.math.maxInt(u64)) {
+            Common.compilerBug("Monotype specialization workspace exhausted epoch identities");
+        }
+        const epoch: SpecJobEpoch = @enumFromInt(self.next_epoch);
+        self.next_epoch += 1;
+        self.active_epoch = epoch;
+        return epoch;
+    }
+
+    fn requireEpoch(self: *const SpecJobWorkspace, epoch: SpecJobEpoch) void {
+        if (self.active_epoch == null or self.active_epoch.? != epoch) {
+            Common.compilerBug("Monotype specialization shard used a stale workspace epoch");
+        }
+    }
+
+    fn finishEpoch(self: *SpecJobWorkspace, epoch: SpecJobEpoch) void {
+        self.requireEpoch(epoch);
+        self.active_epoch = null;
+    }
+
+    fn programTypeRelocation(
+        self: *SpecJobWorkspace,
+        program: *Ast.Program,
+    ) *Type.Store.TypeRelocation {
+        self.bindProgram(program);
+        if (self.program_to_workspace == null) {
+            self.program_to_workspace = Type.Store.TypeRelocation.init(
+                self.allocator,
+                &program.types,
+                &program.names,
+                &self.types,
+                &program.names,
+            );
+        }
+        return &self.program_to_workspace.?;
+    }
+
+    fn committedTypeRelocation(
+        self: *SpecJobWorkspace,
+        program: *Ast.Program,
+    ) *Type.Store.TypeRelocation {
+        self.bindProgram(program);
+        if (self.workspace_to_program == null) {
+            self.workspace_to_program = Type.Store.TypeRelocation.init(
+                self.allocator,
+                &self.types,
+                &program.names,
+                &program.types,
+                &program.names,
+            );
+        }
+        return &self.workspace_to_program.?;
+    }
+
+    fn deinit(self: *SpecJobWorkspace) void {
+        if (self.active_epoch != null) {
+            Common.compilerBug("Monotype specialization workspace deinitialized during an active epoch");
+        }
+        if (self.workspace_to_program) |*relocation| relocation.deinit();
+        if (self.program_to_workspace) |*relocation| relocation.deinit();
+        self.types.deinit();
+        self.* = undefined;
+    }
+};
+
+/// One frozen epoch handed from ordinary body lowering to ordered coordinator
+/// commit. The graph and draft own transient state; all TypeIds and cumulative
+/// relocation belong to the Builder's persistent serial workspace.
 const CompletedSpecJobShard = struct {
     dispatch_index: u64,
+    workspace: *SpecJobWorkspace,
+    epoch: SpecJobEpoch,
     graph: *InstGraph,
     body_draft: BodyDraftStore,
     pending: PendingTemplateBody,
@@ -2018,6 +2119,7 @@ const CompletedSpecJobShard = struct {
     fn deinit(self: *CompletedSpecJobShard) void {
         self.body_draft.deinit();
         self.graph.destroy();
+        self.workspace.finishEpoch(self.epoch);
         self.* = undefined;
     }
 };
@@ -2113,7 +2215,7 @@ const StaticDataUse = struct {
     module: checked.ModuleId,
     node: checked.ConstNodeId,
     checked_type: checked.CheckedTypeId,
-    type_cell: DraftTypeCell,
+    ty: Type.TypeId,
 };
 
 const ConstNodeAddress = struct {
@@ -2286,6 +2388,9 @@ const Builder = struct {
     /// validates FIFO accounting; later worker results also buffer ordinary
     /// body appends behind this index.
     next_spec_accept_index: u64 = 0,
+    /// Serial precursor to a worker-local workspace: ordinary queued jobs reuse
+    /// one private type domain and one cumulative pair of relocation maps.
+    spec_job_workspace: ?SpecJobWorkspace = null,
     spec_store: specialize.SpecBuilder,
     lowered_templates: collections.DenseMap(Ast.FnId, LoweredTemplate),
     /// Nested-fn specialization records keyed by function id; the durable
@@ -2294,10 +2399,9 @@ const Builder = struct {
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
     static_data_ids: std.AutoHashMap(StaticDataUse, Common.StaticDataId),
-    /// Static-data uses indexed by `StaticDataId`. Raw Monotype ids
-    /// are only a fast exact-key path; exact structural equality below is the
-    /// authority for reusing one representation across equivalent
-    /// instantiations.
+    /// Static-data uses indexed by `StaticDataId`. These types have crossed the
+    /// ordered commit boundary; raw ids are only a fast exact-key path, while
+    /// structural equality remains the reuse authority across instantiations.
     static_data_uses: std.ArrayList(StaticDataUse),
     static_data_eligibility: std.AutoHashMap(ConstNodeAddress, bool),
     inspect_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
@@ -2468,6 +2572,7 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
+        if (self.spec_job_workspace) |*workspace| workspace.deinit();
         self.scoped_method_targets.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
         self.hash_defs.deinit();
@@ -2521,7 +2626,11 @@ const Builder = struct {
     }
 
     fn createGraph(self: *Builder) Allocator.Error!*InstGraph {
-        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        return self.createGraphForStore(&self.program.types);
+    }
+
+    fn createGraphForStore(self: *Builder, types_: *Type.Store) Allocator.Error!*InstGraph {
+        const graph = try InstGraph.create(self.allocator, types_, &self.program.names);
         if (self.diagnostics) |diagnostics| {
             diagnostics.body.graphs_created += 1;
             graph.setDiagnostics(&diagnostics.graph);
@@ -4048,14 +4157,22 @@ const Builder = struct {
         self.next_spec_accept_index += 1;
     }
 
-    /// Lower one ordinary queued specialization into independently owned frozen
-    /// graph and prepared syntax state. Coordinator-owned type sealing and
-    /// program appends happen only after this result is returned.
+    fn ensureSpecJobWorkspace(self: *Builder) *SpecJobWorkspace {
+        if (self.spec_job_workspace == null) {
+            self.spec_job_workspace = SpecJobWorkspace.init(self.allocator);
+        }
+        return &self.spec_job_workspace.?;
+    }
+
+    /// Lower one ordinary queued specialization into one frozen workspace epoch
+    /// and independently owned graph/draft state. Durable body sealing and
+    /// program appends happen only after this result is returned; explicitly
+    /// synchronous coordinator operations may import a graph snapshot earlier.
     ///
-    /// Deferred preparation and iterator identity calculation still use shared
-    /// Builder/type/name state and execute serially here. Representation-sensitive
-    /// immediate callees also complete synchronously until those outputs move
-    /// into the shard protocol.
+    /// Deferred preparation still uses shared Builder coordination and the
+    /// program name store, so it executes serially here. Representation-sensitive immediate
+    /// callees also complete synchronously until those outputs move into the
+    /// shard protocol; their durable types cross the explicit store boundary.
     fn lowerPendingSpecJobToShard(
         self: *Builder,
         job: PendingSpecJob,
@@ -4071,10 +4188,14 @@ const Builder = struct {
             .hosted => Common.compilerBug("hosted specialization entered Roc body shard lowering"),
         }
 
-        const graph = try self.createGraph();
+        const workspace = self.ensureSpecJobWorkspace();
+        const epoch = workspace.beginEpoch(self.program);
+        errdefer workspace.finishEpoch(epoch);
+        const graph = try self.createGraphForStore(&workspace.types);
         errdefer graph.destroy();
         var body_draft = BodyDraftStore.init(self.allocator);
         errdefer body_draft.deinit();
+        body_draft.spec_job_workspace = workspace;
         const final_guard = FinalBodyOutputGuard.begin(self);
         const pending = try self.lowerReservedTemplateBodyIntoDraft(
             graph,
@@ -4096,6 +4217,8 @@ const Builder = struct {
         self.countBodyDiagnostic("spec_job_shards_lowered");
         return .{
             .dispatch_index = job.dispatch_index,
+            .workspace = workspace,
+            .epoch = epoch,
             .graph = graph,
             .body_draft = body_draft,
             .pending = pending,
@@ -4109,6 +4232,14 @@ const Builder = struct {
         shard: *CompletedSpecJobShard,
     ) Allocator.Error!void {
         self.requireNextSpecAcceptance(shard.dispatch_index);
+        shard.workspace.requireEpoch(shard.epoch);
+        if (shard.graph.types != &shard.workspace.types) {
+            Common.compilerBug("Monotype specialization shard graph escaped its workspace type store");
+        }
+        const committed_type_relocation = shard.body_draft.ensureCommittedTypeRelocation(
+            shard.graph,
+            self.program,
+        );
         const sealed = try self.commitFinalizedBodyDraft(
             shard.graph,
             &shard.body_draft,
@@ -4117,6 +4248,7 @@ const Builder = struct {
             null,
             null,
             null,
+            committed_type_relocation,
         );
         defer sealed.deinit(self.allocator);
         var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
@@ -4168,7 +4300,8 @@ const Builder = struct {
         lowered_template.evidence = body_ctx.evidence.vector;
         defer body_ctx.deinit();
 
-        const root_node = try body_ctx.relateCheckedFunctionToMono(template.checked_fn_root, lower_fn_ty);
+        const graph_fn_ty = try body_ctx.importProgramType(lower_fn_ty);
+        const root_node = try body_ctx.relateCheckedFunctionToMono(template.checked_fn_root, graph_fn_ty);
         self.active_template_root = .{
             .graph = graph,
             .family = DraftTemplateFamilyAddress.init(template_ref, method_scope.key, source_fn_key),
@@ -5658,45 +5791,40 @@ const Builder = struct {
         };
     }
 
-    fn staticDataValue(
+    fn commitStaticDataValue(
         self: *Builder,
         const_locator: checked.ConstLocator,
         node: ?checked.ConstNodeId,
         checked_type: checked.CheckedTypeId,
-        type_cell: DraftTypeCell,
+        ty: Type.TypeId,
     ) Allocator.Error!Common.StaticDataId {
         const const_node = self.constNode(const_locator, node);
         const use = StaticDataUse{
             .module = const_node.module.key,
             .node = const_node.id,
             .checked_type = checked_type,
-            .type_cell = type_cell,
+            .ty = ty,
         };
         if (self.static_data_ids.get(use)) |existing| return existing;
 
-        // Structural dedup can only compare committed types; graph cells keep
-        // identity comparison until final sealing commits them.
-        if (use.type_cell == .sealed) {
-            for (self.static_data_uses.items, 0..) |existing, index| {
-                if (!moduleBytesEqual(existing.module.bytes, use.module.bytes) or
-                    existing.node != use.node or
-                    existing.checked_type != use.checked_type)
-                {
-                    continue;
-                }
-                const existing_ty = switch (existing.type_cell) {
-                    .sealed => |ty| ty,
-                    .graph_node => continue,
-                };
-                if (!try self.program.types.typeEql(&self.program.names, existing_ty, use.type_cell.sealed)) continue;
-
-                const id: Common.StaticDataId = @enumFromInt(@as(u32, @intCast(index)));
-                try self.static_data_ids.put(use, id);
-                return id;
+        for (self.static_data_uses.items, 0..) |existing, index| {
+            if (!moduleBytesEqual(existing.module.bytes, use.module.bytes) or
+                existing.node != use.node or
+                existing.checked_type != use.checked_type)
+            {
+                continue;
             }
+            if (!try self.program.types.typeEql(&self.program.names, existing.ty, use.ty)) continue;
+
+            const id: Common.StaticDataId = @enumFromInt(@as(u32, @intCast(index)));
+            try self.static_data_ids.put(use, id);
+            return id;
         }
 
-        const id = try self.program.addStaticDataValue(.{
+        try self.program.ensureStaticDataValueCapacity(1);
+        try self.static_data_uses.ensureUnusedCapacity(self.allocator, 1);
+        try self.static_data_ids.ensureUnusedCapacity(1);
+        const id = self.program.addStaticDataValueAssumeCapacity(.{
             .const_locator = const_locator,
             .node = node,
             .checked_type = checked_type,
@@ -5704,8 +5832,8 @@ const Builder = struct {
         if (@intFromEnum(id) != self.static_data_uses.items.len) {
             Common.invariant("Monotype static-data use index diverged from program id");
         }
-        try self.static_data_uses.append(self.allocator, use);
-        try self.static_data_ids.put(use, id);
+        self.static_data_uses.appendAssumeCapacity(use);
+        self.static_data_ids.putAssumeCapacityNoClobber(use, id);
         return id;
     }
 
@@ -6569,6 +6697,7 @@ const Builder = struct {
         emit_fns: []bool,
         emit_defs: []bool,
         emit_nested_defs: []bool,
+        static_data_ids: []Common.StaticDataId,
 
         fn deinit(self: DraftCommitMap, allocator: Allocator) void {
             if (self.core_maps) |maps| {
@@ -6580,6 +6709,7 @@ const Builder = struct {
             allocator.free(self.emit_fns);
             allocator.free(self.emit_defs);
             allocator.free(self.emit_nested_defs);
+            allocator.free(self.static_data_ids);
         }
     };
 
@@ -7129,7 +7259,7 @@ const Builder = struct {
             ctx.frozen_codec_calls = &frozen_codec_calls;
 
             const callable_ty = try sealer.sealNode(boundary.callable_node);
-            const callable = self.functionShape(callable_ty, "deferred structural serialization callable was not a function");
+            const callable = ctx.functionShape(callable_ty, "deferred structural serialization callable was not a function");
             const shape_ty = try sealer.sealNode(boundary.shape_node);
             const pre_lowered = [_]BodyContext.PreLoweredOperand{.{ .index = 0, .expr = boundary.encoding }};
             const lowered = switch (boundary.plan.result_mode) {
@@ -7139,7 +7269,7 @@ const Builder = struct {
             };
             const lowered_expr = body_draft.exprs.items[@intFromEnum(lowered)];
             const lowered_ty = try lowered_expr.ty.seal(graph, sealer);
-            if (!try self.program.types.typeEql(&self.program.names, callable.ret, lowered_ty)) {
+            if (!try ctx.typeStore().typeEql(&self.program.names, callable.ret, lowered_ty)) {
                 Common.invariant("deferred structural serialization changed its sealed result type");
             }
             body_draft.exprs.items[@intFromEnum(boundary.expr)] = lowered_expr;
@@ -7217,7 +7347,7 @@ const Builder = struct {
             const reserved_cell = body_draft.exprs.items[@intFromEnum(boundary.expr)].ty;
             const reserved_ty = try reserved_cell.seal(graph, sealer);
             const lowered_ty = try lowered_expr.ty.seal(graph, sealer);
-            if (!try self.program.types.typeEql(&self.program.names, reserved_ty, lowered_ty)) {
+            if (!try ctx.typeStore().typeEql(&self.program.names, reserved_ty, lowered_ty)) {
                 Common.invariant("deferred call-site intrinsic changed its sealed result type");
             }
             lowered_expr.ty = reserved_cell;
@@ -7366,7 +7496,7 @@ const Builder = struct {
         };
         const lowered_expr = body_draft.exprs.items[@intFromEnum(lowered)];
         const lowered_ty = try lowered_expr.ty.seal(graph, sealer);
-        if (!try self.program.types.typeEql(&self.program.names, boundary.ret_ty, lowered_ty)) {
+        if (!try ctx.typeStore().typeEql(&self.program.names, boundary.ret_ty, lowered_ty)) {
             Common.invariant("deferred structural equality changed its sealed result type");
         }
         body_draft.exprs.items[@intFromEnum(boundary.expr)] = lowered_expr;
@@ -7499,6 +7629,21 @@ const Builder = struct {
         base_ids: FinalIdOffsets,
     ) Allocator.Error!DraftCommitMap {
         var ids = base_ids;
+        const static_data_ids =
+            try self.allocator.alloc(Common.StaticDataId, body_draft.static_data_requests.items.len);
+        errdefer self.allocator.free(static_data_ids);
+        // Static-data requests are result intents, not function-range members.
+        // Absorb all of them even if identity merging later discards a duplicate
+        // function body, preserving the prior eager assignment of durable ids.
+        for (body_draft.static_data_requests.items, static_data_ids) |request, *id| {
+            const coordinator_ty = try request.ty.sealCommitted(graph, committed_types);
+            id.* = try self.commitStaticDataValue(
+                request.const_locator,
+                request.node,
+                request.checked_type,
+                coordinator_ty,
+            );
+        }
         const fn_slots = try self.allocator.alloc(?Ast.FnSlot, body_draft.fns.items.len);
         errdefer self.allocator.free(fn_slots);
         @memset(fn_slots, null);
@@ -7702,6 +7847,7 @@ const Builder = struct {
             .emit_fns = emit_fns,
             .emit_defs = emit_defs,
             .emit_nested_defs = emit_nested_defs,
+            .static_data_ids = static_data_ids,
         };
     }
 
@@ -7726,6 +7872,7 @@ const Builder = struct {
             extra_ty,
             root_def,
             root_fn,
+            null,
         );
     }
 
@@ -7733,8 +7880,8 @@ const Builder = struct {
     /// before an owned specialization result can cross the coordinator handoff.
     ///
     /// Deferred preparation remains serialized because it can reenter lowering
-    /// and mutate shared Builder state. Iterator identity calculation also still
-    /// reads the graph's shared type and name stores in this transitional slice.
+    /// and mutate shared Builder state. Iterator identity calculation uses the
+    /// graph-owned type store and the shared program name store.
     fn finalizeBodyDraftGraph(
         self: *Builder,
         graph: *InstGraph,
@@ -7777,6 +7924,7 @@ const Builder = struct {
         extra_ty: ?Type.TypeId,
         root_def: ?DraftDefId,
         root_fn: ?DraftFnId,
+        committed_type_relocation: ?*Type.Store.TypeRelocation,
     ) Allocator.Error!ActiveBodyDraftSeal {
         var timing_scope = ProcedureTimingScope.begin(self.timing, .body_finalization);
         defer timing_scope.end();
@@ -7787,7 +7935,16 @@ const Builder = struct {
         try self.emitDraftDeferredCallsiteIntrinsics(body_draft, graph, &sealer);
         try self.emitDraftDeferredStructuralEqs(body_draft, graph, &sealer);
         try self.emitDraftDeferredInspects(body_draft, graph, &sealer);
-        var committed_types = CommittedGraphTypes.shared(graph, &sealer);
+        var committed_types = if (committed_type_relocation) |relocation|
+            CommittedGraphTypes.relocated(
+                graph,
+                &sealer,
+                &self.program.types,
+                &self.program.names,
+                relocation,
+            )
+        else
+            CommittedGraphTypes.shared(graph, &sealer);
         const sealed_root = if (root_node) |node| try committed_types.sealNode(node) else null;
         const sealed_roots = try self.allocator.alloc(Type.TypeId, root_nodes.len);
         errdefer self.allocator.free(sealed_roots);
@@ -7809,6 +7966,7 @@ const Builder = struct {
             self.program,
             graph,
             &committed_types,
+            commit_map.static_data_ids,
             body_ids,
             commit_map.emit_fns,
             commit_map.emit_defs,
@@ -9644,6 +9802,7 @@ const DraftDefId = enum(u32) { _ };
 const DraftNestedDefId = enum(u32) { _ };
 const DraftComptimeSiteId = enum(u32) { _ };
 const DraftStringLiteralId = enum(u32) { _ };
+const DraftStaticDataId = enum(u32) { _ };
 
 fn DraftSpan(comptime _: type) type {
     return extern struct {
@@ -9843,7 +10002,7 @@ const DraftReturn = struct {
 };
 
 const DraftStaticDataCandidate = struct {
-    static_data: Common.StaticDataId,
+    static_data: DraftStaticDataId,
     runtime_expr: DraftExprId,
 };
 
@@ -11063,8 +11222,26 @@ const CheckedStringLiteralAddress = struct {
 };
 
 const StaticDataCandidateAddress = struct {
-    static_data: Common.StaticDataId,
+    static_data: DraftStaticDataId,
     owner: DraftOwner,
+};
+
+/// Draft-local static-data identity. Graph types remain qualified by the body
+/// that owns them until ordered commit seals the request into program storage.
+const DraftStaticDataRequestAddress = struct {
+    module: checked.ModuleId,
+    node: checked.ConstNodeId,
+    checked_type: checked.CheckedTypeId,
+    ty: DraftTypeCell,
+};
+
+const DraftStaticDataRequest = struct {
+    const_locator: checked.ConstLocator,
+    node: ?checked.ConstNodeId,
+    module: checked.ModuleId,
+    const_node: checked.ConstNodeId,
+    checked_type: checked.CheckedTypeId,
+    ty: DraftTypeCell,
 };
 
 const BodyDraftStore = struct {
@@ -11143,9 +11320,14 @@ const BodyDraftStore = struct {
     current_owner: DraftOwner,
     owner_starts: DraftCoreLengths,
     owner_runs: std.ArrayList(DraftOwnerRun),
-    /// Closed static-data candidates are shared by child lowering contexts
-    /// only within the body that owns their explicit runtime expression.
+    /// Exact static-data requests are shared by child lowering contexts only
+    /// within the body that owns their explicit runtime expression.
     static_data_candidate_exprs: std.AutoHashMap(StaticDataCandidateAddress, DraftExprId),
+    /// Static-data requests are coordinator intents. Keeping them draft-local
+    /// prevents graph-owned types and durable StaticDataIds from crossing the
+    /// private-body boundary before ordered commit.
+    static_data_requests: std.ArrayList(DraftStaticDataRequest),
+    static_data_request_ids: std.AutoHashMap(DraftStaticDataRequestAddress, DraftStaticDataId),
     /// These memoized TypeIds belong to this draft's graph, so their lifetime
     /// cannot exceed the body that owns that graph. Type-store entries are
     /// immutable snapshots: later graph refinement allocates a new TypeId
@@ -11153,9 +11335,15 @@ const BodyDraftStore = struct {
     parse_result_ok_types: std.AutoHashMap(GeneratedParseResultOkTypeAddress, Type.TypeId),
     generated_try_types: std.AutoHashMap(GeneratedTryTypeAddress, Type.TypeId),
     uninhabited_type_cache: collections.DenseMap(Type.TypeId, bool),
+    /// Ordinary queued drafts borrow the Builder-owned persistent workspace.
+    /// Other private-graph tests and paths retain draft-owned relocation below.
+    spec_job_workspace: ?*SpecJobWorkspace,
     /// Retains imported `TypeId` mappings while this body lowers into its
     /// graph-owned store.
     program_type_relocation: ?Type.Store.TypeRelocation,
+    /// Retains graph-to-program mappings across eager coordinator calls and the
+    /// final ordered commit.
+    committed_type_relocation: ?Type.Store.TypeRelocation,
 
     fn init(allocator: Allocator) BodyDraftStore {
         return .{
@@ -11231,11 +11419,73 @@ const BodyDraftStore = struct {
             .owner_starts = @splat(0),
             .owner_runs = .empty,
             .static_data_candidate_exprs = std.AutoHashMap(StaticDataCandidateAddress, DraftExprId).init(allocator),
+            .static_data_requests = .empty,
+            .static_data_request_ids = std.AutoHashMap(DraftStaticDataRequestAddress, DraftStaticDataId).init(allocator),
             .parse_result_ok_types = std.AutoHashMap(GeneratedParseResultOkTypeAddress, Type.TypeId).init(allocator),
             .generated_try_types = std.AutoHashMap(GeneratedTryTypeAddress, Type.TypeId).init(allocator),
             .uninhabited_type_cache = collections.DenseMap(Type.TypeId, bool).init(allocator),
+            .spec_job_workspace = null,
             .program_type_relocation = null,
+            .committed_type_relocation = null,
         };
+    }
+
+    fn ensureProgramTypeRelocation(
+        self: *BodyDraftStore,
+        graph: *InstGraph,
+        program: *Ast.Program,
+    ) *Type.Store.TypeRelocation {
+        if (graph.types == &program.types) {
+            Common.invariant("shared-store body requested a program-to-graph type relocation");
+        }
+        if (graph.name_store != &program.names) {
+            Common.invariant("private Monotype body import requires the graph and program to share one NameStore");
+        }
+        if (self.spec_job_workspace) |workspace| {
+            if (graph.types != &workspace.types) {
+                Common.compilerBug("Monotype specialization draft imported through an unrelated workspace");
+            }
+            return workspace.programTypeRelocation(program);
+        }
+        if (self.program_type_relocation == null) {
+            self.program_type_relocation = Type.Store.TypeRelocation.init(
+                self.allocator,
+                &program.types,
+                &program.names,
+                graph.types,
+                graph.name_store,
+            );
+        }
+        return &self.program_type_relocation.?;
+    }
+
+    fn ensureCommittedTypeRelocation(
+        self: *BodyDraftStore,
+        graph: *InstGraph,
+        program: *Ast.Program,
+    ) *Type.Store.TypeRelocation {
+        if (graph.types == &program.types) {
+            Common.invariant("shared-store body requested a graph-to-program type relocation");
+        }
+        if (graph.name_store != &program.names) {
+            Common.invariant("private Monotype body commit requires the graph and program to share one NameStore");
+        }
+        if (self.spec_job_workspace) |workspace| {
+            if (graph.types != &workspace.types) {
+                Common.compilerBug("Monotype specialization draft committed through an unrelated workspace");
+            }
+            return workspace.committedTypeRelocation(program);
+        }
+        if (self.committed_type_relocation == null) {
+            self.committed_type_relocation = Type.Store.TypeRelocation.init(
+                self.allocator,
+                graph.types,
+                graph.name_store,
+                &program.types,
+                &program.names,
+            );
+        }
+        return &self.committed_type_relocation.?;
     }
 
     fn deinit(self: *BodyDraftStore) void {
@@ -11281,10 +11531,13 @@ const BodyDraftStore = struct {
         self.expr_impossibility_proofs.deinit(self.allocator);
         self.impossibility_proof_ids.deinit(self.allocator);
         self.impossibility_proofs.deinit(self.allocator);
+        if (self.committed_type_relocation) |*relocation| relocation.deinit();
         if (self.program_type_relocation) |*relocation| relocation.deinit();
         self.uninhabited_type_cache.deinit();
         self.generated_try_types.deinit();
         self.parse_result_ok_types.deinit();
+        self.static_data_request_ids.deinit();
+        self.static_data_requests.deinit(self.allocator);
         self.static_data_candidate_exprs.deinit();
         self.stmt_regions.deinit(self.allocator);
         self.stmt_locs.deinit(self.allocator);
@@ -11830,6 +12083,7 @@ const BodyDraftStore = struct {
             program,
             graph,
             &committed_types,
+            &.{},
             BodyDraftStore.finalIdOffsets(program),
             null,
             null,
@@ -11842,6 +12096,7 @@ const BodyDraftStore = struct {
         program: *Ast.Program,
         graph: *InstGraph,
         committed_types: *CommittedGraphTypes,
+        static_data_ids: []const Common.StaticDataId,
         ids: FinalIdOffsets,
         emit_fns: ?[]const bool,
         emit_defs: ?[]const bool,
@@ -12008,7 +12263,14 @@ const BodyDraftStore = struct {
         for (self.exprs.items, 0..) |expr, index| {
             if (!ids.retained(.exprs, index)) continue;
             const sealed_ty = try expr.ty.sealCommitted(graph, committed_types);
-            const sealed_data = try self.sealCoreExprData(program, ids, graph, committed_types, expr.data);
+            const sealed_data = try self.sealCoreExprData(
+                program,
+                ids,
+                graph,
+                committed_types,
+                static_data_ids,
+                expr.data,
+            );
             const loc = ids.sourceLoc(self.expr_locs.items[index]);
             const region = self.expr_regions.items[index];
             const sealed_expr = try BodyDraftStore.sealConstructorExprWithNominalBackings(
@@ -12403,6 +12665,7 @@ const BodyDraftStore = struct {
         ids: FinalIdOffsets,
         graph: *InstGraph,
         committed_types: *CommittedGraphTypes,
+        static_data_ids: []const Common.StaticDataId,
         data: DraftExprData,
     ) Allocator.Error!Ast.ExprData {
         return switch (data) {
@@ -12418,10 +12681,16 @@ const BodyDraftStore = struct {
                 .len = literal.len,
                 .element = literal.element,
             } },
-            .static_data_candidate => |candidate| .{ .static_data_candidate = .{
-                .static_data = candidate.static_data,
-                .runtime_expr = ids.expr(candidate.runtime_expr),
-            } },
+            .static_data_candidate => |candidate| blk: {
+                const index = @intFromEnum(candidate.static_data);
+                if (index >= static_data_ids.len) {
+                    Common.invariant("Monotype body draft static-data request was not committed");
+                }
+                break :blk .{ .static_data_candidate = .{
+                    .static_data = static_data_ids[index],
+                    .runtime_expr = ids.expr(candidate.runtime_expr),
+                } };
+            },
             .list => |span| .{ .list = ids.exprSpan(span) },
             .tuple => |span| .{ .tuple = ids.exprSpan(span) },
             .record => |span| .{ .record = ids.fieldExprSpan(span) },
@@ -13494,24 +13763,79 @@ const BodyContext = struct {
         if (self.graph.name_store != &self.builder.program.names) {
             Common.invariant("body type import requires the graph and program to share one NameStore");
         }
-        if (self.draft.program_type_relocation == null) {
-            self.draft.program_type_relocation = Type.Store.TypeRelocation.init(
-                self.allocator,
-                program_types,
-                &self.builder.program.names,
-                graph_types,
-                &self.builder.program.names,
-            );
-        }
+        const relocation = self.draft.ensureProgramTypeRelocation(
+            self.graph,
+            self.builder.program,
+        );
+        if (relocation.get(program_types, program_ty)) |mapped| return mapped;
         var imported = try graph_types.importTypes(
             &self.builder.program.names,
             program_types,
             &self.builder.program.names,
-            &self.draft.program_type_relocation.?,
+            relocation,
             &.{program_ty},
         );
         defer imported.deinit();
         return imported.roots[0];
+    }
+
+    /// Export one immutable graph-store snapshot for a synchronous coordinator
+    /// operation. Graph refinement materializes a different snapshot id, so the
+    /// final seal imports that newer closure independently through the same map.
+    /// Architecture checks restrict this escape hatch to the few operations
+    /// whose durable identities must be established before the ordered commit.
+    fn commitGraphType(self: *BodyContext, graph_ty: Type.TypeId) Allocator.Error!Type.TypeId {
+        if (self.typeStore() == &self.builder.program.types) return graph_ty;
+        const relocation = self.draft.ensureCommittedTypeRelocation(self.graph, self.builder.program);
+        // Store entries are immutable snapshots even when the active graph has a
+        // node associated with this id. Refinement allocates another id, so a
+        // cumulative mapping always retains the earlier snapshot's contents.
+        if (relocation.get(self.typeStore(), graph_ty)) |mapped| return mapped;
+        var imported = try self.builder.program.types.importTypes(
+            &self.builder.program.names,
+            self.typeStore(),
+            self.graph.name_store,
+            relocation,
+            &.{graph_ty},
+        );
+        defer imported.deinit();
+        return imported.roots[0];
+    }
+
+    /// Record a graph-qualified static-data intent without allocating a durable
+    /// program id. Ordered commit seals the type and performs global interning.
+    fn draftStaticDataRequest(
+        self: *BodyContext,
+        const_locator: checked.ConstLocator,
+        node: ?checked.ConstNodeId,
+        checked_type: checked.CheckedTypeId,
+        ty: DraftTypeCell,
+    ) Allocator.Error!DraftStaticDataId {
+        const const_node = self.builder.constNode(const_locator, node);
+        const address: DraftStaticDataRequestAddress = .{
+            .module = const_node.module.key,
+            .node = const_node.id,
+            .checked_type = checked_type,
+            .ty = ty,
+        };
+        if (self.draft.static_data_request_ids.get(address)) |existing| return existing;
+
+        try self.draft.static_data_requests.ensureUnusedCapacity(self.allocator, 1);
+        const entry = try self.draft.static_data_request_ids.getOrPut(address);
+        if (entry.found_existing) return entry.value_ptr.*;
+        errdefer _ = self.draft.static_data_request_ids.remove(address);
+        const id: DraftStaticDataId =
+            @enumFromInt(@as(u32, @intCast(self.draft.static_data_requests.items.len)));
+        self.draft.static_data_requests.appendAssumeCapacity(.{
+            .const_locator = const_locator,
+            .node = node,
+            .module = const_node.module.key,
+            .const_node = const_node.id,
+            .checked_type = checked_type,
+            .ty = ty,
+        });
+        entry.value_ptr.* = id;
+        return id;
     }
 
     /// Crossing from a committed function signature into the active graph is
@@ -29094,13 +29418,14 @@ const BodyContext = struct {
         if (!try self.graph.typeIsResolved(spec.request_fn_node)) return current_node;
 
         const request_fn_ty = try self.activeTypeFromNode(spec.request_fn_node);
+        const coordinator_request_fn_ty = try self.commitGraphType(request_fn_ty);
         // Iterator-inline completion consumes the callee's solved private
         // representation, so the body must lower now rather than queue.
         try self.builder.resolveDeferredTemplateSpecAtType(
             self.draft,
             spec_index,
             request_fn_ty,
-            request_fn_ty,
+            coordinator_request_fn_ty,
             .immediate,
         );
         self.draft.template_specs.items[spec_index].eager_resolution = .{
@@ -29567,7 +29892,12 @@ const BodyContext = struct {
             try self.builder.constNodeHasStableStaticDataRepresentation(store_view, node) and
             self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn))
         {
-            const id = try self.builder.staticDataValue(const_locator, node, checked_type, DraftTypeCell.fromSealed(ty));
+            const id = try self.draftStaticDataRequest(
+                const_locator,
+                node,
+                checked_type,
+                DraftTypeCell.fromSealed(ty),
+            );
             const address: StaticDataCandidateAddress = .{
                 .static_data = id,
                 .owner = self.draft.current_owner,
@@ -29610,20 +29940,11 @@ const BodyContext = struct {
             try self.builder.constNodeHasStableStaticDataRepresentation(store_view, node) and
             self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn))
         {
-            // A resolved request already names a committed type, so sealing it
-            // here lets this use share one static allocation with every other
-            // use of the same constant. An unresolved request keeps its graph
-            // cell and its own allocation, which stays correct because the
-            // static data it names is a copy of the same bytes.
-            const request_cell = if (try self.graph.typeIsResolved(request_node))
-                DraftTypeCell.fromSealed(try self.resolvedTypeViewForNode(request_node))
-            else
-                DraftTypeCell.fromGraphNode(request_node);
-            const id = try self.builder.staticDataValue(
+            const id = try self.draftStaticDataRequest(
                 const_locator,
                 node,
                 checked_type,
-                request_cell,
+                DraftTypeCell.fromGraphNode(request_node),
             );
             return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(request_node), .{ .static_data_candidate = .{
                 .static_data = id,
@@ -52366,6 +52687,140 @@ test "body draft store appends draft-local ids spans and type cells" {
     }
 }
 
+test "body draft static data candidates use ordered commit ids" {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator);
+    defer program.deinit();
+    const graph = try InstGraph.create(allocator, &program.types, &program.names);
+    defer graph.destroy();
+    try graph.freezeRelations();
+    var sealer = GraphTypeFinals.init(graph);
+    defer sealer.deinit();
+    var committed_types = CommittedGraphTypes.shared(graph, &sealer);
+    var draft = BodyDraftStore.init(allocator);
+    defer draft.deinit();
+
+    const draft_static: DraftStaticDataId = @enumFromInt(@as(u32, @intCast(0)));
+    const draft_runtime: DraftExprId = @enumFromInt(@as(u32, @intCast(0)));
+    const committed_static: Common.StaticDataId = @enumFromInt(@as(u32, @intCast(17)));
+    const sealed = try draft.sealCoreExprData(
+        &program,
+        BodyDraftStore.finalIdOffsets(&program),
+        graph,
+        &committed_types,
+        &.{committed_static},
+        .{ .static_data_candidate = .{
+            .static_data = draft_static,
+            .runtime_expr = draft_runtime,
+        } },
+    );
+    if (sealed != .static_data_candidate) return error.TestExpectedEqual;
+    try std.testing.expectEqual(committed_static, sealed.static_data_candidate.static_data);
+    try std.testing.expectEqual(
+        @as(Ast.ExprId, @enumFromInt(@as(u32, @intCast(0)))),
+        sealed.static_data_candidate.runtime_expr,
+    );
+}
+
+test "specialization workspace retains bidirectional type relocation across serial epochs" {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator);
+    defer program.deinit();
+
+    const program_bool = try program.types.internPrimitive(&program.names, .bool);
+    var committed_list: Type.TypeId = undefined;
+
+    {
+        var workspace = SpecJobWorkspace.init(allocator);
+        defer workspace.deinit();
+
+        var workspace_bool: Type.TypeId = undefined;
+        var workspace_list: Type.TypeId = undefined;
+        var ingress_count_after_first_epoch: usize = undefined;
+        var committed_count_after_first_epoch: usize = undefined;
+
+        {
+            const epoch = workspace.beginEpoch(&program);
+            defer workspace.finishEpoch(epoch);
+
+            const ingress = workspace.programTypeRelocation(&program);
+            var imported_bool = try workspace.types.importTypes(
+                &program.names,
+                &program.types,
+                &program.names,
+                ingress,
+                &.{program_bool},
+            );
+            defer imported_bool.deinit();
+            workspace_bool = imported_bool.roots[0];
+            workspace_list = try workspace.types.internList(&program.names, workspace_bool);
+
+            const committed = workspace.committedTypeRelocation(&program);
+            var exported_list = try program.types.importTypes(
+                &program.names,
+                &workspace.types,
+                &program.names,
+                committed,
+                &.{workspace_list},
+            );
+            defer exported_list.deinit();
+            committed_list = exported_list.roots[0];
+
+            ingress_count_after_first_epoch = ingress.mappedCount();
+            committed_count_after_first_epoch = committed.mappedCount();
+        }
+
+        {
+            const epoch = workspace.beginEpoch(&program);
+            defer workspace.finishEpoch(epoch);
+
+            const ingress = workspace.programTypeRelocation(&program);
+            const committed = workspace.committedTypeRelocation(&program);
+            try std.testing.expectEqual(ingress_count_after_first_epoch, ingress.mappedCount());
+            try std.testing.expectEqual(committed_count_after_first_epoch, committed.mappedCount());
+            try std.testing.expectEqual(workspace_bool, ingress.get(&program.types, program_bool).?);
+            try std.testing.expectEqual(committed_list, committed.get(&workspace.types, workspace_list).?);
+
+            // Importing a type produced by the reverse relocation must converge
+            // on the workspace's existing canonical type rather than duplicate it.
+            var imported_list = try workspace.types.importTypes(
+                &program.names,
+                &program.types,
+                &program.names,
+                ingress,
+                &.{committed_list},
+            );
+            defer imported_list.deinit();
+            try std.testing.expectEqual(workspace_list, imported_list.roots[0]);
+
+            // Both stores may keep growing after the cumulative maps are created.
+            const program_unit = try program.types.internZst(&program.names);
+            var imported_unit = try workspace.types.importTypes(
+                &program.names,
+                &program.types,
+                &program.names,
+                ingress,
+                &.{program_unit},
+            );
+            defer imported_unit.deinit();
+            try std.testing.expectEqual(.zst, workspace.types.get(imported_unit.roots[0]));
+            try std.testing.expectEqual(workspace_bool, ingress.get(&program.types, program_bool).?);
+            try std.testing.expectEqual(committed_list, committed.get(&workspace.types, workspace_list).?);
+        }
+    }
+
+    // Coordinator output remains self-contained after the persistent workspace dies.
+    const committed_bool = switch (program.types.get(committed_list)) {
+        .list => |element| element,
+        .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => return error.TestExpectedEqual,
+    };
+    const committed_primitive = switch (program.types.get(committed_bool)) {
+        .primitive => |primitive| primitive,
+        .named, .record, .tuple, .tag_union, .box, .list, .func, .erased, .zst => return error.TestExpectedEqual,
+    };
+    try std.testing.expectEqual(.bool, committed_primitive);
+}
+
 test "body draft commit relocates core type fields out of a private graph store" {
     const allocator = std.testing.allocator;
 
@@ -52373,54 +52828,59 @@ test "body draft commit relocates core type fields out of a private graph store"
     defer program.deinit();
     _ = try program.types.internPrimitive(&program.names, .bool);
 
-    var private_types = Type.Store.init(allocator);
-    defer private_types.deinit();
-    const graph = try InstGraph.create(allocator, &private_types, &program.names);
-    defer graph.destroy();
+    var sealed_list: Type.TypeId = undefined;
+    {
+        var private_types = Type.Store.init(allocator);
+        defer private_types.deinit();
+        const graph = try InstGraph.create(allocator, &private_types, &program.names);
+        defer graph.destroy();
 
-    var draft = BodyDraftStore.init(allocator);
-    defer draft.deinit();
-    const unit_node = try graph.newNode(.zst);
-    const list_node = try graph.newNode(.{ .list = unit_node });
-    const unit_cell = DraftTypeCell.fromGraphNode(unit_node);
-    const list_cell = DraftTypeCell.fromGraphNode(list_node);
+        var draft = BodyDraftStore.init(allocator);
+        defer draft.deinit();
+        const unit_node = try graph.newNode(.zst);
+        const list_node = try graph.newNode(.{ .list = unit_node });
+        const unit_cell = DraftTypeCell.fromGraphNode(unit_node);
+        const list_cell = DraftTypeCell.fromGraphNode(list_node);
 
-    var symbol_gen = Common.SymbolGen{};
-    const local = try draft.addLocal(symbol_gen.fresh(), list_cell, null, null);
-    _ = try draft.addPat(.{ .ty = list_cell, .data = .{ .bind = local } });
-    const expr = try draft.addExpr(.{ .ty = list_cell, .data = .{ .local = local } });
-    _ = try draft.addTypedLocalSpan(&.{.{ .local = local, .ty = list_cell }});
-    _ = try draft.addStmt(.{ .return_ = .{ .value = expr, .target = unit_cell } });
+        var symbol_gen = Common.SymbolGen{};
+        const local = try draft.addLocal(symbol_gen.fresh(), list_cell, null, null);
+        _ = try draft.addPat(.{ .ty = list_cell, .data = .{ .bind = local } });
+        const expr = try draft.addExpr(.{ .ty = list_cell, .data = .{ .local = local } });
+        _ = try draft.addTypedLocalSpan(&.{.{ .local = local, .ty = list_cell }});
+        _ = try draft.addStmt(.{ .return_ = .{ .value = expr, .target = unit_cell } });
 
-    try graph.freezeRelations();
-    var sealer = GraphTypeFinals.init(graph);
-    defer sealer.deinit();
-    var relocation = Type.Store.TypeRelocation.init(
-        allocator,
-        &private_types,
-        &program.names,
-        &program.types,
-        &program.names,
-    );
-    defer relocation.deinit();
-    var committed_types = CommittedGraphTypes.relocated(
-        graph,
-        &sealer,
-        &program.types,
-        &program.names,
-        &relocation,
-    );
-    try draft.sealCoreIntoProgramWithMap(
-        &program,
-        graph,
-        &committed_types,
-        BodyDraftStore.finalIdOffsets(&program),
-        null,
-        null,
-        null,
-    );
+        try graph.freezeRelations();
+        var sealer = GraphTypeFinals.init(graph);
+        defer sealer.deinit();
+        var relocation = Type.Store.TypeRelocation.init(
+            allocator,
+            &private_types,
+            &program.names,
+            &program.types,
+            &program.names,
+        );
+        defer relocation.deinit();
+        var committed_types = CommittedGraphTypes.relocated(
+            graph,
+            &sealer,
+            &program.types,
+            &program.names,
+            &relocation,
+        );
+        try draft.sealCoreIntoProgramWithMap(
+            &program,
+            graph,
+            &committed_types,
+            &.{},
+            BodyDraftStore.finalIdOffsets(&program),
+            null,
+            null,
+            null,
+        );
+        sealed_list = program.getLocal(@enumFromInt(@intFromEnum(local))).ty;
+    }
 
-    const sealed_list = program.getLocal(@enumFromInt(@intFromEnum(local))).ty;
+    // Program storage must remain self-contained after all private owners die.
     const sealed_unit = switch (program.types.get(sealed_list)) {
         .list => |element| element,
         .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => return error.TestExpectedEqual,
