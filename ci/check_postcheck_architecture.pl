@@ -289,15 +289,14 @@ sub check_body_context_output_access {
     );
     my %allowed_graph_type_egress = map { $_ => 1 } qw(
         completeDeferredIteratorResult
-        restoredStaticDataCandidateNode
-        restoredStaticDataCandidateNodeAtNode
     );
 
-    my $direct_output = qr/self\.builder\.program\.(?:addExpr|addPat|addLocal|addLocalWithBinder|addFn|addExprSpan|addPatSpan|addTypedLocalSpan|addStmt|addStmtSpan|addFieldExprSpan|addRecordDestructSpan|addBranchSpan|addIfBranchSpan|addStrPatternStepSpan|addStringLiteral|addStringView|addComptimeSite|defs\.append|defs\.items|exprs\.items|pats\.items|locals\.items)\b/;
+    my $direct_output = qr/self\.builder\.program\.(?:addExpr|addPat|addLocal|addLocalWithBinder|addFn|addExprSpan|addPatSpan|addTypedLocalSpan|addStmt|addStmtSpan|addFieldExprSpan|addRecordDestructSpan|addBranchSpan|addIfBranchSpan|addStrPatternStepSpan|addStringLiteral|addStringView|addComptimeSite|addStaticDataValue|addStaticDataValueAssumeCapacity|ensureStaticDataValueCapacity|static_data_values|defs\.append|defs\.items|exprs\.items|pats\.items|locals\.items)\b/;
     my $global_type_access = qr/(?:\.builder\.program\.(?:fnSource|types)|self\.builder\.(?:constBoxPayloadType|constListElemType|constRecordFields|errorRowIsIncludedIn|functionShape|namedBackingType|nominalConstructionLayer|nominalExprBackingType|optionalFieldSlot|optionalSlotInfo|recordField|recordFieldByTextOptional|recordFieldType|recordFieldsSpan|shapeContent|singleTypeArg|specializationTypeDigest|tagByName|tagPayloadTypes|tagUnionTags|tupleItemTypes|typeHasBuiltinOwner|typeIsProvenUninhabited))\b/;
     my $global_type_ingress = qr/self\.builder\.(?:lowerType|primitiveType)\b/;
     my $global_type_cache = qr/\.builder\.(?:type_cache|parse_result_ok_types|generated_try_types|uninhabited_type_cache)\.(?:get|getPtr|getOrPut|put|remove)\b/;
     my $graph_type_egress = qr/self\.commitGraphType\b/;
+    my $coordinator_static_data = qr/self\.builder\.commitStaticDataValue\b/;
 
     my $in_body_context = 0;
     my $body_depth = 0;
@@ -339,6 +338,9 @@ sub check_body_context_output_access {
         }
         if ($code =~ $graph_type_egress && !$allowed_graph_type_egress{$current_fn // ''}) {
             push @violations, "$rel:$line_no: body-context-global-type-egress: $line";
+        }
+        if ($code =~ $coordinator_static_data) {
+            push @violations, "$rel:$line_no: body-context-coordinator-static-data: $line";
         }
 
         my $delta = brace_delta($code);
