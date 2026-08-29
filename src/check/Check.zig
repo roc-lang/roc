@@ -63,6 +63,8 @@ const TypeDeclDependency = struct {
     dependency: u32,
 };
 
+const InterpolationPartsIdx = InterpolationPartMetadata.SafeList.Idx;
+
 const no_type_decl_dense_index = std.math.maxInt(u32);
 
 const no_def_group = std.math.maxInt(u32);
@@ -307,8 +309,9 @@ u64_var: Var,
 builtin_types_copied: bool,
 /// Map representation of Ident -> Var, used in checking static dispatch constraints
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
-/// Interpolation constraint function vars whose custom part checks have already run.
-checked_interpolation_part_constraints: std.AutoHashMap(Var, void),
+/// Interpolation metadata ranges whose occurrence-specific custom part checks
+/// have already run.
+checked_interpolation_part_constraints: std.AutoHashMap(InterpolationPartsIdx, void),
 /// Vars that originated as single-quote (.int_unbound) literals.
 int_unbound_vars: std.AutoHashMap(Var, void),
 /// Dispatcher/method pairs already reported by `reportConstraintError`, so a
@@ -2375,7 +2378,7 @@ fn initAssumePrepared(
         .u64_var = undefined,
         .builtin_types_copied = false,
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
-        .checked_interpolation_part_constraints = std.AutoHashMap(Var, void).init(gpa),
+        .checked_interpolation_part_constraints = std.AutoHashMap(InterpolationPartsIdx, void).init(gpa),
         .scratch_generated_codec_calls = .empty,
         .int_unbound_vars = std.AutoHashMap(Var, void).init(gpa),
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
@@ -27847,8 +27850,12 @@ fn ensureCustomInterpolationPartsChecked(
         unreachable;
     }
 
-    const checked_key = self.types.resolveVar(constraint.fn_var).var_;
-    if ((try self.checked_interpolation_part_constraints.getOrPut(checked_key)).found_existing) return;
+    // Empty interpolations have no part constraints to validate and their
+    // SafeList range intentionally has no usable start index.
+    if (metadata.interpolated_parts.isEmpty()) return;
+    if ((try self.checked_interpolation_part_constraints.getOrPut(
+        metadata.interpolated_parts.start,
+    )).found_existing) return;
 
     const item_var = metadata.item_var;
     // Use the captured part metadata, not the original CIR `parts`, so an instantiated call

@@ -3392,12 +3392,20 @@ const Unifier = struct {
         }
 
         const ConstraintOrder = struct {
+            unifier: *const Self,
             constraints: []const StaticDispatchConstraint,
 
             fn lessThan(context: @This(), a_index: u32, b_index: u32) bool {
                 const a = context.constraints[a_index];
                 const b = context.constraints[b_index];
-                if (!a.fn_name.eql(b.fn_name)) return a.fn_name.idx < b.fn_name.idx;
+                if (!a.fn_name.eql(b.fn_name)) {
+                    // Evidence order must survive import/copy remapping, but
+                    // Ident.Idx ordering is local to one interner.
+                    return Ident.textLessThan(
+                        context.unifier.getTypeIdentText(a.fn_name),
+                        context.unifier.getTypeIdentText(b.fn_name),
+                    );
+                }
 
                 // Put declarative/defaulting relations before independent
                 // dot-call relations so each same-name group can be matched
@@ -3420,9 +3428,11 @@ const Unifier = struct {
             .count = @intCast(b_constraints.len),
         });
         std.mem.sort(u32, a_indices, ConstraintOrder{
+            .unifier = self,
             .constraints = a_constraints,
         }, ConstraintOrder.lessThan);
         std.mem.sort(u32, b_indices, ConstraintOrder{
+            .unifier = self,
             .constraints = b_constraints,
         }, ConstraintOrder.lessThan);
 
@@ -3432,7 +3442,10 @@ const Unifier = struct {
             const a_name = a_constraints[a_indices[a_group_start]].fn_name;
             const b_name = b_constraints[b_indices[b_group_start]].fn_name;
             if (!a_name.eql(b_name)) {
-                if (a_name.idx < b_name.idx) {
+                if (Ident.textLessThan(
+                    self.getTypeIdentText(a_name),
+                    self.getTypeIdentText(b_name),
+                )) {
                     _ = try scratch.only_in_a_static_dispatch_constraints.append(
                         scratch.gpa,
                         a_constraints[a_indices[a_group_start]],
@@ -3649,8 +3662,13 @@ fn sameDeclarativeOriginClass(
         .desugared_unaryop => b == .desugared_unaryop,
         .desugared_binop => |a_binop| b == .desugared_binop and
             a_binop.negated == b.desugared_binop.negated,
-        .from_literal => |a_literal| b == .from_literal and
-            std.meta.activeTag(a_literal) == std.meta.activeTag(b.from_literal),
+        .from_literal => |a_literal| b == .from_literal and switch (a_literal) {
+            // Each interpolation carries its own part vars and source regions;
+            // sharing one callable relation must not discard those checks.
+            .interpolation => false,
+            .numeral, .quote => std.meta.activeTag(a_literal) ==
+                std.meta.activeTag(b.from_literal),
+        },
     };
 }
 

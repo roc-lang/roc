@@ -2259,6 +2259,66 @@ test "unify - declarative static dispatch representative survives repeated merge
     try std.testing.expect(retained[0].origin.desugared_binop.negated);
 }
 
+test "unify - static dispatch method ordering ignores ident interning order" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Deliberately intern and produce zeta first. Partitioning must still use
+    // lexical method order because Ident.Idx values are remapped by imports.
+    const zeta = try env.module_env.getIdentStore().insert(
+        env.module_env.gpa,
+        Ident.for_text("zeta"),
+    );
+    const alpha = try env.module_env.getIdentStore().insert(
+        env.module_env.gpa,
+        Ident.for_text("alpha"),
+    );
+    try std.testing.expect(zeta.idx < alpha.idx);
+
+    const argument = try env.module_env.types.fresh();
+    const result_var = try env.module_env.types.fresh();
+    const fn_var = try env.module_env.types.freshFromContent(
+        try env.mkFuncPure(&.{argument}, result_var),
+    );
+    const zeta_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = zeta,
+        .fn_var = fn_var,
+        .origin = .method_call,
+    };
+    const alpha_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = alpha,
+        .fn_var = fn_var,
+        .origin = .method_call,
+    };
+    const first_range = try env.module_env.types.appendStaticDispatchConstraints(
+        &.{ zeta_constraint, alpha_constraint },
+    );
+    const second_range = try env.module_env.types.appendStaticDispatchConstraints(
+        &.{ zeta_constraint, alpha_constraint },
+    );
+    const first = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = first_range,
+    } });
+    const second = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = second_range,
+    } });
+
+    try std.testing.expectEqual(.unified, try env.unify(first, second));
+    const resolved = env.module_env.types.resolveVar(first);
+    try std.testing.expect(resolved.desc.content == .flex);
+    const retained = env.module_env.types.sliceStaticDispatchConstraints(
+        resolved.desc.content.flex.constraints,
+    );
+    try std.testing.expectEqual(@as(usize, 4), retained.len);
+    try std.testing.expect(retained[0].fn_name.eql(alpha));
+    try std.testing.expect(retained[1].fn_name.eql(zeta));
+    try std.testing.expect(retained[2].fn_name.eql(alpha));
+    try std.testing.expect(retained[3].fn_name.eql(zeta));
+}
+
 // capture constraints
 
 test "unify - flex with constraints vs structure captures deferred check" {
