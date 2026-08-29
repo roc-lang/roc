@@ -3417,17 +3417,12 @@ const Unifier = struct {
         }
 
         const ConstraintOrder = struct {
-            unifier: *const Self,
             constraints: []const StaticDispatchConstraint,
 
             fn lessThan(context: @This(), a_index: u32, b_index: u32) bool {
                 const a = context.constraints[a_index];
                 const b = context.constraints[b_index];
-                switch (std.mem.order(u8, context.unifier.getTypeIdentText(a.fn_name), context.unifier.getTypeIdentText(b.fn_name))) {
-                    .lt => return true,
-                    .gt => return false,
-                    .eq => {},
-                }
+                if (!a.fn_name.eql(b.fn_name)) return a.fn_name.idx < b.fn_name.idx;
 
                 // Put declarative/defaulting relations before independent
                 // dot-call relations so each same-name group can be matched
@@ -3450,48 +3445,44 @@ const Unifier = struct {
             .count = @intCast(b_constraints.len),
         });
         std.mem.sort(u32, a_indices, ConstraintOrder{
-            .unifier = self,
             .constraints = a_constraints,
         }, ConstraintOrder.lessThan);
         std.mem.sort(u32, b_indices, ConstraintOrder{
-            .unifier = self,
             .constraints = b_constraints,
         }, ConstraintOrder.lessThan);
 
         var a_group_start: usize = 0;
         var b_group_start: usize = 0;
         while (a_group_start < a_indices.len and b_group_start < b_indices.len) {
-            const a_name = self.getTypeIdentText(a_constraints[a_indices[a_group_start]].fn_name);
-            const b_name = self.getTypeIdentText(b_constraints[b_indices[b_group_start]].fn_name);
-            switch (std.mem.order(u8, a_name, b_name)) {
-                .lt => {
+            const a_name = a_constraints[a_indices[a_group_start]].fn_name;
+            const b_name = b_constraints[b_indices[b_group_start]].fn_name;
+            if (!a_name.eql(b_name)) {
+                if (a_name.idx < b_name.idx) {
                     _ = try scratch.only_in_a_static_dispatch_constraints.append(
                         scratch.gpa,
                         a_constraints[a_indices[a_group_start]],
                     );
                     a_group_start += 1;
                     continue;
-                },
-                .gt => {
+                } else {
                     _ = try scratch.only_in_b_static_dispatch_constraints.append(
                         scratch.gpa,
                         b_constraints[b_indices[b_group_start]],
                     );
                     b_group_start += 1;
                     continue;
-                },
-                .eq => {},
+                }
             }
 
             var a_group_end = a_group_start + 1;
             while (a_group_end < a_indices.len and
-                std.mem.eql(u8, a_name, self.getTypeIdentText(a_constraints[a_indices[a_group_end]].fn_name)))
+                a_name.eql(a_constraints[a_indices[a_group_end]].fn_name))
             {
                 a_group_end += 1;
             }
             var b_group_end = b_group_start + 1;
             while (b_group_end < b_indices.len and
-                std.mem.eql(u8, b_name, self.getTypeIdentText(b_constraints[b_indices[b_group_end]].fn_name)))
+                b_name.eql(b_constraints[b_indices[b_group_end]].fn_name))
             {
                 b_group_end += 1;
             }

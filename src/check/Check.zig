@@ -23911,6 +23911,26 @@ const GeneralizedAttachedConstraintKey = struct {
     callable_shape: [32]u8,
 };
 
+fn generalizedCallableShape(
+    self: *Self,
+    anchors: *const std.AutoHashMap(Var, void),
+    cache: *std.AutoHashMap(Var, [32]u8),
+    fn_var: Var,
+) Allocator.Error![32]u8 {
+    const fn_root = self.types.resolveVar(fn_var).var_;
+    if (cache.get(fn_root)) |shape| return shape;
+
+    const shape = (try canonical_type_keys.fromVarWithAnchoredIdentities(
+        self.gpa,
+        self.types,
+        self.cir,
+        fn_root,
+        anchors,
+    )).bytes;
+    try cache.put(fn_root, shape);
+    return shape;
+}
+
 fn dispatchConstraintOriginFlag(origin: StaticDispatchConstraint.Origin) bool {
     return switch (origin) {
         .desugared_binop => |binop| binop.negated,
@@ -23923,7 +23943,9 @@ fn dispatchConstraintOriginFlag(origin: StaticDispatchConstraint.Origin) bool {
 /// callable shape. Variables exposed through the enclosing scheme remain fixed
 /// anchors; only requirement-private generalized variables may be renamed.
 /// This keeps repeated helper uses compact without conflating call results that
-/// a caller can still specialize differently.
+/// a caller can still specialize differently. Shape keys are memoized by
+/// finalized callable root for the duration of this pass because attached and
+/// side-table requirements commonly refer to the same callable graph.
 fn deduplicateGeneralizedDispatchRequirements(
     self: *Self,
     scheme_var: Var,
@@ -23942,6 +23964,9 @@ fn deduplicateGeneralizedDispatchRequirements(
     for (identity_vars) |identity_var| {
         anchors.putAssumeCapacity(self.types.resolveVar(identity_var).var_, {});
     }
+
+    var callable_shapes = std.AutoHashMap(Var, [32]u8).init(self.gpa);
+    defer callable_shapes.deinit();
 
     var retained_constraints: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty;
     defer retained_constraints.deinit(self.gpa);
@@ -23964,18 +23989,16 @@ fn deduplicateGeneralizedDispatchRequirements(
                 retained_constraints.appendAssumeCapacity(constraint);
                 continue;
             }
-            const callable_key = try canonical_type_keys.fromVarWithAnchoredIdentities(
-                self.gpa,
-                self.types,
-                self.cir,
-                constraint.fn_var,
+            const callable_shape = try self.generalizedCallableShape(
                 &anchors,
+                &callable_shapes,
+                constraint.fn_var,
             );
             const key = GeneralizedAttachedConstraintKey{
                 .fn_name = constraint.fn_name,
                 .origin_tag = std.meta.activeTag(constraint.origin),
                 .origin_flag = dispatchConstraintOriginFlag(constraint.origin),
-                .callable_shape = callable_key.bytes,
+                .callable_shape = callable_shape,
             };
             if (seen_attached.contains(key)) continue;
             seen_attached.putAssumeCapacity(key, {});
@@ -24010,19 +24033,17 @@ fn deduplicateGeneralizedDispatchRequirements(
             continue;
         }
 
-        const callable_key = try canonical_type_keys.fromVarWithAnchoredIdentities(
-            self.gpa,
-            self.types,
-            self.cir,
-            requirement.constraint.fn_var,
+        const callable_shape = try self.generalizedCallableShape(
             &anchors,
+            &callable_shapes,
+            requirement.constraint.fn_var,
         );
         const key = GeneralizedSchemeRequirementKey{
             .receiver_root = self.types.resolveVar(requirement.receiver_var).var_,
             .fn_name = requirement.constraint.fn_name,
             .origin_tag = std.meta.activeTag(requirement.constraint.origin),
             .origin_flag = dispatchConstraintOriginFlag(requirement.constraint.origin),
-            .callable_shape = callable_key.bytes,
+            .callable_shape = callable_shape,
         };
         if (seen.contains(key)) continue;
         seen.putAssumeCapacity(key, {});
