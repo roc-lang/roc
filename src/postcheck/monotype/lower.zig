@@ -13241,7 +13241,10 @@ const InterfaceReplayEntry = struct {
     evidence: StoredConstFnEvidence,
     provisional_ty: Type.TypeId,
     representative: NodeId,
-    duplicates: std.ArrayList(NodeId) = .empty,
+    /// Immutable result of expanding the representative. Instantiating this
+    /// snapshot gives each independent request fresh variables while replaying
+    /// the complete transitive interface constraints.
+    summary_ty: ?Type.TypeId = null,
     status: InterfaceReplayStatus = .expanding,
 };
 
@@ -13257,7 +13260,6 @@ const InterfaceReplayState = struct {
     }
 
     fn deinit(self: *InterfaceReplayState, allocator: Allocator) void {
-        for (self.entries.items) |*entry| entry.duplicates.deinit(allocator);
         self.entries.deinit(allocator);
         var buckets = self.buckets.valueIterator();
         while (buckets.next()) |bucket| bucket.deinit(allocator);
@@ -17362,7 +17364,6 @@ const BodyContext = struct {
             &active_local_scopes,
             &replay_state,
         );
-        try self.finishCheckedTemplateInterfaceReplay(&replay_state);
     }
 
     fn applyCheckedTemplateInterfaceScopeRelations(
@@ -17585,13 +17586,16 @@ const BodyContext = struct {
                     request_fn_node,
                 ),
                 .ready => {
-                    // Alpha-equivalent provisional views can still contain
-                    // different live variables that acquire incompatible
-                    // structure later. Reuse is safe when the requests are
-                    // already the same graph interface: later refinements then
-                    // reach the same argument and result classes.
-                    if (!self.graph.sameFunctionInterface(entry.representative, request_fn_node)) continue;
-                    try entry.duplicates.append(self.allocator, request_fn_node);
+                    // Never join an independent request to the completed live
+                    // graph. Its variables may subsequently be refined by its
+                    // caller. Instantiating the immutable summary preserves its
+                    // internal sharing while allocating fresh request variables.
+                    try relateFunctionRequestInterface(
+                        self.graph,
+                        try self.graph.instantiateProvisionalTypeView(entry.summary_ty orelse
+                            Common.invariant("ready interface replay had no summary")),
+                        request_fn_node,
+                    );
                 },
             }
             return;
@@ -17642,30 +17646,9 @@ const BodyContext = struct {
             &active_local_scopes,
             replay_state,
         );
-        replay_state.entries.items[replay_index].status = .ready;
-    }
-
-    fn finishCheckedTemplateInterfaceReplay(
-        self: *BodyContext,
-        replay_state: *InterfaceReplayState,
-    ) Allocator.Error!void {
-        const final_types = try self.allocator.alloc(Type.TypeId, replay_state.entries.items.len);
-        defer self.allocator.free(final_types);
-        for (replay_state.entries.items, final_types) |entry, *final_ty| {
-            if (entry.status != .ready) {
-                Common.invariant("checked specialization interface replay did not finish");
-            }
-            final_ty.* = try self.graph.provisionalTypeViewForNode(entry.representative);
-        }
-        for (replay_state.entries.items, final_types) |entry, final_ty| {
-            for (entry.duplicates.items) |duplicate| {
-                try relateFunctionRequestInterface(
-                    self.graph,
-                    try self.graph.instantiateProvisionalTypeView(final_ty),
-                    duplicate,
-                );
-            }
-        }
+        const entry = &replay_state.entries.items[replay_index];
+        entry.summary_ty = try self.graph.provisionalTypeViewForNode(entry.representative);
+        entry.status = .ready;
     }
 
     fn lowerEntryWrapperAtCell(

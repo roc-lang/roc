@@ -29333,11 +29333,41 @@ fn reportInvalidBuiltinFromNumeralLiteral(
     env: *Env,
 ) Allocator.Error!bool {
     const num_literal = constraint.origin.numeralInfo() orelse return false;
-    if (!try self.reportInvalidBuiltinFromNumeralInfo(dispatcher_var, num_kind, num_literal, env)) return false;
+    if (validateBuiltinFromNumeralLiteral(num_kind, num_literal) == null) return false;
 
-    try self.poisonConstraintSourceExpr(dispatcher_var, constraint);
-    try self.markStaticDispatchRejected(constraint);
+    // Constraint merging retains aggregate fit facts, while this occurrence
+    // table retains the source literal responsible for a concrete rejection.
+    const rejected_entry = self.firstRejectedOpenNumeral(
+        dispatcher_var,
+        num_kind,
+    );
+    const rejected_constraint = if (rejected_entry) |entry| entry.constraint else constraint;
+    const rejected_literal = rejected_constraint.origin.numeralInfo().?;
+    if (!try self.reportInvalidBuiltinFromNumeralInfo(dispatcher_var, num_kind, rejected_literal, env)) return false;
+
+    const rejected_expr: ?CIR.Expr.Idx = if (rejected_entry) |entry| if (entry.source_node) |node_idx|
+        if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) @enumFromInt(@intFromEnum(node_idx)) else null
+    else
+        null else null;
+    try self.poisonConstraintFailureSource(dispatcher_var, rejected_constraint, rejected_expr);
+    try self.markStaticDispatchRejected(rejected_constraint);
     return true;
+}
+
+fn firstRejectedOpenNumeral(
+    self: *Self,
+    dispatcher_var: Var,
+    num_kind: CIR.NumKind,
+) ?OpenNumeralLiteral {
+    const dispatcher_root = self.types.resolveVar(dispatcher_var).var_;
+    for (self.open_numeral_literals.items) |entry| {
+        if (self.types.resolveVar(entry.var_).var_ != dispatcher_root) continue;
+        const info = entry.constraint.origin.numeralInfo() orelse continue;
+        if (validateBuiltinFromNumeralLiteral(num_kind, info) != null) {
+            return entry;
+        }
+    }
+    return null;
 }
 
 fn reportInvalidBuiltinFromNumeralInfo(
