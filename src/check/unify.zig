@@ -3387,84 +3387,259 @@ const Unifier = struct {
         in_both: TwoStaticDispatchConstraints.SafeList.Range,
     };
 
-    /// Given two ranges of record fields stored in `scratch.gathered_fields`, this function:
-    /// * sorts both slices in-place by field name
-    /// * partitions them into three disjoint groups:
-    ///     - fields only in `a`
-    ///     - fields only in `b`
-    ///     - fields present in both (by name)
-    ///
-    /// These groups are stored into dedicated scratch buffers:
-    /// * `only_in_a_fields`
-    /// * `only_in_b_fields`
-    /// * `in_both_fields`
-    ///
-    /// The result is a set of ranges that can be used to slice those buffers.
+    /// Match relations that deliberately share one callable type while leaving
+    /// independent same-name method calls separate. Keeping those calls separate
+    /// lets each use instantiate a selected rank-1 method scheme independently.
     fn partitionStaticDispatchConstraints(
         self: *const Self,
         a_constraints_range: StaticDispatchConstraint.SafeList.Range,
         b_constraints_range: StaticDispatchConstraint.SafeList.Range,
-    ) std.mem.Allocator.Error!PartitionedStaticDispatchConstraints {
+    ) Error!PartitionedStaticDispatchConstraints {
         const scratch = self.scratch;
 
-        // First sort the fields
         const a_constraints = self.types_store.static_dispatch_constraints.sliceRange(a_constraints_range);
-        std.mem.sort(StaticDispatchConstraint, a_constraints, self, struct {
-            fn less(unifier: *const Self, a: StaticDispatchConstraint, b: StaticDispatchConstraint) bool {
-                return std.mem.order(u8, unifier.getTypeIdentText(a.fn_name), unifier.getTypeIdentText(b.fn_name)) == .lt;
-            }
-        }.less);
         const b_constraints = self.types_store.static_dispatch_constraints.sliceRange(b_constraints_range);
-        std.mem.sort(StaticDispatchConstraint, b_constraints, self, struct {
-            fn less(unifier: *const Self, a: StaticDispatchConstraint, b: StaticDispatchConstraint) bool {
-                return std.mem.order(u8, unifier.getTypeIdentText(a.fn_name), unifier.getTypeIdentText(b.fn_name)) == .lt;
-            }
-        }.less);
 
         // Get the start of index of the new range
         const a_constraints_start: u32 = @intCast(scratch.only_in_a_static_dispatch_constraints.len());
         const b_constraints_start: u32 = @intCast(scratch.only_in_b_static_dispatch_constraints.len());
         const both_constraints_start: u32 = @intCast(scratch.in_both_static_dispatch_constraints.len());
+        const a_indices_start: u32 = @intCast(scratch.a_static_dispatch_constraint_indices.len());
+        const b_indices_start: u32 = @intCast(scratch.b_static_dispatch_constraint_indices.len());
+        for (a_constraints, 0..) |_, i| {
+            _ = try scratch.a_static_dispatch_constraint_indices.append(scratch.gpa, @intCast(i));
+        }
+        for (b_constraints, 0..) |_, i| {
+            _ = try scratch.b_static_dispatch_constraint_indices.append(scratch.gpa, @intCast(i));
+        }
 
-        // Iterate over the fields in order, grouping them
-        var a_i: usize = 0;
-        var b_i: usize = 0;
-        while (a_i < a_constraints.len and b_i < b_constraints.len) {
-            const a_next = a_constraints[a_i];
-            const b_next = b_constraints[b_i];
-            const ord = std.mem.order(u8, self.getTypeIdentText(a_next.fn_name), self.getTypeIdentText(b_next.fn_name));
-            switch (ord) {
-                .eq => {
-                    _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, TwoStaticDispatchConstraints{
-                        .a = a_next,
-                        .b = b_next,
-                    });
-                    a_i = a_i + 1;
-                    b_i = b_i + 1;
-                },
+        const ConstraintOrder = struct {
+            unifier: *const Self,
+            constraints: []const StaticDispatchConstraint,
+
+            fn lessThan(context: @This(), a_index: u32, b_index: u32) bool {
+                const a = context.constraints[a_index];
+                const b = context.constraints[b_index];
+                switch (std.mem.order(u8, context.unifier.getTypeIdentText(a.fn_name), context.unifier.getTypeIdentText(b.fn_name))) {
+                    .lt => return true,
+                    .gt => return false,
+                    .eq => {},
+                }
+
+                // Put declarative/defaulting relations before independent
+                // dot-call relations so each same-name group can be matched
+                // with a linear scan.
+                const a_is_method_call = a.origin == .method_call;
+                const b_is_method_call = b.origin == .method_call;
+                if (a_is_method_call != b_is_method_call) return !a_is_method_call;
+
+                // Preserve producer order within each semantic class.
+                return a_index < b_index;
+            }
+        };
+
+        const a_indices = scratch.a_static_dispatch_constraint_indices.sliceRange(.{
+            .start = @enumFromInt(a_indices_start),
+            .count = @intCast(a_constraints.len),
+        });
+        const b_indices = scratch.b_static_dispatch_constraint_indices.sliceRange(.{
+            .start = @enumFromInt(b_indices_start),
+            .count = @intCast(b_constraints.len),
+        });
+        std.mem.sort(u32, a_indices, ConstraintOrder{
+            .unifier = self,
+            .constraints = a_constraints,
+        }, ConstraintOrder.lessThan);
+        std.mem.sort(u32, b_indices, ConstraintOrder{
+            .unifier = self,
+            .constraints = b_constraints,
+        }, ConstraintOrder.lessThan);
+
+        var a_group_start: usize = 0;
+        var b_group_start: usize = 0;
+        while (a_group_start < a_indices.len and b_group_start < b_indices.len) {
+            const a_name = self.getTypeIdentText(a_constraints[a_indices[a_group_start]].fn_name);
+            const b_name = self.getTypeIdentText(b_constraints[b_indices[b_group_start]].fn_name);
+            switch (std.mem.order(u8, a_name, b_name)) {
                 .lt => {
-                    _ = try scratch.only_in_a_static_dispatch_constraints.append(scratch.gpa, a_next);
-                    a_i = a_i + 1;
+                    _ = try scratch.only_in_a_static_dispatch_constraints.append(
+                        scratch.gpa,
+                        a_constraints[a_indices[a_group_start]],
+                    );
+                    a_group_start += 1;
+                    continue;
                 },
                 .gt => {
-                    _ = try scratch.only_in_b_static_dispatch_constraints.append(scratch.gpa, b_next);
-                    b_i = b_i + 1;
+                    _ = try scratch.only_in_b_static_dispatch_constraints.append(
+                        scratch.gpa,
+                        b_constraints[b_indices[b_group_start]],
+                    );
+                    b_group_start += 1;
+                    continue;
                 },
+                .eq => {},
             }
+
+            var a_group_end = a_group_start + 1;
+            while (a_group_end < a_indices.len and
+                std.mem.eql(u8, a_name, self.getTypeIdentText(a_constraints[a_indices[a_group_end]].fn_name)))
+            {
+                a_group_end += 1;
+            }
+            var b_group_end = b_group_start + 1;
+            while (b_group_end < b_indices.len and
+                std.mem.eql(u8, b_name, self.getTypeIdentText(b_constraints[b_indices[b_group_end]].fn_name)))
+            {
+                b_group_end += 1;
+            }
+
+            // A rank-1 method scheme has one fixed outer function shape. Its
+            // quantified types may instantiate differently at each call, but
+            // instantiation cannot change argument count or a known effect
+            // mode. Reject this impossible conjunction before carrying it into
+            // a scheme.
+            var common_arity: ?u32 = null;
+            var common_effectful: ?bool = null;
+            for (a_indices[a_group_start..a_group_end]) |constraint_index| {
+                if (self.staticDispatchCallableHead(a_constraints[constraint_index])) |head| {
+                    if (common_arity) |expected| {
+                        if (head.arity != expected) return error.TypeMismatch;
+                    } else {
+                        common_arity = head.arity;
+                    }
+                    if (head.effectful) |effectful| {
+                        if (common_effectful) |expected| {
+                            if (effectful != expected) return error.TypeMismatch;
+                        } else {
+                            common_effectful = effectful;
+                        }
+                    }
+                }
+            }
+            for (b_indices[b_group_start..b_group_end]) |constraint_index| {
+                if (self.staticDispatchCallableHead(b_constraints[constraint_index])) |head| {
+                    if (common_arity) |expected| {
+                        if (head.arity != expected) return error.TypeMismatch;
+                    } else {
+                        common_arity = head.arity;
+                    }
+                    if (head.effectful) |effectful| {
+                        if (common_effectful) |expected| {
+                            if (effectful != expected) return error.TypeMismatch;
+                        } else {
+                            common_effectful = effectful;
+                        }
+                    }
+                }
+            }
+
+            var a_non_method_end = a_group_start;
+            while (a_non_method_end < a_group_end and
+                a_constraints[a_indices[a_non_method_end]].origin != .method_call)
+            {
+                a_non_method_end += 1;
+            }
+            var b_non_method_end = b_group_start;
+            while (b_non_method_end < b_group_end and
+                b_constraints[b_indices[b_non_method_end]].origin != .method_call)
+            {
+                b_non_method_end += 1;
+            }
+
+            var a_non_method = a_group_start;
+            var b_non_method = b_group_start;
+            while (a_non_method < a_non_method_end and b_non_method < b_non_method_end) {
+                _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, .{
+                    .a = a_constraints[a_indices[a_non_method]],
+                    .b = b_constraints[b_indices[b_non_method]],
+                });
+                a_non_method += 1;
+                b_non_method += 1;
+            }
+
+            var a_method = a_non_method_end;
+            var b_method = b_non_method_end;
+            while (a_non_method < a_non_method_end and b_method < b_group_end) {
+                _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, .{
+                    .a = a_constraints[a_indices[a_non_method]],
+                    .b = b_constraints[b_indices[b_method]],
+                });
+                a_non_method += 1;
+                b_method += 1;
+            }
+            while (a_method < a_group_end and b_non_method < b_non_method_end) {
+                _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, .{
+                    .a = a_constraints[a_indices[a_method]],
+                    .b = b_constraints[b_indices[b_non_method]],
+                });
+                a_method += 1;
+                b_non_method += 1;
+            }
+
+            // A written/defaulting requirement describes the method available
+            // to the body, so every independent call on the other side must
+            // satisfy it. Reuse one representative after the one-to-one matches;
+            // this checks every call without unifying independent inferred calls
+            // when neither side supplies a declaration.
+            if (a_non_method_end > a_group_start) {
+                const representative = a_constraints[a_indices[a_group_start]];
+                while (b_method < b_group_end) : (b_method += 1) {
+                    _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, .{
+                        .a = representative,
+                        .b = b_constraints[b_indices[b_method]],
+                    });
+                }
+            }
+            if (b_non_method_end > b_group_start) {
+                const representative = b_constraints[b_indices[b_group_start]];
+                while (a_method < a_group_end) : (a_method += 1) {
+                    _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, .{
+                        .a = a_constraints[a_indices[a_method]],
+                        .b = representative,
+                    });
+                }
+            }
+
+            while (a_non_method < a_non_method_end) : (a_non_method += 1) {
+                _ = try scratch.only_in_a_static_dispatch_constraints.append(
+                    scratch.gpa,
+                    a_constraints[a_indices[a_non_method]],
+                );
+            }
+            while (a_method < a_group_end) : (a_method += 1) {
+                _ = try scratch.only_in_a_static_dispatch_constraints.append(
+                    scratch.gpa,
+                    a_constraints[a_indices[a_method]],
+                );
+            }
+            while (b_non_method < b_non_method_end) : (b_non_method += 1) {
+                _ = try scratch.only_in_b_static_dispatch_constraints.append(
+                    scratch.gpa,
+                    b_constraints[b_indices[b_non_method]],
+                );
+            }
+            while (b_method < b_group_end) : (b_method += 1) {
+                _ = try scratch.only_in_b_static_dispatch_constraints.append(
+                    scratch.gpa,
+                    b_constraints[b_indices[b_method]],
+                );
+            }
+
+            a_group_start = a_group_end;
+            b_group_start = b_group_end;
         }
 
-        // If b was shorter, add the extra a elems
-        while (a_i < a_constraints.len) {
-            const a_next = a_constraints[a_i];
-            _ = try scratch.only_in_a_static_dispatch_constraints.append(scratch.gpa, a_next);
-            a_i = a_i + 1;
+        while (a_group_start < a_indices.len) : (a_group_start += 1) {
+            _ = try scratch.only_in_a_static_dispatch_constraints.append(
+                scratch.gpa,
+                a_constraints[a_indices[a_group_start]],
+            );
         }
-
-        // If a was shorter, add the extra b elems
-        while (b_i < b_constraints.len) {
-            const b_next = b_constraints[b_i];
-            _ = try scratch.only_in_b_static_dispatch_constraints.append(scratch.gpa, b_next);
-            b_i = b_i + 1;
+        while (b_group_start < b_indices.len) : (b_group_start += 1) {
+            _ = try scratch.only_in_b_static_dispatch_constraints.append(
+                scratch.gpa,
+                b_constraints[b_indices[b_group_start]],
+            );
         }
 
         // Return the ranges
@@ -3473,6 +3648,41 @@ const Unifier = struct {
             .only_in_b = scratch.only_in_b_static_dispatch_constraints.rangeToEnd(b_constraints_start),
             .in_both = scratch.in_both_static_dispatch_constraints.rangeToEnd(both_constraints_start),
         };
+    }
+
+    const StaticDispatchCallableHead = struct {
+        arity: u32,
+        /// Null is an effect-polymorphic callable.
+        effectful: ?bool,
+    };
+
+    fn staticDispatchCallableHead(
+        self: *const Self,
+        constraint: StaticDispatchConstraint,
+    ) ?StaticDispatchCallableHead {
+        var callable_var = constraint.fn_var;
+        var guard = types_mod.debug.IterationGuard.init("staticDispatchCallableHead");
+        while (true) {
+            guard.tick();
+            const resolved = self.types_store.resolveVar(callable_var);
+            switch (resolved.desc.content) {
+                .alias => |alias| callable_var = self.types_store.getAliasBackingVar(alias),
+                .structure => |flat_type| return switch (flat_type) {
+                    .fn_pure => |func| .{ .arity = func.args.len(), .effectful = false },
+                    .fn_effectful => |func| .{ .arity = func.args.len(), .effectful = true },
+                    .fn_unbound => |func| .{ .arity = func.args.len(), .effectful = null },
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .tag_union,
+                    .empty_record,
+                    .empty_tag_union,
+                    => null,
+                },
+                .flex, .rigid, .field_presence, .err => return null,
+            }
+        }
     }
 };
 
@@ -3680,6 +3890,8 @@ pub const Scratch = struct {
     only_in_a_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
     only_in_b_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
     in_both_static_dispatch_constraints: TwoStaticDispatchConstraints.SafeList,
+    a_static_dispatch_constraint_indices: MkSafeList(u32),
+    b_static_dispatch_constraint_indices: MkSafeList(u32),
 
     // occurs
     occurs_scratch: occurs.Scratch,
@@ -3736,6 +3948,8 @@ pub const Scratch = struct {
             .only_in_a_static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, 32),
             .only_in_b_static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, 32),
             .in_both_static_dispatch_constraints = try TwoStaticDispatchConstraints.SafeList.initCapacity(gpa, 32),
+            .a_static_dispatch_constraint_indices = try MkSafeList(u32).initCapacity(gpa, 32),
+            .b_static_dispatch_constraint_indices = try MkSafeList(u32).initCapacity(gpa, 32),
             .occurs_scratch = try occurs.Scratch.init(gpa),
             .visited_vars = try VarSafeList.initCapacity(gpa, 16),
             .open_var_map = std.AutoHashMap(types_mod.Var, types_mod.Var).init(gpa),
@@ -3763,6 +3977,8 @@ pub const Scratch = struct {
         self.only_in_a_static_dispatch_constraints.deinit(self.gpa);
         self.only_in_b_static_dispatch_constraints.deinit(self.gpa);
         self.in_both_static_dispatch_constraints.deinit(self.gpa);
+        self.a_static_dispatch_constraint_indices.deinit(self.gpa);
+        self.b_static_dispatch_constraint_indices.deinit(self.gpa);
         self.occurs_scratch.deinit();
         self.visited_vars.deinit(self.gpa);
         self.constraint_visited_vars.deinit(self.gpa);
@@ -3788,6 +4004,8 @@ pub const Scratch = struct {
         self.only_in_a_static_dispatch_constraints.items.clearRetainingCapacity();
         self.only_in_b_static_dispatch_constraints.items.clearRetainingCapacity();
         self.in_both_static_dispatch_constraints.items.clearRetainingCapacity();
+        self.a_static_dispatch_constraint_indices.items.clearRetainingCapacity();
+        self.b_static_dispatch_constraint_indices.items.clearRetainingCapacity();
         self.fresh_vars.items.clearRetainingCapacity();
         self.occurs_scratch.reset();
         self.visited_vars.items.clearRetainingCapacity();

@@ -17064,7 +17064,15 @@ const BodyContext = struct {
                     entry.representative,
                     request_fn_node,
                 ),
-                .ready => try entry.duplicates.append(self.allocator, request_fn_node),
+                .ready => {
+                    // Alpha-equivalent provisional views can still contain
+                    // different live variables that acquire incompatible
+                    // structure later. Reuse is safe when the requests are
+                    // already the same graph interface: later refinements then
+                    // reach the same argument and result classes.
+                    if (!self.graph.sameFunctionInterface(entry.representative, request_fn_node)) continue;
+                    try entry.duplicates.append(self.allocator, request_fn_node);
+                },
             }
             return;
         };
@@ -35504,9 +35512,24 @@ const BodyContext = struct {
                 return .{ .target = try self.materializeEvidenceTarget(node, purpose) };
             },
             .constraint => |constraint_ref| {
-                const entry = self.evidence.at(constraint_ref) orelse
+                const entry = self.evidence.at(constraint_ref.index) orelse
                     Common.invariant("checked evidence reference was absent from its lexical chain");
-                return entry;
+                if (!constraint_ref.independent_callable) return entry;
+                return switch (entry) {
+                    .target => |target| blk: {
+                        const arena = self.builder.evidence_arena.allocator();
+                        const independent = try arena.create(SpecEvidenceTarget);
+                        independent.* = .{
+                            .view = target.view,
+                            .target = target.target,
+                            .instantiation = null,
+                            .local_proc_context = target.local_proc_context,
+                            .nested = .synthesize,
+                        };
+                        break :blk .{ .target = independent };
+                    },
+                    .structural, .unreachable_value, .checked_error => entry,
+                };
             },
             .structural => |evidence| return .{ .structural = .{
                 .derivation = evidence.derivation,
@@ -35712,11 +35735,13 @@ const BodyContext = struct {
                     .from_callable => .synthesize,
                 };
             },
-            .evidence_dependent => |constraint_ref| {
-                const entry = self.evidence.at(constraint_ref) orelse
+            .evidence_dependent => |dependent| {
+                const entry = self.evidence.at(dependent.index) orelse
                     Common.invariant("method target evidence was absent from its lexical chain");
                 return switch (entry) {
-                    .target => |target| switch (target.nested) {
+                    .target => |target| if (dependent.independent_callable)
+                        .synthesize
+                    else switch (target.nested) {
                         .resolved => |nested| .{ .resolved = nested },
                         .synthesize => .synthesize,
                     },
@@ -35739,11 +35764,13 @@ const BodyContext = struct {
                     .from_callable => .synthesize,
                 };
             },
-            .evidence_dependent => |constraint_ref| {
-                const entry = self.evidence.at(constraint_ref) orelse
+            .evidence_dependent => |dependent| {
+                const entry = self.evidence.at(dependent.index) orelse
                     Common.invariant("iterator target evidence was absent from its lexical chain");
                 return switch (entry) {
-                    .target => |target| switch (target.nested) {
+                    .target => |target| if (dependent.independent_callable)
+                        .synthesize
+                    else switch (target.nested) {
                         .resolved => |nested| .{ .resolved = nested },
                         .synthesize => .synthesize,
                     },
@@ -35775,16 +35802,21 @@ const BodyContext = struct {
                 };
                 return .{ .target = lookup };
             },
-            .evidence_dependent => |constraint_ref| {
-                const entry = self.evidence.at(constraint_ref) orelse
+            .evidence_dependent => |dependent| {
+                const entry = self.evidence.at(dependent.index) orelse
                     Common.invariant("dispatch resolution evidence was absent from its lexical chain");
                 return switch (entry) {
-                    .target => |target| .{ .target = .{
-                        .view = target.view,
-                        .target = target.target,
-                        .instantiation = target.instantiation,
-                        .local_proc_context = target.local_proc_context,
-                    } },
+                    .target => |target| .{
+                        .target = .{
+                            .view = target.view,
+                            .target = target.target,
+                            .instantiation = if (dependent.independent_callable)
+                                null
+                            else
+                                target.instantiation,
+                            .local_proc_context = target.local_proc_context,
+                        },
+                    },
                     .structural => |derivation| .{ .structural = derivation },
                     // Unreachable and checked-error dispatches crash before
                     // target resolution.
@@ -35863,7 +35895,7 @@ const BodyContext = struct {
         return switch (resolution) {
             .@"unreachable" => .unreachable_value,
             .checked_error => .checked_error,
-            .evidence_dependent => |constraint_ref| if (self.evidence.at(constraint_ref)) |entry| switch (entry) {
+            .evidence_dependent => |dependent| if (self.evidence.at(dependent.index)) |entry| switch (entry) {
                 .unreachable_value => .unreachable_value,
                 .checked_error => .checked_error,
                 .target, .structural => null,
@@ -46898,7 +46930,7 @@ const BodyContext = struct {
                 };
                 break :blk lookup;
             },
-            .evidence_dependent => |constraint_ref| if (self.evidence.at(constraint_ref)) |entry| switch (entry) {
+            .evidence_dependent => |dependent| if (self.evidence.at(dependent.index)) |entry| switch (entry) {
                 .target => |target| .{
                     .view = target.view,
                     .target = target.target,

@@ -2168,11 +2168,44 @@ test "issue 10529 open Try chain with named local callback stays bounded" {
     ;
 
     const counters = try monotypeCountersForModule(allocator, source);
-    try std.testing.expect(counters.template_misses <= 20);
-    // Generalized record fields retain distinct source-value/runtime-slot
-    // cells until specialization freeze. Keep that fixed linear bookkeeping
-    // bounded while guarding against the former exponential Try-chain growth.
-    try std.testing.expect(counters.nominal_backing_instantiations <= 325);
+    // Repeated calls retain independent callable relations while equivalent
+    // public requirements collapse to a fixed set at each helper boundary.
+    // Guard that linear bookkeeping against transitive requirement growth.
+    try std.testing.expect(counters.template_misses <= 60);
+    try std.testing.expect(counters.nominal_backing_instantiations <= 2000);
+}
+
+test "independent same-name helper requirements lower separately" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\take0 = |b| {
+        \\    to_end = |_| End
+        \\    Ok({ val: b.get(0).map_err(to_end)?, rest: b.drop_first(1) })
+        \\}
+        \\take1 = |b| Ok({ val: take0(b)?.val, rest: take0(b)?.rest })
+        \\take2 = |b| Ok({ val: take1(b)?.val, rest: take1(b)?.rest })
+        \\take3 = |b| Ok({ val: take2(b)?.val, rest: take2(b)?.rest })
+        \\take4 = |b| Ok({ val: take3(b)?.val, rest: take3(b)?.rest })
+        \\
+        \\main : {} -> Try({ val : U8, rest : List(U8) }, [End, ..])
+        \\main = |_| take4([1, 2, 3])
+    ;
+
+    _ = try monotypeCountersForModule(allocator, source);
+}
+
+test "independent same-name method requirements specialize separately" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\f1 = |list| list.map(|item| U32.to_u64(item))
+        \\f2 = |list| list.map(|item| U32.to_u128(item))
+        \\g = |list| (f1(list), f2(list))
+        \\
+        \\main : {} -> (List(U64), List(U128))
+        \\main = |_| g([1.U32, 2.U32])
+    ;
+
+    _ = try monotypeCountersForModule(allocator, source);
 }
 
 test "specialization interface replay follows returned local functions through wrappers" {

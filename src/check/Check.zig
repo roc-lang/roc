@@ -11896,6 +11896,7 @@ fn predeclareAnnotationScheme(
     );
     try self.judgeFieldKindsAtBoundary(env);
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+    try self.deduplicateGeneralizedDispatchRequirements(scheme_var);
     try self.publishBindingScheme(scheme_var);
     env.var_pool.popRank();
 
@@ -12269,6 +12270,7 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
         for (scc.defs) |member_def_idx| {
             const member_def = self.cir.store.getDef(member_def_idx);
             const expr_var = ModuleEnv.varFrom(member_def.expr);
+            try self.deduplicateGeneralizedDispatchRequirements(expr_var);
             try self.publishBindingScheme(expr_var);
             try self.bindBindingSchemeVar(expr_var, ModuleEnv.varFrom(member_def.pattern));
             try self.bindBindingSchemeVar(expr_var, ModuleEnv.varFrom(member_def_idx));
@@ -18059,6 +18061,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         }
         try self.judgeFieldKindsAtBoundary(env);
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+        try self.deduplicateGeneralizedDispatchRequirements(expr_var_raw);
         try self.publishBindingScheme(expr_var_raw);
         self.retireNonGeneralizedTypeSchemes(&.{.{ .owner = expr_var_raw, .interface = expr_var }});
         try self.retireStructurallyPublishedTypeSchemeRequirements(
@@ -19213,6 +19216,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     try self.defaultLiteralsAtGeneralizationBoundary(.{ .owner = decl_pattern_var, .interface = decl_pattern_var }, env);
                     try self.judgeFieldKindsAtBoundary(env);
                     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+                    try self.deduplicateGeneralizedDispatchRequirements(decl_pattern_var);
                     try self.publishBindingScheme(decl_pattern_var);
                     try self.bindBindingSchemeVar(decl_pattern_var, decl_expr_var);
                     self.retireNonGeneralizedTypeSchemes(&.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }});
@@ -23890,6 +23894,142 @@ fn typeSchemeHasRequirement(
         return true;
     }
     return false;
+}
+
+const GeneralizedSchemeRequirementKey = struct {
+    receiver_root: Var,
+    fn_name: Ident.Idx,
+    origin_tag: std.meta.Tag(StaticDispatchConstraint.Origin),
+    origin_flag: bool,
+    callable_shape: [32]u8,
+};
+
+const GeneralizedAttachedConstraintKey = struct {
+    fn_name: Ident.Idx,
+    origin_tag: std.meta.Tag(StaticDispatchConstraint.Origin),
+    origin_flag: bool,
+    callable_shape: [32]u8,
+};
+
+fn dispatchConstraintOriginFlag(origin: StaticDispatchConstraint.Origin) bool {
+    return switch (origin) {
+        .desugared_binop => |binop| binop.negated,
+        .where_clause => |where_clause| where_clause.body_required,
+        .desugared_unaryop, .method_call, .from_literal => false,
+    };
+}
+
+/// Collapse requirements that ask for the same target with the same finalized
+/// callable shape. Variables exposed through the enclosing scheme remain fixed
+/// anchors; only requirement-private generalized variables may be renamed.
+/// This keeps repeated helper uses compact without conflating call results that
+/// a caller can still specialize differently.
+fn deduplicateGeneralizedDispatchRequirements(
+    self: *Self,
+    scheme_var: Var,
+) Allocator.Error!void {
+    const identity_vars = try canonical_type_keys.identityVarsFromVarIgnoringConstraints(
+        self.gpa,
+        self.types,
+        self.cir,
+        scheme_var,
+    );
+    defer self.gpa.free(identity_vars);
+
+    var anchors = std.AutoHashMap(Var, void).init(self.gpa);
+    defer anchors.deinit();
+    try anchors.ensureTotalCapacity(@intCast(identity_vars.len));
+    for (identity_vars) |identity_var| {
+        anchors.putAssumeCapacity(self.types.resolveVar(identity_var).var_, {});
+    }
+
+    var retained_constraints: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty;
+    defer retained_constraints.deinit(self.gpa);
+    var seen_attached = std.AutoHashMap(GeneralizedAttachedConstraintKey, void).init(self.gpa);
+    defer seen_attached.deinit();
+
+    for (identity_vars) |identity_var| {
+        const resolved = self.types.resolveVar(identity_var);
+        const constraints_range = contentConstraintRange(resolved.desc.content) orelse continue;
+        const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
+        if (constraints.len <= 1) continue;
+
+        retained_constraints.clearRetainingCapacity();
+        seen_attached.clearRetainingCapacity();
+        try retained_constraints.ensureTotalCapacity(self.gpa, constraints.len);
+        try seen_attached.ensureTotalCapacity(@intCast(constraints.len));
+        for (constraints) |constraint| {
+            // Literal metadata is aggregated by the literal-specific path.
+            if (constraint.origin == .from_literal) {
+                retained_constraints.appendAssumeCapacity(constraint);
+                continue;
+            }
+            const callable_key = try canonical_type_keys.fromVarWithAnchoredIdentities(
+                self.gpa,
+                self.types,
+                self.cir,
+                constraint.fn_var,
+                &anchors,
+            );
+            const key = GeneralizedAttachedConstraintKey{
+                .fn_name = constraint.fn_name,
+                .origin_tag = std.meta.activeTag(constraint.origin),
+                .origin_flag = dispatchConstraintOriginFlag(constraint.origin),
+                .callable_shape = callable_key.bytes,
+            };
+            if (seen_attached.contains(key)) continue;
+            seen_attached.putAssumeCapacity(key, {});
+            retained_constraints.appendAssumeCapacity(constraint);
+        }
+        if (retained_constraints.items.len == constraints.len) continue;
+
+        const retained_range = try self.types.appendStaticDispatchConstraints(retained_constraints.items);
+        const retained_content: Content = switch (resolved.desc.content) {
+            .flex => |flex| .{ .flex = flex.withConstraints(retained_range) },
+            .rigid => |rigid| .{ .rigid = rigid.withConstraints(retained_range) },
+            .alias, .structure, .field_presence, .err => unreachable,
+        };
+        try self.types.setVarContent(resolved.var_, retained_content);
+    }
+
+    const scheme_idx = self.typeSchemeIndexForRoot(scheme_var) orelse return;
+    const scheme = &self.type_schemes.items[scheme_idx];
+    if (scheme.dispatch_requirements.items.len <= 1) return;
+
+    var seen = std.AutoHashMap(GeneralizedSchemeRequirementKey, void).init(self.gpa);
+    defer seen.deinit();
+    try seen.ensureTotalCapacity(@intCast(scheme.dispatch_requirements.items.len));
+
+    var write: usize = 0;
+    for (scheme.dispatch_requirements.items) |requirement| {
+        // Literal metadata participates in defaulting and is intentionally
+        // aggregated by the literal-specific path, not this method-target pass.
+        if (requirement.constraint.origin == .from_literal) {
+            scheme.dispatch_requirements.items[write] = requirement;
+            write += 1;
+            continue;
+        }
+
+        const callable_key = try canonical_type_keys.fromVarWithAnchoredIdentities(
+            self.gpa,
+            self.types,
+            self.cir,
+            requirement.constraint.fn_var,
+            &anchors,
+        );
+        const key = GeneralizedSchemeRequirementKey{
+            .receiver_root = self.types.resolveVar(requirement.receiver_var).var_,
+            .fn_name = requirement.constraint.fn_name,
+            .origin_tag = std.meta.activeTag(requirement.constraint.origin),
+            .origin_flag = dispatchConstraintOriginFlag(requirement.constraint.origin),
+            .callable_shape = callable_key.bytes,
+        };
+        if (seen.contains(key)) continue;
+        seen.putAssumeCapacity(key, {});
+        scheme.dispatch_requirements.items[write] = requirement;
+        write += 1;
+    }
+    scheme.dispatch_requirements.shrinkRetainingCapacity(write);
 }
 
 /// Retire side-table requirements only after their exact deferred callable was

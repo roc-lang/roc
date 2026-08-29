@@ -17218,12 +17218,25 @@ const EvidencePass = struct {
         return numericDefaultPhaseForConstraints(self.module, constraints);
     }
 
-    /// The canonical `(depth, index)` of `dispatcher_root`'s `method`
-    /// obligation in the chain, searching innermost-out.
-    fn chainParamIndex(self: *EvidencePass, chain: []const []const EvidenceParam, dispatcher_root: Var, method: canonical.MethodNameId) Allocator.Error!?static_dispatch.EvidenceChainIndex {
+    /// The canonical `(depth, index)` of one method target in the chain,
+    /// searching innermost-out. Independent same-name callable relations share
+    /// the target slot, while their checked plans retain the per-call shape.
+    fn chainParamIndex(
+        self: *EvidencePass,
+        chain: []const []const EvidenceParam,
+        dispatcher_root: Var,
+        method: canonical.MethodNameId,
+        constraint_fn_var: ?Var,
+    ) Allocator.Error!?struct {
+        index: static_dispatch.EvidenceChainIndex,
+        exact_callable: bool,
+    } {
         for (chain, 0..) |params, depth| {
-            if (try self.paramIndexFor(params, dispatcher_root, method)) |k| {
-                return .{ .depth = @intCast(depth), .index = @intCast(k) };
+            if (try self.paramIndexFor(params, dispatcher_root, method, constraint_fn_var)) |match| {
+                return .{
+                    .index = .{ .depth = @intCast(depth), .index = @intCast(match.index) },
+                    .exact_callable = match.exact_callable,
+                };
             }
         }
         return null;
@@ -17283,15 +17296,36 @@ const EvidencePass = struct {
         }
     }
 
-    /// The canonical param index of `dispatcher_root`'s `method` obligation.
-    fn paramIndexFor(self: *EvidencePass, params: []const EvidenceParam, dispatcher_root: Var, method: canonical.MethodNameId) Allocator.Error!?u32 {
+    /// The canonical param index of one dispatch obligation.
+    fn paramIndexFor(
+        self: *EvidencePass,
+        params: []const EvidenceParam,
+        dispatcher_root: Var,
+        method: canonical.MethodNameId,
+        constraint_fn_var: ?Var,
+    ) Allocator.Error!?struct {
+        index: u32,
+        exact_callable: bool,
+    } {
         const idents = self.module.identStoreConst();
+        const constraint_fn_root = if (constraint_fn_var) |fn_var|
+            self.types.resolveVar(fn_var).var_
+        else
+            null;
+        var same_method_fallback: ?u32 = null;
         for (params, 0..) |param, k| {
             if (self.types.resolveVar(param.dispatcher_var).var_ != dispatcher_root) continue;
             if (try self.names.internMethodIdent(idents, param.constraint.fn_name) != method) continue;
-            return @intCast(k);
+            if (same_method_fallback == null) same_method_fallback = @intCast(k);
+            if (constraint_fn_root) |fn_root| {
+                if (self.types.resolveVar(param.constraint.fn_var).var_ != fn_root) continue;
+            }
+            return .{ .index = @intCast(k), .exact_callable = true };
         }
-        return null;
+        return if (same_method_fallback) |index|
+            .{ .index = index, .exact_callable = false }
+        else
+            null;
     }
 
     fn resolvePlan(self: *EvidencePass, plan_id: static_dispatch.StaticDispatchPlanId, chain: []const []const EvidenceParam, commit_unpinned: bool) Allocator.Error!void {
@@ -17508,20 +17542,11 @@ const EvidencePass = struct {
         chain: []const []const EvidenceParam,
         commit_unpinned: bool,
     ) Allocator.Error!?static_dispatch.CheckedCallResolution {
-        if (try self.chainParamIndex(chain, dispatcher_root, method)) |ref| {
-            // A constraint(k) resolution consumes evidence entry k, whose
-            // callable is the scheme's pristine constraint fn type. The
-            // obligation's own callable must be that same type: same-named
-            // constraints on a shared dispatcher var unify their fn vars, so
-            // a mismatched root here means the site's callable was pinned to
-            // one instantiation's concrete type.
-            if (constraint_fn_var) |fn_var| {
-                const chain_fn_var = chain[ref.depth][ref.index].constraint.fn_var;
-                if (self.types.resolveVar(fn_var).var_ != self.types.resolveVar(chain_fn_var).var_) {
-                    checkedArtifactInvariant("constraint-resolved dispatch callable was not the scheme-pristine constraint fn type", .{});
-                }
-            }
-            return .{ .evidence_dependent = ref };
+        if (try self.chainParamIndex(chain, dispatcher_root, method, constraint_fn_var)) |match| {
+            return .{ .evidence_dependent = .{
+                .index = match.index,
+                .independent_callable = !match.exact_callable,
+            } };
         }
 
         // Not bound by this chain. During template walks another template's
@@ -17975,7 +18000,10 @@ const EvidencePass = struct {
             .resolution = switch (resolution) {
                 .direct_pending => |node| .{ .direct = node },
                 .direct_closed, .direct_parametric => checkedArtifactInvariant("call resolution was finalized before evidence publication completed", .{}),
-                .evidence_dependent => |ref| .{ .constraint = ref },
+                .evidence_dependent => |dependent| .{ .constraint = .{
+                    .index = dependent.index,
+                    .independent_callable = dependent.independent_callable,
+                } },
                 .structural => |kind| blk: {
                     const callable_var = fresh_fn_var orelse param.constraint.fn_var;
                     const callable_ty = self.checked_types.rootForSourceVar(self.module, callable_var) orelse
@@ -29233,7 +29261,9 @@ pub const CheckedModuleArtifact = struct {
     // entrypoint contract cannot share a cache entry with one checked under it.
     // Version 70 retains canonical callable type keys in stored function
     // evidence so specialization identity does not depend on fresh checked ids.
-    const serialized_layout_version: u32 = 70;
+    // Version 71 preserves whether forwarded evidence supplies an exact
+    // callable relation or only the shared method target.
+    const serialized_layout_version: u32 = 71;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -35386,8 +35416,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xF4, 0x44, 0xBF, 0x73, 0x28, 0x33, 0x3B, 0x3E, 0x4E, 0xD1, 0xF6, 0x56, 0x8D, 0x7E, 0x27, 0x88,
-        0x5A, 0x77, 0x16, 0xA5, 0xA3, 0x94, 0xB2, 0x00, 0xA8, 0xD6, 0xCA, 0xB1, 0x7B, 0x8C, 0x8E, 0x54,
+        0x84, 0xB2, 0x88, 0x05, 0xB4, 0x35, 0x1B, 0x08, 0x07, 0xE1, 0x5D, 0x11, 0x4E, 0xD2, 0x11, 0xEF,
+        0x8A, 0x64, 0xDB, 0x78, 0xDE, 0x65, 0xBA, 0xA9, 0x50, 0xEC, 0x80, 0xB0, 0x9B, 0x3D, 0x3C, 0x39,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -35407,7 +35437,7 @@ test "closed direct evidence excludes specialization-dependent nested recipes" {
     const context_anchor = testIndexId(CheckedStatementId, 0);
 
     var refs = [_]static_dispatch.CheckedEvidence{
-        .{ .dispatcher_ty = callable_ty, .runtime_dictionary = true, .resolution = .{ .constraint = .{ .depth = 0, .index = 0 } } },
+        .{ .dispatcher_ty = callable_ty, .runtime_dictionary = true, .resolution = .{ .constraint = .{ .index = .{ .depth = 0, .index = 0 } } } },
         .{ .dispatcher_ty = callable_ty, .runtime_dictionary = true, .resolution = .{ .direct = evidence_0 } },
         .{ .dispatcher_ty = callable_ty, .runtime_dictionary = true, .resolution = .{ .direct = evidence_1 } },
     };
@@ -35512,7 +35542,7 @@ test "template dispatch classification separates direct calls from graph relatio
         .{ .expr = testIndexId(CheckedExprId, 0), .method = method, .dispatcher = .type_only, .dispatcher_ty = callable_ty, .callable_ty = callable_ty, .result_mode = .value, .resolution = .{ .direct_closed = .{ .evidence = evidence_0 } } },
         .{ .expr = testIndexId(CheckedExprId, 1), .method = method, .dispatcher = .type_only, .dispatcher_ty = callable_ty, .callable_ty = callable_ty, .result_mode = .value, .resolution = .{ .direct_parametric = .{ .evidence = evidence_1 } } },
         .{ .expr = testIndexId(CheckedExprId, 2), .method = method, .dispatcher = .type_only, .dispatcher_ty = callable_ty, .callable_ty = callable_ty, .result_mode = .value, .resolution = .{ .direct_closed = .{ .evidence = evidence_2 } } },
-        .{ .expr = testIndexId(CheckedExprId, 3), .method = method, .dispatcher = .type_only, .dispatcher_ty = callable_ty, .callable_ty = callable_ty, .result_mode = .value, .resolution = .{ .evidence_dependent = .{ .depth = 0, .index = 0 } } },
+        .{ .expr = testIndexId(CheckedExprId, 3), .method = method, .dispatcher = .type_only, .dispatcher_ty = callable_ty, .callable_ty = callable_ty, .result_mode = .value, .resolution = .{ .evidence_dependent = .{ .index = .{ .depth = 0, .index = 0 } } } },
     };
     var refs = [_]static_dispatch.StaticDispatchPlanId{
         plan_0,

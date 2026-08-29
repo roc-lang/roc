@@ -7183,8 +7183,19 @@ occurrence, then constraint fn types walked the same way). Index `k` in this
 list is the shared identity between a plan's `constraint(k)` resolution and
 the k-th evidence entry a call edge supplies. The definition's module and any
 importing module enumerate identical lists from their structural copies of the
-scheme. A dispatcher's requirements are a set keyed by method identity: repeated
-source constraints share one callable type and contribute one evidence param.
+scheme. Repeated declarative constraints share one callable type, while
+independently inferred dot-method calls retain separate callable relations so a
+rank-1 method scheme can be instantiated independently at each use. Operators
+and literal conversions retain one numeric/defaulting relation per method
+identity. Same-name relations must agree on fixed outer function properties:
+rank-1 instantiation can vary types but cannot vary a declaration's argument
+count or known effect mode. Once a scheme's public type is fixed, equivalent
+requirements whose only differences are private generalized variables collapse;
+public type variables remain identity anchors, so requirements a caller can
+specialize differently stay separate. Independent same-name callable relations
+share one evidence parameter: the runtime target is selected by dispatcher and
+method, while each dispatch plan checks and instantiates that target against its
+own callable relation.
 
 **Edges supply evidence.** Checking persists every constrained-scheme edge.
 An ordinary instantiation records the (pristine var, fresh var) pairs of its
