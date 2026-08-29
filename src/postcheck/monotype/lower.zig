@@ -448,7 +448,7 @@ pub const Diagnostics = struct {
 };
 
 /// Workload diagnostics produced by one ordinary specialization shard. These
-/// remain result-owned until ordered coordinator commit publishes them.
+/// remain result-owned until ordered coordinator commit merges them.
 const SpecJobDiagnostics = struct {
     graph: solve.GraphDiagnostics = .{},
     body: BodyDiagnostics = .{},
@@ -2128,7 +2128,7 @@ const CompletedSpecJobShard = struct {
     body_draft: BodyDraftStore,
     pending: PendingTemplateBody,
     diagnostics: ?*SpecJobDiagnostics,
-    diagnostics_published: bool = false,
+    diagnostics_committed: bool = false,
 
     fn deinit(self: *CompletedSpecJobShard) void {
         self.body_draft.deinit();
@@ -4286,8 +4286,8 @@ const Builder = struct {
     ) Allocator.Error!void {
         self.requireNextSpecAcceptance(shard.dispatch_index);
         shard.workspace.requireEpoch(shard.epoch);
-        if (shard.diagnostics_published) {
-            Common.compilerBug("Monotype specialization shard diagnostics were published more than once");
+        if (shard.diagnostics_committed) {
+            Common.compilerBug("Monotype specialization shard diagnostics were committed more than once");
         }
         if (self.active_spec_job_diagnostics != null) {
             Common.compilerBug("Monotype specialization shard committed with another shard diagnostic sink active");
@@ -4320,7 +4320,7 @@ const Builder = struct {
                 Common.compilerBug("Monotype specialization shard lost its coordinator diagnostic sink");
             diagnostics.addTo(destination);
         }
-        shard.diagnostics_published = true;
+        shard.diagnostics_committed = true;
         self.countCoordinatorBodyDiagnostic("spec_job_shards_committed");
         self.acceptSpecDispatch(shard.dispatch_index);
     }
@@ -53182,7 +53182,7 @@ test "checked type instantiation scopes have exact isolated identities" {
     try std.testing.expectEqual(@as(u64, 2), diagnostics.body.instantiation_scopes_created);
 }
 
-test "specialization shard diagnostics remain private until coordinator publication" {
+test "specialization shard diagnostics remain private until coordinator commit" {
     const allocator = std.testing.allocator;
     var program = Ast.Program.init(allocator);
     defer program.deinit();
