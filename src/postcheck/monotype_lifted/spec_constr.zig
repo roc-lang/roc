@@ -351,7 +351,7 @@ const Value = union(enum) {
 /// One exact runtime value paired with finite symbolic structure known for it.
 /// Materialization always reuses `runtime`; structural consumers inspect
 /// `structure`. Recursive bindings use this dual representation to expose
-/// constructor and callable facts without reconstructing the recursive value
+/// constructor and callable structure without reconstructing the recursive value
 /// or letting initializer-private locals escape their scope.
 const RuntimeAnchorValue = struct {
     runtime: Ast.ExprId,
@@ -9922,9 +9922,9 @@ const Cloner = struct {
     /// Total node-visit bound for proving which initializer leaves survive a
     /// recursive statement's scope. Symbolic values can be cyclic or heavily
     /// shared, so an unbounded structural walk is not total. Exhaustion never
-    /// guesses: the unresolved sub-value becomes its exact runtime projection,
-    /// preserving correctness and single evaluation while declining only the
-    /// unproved structure. See design.md "Core Principles" on bounded
+    /// loses no information: the unresolved sub-value becomes its exact runtime
+    /// expression, preserving correctness and single evaluation while declining
+    /// only the unproved structure. See design.md "Core Principles" on bounded
     /// post-check walks.
     const recursive_anchor_scope_work_budget: u32 = 4096;
 
@@ -9933,7 +9933,7 @@ const Cloner = struct {
     /// work through later structural use; an expression referencing a chain
     /// local would escape its lexical scope. Either case must use the retained
     /// recursive value's exact runtime position instead.
-    fn valueNeedsRuntimeProjection(
+    fn valueContainsNonReusableOrInitializerLocalExpr(
         self: *Cloner,
         bindings: BindingChain,
         value: Value,
@@ -9946,30 +9946,30 @@ const Cloner = struct {
                 try bindings.referencedByExpr(self.pass.program, expr),
             .runtime_anchor => |anchor| !self.exprCanSubstitute(anchor.runtime) or
                 try bindings.referencedByExpr(self.pass.program, anchor.runtime) or
-                try self.valueNeedsRuntimeProjection(bindings, anchor.structure.*, budget),
-            .static_data_candidate => |candidate| try self.valueNeedsRuntimeProjection(bindings, candidate.runtime.*, budget),
+                try self.valueContainsNonReusableOrInitializerLocalExpr(bindings, anchor.structure.*, budget),
+            .static_data_candidate => |candidate| try self.valueContainsNonReusableOrInitializerLocalExpr(bindings, candidate.runtime.*, budget),
             .tag => |tag| blk: {
                 for (tag.payloads) |payload| {
-                    if (try self.valueNeedsRuntimeProjection(bindings, payload, budget)) break :blk true;
+                    if (try self.valueContainsNonReusableOrInitializerLocalExpr(bindings, payload, budget)) break :blk true;
                 }
                 break :blk false;
             },
             .record => |record| blk: {
                 for (record.fields) |field| {
-                    if (try self.valueNeedsRuntimeProjection(bindings, field.value, budget)) break :blk true;
+                    if (try self.valueContainsNonReusableOrInitializerLocalExpr(bindings, field.value, budget)) break :blk true;
                 }
                 break :blk false;
             },
             .tuple => |tuple| blk: {
                 for (tuple.items) |item| {
-                    if (try self.valueNeedsRuntimeProjection(bindings, item, budget)) break :blk true;
+                    if (try self.valueContainsNonReusableOrInitializerLocalExpr(bindings, item, budget)) break :blk true;
                 }
                 break :blk false;
             },
-            .nominal => |nominal| try self.valueNeedsRuntimeProjection(bindings, nominal.backing.*, budget),
+            .nominal => |nominal| try self.valueContainsNonReusableOrInitializerLocalExpr(bindings, nominal.backing.*, budget),
             .callable => |callable| blk: {
                 for (callable.captures) |capture| {
-                    if (try self.valueNeedsRuntimeProjection(bindings, capture.value, budget)) break :blk true;
+                    if (try self.valueContainsNonReusableOrInitializerLocalExpr(bindings, capture.value, budget)) break :blk true;
                 }
                 break :blk false;
             },
@@ -10084,7 +10084,7 @@ const Cloner = struct {
                 return if (runtime_has_value_type) try self.runtimeAnchoredValue(structure, runtime) else structure;
             },
             .static_data_candidate, .tag, .callable => {
-                if (try self.valueNeedsRuntimeProjection(initializer_bindings, value, budget)) {
+                if (try self.valueContainsNonReusableOrInitializerLocalExpr(initializer_bindings, value, budget)) {
                     return if (runtime_has_value_type) Value{ .expr = runtime } else null;
                 }
                 return if (runtime_has_value_type) try self.runtimeAnchoredValue(value, runtime) else value;
