@@ -2064,7 +2064,7 @@ pub const InstGraph = struct {
     /// instantiation node. Literal lowering calls this only when runtime demand
     /// reaches an unpinned literal leaf; custom specializations have already
     /// related the node to their concrete target before that point.
-    pub fn materializeLiteralDefault(self: *InstGraph, raw_node: NodeId) Allocator.Error!void {
+    pub fn materializeLiteralDefault(self: *InstGraph, raw_node: NodeId) void {
         self.requireRelationProduction();
         const node = self.find(raw_node);
         const node_content = self.nodes.items[@intFromEnum(node)];
@@ -6246,8 +6246,9 @@ test "issue 10941: row extension class unions remain linear" {
 
     // Repro for https://github.com/roc-lang/roc/issues/10941: re-rooting one
     // row-extension class must do work linear in the graph nodes and unions.
+    const row_count = 128;
     var extension = try graph.newNode(.empty_record);
-    for (0..128) |_| {
+    for (0..row_count) |_| {
         _ = try graph.newNode(.{ .record = .{
             .fields = &.{},
             .ext = extension,
@@ -6257,6 +6258,8 @@ test "issue 10941: row extension class unions remain linear" {
         extension = replacement;
     }
 
+    try std.testing.expectEqual(@as(u64, row_count * 2 + 1), diagnostics.nodes_created);
+    try std.testing.expectEqual(@as(u64, row_count), diagnostics.class_unions);
     const linear_work_limit = (diagnostics.nodes_created + diagnostics.class_unions) * 16;
     if (diagnostics.union_find_resolutions > linear_work_limit) {
         std.debug.print(
