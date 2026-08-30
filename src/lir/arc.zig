@@ -5071,77 +5071,106 @@ const Inserter = struct {
                         .list_reinterpret => {},
                         .nominal => {},
                     }
+                    if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
-                .assign_literal => |assign| try stack.append(self.emission_allocator, assign.next),
-                .init_uninitialized => |assign| try stack.append(self.emission_allocator, assign.next),
+                .assign_literal => |assign| {
+                    if (assign.target == root) continue;
+                    try stack.append(self.emission_allocator, assign.next);
+                },
+                .init_uninitialized => |assign| {
+                    if (assign.target == root) continue;
+                    try stack.append(self.emission_allocator, assign.next);
+                },
                 .assign_call => |assign| {
                     if (self.spanUsesOwnershipPlace(assign.args, root)) return true;
+                    if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_call_erased => |assign| {
                     if (self.isAliasOfOwnershipPlace(assign.closure, root) or
                         (assign.reuse_source != null and self.isAliasOfOwnershipPlace(assign.reuse_source.?, root)) or
                         self.spanUsesOwnershipPlace(assign.args, root)) return true;
+                    if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_packed_erased_fn => |assign| {
                     if ((assign.capture != null and self.isAliasOfOwnershipPlace(assign.capture.?, root)) or
                         (assign.reuse != null and self.isAliasOfOwnershipPlace(assign.reuse.?, root))) return true;
+                    if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
-                .assign_boxy_desc_ref => |assign| try stack.append(self.emission_allocator, assign.next),
-                .assign_boxy_dict_ref => |assign| try stack.append(self.emission_allocator, assign.next),
+                .assign_boxy_desc_ref => |assign| {
+                    if (assign.target == root) continue;
+                    try stack.append(self.emission_allocator, assign.next);
+                },
+                .assign_boxy_dict_ref => |assign| {
+                    if (assign.target == root) continue;
+                    try stack.append(self.emission_allocator, assign.next);
+                },
                 .assign_boxy_box => |assign| {
                     if (self.isAliasOfOwnershipPlace(assign.payload, root)) return true;
+                    if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_boxy_reuse_box => |assign| {
                     if (self.isAliasOfOwnershipPlace(assign.source, root)) return true;
+                    if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_boxy_unbox => |assign| {
                     if (self.isAliasOfOwnershipPlace(assign.source, root)) return true;
+                    if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_boxy_adapt => |assign| {
                     if (self.isAliasOfOwnershipPlace(assign.source, root)) return true;
+                    if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_boxy_inspect => |assign| {
                     if (self.isAliasOfOwnershipPlace(assign.source, root)) return true;
+                    if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_boxy_eq => |assign| {
                     if (self.isAliasOfOwnershipPlace(assign.lhs, root) or self.isAliasOfOwnershipPlace(assign.rhs, root)) return true;
+                    if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_boxy_tag => |assign| {
                     if (assign.payload != null and self.isAliasOfOwnershipPlace(assign.payload.?, root)) return true;
+                    if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_boxy_tag_payload => |assign| {
                     if (self.isAliasOfOwnershipPlace(assign.source, root)) return true;
+                    if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_call_dict => |assign| {
                     if (self.spanUsesOwnershipPlace(assign.args, root) or self.spanUsesOwnershipPlace(assign.hidden_args, root)) return true;
+                    if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_low_level => |assign| {
                     if (self.spanUsesOwnershipPlace(assign.args, root)) return true;
+                    if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_list => |assign| {
                     if (self.spanUsesOwnershipPlace(assign.elems, root)) return true;
+                    if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_struct => |assign| {
                     if (self.spanUsesOwnershipPlace(assign.fields, root)) return true;
+                    if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_tag => |assign| {
                     if (assign.payload != null and self.isAliasOfOwnershipPlace(assign.payload.?, root)) return true;
+                    if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .store_struct => |assign| {
@@ -5158,7 +5187,9 @@ const Inserter = struct {
                     // Rebinding the place ends this definition. Uses reached
                     // through the following jump belong to the newly written
                     // join value, not to the value whose projection is being
-                    // considered here.
+                    // considered here. Every statement that writes the place
+                    // ends it the same way, which is what stops this walk
+                    // when it follows a loop edge back to the definition.
                     if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
