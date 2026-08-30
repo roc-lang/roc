@@ -542,6 +542,10 @@ relocatable_object: bool = false,
 /// Whether final in-memory codegen should still emit relocation edges for
 /// static-data addresses so final DCE can trace data liveness explicitly.
 track_static_data_addresses: bool = false,
+/// Locals every write of which is image data, computed on first use.
+/// Reference-count traffic on them can only ever decide to do nothing, so no
+/// call is emitted. See `src/lir/immortal_locals.zig`.
+immortal_locals: ?lir.ImmortalLocals.ImmortalLocals = null,
 pub fn init(
     allocator: Allocator,
     store: *const LirStore,
@@ -634,6 +638,7 @@ pub fn configureStaticDataAddressTracking(self: *Self) void {
 }
 
 pub fn deinit(self: *Self) void {
+    if (self.immortal_locals) |*set| set.deinit(self.allocator);
     self.module.deinit();
     var body_it = self.pending_bodies.valueIterator();
     while (body_it.next()) |body| {
@@ -11192,6 +11197,17 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
     }
 }
 
+/// Whether `local` holds image data, whose refcount word is
+/// `REFCOUNT_STATIC_DATA`. Both `increfRcPtr` and `decrefRcPtr` return without
+/// touching a count when they read that value, so the helper call can only
+/// ever decide to do nothing.
+fn localIsImmortal(self: *Self, local: ProcLocalId) Allocator.Error!bool {
+    if (self.immortal_locals == null) {
+        self.immortal_locals = try lir.ImmortalLocals.compute(self.allocator, self.store);
+    }
+    return self.immortal_locals.?.contains(local);
+}
+
 fn generateRcStmt(
     self: *Self,
     op: layout.RcOp,
@@ -11200,6 +11216,12 @@ fn generateRcStmt(
     atomicity: RcAtomicity,
     inc_count: u16,
 ) Allocator.Error!void {
+    // A `free` still runs: releasing image data is a bug in the placement
+    // rather than a no-op to elide, and eliding it would hide that.
+    switch (op) {
+        .incref, .decref => if (try self.localIsImmortal(value)) return,
+        .free => {},
+    }
     switch (rc) {
         .concrete => |helper| {
             try self.emitProcLocal(value);
