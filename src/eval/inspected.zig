@@ -456,12 +456,8 @@ pub const DevBoolRootTiming = struct {
     }
 };
 
-/// Per-call mutable observation state passed to optimized test entrypoints.
-pub const TestInvocationContext = extern struct {
-    expect_err_set: u32 = 0,
-    expect_err_start: u32 = 0,
-    expect_err_end: u32 = 0,
-};
+/// Per-call state passed to optimized test entrypoints.
+pub const TestInvocationContext = boxy_abi.InProcessContext;
 
 /// A host event observed while evaluating a bool-returning test root.
 pub const BoolRootEvent = union(enum) {
@@ -2673,6 +2669,7 @@ fn callLlvmBoolRoot(
     store: *const lir.LirStore,
     tables: boxy_runtime.BoxyTables,
     entry: LlvmBoolRootEntryFn,
+    boxy_fns: *const BoxyNativeFnTable,
     root: BoolRoot,
     longjmp_on_crash: bool,
     call_index: usize,
@@ -2694,7 +2691,7 @@ fn callLlvmBoolRoot(
     }
     runtime_env.resetObservation();
     runtime_env.resetAllocationTracker();
-    var test_context: TestInvocationContext = .{};
+    var test_context: TestInvocationContext = .{ .boxy_fn_table = boxy_fns };
     const boxy_runtime_instance = if (tables.needsRuntimeForStore(store))
         try boxy_abi.createRuntimeFromStores(allocator, store, layouts, tables, runtime_env.get_ops())
     else
@@ -2718,13 +2715,11 @@ fn callLlvmBoolRoot(
     defer crash_boundary.deinit();
     const sj = crash_boundary.set();
     if (sj == 0) {
-        const boxy_fns = boxyNativeFnTable();
         entry(
             runtime_env.get_ops(),
             &test_context,
             ret_buf.ptr,
             if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
-            &boxy_fns,
         );
     }
 
@@ -2749,7 +2744,7 @@ fn callLlvmBoolRoot(
     };
 }
 
-const LlvmBoolRootEntryFn = *const fn (*builtins.host_abi.RocOps, *TestInvocationContext, [*]u8, ?*anyopaque, *const BoxyNativeFnTable) callconv(.c) void;
+const LlvmBoolRootEntryFn = *const fn (*builtins.host_abi.RocOps, *TestInvocationContext, [*]u8, ?*anyopaque) callconv(.c) void;
 
 const LlvmBoolRootCall = struct {
     store: *const lir.LirStore,
@@ -2762,6 +2757,7 @@ const LlvmBoolRootCall = struct {
 const LlvmBoolRootWorkerState = struct {
     allocator: Allocator,
     calls: []const LlvmBoolRootCall,
+    boxy_fns: *const BoxyNativeFnTable,
     longjmp_on_crash: bool,
     next_call: std.atomic.Value(usize),
     results: []?BoolRootEvalResult,
@@ -2782,6 +2778,7 @@ fn llvmBoolRootWorker(state: *LlvmBoolRootWorkerState) void {
             call.store,
             call.tables,
             call.entry,
+            state.boxy_fns,
             call.root,
             state.longjmp_on_crash,
             index,
@@ -2828,9 +2825,12 @@ fn runLlvmBoolRootCalls(
     defer allocator.free(errors);
     for (errors) |*slot| slot.* = null;
 
+    const boxy_fns = boxyNativeFnTable();
+
     var state = LlvmBoolRootWorkerState{
         .allocator = allocator,
         .calls = calls,
+        .boxy_fns = &boxy_fns,
         .longjmp_on_crash = longjmp_on_crash,
         .next_call = std.atomic.Value(usize).init(0),
         .results = slots,

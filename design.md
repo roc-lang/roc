@@ -8487,11 +8487,15 @@ worker thunks and erased-callable registrations expose only the proc ids,
 layouts, descriptor sources, and ownership metadata already present in LIR;
 backend code does not derive any of them from procedure bodies.
 
-In-process test invocation context is also an explicit execution ABI input. It
-is threaded through ordinary procedures, Boxy dictionary calls and their
-registered worker thunks, descriptor-guided inspect callbacks, and registered
-Roc erased-callable workers. Exported symbol procedures omit it, and dev, Wasm,
-and host-facing Boxy calls pass null.
+The in-process invocation context is also an explicit execution ABI input. It
+owns immutable per-invocation runtime inputs, including the Boxy native-function
+table used by generated vtable calls, and mutable observation output used by
+test roots. It is threaded through ordinary procedures, Boxy dictionary calls
+and their registered worker thunks, descriptor-guided inspect callbacks, and
+registered Roc erased-callable workers. LLVM eval entrypoints receive it from
+the evaluator, and LLVM plugin wrappers construct one for each call. Exported
+symbol procedures omit it; dev, Wasm, and public host-symbol Boxy calls pass
+null.
 The public erased-callable payload ABI remains `(ops, ret, args, capture,
 ret_desc)`; only a registered in-process worker is invoked with the additional
 context argument. The runtime receives in-process ABI selection as an explicit
@@ -10997,17 +11001,19 @@ needed to locate the entrypoint in the loaded test library.
 Every optimized test entrypoint uses the compiler-internal test ABI, not the
 public host symbol ABI. The entrypoint receives `RocOps`, a pointer to a
 test-invocation context, the return buffer, and the argument buffer. The
-invocation context stores mutable observation output produced by generated test
-code that cannot live in `RocOps`; currently this includes the `expect_err`
-source region. The LLVM backend must not use a shared exported global such as
-`roc_expect_err_region` for optimized tests, because a command-level test
-library runs multiple roots in parallel.
+invocation context stores immutable execution inputs and mutable observation
+output produced by generated test code that cannot live in `RocOps`; currently
+these are the Boxy native-function table and the `expect_err` source region.
+The LLVM backend must not use shared mutable globals such as a Boxy dispatch
+pointer or `roc_expect_err_region` for optimized tests, because a command-level
+test library runs multiple roots in parallel.
 
 After the single library is loaded, test roots run on a worker pool. Each root
 call owns its `RuntimeHostEnv`, `RocOps`, allocation tracker, crash boundary,
 argument buffer, return buffer, test-invocation context, and result slot. The
-loaded code and immutable static data are shared across workers. Mutable
-observation state is per invocation. Generated test code must be reentrant with
+loaded code, immutable static data, and immutable Boxy native-function table are
+shared across workers. Each invocation context references that table and owns
+its mutable observation state. Generated test code must be reentrant with
 respect to test-root calls: a root call must not write process-global state
 except through explicitly thread-safe runtime services or the invocation data
 passed to that root.
