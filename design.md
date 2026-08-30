@@ -9670,9 +9670,14 @@ the proc body; it is not recollected from the finished graph.
 
 The debug borrow certifier deliberately spends more: it re-certifies join
 bodies per distinct entry state and summarizes per statement for walk
-deduplication. Release builds compile the certifier away entirely, so only
-debug compiler builds pay, and any certifier slowness is fixed inside the
-certifier, never by weakening what it checks.
+deduplication. A summary keeps ownership balance separate from sparse lifetime
+provenance, because a currently owned value's lender or aggregate holder
+becomes observable again after the explicit unit is spent. Provenance is
+recorded only when a live lender, live holder, or deferred payload source
+exists, hash-consed within the procedure, and shared by every alias of the
+summary representative. Release builds compile the certifier away entirely,
+so only debug compiler builds pay, and any certifier slowness is fixed inside
+the certifier, never by weakening what it checks.
 
 ### Mode Specialization
 
@@ -10095,14 +10100,17 @@ complete claim set marks that unit spent: a terminal treats it as balanced and
 a jump's carry check exempts it, while anything less fails as an unspent stored
 unit. A claimed container can be neither consumed, moved into an aggregate, nor
 released whole. Claims and complete read chains cross join quotients on the
-summary: owned entries carry their container's claim set, and borrowed field or
-payload entries carry their immediate container's representative and encoded
-read operation. When such a read value is relevant after the join but its
-nearest unit-holding container is not independently relevant, quotienting
-claims the stored unit and makes the join value its carrier; when that
-container is independently relevant, the read stays borrowed. Restoration of
-the remaining read chains happens only after all representatives exist, so
-correctness is independent of local numbering.
+summary: owned entries carry their container's claim set, and every live entry
+carries sparse lender, aggregate-holder, and immediate payload-source
+provenance independently of its current balance. This preserves the
+alternatives that become active when a later statement spends an explicit
+unit; currently dead alternatives are omitted because they cannot make the
+value live. When such a read value is relevant after the join but its nearest
+unit-holding container is not independently relevant, quotienting claims the
+stored unit and makes the join value its carrier; when that container is
+independently relevant, the read stays borrowed. Restoration of the remaining
+provenance happens only after all representatives exist, so correctness is
+independent of local numbering.
 
 #### Per-edge aggregate residuals
 
@@ -10240,15 +10248,16 @@ resolves against the emitting variant's demand vector), and the certifier
 consumes the stamp instead of re-deriving take-ness from refcount shapes.
 Only a stamped read carries a claim target, so a borrowed payload read can
 never be mistaken for a take however it crosses the control-flow graph—
-which is also what keeps certification affordable: claim targets and view
-provenance never enter join summaries, stamped takers settle their claims
-at the first quotient they cross and continue as ordinary owned values, and
-a fully claimed container hashes as unbound in walk digests so the two
-sides of a death point re-converge instead of forking. The union encoding
-is shared: a stamped read through a payload view claims the union container
-under the view's variant, claims must stay within one variant, and a fully
-dismantled union's unit is spent when its claims cover exactly the claimed
-variant's mask—sound because control reaches that spend only when the
+which is also what keeps certification affordable: a stamped taker settles
+its claim at the first quotient where the transfer is fixed and continues as
+an ordinary owned value. A claim target or view that can still be observed
+after the quotient remains only in the sparse, hash-consed lifetime
+provenance. A fully claimed container hashes as unbound in walk digests so
+the two sides of a death point re-converge instead of forking. The union
+encoding is shared: a stamped read through a payload view claims the union
+container under the view's variant, claims must stay within one variant, and
+a fully dismantled union's unit is spent when its claims cover exactly the
+claimed variant's mask—sound because control reaches that spend only when the
 container holds that variant. What makes the emitted dispatch certifiable
 is variant knowledge per path: reading a variant's payload proves the
 container holds it (anything else is already undefined), switch arms on a
@@ -10272,8 +10281,8 @@ against the borrow typing rules:
   borrow's lifetime is contained in the lender's
 - every join body holds under the entry state of each jump that reaches it:
   jump states are summarized over the names the body relies on (liveness,
-  unit counts, alias partition, and borrow anchors) and joined into a
-  forward dataflow fixpoint—summaries agreeing on every name's ownership
+  unit counts, alias partition, and sparse dormant provenance) and joined into
+  a forward dataflow fixpoint—summaries agreeing on every name's ownership
   mode share one abstraction whose must-alias partition is the meet of
   theirs (with per-fine-class balances re-attributed by constraint
   propagation), and the body is re-certified only when a jump strictly
