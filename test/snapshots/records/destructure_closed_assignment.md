@@ -98,14 +98,7 @@ compute = {
 						(record-destruct (label "y") (ident "y")
 							(required
 								(p-assign (ident "y"))))))
-				(e-record
-					(fields
-						(field (name "x")
-							(e-num (value "1")))
-						(field (name "y")
-							(e-num (value "2")))
-						(field (name "z")
-							(e-num (value "3"))))))
+				(e-runtime-error (tag "erroneous_value_expr")))
 			(e-dispatch-call (method "plus") (constraint-fn-var 257)
 				(receiver
 					(e-lookup-local
