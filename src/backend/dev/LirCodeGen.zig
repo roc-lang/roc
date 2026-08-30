@@ -15883,11 +15883,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (inner_layout.tag == .tag_union) {
                     const box_ptr_reg = try self.ensureInGeneralReg(raw_value_loc);
                     const dest_offset = self.codegen.allocStackSlot(payload_size);
-                    var copied: u32 = 0;
-                    while (copied < payload_size) : (copied += 8) {
+                    // The box allocation holds exactly payload_size bytes, so a
+                    // word-rounded copy would read past the heap allocation.
+                    if (payload_size > 0) {
                         const temp_reg = try self.allocTempGeneral();
-                        try self.emitLoad(.w64, temp_reg, box_ptr_reg, @intCast(copied));
-                        try self.emitStore(.w64, frame_ptr, dest_offset + @as(i32, @intCast(copied)), temp_reg);
+                        try self.copyChunked(temp_reg, box_ptr_reg, 0, frame_ptr, dest_offset, payload_size);
                         self.codegen.freeGeneral(temp_reg);
                     }
                     self.codegen.freeGeneral(box_ptr_reg);
@@ -19139,38 +19139,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 const tuple_data = ls.getStructData(tuple_layout.getStruct().idx);
                                 const total_size = tuple_data.size.get(ls.targetUsize());
 
-                                // Copy entire tuple as 8-byte chunks
-                                const temp_reg = try self.allocTempGeneral();
-                                var copied: u32 = 0;
-
-                                while (copied < total_size) {
-                                    const stack_offset = base_offset + @as(i32, @intCast(copied));
-                                    const buf_offset: i32 = @as(i32, @intCast(copied));
-
-                                    // Load from stack
-                                    try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset);
-
-                                    // Store to result buffer
-                                    try self.emitStore(.w64, saved_ptr_reg, buf_offset, temp_reg);
-
-                                    copied += 8;
+                                // The result buffer holds exactly total_size
+                                // bytes of caller-owned storage, so the copy
+                                // must not round up to whole words.
+                                if (total_size > 0) {
+                                    const temp_reg = try self.allocTempGeneral();
+                                    try self.copyChunked(temp_reg, frame_ptr, base_offset, saved_ptr_reg, 0, total_size);
+                                    self.codegen.freeGeneral(temp_reg);
                                 }
-
-                                self.codegen.freeGeneral(temp_reg);
                                 return;
                             }
                         }
 
-                        // Fallback: copy tuple_len * 8 bytes
-                        const temp_reg = try self.allocTempGeneral();
-                        for (0..tuple_len) |i| {
-                            const stack_offset = base_offset + @as(i32, @intCast(i)) * 8;
-                            const buf_offset: i32 = @as(i32, @intCast(i)) * 8;
-
-                            try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset);
-                            try self.emitStore(.w64, saved_ptr_reg, buf_offset, temp_reg);
+                        // Non-struct tuple layouts still copy exactly the
+                        // layout's byte count into the caller-owned buffer.
+                        const total_size = self.getLayoutSize(result_layout);
+                        if (total_size > 0) {
+                            const temp_reg = try self.allocTempGeneral();
+                            try self.copyChunked(temp_reg, frame_ptr, base_offset, saved_ptr_reg, 0, total_size);
+                            self.codegen.freeGeneral(temp_reg);
                         }
-                        self.codegen.freeGeneral(temp_reg);
                         return;
                     },
                     .general_reg,
@@ -20010,6 +19998,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        /// Copy exactly `size` bytes from [src_base + src_offset] to
+        /// [dst_base + dst_offset], never a byte more, so it is safe for
+        /// buffers whose exact extent someone else owns (heap allocations,
+        /// caller-owned result storage). Any codegen that writes through a
+        /// pointer it did not size itself must use this instead of a
+        /// word-rounded copy loop. Sizes above 8 that are not word multiples
+        /// finish with an 8-byte copy of the final `size - 8` tail, which
+        /// re-copies up to 7 earlier bytes; source and destination therefore
+        /// must not overlap.
         fn copyChunked(self: *Self, temp_reg: GeneralReg, src_base: GeneralReg, src_offset: i32, dst_base: GeneralReg, dst_offset: i32, size: u32) Allocator.Error!void {
             std.debug.assert(size > 0);
             if (size == 8) {
@@ -22172,17 +22169,49 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
             const layout_val = ls.getLayout(runtime_ret_layout);
             const ret_size = ls.layoutSizeAlign(layout_val).size;
+            if (ret_size == 0) return;
 
-            // Ensure result is on stack
+            // The return buffer is caller-owned storage of exactly ret_size
+            // bytes. Erased-callable and hosted results land in buffers sized
+            // by compiled Zig code (e.g. a comparator's `var ordering: u8`),
+            // so writing even one byte past ret_size corrupts the caller's
+            // frame.
+            const ptr_reg: GeneralReg = scratch_reg;
+            const temp_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
+
+            // Register and immediate scalars store their exact width straight
+            // through the return pointer instead of bouncing through a spill
+            // slot; every other location spills to stack and copies from
+            // there.
             const result_offset: i32 = switch (result_loc) {
                 .stack => |s| s.offset,
                 .list_stack => |info| info.struct_offset,
                 .stack_str => |off| off,
                 .stack_i128 => |off| off,
-                .general_reg,
+                .general_reg => |reg| switch (ret_size) {
+                    1, 2, 4, 8 => {
+                        // On aarch64 the register allocator can hand out the
+                        // scratch register, so the result may already be in
+                        // ptr_reg; address through temp_reg in that case.
+                        const addr_reg: GeneralReg = if (reg == ptr_reg) temp_reg else ptr_reg;
+                        try self.emitLoad(.w64, addr_reg, frame_ptr, ret_ptr_stack_slot);
+                        try self.emitStoreScalarToPtr(addr_reg, reg, ret_size);
+                        self.codegen.freeGeneral(reg);
+                        return;
+                    },
+                    else => try self.ensureOnStack(result_loc, ret_size),
+                },
+                .immediate_i64 => |val| switch (ret_size) {
+                    1, 2, 4, 8 => {
+                        try self.emitLoad(.w64, ptr_reg, frame_ptr, ret_ptr_stack_slot);
+                        try self.codegen.emitLoadImm(temp_reg, val);
+                        try self.emitStoreScalarToPtr(ptr_reg, temp_reg, ret_size);
+                        return;
+                    },
+                    else => try self.ensureOnStack(result_loc, ret_size),
+                },
                 .float_reg,
                 .vector_reg,
-                .immediate_i64,
                 .immediate_f32,
                 .immediate_f64,
                 .immediate_i128,
@@ -22191,18 +22220,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
 
             // Load the return pointer from the saved stack slot
-            const ptr_reg: GeneralReg = scratch_reg;
             try self.emitLoad(.w64, ptr_reg, frame_ptr, ret_ptr_stack_slot);
-
-            // The return buffer is caller-owned storage of exactly ret_size
-            // bytes. Erased-callable and hosted results land in buffers sized
-            // by compiled Zig code (e.g. a comparator's `var ordering: u8`),
-            // so writing even one byte past ret_size corrupts the caller's
-            // frame. copyChunked copies the exact byte count.
-            const temp_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
-            if (ret_size > 0) {
-                try self.copyChunked(temp_reg, frame_ptr, result_offset, ptr_reg, 0, ret_size);
-            }
+            try self.copyChunked(temp_reg, frame_ptr, result_offset, ptr_reg, 0, ret_size);
         }
 
         fn copyValueToPointer(self: *Self, value_loc: ValueLocation, value_layout: layout.Idx, ptr_local: LocalId) Allocator.Error!void {
