@@ -219,6 +219,80 @@ test "issue 10295: nested list equality has bounded register pressure" {
     try std.testing.expectEqual(@as(u8, 1), actual);
 }
 
+test "issue 10993: erased callable ABI writes exactly ret_size bytes through the return pointer" {
+    if (comptime !dev.host_lir_codegen_available) return error.SkipZigTest;
+
+    // https://github.com/roc-lang/roc/issues/10993
+    //
+    // The uniform erased-callable ABI hands the callee a pointer to
+    // caller-owned result storage of exactly the return layout's size (see
+    // builtins/erased_callable.zig). A callee that stores past that size
+    // corrupts whatever the caller keeps next to the result slot:
+    // `listSortWith` comparators return a 1-byte ordering into a
+    // `var ordering: u8` stack slot, so any wider store smashes the caller's
+    // frame and segfaults `List.sort` under the machine-code shim.
+    const std = @import("std");
+    const layout = @import("layout");
+    const lir = @import("lir");
+    const builtins = @import("builtins");
+
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layout_store = try layout.Store.init(allocator, .u64);
+    defer layout_store.deinit();
+
+    const capture_arg = try store.addLocal(.{ .layout_idx = .opaque_ptr });
+    const reuse_arg = try store.addLocal(.{ .layout_idx = .opaque_ptr });
+    const args = try store.addLocalSpan(&.{ capture_arg, reuse_arg });
+    const arg_plan = try store.internErasedCallArgsPlan(&layout_store, &.{});
+
+    const result = try store.addLocal(.{ .layout_idx = .u8 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const assign = try store.addCFStmt(.{ .assign_literal = .{
+        .target = result,
+        .value = .{ .i64_literal = .{ .value = 2, .layout_idx = .u8 } },
+        .next = ret,
+    } });
+
+    const proc_id = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = args,
+        .body = assign,
+        .ret_layout = .u8,
+        .abi = .erased_callable,
+        .erased_capture_arg = capture_arg,
+        .erased_reuse_arg = reuse_arg,
+        .erased_call_args = arg_plan,
+    });
+
+    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, &.{}, .preserve, roc_target.host_cpu.level());
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+
+    const compiled = codegen.proc_registry.get(@intFromEnum(proc_id)) orelse return error.TestUnexpectedResult;
+    var executable = try dev.ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
+        codegen.codegen.getCode(),
+        compiled.code_start,
+        codegen.getUnwindFunctions(),
+    );
+    defer executable.deinit();
+
+    // Sentinel bytes on both sides of the 1-byte result slot; the callee owns
+    // only ret_buf[4].
+    var ret_buf align(16) = [_]u8{0xAA} ** 16;
+    var out_desc: ?*const anyopaque = null;
+    var dummy_roc_ops: builtins.erased_callable.RocOps = undefined;
+    const callable: builtins.erased_callable.ErasedCallableFn = @ptrCast(@alignCast(executable.entryPtr()));
+    callable(&dummy_roc_ops, ret_buf[4..].ptr, null, null, null, &out_desc);
+
+    try std.testing.expectEqual(@as(u8, 2), ret_buf[4]);
+    for (ret_buf, 0..) |byte, i| {
+        if (i == 4) continue;
+        try std.testing.expectEqual(@as(u8, 0xAA), byte);
+    }
+}
+
 test "x86_64 Windows hosted U128 return stores all 16 bytes from XMM0" {
     const std = @import("std");
     const layout = @import("layout");
