@@ -322,8 +322,9 @@ fn shapeProofIsProven(proof: ShapeProof) bool {
     };
 }
 
-/// Maximum number of `nominal.backing` / `static_data_candidate.runtime` /
-/// callable-capture pointer edges any single value-tree strip may follow. A
+/// Maximum number of `runtime_anchor.structure` / `nominal.backing` /
+/// `static_data_candidate.runtime` / callable-capture pointer edges any single
+/// value-tree strip may follow. A
 /// value can reference itself through those edges when a `.local` resolves
 /// through the substitution maps to an ancestor of a recursive construction,
 /// so a strip that ignored the bound would hang on a cycle. A finite value's
@@ -338,12 +339,23 @@ const value_wrapper_strip_cap: usize = 4096;
 
 const Value = union(enum) {
     expr: Ast.ExprId,
+    runtime_anchor: RuntimeAnchorValue,
     static_data_candidate: StaticDataCandidateValue,
     tag: TagValue,
     record: RecordValue,
     tuple: TupleValue,
     nominal: NominalValue,
     callable: CallableValue,
+};
+
+/// One exact runtime value paired with finite symbolic structure known for it.
+/// Materialization always reuses `runtime`; structural consumers inspect
+/// `structure`. Recursive bindings use this dual representation to expose
+/// constructor and callable facts without reconstructing the recursive value
+/// or letting initializer-private locals escape their scope.
+const RuntimeAnchorValue = struct {
+    runtime: Ast.ExprId,
+    structure: *const Value,
 };
 
 const StaticDataCandidateValue = struct {
@@ -492,10 +504,32 @@ const StrictBinding = struct {
     value: Ast.ExprId,
 };
 
+const PositionedBinding = union(enum) {
+    strict: StrictBinding,
+    /// The exact cloned recursive statement that owns a symbolic value's
+    /// runtime back-edge. Keeping this anchor in the same source-ordered chain
+    /// as the initializer's strict leaves lets transparent value flow retain
+    /// the known outer structure without turning the finite symbolic graph
+    /// into an unbound local reference.
+    recursive_anchor: Ast.StmtId,
+};
+
 const BindingNode = struct {
-    binding: StrictBinding,
+    binding: PositionedBinding,
     previous: ?*BindingNode = null,
     next: ?*BindingNode = null,
+};
+
+const PatternLocalUseProbe = struct {
+    program: *const Ast.Program,
+    expr: Ast.ExprId,
+    found: *bool,
+
+    pub fn bindLocal(self: PatternLocalUseProbe, local: Ast.LocalId) Allocator.Error!void {
+        if (!self.found.* and localUseCountInExpr(self.program, local, self.expr) != 0) {
+            self.found.* = true;
+        }
+    }
 };
 
 /// A linearly owned, source-ordered chain of strict bindings. Concatenation
@@ -526,7 +560,18 @@ const BindingChain = struct {
 
     fn appendBinding(self: *BindingChain, arena: Allocator, binding: StrictBinding) Allocator.Error!void {
         const node = try arena.create(BindingNode);
-        node.* = .{ .binding = binding, .previous = self.last };
+        node.* = .{ .binding = .{ .strict = binding }, .previous = self.last };
+        if (self.last) |last| {
+            last.next = node;
+        } else {
+            self.first = node;
+        }
+        self.last = node;
+    }
+
+    fn appendRecursiveAnchor(self: *BindingChain, arena: Allocator, stmt: Ast.StmtId) Allocator.Error!void {
+        const node = try arena.create(BindingNode);
+        node.* = .{ .binding = .{ .recursive_anchor = stmt }, .previous = self.last };
         if (self.last) |last| {
             last.next = node;
         } else {
@@ -552,12 +597,59 @@ const BindingChain = struct {
         var current = self.first;
         while (current) |node| : (current = node.next) {
             std.debug.assert(node.previous == previous);
-            std.debug.assert(program.getLocal(node.binding.local).ty == node.binding.ty);
-            std.debug.assert(program.getExpr(node.binding.value).ty == node.binding.ty);
+            switch (node.binding) {
+                .strict => |binding| {
+                    std.debug.assert(program.getLocal(binding.local).ty == binding.ty);
+                    std.debug.assert(program.getExpr(binding.value).ty == binding.ty);
+                },
+                .recursive_anchor => |stmt_id| {
+                    const stmt = program.getStmt(stmt_id);
+                    std.debug.assert(stmt == .let_ and stmt.let_.recursive);
+                },
+            }
             previous = node;
         }
         std.debug.assert(previous == self.last);
         std.debug.assert((self.first == null) == (self.last == null));
+    }
+
+    fn hasRecursiveAnchor(self: BindingChain) bool {
+        var current = self.first;
+        while (current) |node| : (current = node.next) {
+            if (node.binding == .recursive_anchor) return true;
+        }
+        return false;
+    }
+
+    /// Whether materializing a symbolic value outside this chain would expose
+    /// one of the chain's private locals. Recursive initializer chains use
+    /// this exact scope proof before letting their symbolic structure flow
+    /// past the recursive statement.
+    fn referencedByExpr(
+        self: BindingChain,
+        program: *const Ast.Program,
+        expr: Ast.ExprId,
+    ) Allocator.Error!bool {
+        var current = self.first;
+        while (current) |node| : (current = node.next) {
+            switch (node.binding) {
+                .strict => |binding| if (localUseCountInExpr(program, binding.local, expr) != 0) return true,
+                .recursive_anchor => |stmt_id| {
+                    const stmt = program.getStmt(stmt_id);
+                    if (stmt != .let_ or !stmt.let_.recursive) {
+                        Common.invariant("recursive binding-chain anchor was not a recursive statement");
+                    }
+                    var found = false;
+                    try Ast.forEachBoundLocal(program, stmt.let_.pat, PatternLocalUseProbe{
+                        .program = program,
+                        .expr = expr,
+                        .found = &found,
+                    });
+                    if (found) return true;
+                },
+            }
+        }
+        return false;
     }
 };
 
@@ -4163,6 +4255,7 @@ const Pass = struct {
         budget.* -= 1;
         return switch (value) {
             .expr => |expr| if (try self.constructorShape(expr)) |shape| .{ .proven = shape } else .disproven,
+            .runtime_anchor => |anchor| try self.shapeFromValueBudgeted(anchor.structure.*, budget),
             .static_data_candidate => |candidate| try self.shapeFromValueBudgeted(candidate.runtime.*, budget),
             .tag => |tag| blk: {
                 const payloads = try self.arena.allocator().alloc(Shape, tag.payloads.len);
@@ -4345,6 +4438,7 @@ const Subst = struct {
             .record,
             .tuple,
             .nominal,
+            .runtime_anchor,
             => true,
             .expr,
             .static_data_candidate,
@@ -5282,13 +5376,14 @@ const Cloner = struct {
             },
             .call_value => |call| {
                 const callee = try self.cloneExprValueDemandingShapeInto(call.callee, bindings);
-                if (callee == .callable and self.inline_calls.admitsCallable(callee.callable, self.iterator_inline_depth != 0)) {
+                const callee_structure = structuralValue(callee);
+                if (callee_structure == .callable and self.inline_calls.admitsCallable(callee_structure.callable, self.iterator_inline_depth != 0)) {
                     const enters_iterator = self.inline_calls == .iterator_fusion;
                     if (enters_iterator) self.iterator_inline_depth += 1;
                     defer {
                         if (enters_iterator) self.iterator_inline_depth -= 1;
                     }
-                    return try self.inlineCallableCallValue(expr.ty, callee.callable, call.args, expr_id, false, bindings);
+                    return try self.inlineCallableCallValue(expr.ty, callee_structure.callable, call.args, expr_id, false, bindings);
                 }
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .call_value = .{
                     .callee = try self.materialize(callee),
@@ -5389,13 +5484,14 @@ const Cloner = struct {
             },
             .call_value => |call| blk: {
                 const callee = try self.cloneExprValueDemandingShapeInto(call.callee, bindings);
-                if (callee == .callable and self.inline_calls.admitsCallable(callee.callable, self.iterator_inline_depth != 0)) {
+                const callee_structure = structuralValue(callee);
+                if (callee_structure == .callable and self.inline_calls.admitsCallable(callee_structure.callable, self.iterator_inline_depth != 0)) {
                     const enters_iterator = self.inline_calls == .iterator_fusion;
                     if (enters_iterator) self.iterator_inline_depth += 1;
                     defer {
                         if (enters_iterator) self.iterator_inline_depth -= 1;
                     }
-                    break :blk try self.inlineCallableCallValue(expr.ty, callee.callable, call.args, expr_id, true, bindings);
+                    break :blk try self.inlineCallableCallValue(expr.ty, callee_structure.callable, call.args, expr_id, true, bindings);
                 }
                 break :blk .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .call_value = .{
                     .callee = try self.materialize(callee),
@@ -5591,6 +5687,7 @@ const Cloner = struct {
         budget.* -= 1;
         return switch (value) {
             .expr => |expr| if (self.exprCanSubstitute(expr)) .proven else .disproven,
+            .runtime_anchor => |anchor| if (self.exprCanSubstitute(anchor.runtime)) .proven else .disproven,
             .static_data_candidate => |candidate| self.valueCanSubstituteBudgeted(candidate.runtime.*, budget),
             .tag => |tag| blk: {
                 var proof = ProofStatus.proven;
@@ -6313,8 +6410,10 @@ const Cloner = struct {
     fn caseExprFromValue(self: *Cloner, value: Value) ?Ast.ExprId {
         const candidate = switch (value) {
             .expr => |expr| expr,
+            .runtime_anchor => |anchor| anchor.runtime,
             .static_data_candidate => |static_candidate| switch (static_candidate.runtime.*) {
                 .expr => |runtime| runtime,
+                .runtime_anchor => |anchor| anchor.runtime,
                 .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => return null,
             },
             .tag, .record, .tuple, .nominal, .callable => return null,
@@ -7176,7 +7275,7 @@ const Cloner = struct {
             if (params.items.len >= let_case_join_param_cap) break :structured;
             if (budget.admit(1) != .admitted) break :structured;
             switch (values[0]) {
-                .expr, .static_data_candidate => break :structured,
+                .expr, .runtime_anchor, .static_data_candidate => break :structured,
                 .tag => |first| {
                     for (values[1..]) |other| {
                         if (other != .tag) break :structured;
@@ -7553,6 +7652,19 @@ const Cloner = struct {
                     return null;
                 },
             };
+            if (let_.recursive) {
+                // Clone the recursive statement through the ordinary path,
+                // which reserves a fresh runtime local before cloning the
+                // initializer and then exposes the initializer's known value
+                // to the remainder. The retained statement is the explicit
+                // graph anchor for every symbolic back-edge to that local.
+                const cloned = try self.cloneStmt(stmt_id);
+                block_bindings.appendChain(cloned.bindings);
+                const anchor = cloned.stmt orelse
+                    Common.invariant("recursive statement dissolved while cloning a transparent block");
+                try block_bindings.appendRecursiveAnchor(self.arena.allocator(), anchor);
+                continue;
+            }
             const value = try self.cloneExprValueInto(let_.value, &block_bindings);
             if (self.caseExprFromValue(value) != null) {
                 self.subst.restore(change_start);
@@ -7770,7 +7882,7 @@ const Cloner = struct {
         value: Value,
         out: *std.ArrayList(Ast.ExprId),
     ) Common.LowerError!void {
-        const structural_value = if (value == .static_data_candidate) value.static_data_candidate.runtime.* else value;
+        const structural_value = structuralValue(value);
         switch (shape) {
             .any => {
                 try out.append(self.pass.allocator, try self.materialize(value));
@@ -7890,7 +8002,7 @@ const Cloner = struct {
                             return .{ .shape = .{ .record = .{ .ty = record.ty, .fields = fields } }, .demoted = demoted };
                         }
                     },
-                    .static_data_candidate, .tag, .tuple, .nominal, .callable => {},
+                    .runtime_anchor, .static_data_candidate, .tag, .tuple, .nominal, .callable => {},
                 }
                 return try self.demoteLoopSlotLeaf(record.ty, value, out);
             },
@@ -7926,7 +8038,7 @@ const Cloner = struct {
                             return .{ .shape = .{ .tuple = .{ .ty = tuple.ty, .items = items } }, .demoted = demoted };
                         }
                     },
-                    .static_data_candidate, .tag, .record, .nominal, .callable => {},
+                    .runtime_anchor, .static_data_candidate, .tag, .record, .nominal, .callable => {},
                 }
                 return try self.demoteLoopSlotLeaf(tuple.ty, value, out);
             },
@@ -7940,7 +8052,7 @@ const Cloner = struct {
                             return .{ .shape = .{ .nominal = .{ .ty = nominal.ty, .backing = backing } }, .demoted = supplied.demoted };
                         }
                     },
-                    .expr, .static_data_candidate, .tag, .record, .tuple, .callable => {},
+                    .expr, .runtime_anchor, .static_data_candidate, .tag, .record, .tuple, .callable => {},
                 }
                 return try self.demoteLoopSlotLeaf(nominal.ty, value, out);
             },
@@ -8132,6 +8244,18 @@ const Cloner = struct {
                     value
                 else
                     try self.makeReusableForMatch(value, bindings);
+                if (base == .runtime_anchor) {
+                    const anchor = base.runtime_anchor;
+                    const prepared_structure = (try self.bindPatToMatchValue(
+                        as.pattern,
+                        anchor.structure.*,
+                        body,
+                        bindings,
+                    )) orelse return null;
+                    const prepared = try self.runtimeAnchoredValue(prepared_structure, anchor.runtime);
+                    try self.subst.put(self.pass.program, as.local, prepared);
+                    return prepared;
+                }
                 const prepared = (try self.bindPatToMatchValue(as.pattern, base, body, bindings)) orelse return null;
                 try self.subst.put(self.pass.program, as.local, prepared);
                 return prepared;
@@ -8139,6 +8263,10 @@ const Cloner = struct {
             .record => |fields_span| {
                 const fields = self.pass.program.recordDestructSpan(fields_span);
                 switch (value) {
+                    .runtime_anchor => |anchor| {
+                        const prepared = (try self.bindPatToMatchValue(pat_id, anchor.structure.*, body, bindings)) orelse return null;
+                        return try self.runtimeAnchoredValue(prepared, anchor.runtime);
+                    },
                     .static_data_candidate => |candidate| return try self.bindStaticDataCandidateToMatchValue(
                         pat_id,
                         candidate,
@@ -8183,6 +8311,10 @@ const Cloner = struct {
             .tuple => |items_span| {
                 const pats = self.pass.program.patSpan(items_span);
                 switch (value) {
+                    .runtime_anchor => |anchor| {
+                        const prepared = (try self.bindPatToMatchValue(pat_id, anchor.structure.*, body, bindings)) orelse return null;
+                        return try self.runtimeAnchoredValue(prepared, anchor.runtime);
+                    },
                     .static_data_candidate => |candidate| return try self.bindStaticDataCandidateToMatchValue(
                         pat_id,
                         candidate,
@@ -8253,8 +8385,9 @@ const Cloner = struct {
                         bindings,
                     );
                 }
-                if (value != .nominal) return null;
-                const nominal = value.nominal;
+                const structure = structuralValue(value);
+                if (structure != .nominal) return null;
+                const nominal = structure.nominal;
                 const backing = try self.arena.allocator().create(Value);
                 backing.* = (try self.bindPatToMatchValueStripped(backing_pat, nominal.backing.*, body, bindings)) orelse return null;
                 return Value{ .nominal = .{
@@ -8407,6 +8540,7 @@ const Cloner = struct {
         budget.* -= 1;
         return switch (value) {
             .expr => .{ .exact = 0 },
+            .runtime_anchor => |anchor| self.knownConstructorSizeBudgeted(anchor.structure.*, budget),
             .static_data_candidate => |candidate| self.knownConstructorSizeBudgeted(candidate.runtime.*, budget),
             .tag => |tag| blk: {
                 var count = ConstructorSize{ .exact = 1 };
@@ -8578,6 +8712,7 @@ const Cloner = struct {
                     .data = .{ .local = local },
                 }) };
             },
+            .runtime_anchor => value,
             .static_data_candidate => |candidate| blk: {
                 const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), candidate.ty);
                 try bindings.appendBinding(self.arena.allocator(), .{
@@ -8654,11 +8789,20 @@ const Cloner = struct {
     fn wrapBindings(self: *Cloner, bindings: BindingChain, expr: Ast.ExprId) Common.LowerError!Ast.ExprId {
         bindings.verify(self.pass.program);
         if (bindings.isEmpty()) return expr;
+        if (bindings.hasRecursiveAnchor()) {
+            var statements = std.ArrayList(Ast.StmtId).empty;
+            defer statements.deinit(self.pass.allocator);
+            try self.appendBindingStmts(bindings, &statements);
+            return try self.addExpr(.{ .ty = self.pass.program.getExpr(expr).ty, .data = .{ .block = .{
+                .statements = try self.pass.program.addStmtSpan(statements.items),
+                .final_expr = expr,
+            } } });
+        }
         const ty = self.pass.program.getExpr(expr).ty;
         var result = expr;
         var current = bindings.last;
         while (current) |node| : (current = node.previous) {
-            const binding = node.binding;
+            const binding = node.binding.strict;
             const pat = try self.pass.program.addPat(.{
                 .ty = binding.ty,
                 .data = .{ .bind = binding.local },
@@ -8677,15 +8821,19 @@ const Cloner = struct {
         bindings.verify(self.pass.program);
         var current = bindings.first;
         while (current) |node| : (current = node.next) {
-            const binding = node.binding;
-            const pat = try self.pass.program.addPat(.{
-                .ty = binding.ty,
-                .data = .{ .bind = binding.local },
-            });
-            try out.append(self.pass.allocator, try self.addStmt(.{ .let_ = .{
-                .pat = pat,
-                .value = binding.value,
-            } }));
+            switch (node.binding) {
+                .strict => |binding| {
+                    const pat = try self.pass.program.addPat(.{
+                        .ty = binding.ty,
+                        .data = .{ .bind = binding.local },
+                    });
+                    try out.append(self.pass.allocator, try self.addStmt(.{ .let_ = .{
+                        .pat = pat,
+                        .value = binding.value,
+                    } }));
+                },
+                .recursive_anchor => |stmt| try out.append(self.pass.allocator, stmt),
+            }
         }
     }
 
@@ -9014,7 +9162,7 @@ const Cloner = struct {
         if (try self.selectKnownMatchValue(inner_value, outer_branches_span, true, bindings)) |value| return value;
         return switch (inner_value) {
             .expr => |expr| try self.cloneCaseOfCaseValue(ty, expr, outer_branches_span),
-            .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => null,
+            .runtime_anchor, .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => null,
         };
     }
 
@@ -9269,6 +9417,7 @@ const Cloner = struct {
             .record => |fields_span| {
                 const fields = self.pass.program.recordDestructSpan(fields_span);
                 switch (value) {
+                    .runtime_anchor => |anchor| return try self.bindPatToValue(pat_id, anchor.structure.*),
                     .expr => |receiver| {
                         if (!canReadFieldsFromExpr(self.pass.program, receiver)) return .unknown;
                         var verdict: MatchVerdict = .match;
@@ -9289,7 +9438,7 @@ const Cloner = struct {
                 }
                 const record = recordFromValue(value) orelse switch (value) {
                     .tag, .tuple, .callable => Common.invariant("record pattern matched a non-record value"),
-                    .expr, .static_data_candidate, .record, .nominal => Common.invariant("record value had no record backing"),
+                    .expr, .runtime_anchor, .static_data_candidate, .record, .nominal => Common.invariant("record value had no record backing"),
                 };
                 var verdict: MatchVerdict = .match;
                 for (0..fields.len) |index| {
@@ -9308,6 +9457,7 @@ const Cloner = struct {
             .tuple => |items_span| {
                 const pats = self.pass.program.patSpan(items_span);
                 switch (value) {
+                    .runtime_anchor => |anchor| return try self.bindPatToValue(pat_id, anchor.structure.*),
                     .expr => |receiver| {
                         if (!canReadFieldsFromExpr(self.pass.program, receiver)) return .unknown;
                         var verdict: MatchVerdict = .match;
@@ -9331,7 +9481,7 @@ const Cloner = struct {
                 }
                 const tuple = tupleFromValue(value) orelse switch (value) {
                     .tag, .record, .callable => Common.invariant("tuple pattern matched a non-tuple value"),
-                    .expr, .static_data_candidate, .tuple, .nominal => Common.invariant("tuple value had no tuple backing"),
+                    .expr, .runtime_anchor, .static_data_candidate, .tuple, .nominal => Common.invariant("tuple value had no tuple backing"),
                 };
                 if (pats.len != tuple.items.len) Common.invariant("tuple pattern arity differed from the tuple value");
                 var verdict: MatchVerdict = .match;
@@ -9351,7 +9501,7 @@ const Cloner = struct {
                 if (value == .expr) return .unknown;
                 const tag = tagFromValue(value) orelse switch (value) {
                     .record, .tuple, .callable => Common.invariant("tag pattern matched a non-tag value"),
-                    .expr, .static_data_candidate, .tag, .nominal => Common.invariant("tag value had no tag backing"),
+                    .expr, .runtime_anchor, .static_data_candidate, .tag, .nominal => Common.invariant("tag value had no tag backing"),
                 };
                 if (!self.pass.program.names.tagLabelTextEql(tag.name, tag_pat.name)) return .no_match;
                 const pats = self.pass.program.patSpan(tag_pat.payloads);
@@ -9377,6 +9527,7 @@ const Cloner = struct {
                 self.wrapper_strip_depth += 1;
                 defer self.wrapper_strip_depth -= 1;
                 return switch (value) {
+                    .runtime_anchor => |anchor| try self.bindPatToValue(pat_id, anchor.structure.*),
                     .static_data_candidate => |candidate| try self.bindPatToValue(pat_id, candidate.runtime.*),
                     .nominal => |nominal| try self.bindPatToValue(backing_pat, nominal.backing.*),
                     .expr => .unknown,
@@ -9424,7 +9575,7 @@ const Cloner = struct {
             .record => |fields_span| {
                 const fields = self.pass.program.recordDestructSpan(fields_span);
                 switch (value) {
-                    .record, .nominal, .static_data_candidate => {
+                    .record, .nominal, .runtime_anchor, .static_data_candidate => {
                         const record = recordFromValue(value) orelse return false;
                         for (0..fields.len) |index| {
                             const field = GuardedList.at(fields, index);
@@ -9448,7 +9599,7 @@ const Cloner = struct {
             .tuple => |items_span| {
                 const pats = self.pass.program.patSpan(items_span);
                 switch (value) {
-                    .tuple, .nominal, .static_data_candidate => {
+                    .tuple, .nominal, .runtime_anchor, .static_data_candidate => {
                         const tuple = tupleFromValue(value) orelse return false;
                         if (pats.len != tuple.items.len) return false;
                         for (0..pats.len) |index| {
@@ -9490,6 +9641,7 @@ const Cloner = struct {
                 self.wrapper_strip_depth += 1;
                 defer self.wrapper_strip_depth -= 1;
                 return switch (value) {
+                    .runtime_anchor => |anchor| try self.bindPatToFlowValue(pat_id, anchor.structure.*),
                     .static_data_candidate => |candidate| try self.bindPatToFlowValue(pat_id, candidate.runtime.*),
                     .nominal => |nominal| try self.bindPatToFlowValue(backing_pat, nominal.backing.*),
                     .expr, .tag, .record, .tuple, .callable => false,
@@ -9705,6 +9857,7 @@ const Cloner = struct {
         const value = self.subst.getForClone(self.pass.program, source) orelse return source;
         const expr = switch (value) {
             .expr => |expr| expr,
+            .runtime_anchor => |anchor| anchor.runtime,
             .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => Common.invariant("SpecConstr local-id field referenced a non-local substituted value"),
         };
         return localExpr(self.pass.program, expr) orelse
@@ -9765,6 +9918,162 @@ const Cloner = struct {
         };
     }
 
+    /// Total node-visit bound for proving which initializer leaves survive a
+    /// recursive statement's scope. Symbolic values can be cyclic or heavily
+    /// shared, so an unbounded structural walk is not total. Exhaustion never
+    /// guesses: the unresolved sub-value becomes its exact runtime projection,
+    /// preserving correctness and single evaluation while declining only the
+    /// unproved structure. See design.md "Core Principles" on bounded
+    /// post-check walks.
+    const recursive_anchor_scope_work_budget: u32 = 4096;
+
+    fn valueReferencesBindings(
+        self: *Cloner,
+        bindings: BindingChain,
+        value: Value,
+        budget: *u32,
+    ) Common.LowerError!bool {
+        if (budget.* == 0) return true;
+        budget.* -= 1;
+        return switch (value) {
+            .expr => |expr| try bindings.referencedByExpr(self.pass.program, expr),
+            .runtime_anchor => |anchor| try bindings.referencedByExpr(self.pass.program, anchor.runtime) or
+                try self.valueReferencesBindings(bindings, anchor.structure.*, budget),
+            .static_data_candidate => |candidate| try self.valueReferencesBindings(bindings, candidate.runtime.*, budget),
+            .tag => |tag| blk: {
+                for (tag.payloads) |payload| {
+                    if (try self.valueReferencesBindings(bindings, payload, budget)) break :blk true;
+                }
+                break :blk false;
+            },
+            .record => |record| blk: {
+                for (record.fields) |field| {
+                    if (try self.valueReferencesBindings(bindings, field.value, budget)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tuple => |tuple| blk: {
+                for (tuple.items) |item| {
+                    if (try self.valueReferencesBindings(bindings, item, budget)) break :blk true;
+                }
+                break :blk false;
+            },
+            .nominal => |nominal| try self.valueReferencesBindings(bindings, nominal.backing.*, budget),
+            .callable => |callable| blk: {
+                for (callable.captures) |capture| {
+                    if (try self.valueReferencesBindings(bindings, capture.value, budget)) break :blk true;
+                }
+                break :blk false;
+            },
+        };
+    }
+
+    fn runtimeAnchoredValue(self: *Cloner, structure: Value, runtime: Ast.ExprId) Allocator.Error!Value {
+        if (!self.exprCanSubstitute(runtime)) {
+            Common.invariant("runtime-anchored structure had a non-reusable runtime expression");
+        }
+        const stored_structure = try self.arena.allocator().create(Value);
+        stored_structure.* = structure;
+        return .{ .runtime_anchor = .{
+            .runtime = runtime,
+            .structure = stored_structure,
+        } };
+    }
+
+    /// Rebase initializer structure onto the exact runtime value which owns
+    /// it. Every structural node with an accessible runtime position keeps
+    /// both views: consumers can specialize through `structure`, while an
+    /// opaque use materializes `runtime` without rebuilding or copying it.
+    /// A child whose runtime position cannot be expressed (tag payloads and
+    /// callable captures) remains structural only when the scope proof shows
+    /// all of its leaves already outlive the initializer.
+    fn reanchorRecursiveValue(
+        self: *Cloner,
+        value: Value,
+        runtime: Ast.ExprId,
+        initializer_bindings: BindingChain,
+        budget: *u32,
+        runtime_has_value_type: bool,
+    ) Common.LowerError!?Value {
+        if (budget.* == 0) return if (runtime_has_value_type) Value{ .expr = runtime } else null;
+        budget.* -= 1;
+
+        switch (value) {
+            .expr => |expr| {
+                if (!try initializer_bindings.referencedByExpr(self.pass.program, expr)) return value;
+                return if (runtime_has_value_type) Value{ .expr = runtime } else null;
+            },
+            .runtime_anchor => |anchor| return try self.reanchorRecursiveValue(
+                anchor.structure.*,
+                runtime,
+                initializer_bindings,
+                budget,
+                runtime_has_value_type,
+            ),
+            .record => |record| {
+                const fields = try self.arena.allocator().alloc(FieldValue, record.fields.len);
+                for (record.fields, 0..) |field, index| {
+                    const field_runtime = try self.addFieldAccessExpr(
+                        valueType(self.pass.program, field.value),
+                        runtime,
+                        field.name,
+                    );
+                    fields[index] = .{
+                        .name = field.name,
+                        .value = (try self.reanchorRecursiveValue(
+                            field.value,
+                            field_runtime,
+                            initializer_bindings,
+                            budget,
+                            true,
+                        )) orelse Common.invariant("record field with a runtime position could not be recursively anchored"),
+                    };
+                }
+                const structure = Value{ .record = .{ .ty = record.ty, .fields = fields } };
+                return if (runtime_has_value_type) try self.runtimeAnchoredValue(structure, runtime) else structure;
+            },
+            .tuple => |tuple| {
+                const items = try self.arena.allocator().alloc(Value, tuple.items.len);
+                for (tuple.items, 0..) |item, index| {
+                    const item_runtime = try self.addExpr(.{ .ty = valueType(self.pass.program, item), .data = .{ .tuple_access = .{
+                        .tuple = runtime,
+                        .elem_index = @as(u32, @intCast(index)),
+                    } } });
+                    items[index] = (try self.reanchorRecursiveValue(
+                        item,
+                        item_runtime,
+                        initializer_bindings,
+                        budget,
+                        true,
+                    )) orelse Common.invariant("tuple item with a runtime position could not be recursively anchored");
+                }
+                const structure = Value{ .tuple = .{ .ty = tuple.ty, .items = items } };
+                return if (runtime_has_value_type) try self.runtimeAnchoredValue(structure, runtime) else structure;
+            },
+            .nominal => |nominal| {
+                const backing = try self.arena.allocator().create(Value);
+                backing.* = (try self.reanchorRecursiveValue(
+                    nominal.backing.*,
+                    runtime,
+                    initializer_bindings,
+                    budget,
+                    false,
+                )) orelse {
+                    if (runtime_has_value_type) return Value{ .expr = runtime };
+                    return null;
+                };
+                const structure = Value{ .nominal = .{ .ty = nominal.ty, .backing = backing } };
+                return if (runtime_has_value_type) try self.runtimeAnchoredValue(structure, runtime) else structure;
+            },
+            .static_data_candidate, .tag, .callable => {
+                if (try self.valueReferencesBindings(initializer_bindings, value, budget)) {
+                    return if (runtime_has_value_type) Value{ .expr = runtime } else null;
+                }
+                return if (runtime_has_value_type) try self.runtimeAnchoredValue(value, runtime) else value;
+            },
+        }
+    }
+
     /// Clone one statement. A binding statement whose value's opaque leaves
     /// can all be named dissolves instead: the returned binding chain is
     /// placed by the caller at this statement's position—the same
@@ -9799,9 +10108,45 @@ const Cloner = struct {
                     null;
                 if (recursive_pat) |pat| try self.markActiveRecursiveValuePat(pat);
                 defer if (recursive_pat) |pat| self.unmarkActiveRecursiveValuePat(pat);
-                const value = try self.cloneExprValueInto(let_.value, &bindings);
-                const value_expr = try self.materialize(value);
-                if (try self.bindPatToReusableValue(let_.pat, value) == .match) {
+                // Bindings produced while cloning a recursive initializer are
+                // in the recursive pattern's scope and may themselves use its
+                // fresh runtime local. Keep that complete chain inside the
+                // initializer; placing it before the recursive statement
+                // would turn those exact back-edges into free locals.
+                var recursive_value_bindings: BindingChain = .{};
+                const value = try self.cloneExprValueInto(
+                    let_.value,
+                    if (let_.recursive) &recursive_value_bindings else &bindings,
+                );
+                const materialized_value = try self.materialize(value);
+                const value_expr = if (let_.recursive)
+                    try self.wrapBindings(recursive_value_bindings, materialized_value)
+                else
+                    materialized_value;
+                const continuation_value = if (let_.recursive and
+                    self.pass.program.getPat(let_.pat).data == .bind and
+                    self.pass.program.getPat(recursive_pat.?).data == .bind)
+                continuation: {
+                    const runtime_local = self.pass.program.getPat(recursive_pat.?).data.bind;
+                    const runtime = try self.addExpr(.{
+                        .ty = self.pass.program.getLocal(runtime_local).ty,
+                        .data = .{ .local = runtime_local },
+                    });
+                    var budget: u32 = recursive_anchor_scope_work_budget;
+                    break :continuation (try self.reanchorRecursiveValue(
+                        value,
+                        runtime,
+                        recursive_value_bindings,
+                        &budget,
+                        true,
+                    )) orelse Common.invariant("whole recursive binding had no runtime anchor");
+                } else value;
+                const value_escapes_recursive_scope = let_.recursive and
+                    self.pass.program.getPat(let_.pat).data != .bind and
+                    try recursive_value_bindings.referencedByExpr(self.pass.program, materialized_value);
+                if (!value_escapes_recursive_scope and
+                    try self.bindPatToReusableValue(let_.pat, continuation_value) == .match)
+                {
                     break :blk .{ .let_ = .{
                         .pat = recursive_pat orelse try self.clonePat(let_.pat, .output_only),
                         .value = value_expr,
@@ -9963,6 +10308,7 @@ const Cloner = struct {
     fn materialize(self: *Cloner, value: Value) Common.LowerError!Ast.ExprId {
         switch (value) {
             .expr => |expr| return expr,
+            .runtime_anchor => |anchor| return anchor.runtime,
             .static_data_candidate => |candidate| {
                 if (self.materialize_strip_depth >= value_wrapper_strip_cap) {
                     Common.invariant("materialize followed a static-data runtime chain past the strip cap; a cyclic value reached materialization");
@@ -10036,11 +10382,14 @@ const Cloner = struct {
                 all_original = false;
                 break;
             };
-            if (value != .expr) {
-                all_original = false;
-                break;
-            }
-            const expr = value.expr;
+            const expr = switch (value) {
+                .expr => |expr| expr,
+                .runtime_anchor => |anchor| anchor.runtime,
+                .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => {
+                    all_original = false;
+                    break;
+                },
+            };
             const local = localExpr(self.pass.program, expr) orelse {
                 all_original = false;
                 break;
@@ -10057,8 +10406,11 @@ const Cloner = struct {
     }
 
     fn activeRecursiveFieldTupleReadRoot(self: *Cloner, value: Value) ?Ast.ExprId {
-        if (value != .expr) return null;
-        const expr_id = value.expr;
+        const expr_id = switch (value) {
+            .expr => |expr| expr,
+            .runtime_anchor => |anchor| anchor.runtime,
+            .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => return null,
+        };
         const data = self.pass.program.getExpr(expr_id).data;
         if (data != .field_access and data != .tuple_access) return null;
         return self.activeRecursiveFieldTupleReadBase(expr_id);
@@ -10163,8 +10515,11 @@ const Cloner = struct {
                 .data = .{ .local = local },
             });
             if (field_tuple_read_root) |root| {
-                if (capture_value != .expr) unreachable;
-                const source_expr = capture_value.expr;
+                const source_expr = switch (capture_value) {
+                    .expr => |expr| expr,
+                    .runtime_anchor => |anchor| anchor.runtime,
+                    .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => Common.invariant("recursive field/tuple capture had no exact runtime expression"),
+                };
                 worker_capture_values[index] = .{ .id = id, .value = .{ .expr = root } };
                 worker_body_values[index] = .{ .expr = try self.cloneFieldTupleReadReplacingRoot(source_expr, root, local_expr) };
             } else {
@@ -12174,12 +12529,28 @@ fn recordUpdateFieldSpan(program: *const Ast.Program, ty: Type.TypeId) Type.Span
 fn valueType(program: *const Ast.Program, value: Value) Type.TypeId {
     return switch (value) {
         .expr => |expr| program.getExpr(expr).ty,
+        .runtime_anchor => |anchor| program.getExpr(anchor.runtime).ty,
         .static_data_candidate => |candidate| candidate.ty,
         .tag => |tag| tag.ty,
         .record => |record| record.ty,
         .tuple => |tuple| tuple.ty,
         .nominal => |nominal| nominal.ty,
         .callable => |callable| callable.ty,
+    };
+}
+
+fn structuralValue(value: Value) Value {
+    return structuralValueStripping(value, 0);
+}
+
+fn structuralValueStripping(value: Value, strip_depth: usize) Value {
+    if (strip_depth >= value_wrapper_strip_cap) {
+        Common.invariant("structuralValue followed a value wrapper chain past the strip cap");
+    }
+    return switch (value) {
+        .runtime_anchor => |anchor| structuralValueStripping(anchor.structure.*, strip_depth + 1),
+        .static_data_candidate => |candidate| structuralValueStripping(candidate.runtime.*, strip_depth + 1),
+        .expr, .tag, .record, .tuple, .nominal, .callable => value,
     };
 }
 
@@ -12301,7 +12672,7 @@ fn callPatternMatchesValues(program: *Ast.Program, pattern: CallPattern, values:
 }
 
 fn shapeMatchesValue(program: *Ast.Program, shape: Shape, value: Value) bool {
-    const structural_value = if (value == .static_data_candidate) value.static_data_candidate.runtime.* else value;
+    const structural_value = structuralValue(value);
     return switch (shape) {
         .any => true,
         .tag => |tag| blk: {
@@ -12385,7 +12756,7 @@ fn fieldFromValue(program: *const Ast.Program, value: Value, name: names.RecordF
             step.iterator_step = true;
             break :blk .{ .callable = step };
         },
-        .expr, .static_data_candidate, .tag, .record, .tuple, .nominal => field,
+        .expr, .runtime_anchor, .static_data_candidate, .tag, .record, .tuple, .nominal => field,
     };
 }
 
@@ -12406,6 +12777,7 @@ fn isGeneratedIteratorStepField(
 fn fieldFromValueStripping(program: *const Ast.Program, value: Value, name: names.RecordFieldNameId, strip_depth: usize) ?Value {
     if (strip_depth >= value_wrapper_strip_cap) Common.invariant("fieldFromValue followed a value wrapper chain past the strip cap");
     return switch (value) {
+        .runtime_anchor => |anchor| fieldFromValueStripping(program, anchor.structure.*, name, strip_depth + 1),
         .static_data_candidate => |candidate| fieldFromValueStripping(program, candidate.runtime.*, name, strip_depth + 1),
         .record => |record| fieldFromRecord(program, record, name),
         .nominal => |nominal| fieldFromValueStripping(program, nominal.backing.*, name, strip_depth + 1),
@@ -12445,6 +12817,7 @@ fn itemFromValue(value: Value, index: u32) ?Value {
 fn itemFromValueStripping(value: Value, index: u32, strip_depth: usize) ?Value {
     if (strip_depth >= value_wrapper_strip_cap) Common.invariant("itemFromValue followed a value wrapper chain past the strip cap");
     return switch (value) {
+        .runtime_anchor => |anchor| itemFromValueStripping(anchor.structure.*, index, strip_depth + 1),
         .static_data_candidate => |candidate| itemFromValueStripping(candidate.runtime.*, index, strip_depth + 1),
         .tuple => |tuple| if (index < tuple.items.len) tuple.items[index] else null,
         .nominal => |nominal| itemFromValueStripping(nominal.backing.*, index, strip_depth + 1),
@@ -12459,6 +12832,7 @@ fn tagFromValue(value: Value) ?TagValue {
 fn tagFromValueStripping(value: Value, strip_depth: usize) ?TagValue {
     if (strip_depth >= value_wrapper_strip_cap) Common.invariant("tagFromValue followed a value wrapper chain past the strip cap");
     return switch (value) {
+        .runtime_anchor => |anchor| tagFromValueStripping(anchor.structure.*, strip_depth + 1),
         .static_data_candidate => |candidate| tagFromValueStripping(candidate.runtime.*, strip_depth + 1),
         .tag => |tag| tag,
         .nominal => |nominal| tagFromValueStripping(nominal.backing.*, strip_depth + 1),
@@ -12473,6 +12847,7 @@ fn recordFromValue(value: Value) ?RecordValue {
 fn recordFromValueStripping(value: Value, strip_depth: usize) ?RecordValue {
     if (strip_depth >= value_wrapper_strip_cap) Common.invariant("recordFromValue followed a value wrapper chain past the strip cap");
     return switch (value) {
+        .runtime_anchor => |anchor| recordFromValueStripping(anchor.structure.*, strip_depth + 1),
         .static_data_candidate => |candidate| recordFromValueStripping(candidate.runtime.*, strip_depth + 1),
         .record => |record| record,
         .nominal => |nominal| recordFromValueStripping(nominal.backing.*, strip_depth + 1),
@@ -12487,6 +12862,7 @@ fn tupleFromValue(value: Value) ?TupleValue {
 fn tupleFromValueStripping(value: Value, strip_depth: usize) ?TupleValue {
     if (strip_depth >= value_wrapper_strip_cap) Common.invariant("tupleFromValue followed a value wrapper chain past the strip cap");
     return switch (value) {
+        .runtime_anchor => |anchor| tupleFromValueStripping(anchor.structure.*, strip_depth + 1),
         .static_data_candidate => |candidate| tupleFromValueStripping(candidate.runtime.*, strip_depth + 1),
         .tuple => |tuple| tuple,
         .nominal => |nominal| tupleFromValueStripping(nominal.backing.*, strip_depth + 1),
@@ -12596,19 +12972,112 @@ test "SpecConstr preserves record update ordering while exposing its final shape
     const read_binding = base_binding.next orelse return error.TestUnexpectedResult;
     try std.testing.expect(read_binding.next == null);
     const read = blk_read: {
-        const scrutinee = program.getExpr(read_binding.binding.value).data;
+        const scrutinee = program.getExpr(read_binding.binding.strict.value).data;
         if (scrutinee != .field_access) return error.TestUnexpectedResult;
         break :blk_read scrutinee.field_access;
     };
     const read_segments = program.fieldAccessSegmentSpan(read.segments);
     try std.testing.expectEqual(@as(usize, 1), GuardedList.borrowLen(read_segments));
     try std.testing.expectEqual(a, GuardedList.at(read_segments, 0).field);
-    try std.testing.expectEqual(base_binding.binding.local, program.getExpr(read.receiver).data.local);
+    try std.testing.expectEqual(base_binding.binding.strict.local, program.getExpr(read.receiver).data.local);
 
     try std.testing.expectEqual(a, record.fields[0].name);
-    try std.testing.expectEqual(read_binding.binding.local, program.getExpr(record.fields[0].value.expr).data.local);
+    try std.testing.expectEqual(read_binding.binding.strict.local, program.getExpr(record.fields[0].value.expr).data.local);
     try std.testing.expectEqual(b, record.fields[1].name);
     try std.testing.expectEqual(update_local, program.getExpr(record.fields[1].value.expr).data.local);
+}
+
+test "SpecConstr keeps a transparent recursive anchor and its initializer bindings in scope" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const u8_ty = try program.types.add(.{ .primitive = .u8 });
+    const field = try program.names.internRecordFieldLabel("field");
+    const record_ty = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &.{
+        .{ .name = field, .ty = u8_ty, .default = null },
+    }) });
+    const source_local = try program.addLocal(@enumFromInt(1), record_ty);
+    const source_pat = try program.addPat(.{ .ty = record_ty, .data = .{ .bind = source_local } });
+    const source_ref = try program.addExpr(.{ .ty = record_ty, .data = .{ .local = source_local } });
+    const initializer = try program.addExpr(.{ .ty = record_ty, .data = .{ .record_update = .{
+        .base = source_ref,
+        .fields = try program.addFieldExprSpan(&.{}),
+    } } });
+    const source_stmt = try program.addStmt(.{ .let_ = .{
+        .pat = source_pat,
+        .value = initializer,
+        .recursive = true,
+    } });
+    const source_block = try program.addExpr(.{ .ty = record_ty, .data = .{ .block = .{
+        .statements = try program.addStmtSpan(&.{source_stmt}),
+        .final_expr = source_ref,
+    } } });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+
+    const cloned = try cloner.cloneExprValue(source_block);
+    const anchor_node = cloned.bindings.first orelse return error.TestUnexpectedResult;
+    try std.testing.expect(anchor_node.next == null);
+    const anchor_id = switch (anchor_node.binding) {
+        .recursive_anchor => |stmt| stmt,
+        .strict => return error.TestUnexpectedResult,
+    };
+    const anchor = program.getStmt(anchor_id).let_;
+    try std.testing.expect(anchor.recursive);
+    const anchor_local = program.getPat(anchor.pat).data.bind;
+    try std.testing.expect(cloned.value == .runtime_anchor);
+    const runtime_anchor = cloned.value.runtime_anchor;
+    try std.testing.expectEqual(anchor_local, program.getExpr(runtime_anchor.runtime).data.local);
+    try std.testing.expect(runtime_anchor.structure.* == .record);
+    try std.testing.expectEqual(runtime_anchor.runtime, try cloner.materialize(cloned.value));
+    switch (try pass.shapeFromValue(cloned.value)) {
+        .proven => |shape| try std.testing.expect(shape == .record),
+        .disproven, .unknown_budget_exhausted => return error.TestUnexpectedResult,
+    }
+
+    // Structure consumers still see the record, but its field is projected
+    // from the retained runtime anchor instead of retaining the initializer's
+    // private temporary or reconstructing the record.
+    const anchored_field = runtime_anchor.structure.record.fields[0].value;
+    if (anchored_field != .expr) return error.TestUnexpectedResult;
+    const field_access = program.getExpr(anchored_field.expr).data.field_access;
+    try std.testing.expectEqual(anchor_local, program.getExpr(field_access.receiver).data.local);
+
+    // The record-update base is strict work created from the recursive
+    // reference. It must remain in the initializer, where the anchor local is
+    // already in scope, rather than preceding the recursive statement.
+    const initializer_let = program.getExpr(anchor.value).data.let_;
+    try std.testing.expectEqual(anchor_local, program.getExpr(initializer_let.value).data.local);
+
+    const wrapped = try cloner.wrapBindings(cloned.bindings, try cloner.materialize(cloned.value));
+    const output_block = program.getExpr(wrapped).data.block;
+    const output_stmts = program.stmtSpan(output_block.statements);
+    try std.testing.expectEqual(@as(usize, 1), output_stmts.len);
+    try std.testing.expectEqual(anchor_id, GuardedList.at(output_stmts, 0));
+    try std.testing.expectEqual(runtime_anchor.runtime, output_block.final_expr);
+
+    _ = try program.addFn(.{
+        .symbol = @enumFromInt(2),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = wrapped },
+        .ret = record_ty,
+    });
+
+    var scope: BodyLocalScope = .{
+        .program = &program,
+        .allocator = allocator,
+        .fn_index = 0,
+        .bound = collections.DenseMap(Ast.LocalId, u32).init(allocator),
+        .joins = collections.DenseMap(Ast.JoinPointId, u32).init(allocator),
+    };
+    defer scope.bound.deinit();
+    defer scope.joins.deinit();
+    try scope.walkExpr(wrapped);
 }
 
 test "SpecConstr accepts a transparent alias record update base" {
