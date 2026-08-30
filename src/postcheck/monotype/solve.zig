@@ -1875,13 +1875,13 @@ pub const InstGraph = struct {
                     Common.invariant("nominal backing index referenced a retired collision");
                 }
 
-                const canonical_id, const retired_id = if (@intFromEnum(instance_id) < existing_index)
+                const retained_id, const retired_id = if (@intFromEnum(instance_id) < existing_index)
                     .{ instance_id, existing_id }
                 else
                     .{ existing_id, instance_id };
-                const canonical = &self.nominal_backing_instances.items[@intFromEnum(canonical_id)];
+                const retained = &self.nominal_backing_instances.items[@intFromEnum(retained_id)];
                 const retired = &self.nominal_backing_instances.items[@intFromEnum(retired_id)];
-                if (canonical_id == instance_id) {
+                if (retained_id == instance_id) {
                     const removed = self.nominal_backing_index.fetchRemove(new_key) orelse
                         Common.invariant("colliding nominal backing key disappeared during migration");
                     if (removed.value != existing_id) {
@@ -1891,7 +1891,7 @@ pub const InstGraph = struct {
                 }
                 retired.active = false;
                 self.nominal_backing_collisions.appendAssumeCapacity(.{
-                    .left = canonical.node,
+                    .left = retained.node,
                     .right = retired.node,
                 });
             } else {
