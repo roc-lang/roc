@@ -718,6 +718,7 @@ const DefaultPlatformCompilerRtObjects = struct {
             .x64elf,
             .x64v1mac,
             .x64v1win,
+            .x64v1mingw,
             .x64v1freebsd,
             .x64v1openbsd,
             .x64v1netbsd,
@@ -725,12 +726,11 @@ const DefaultPlatformCompilerRtObjects = struct {
             .x64v1glibc,
             .x64v1linux,
             .x64v1elf,
-            .x64v1mingw,
             .arm64v1win,
+            .arm64v1mingw,
             .arm64v1linux,
             .arm64v1musl,
             .arm64v1glibc,
-            .arm64v1mingw,
             .arm32linux,
             .arm32musl,
             .wasm32,
@@ -2161,7 +2161,7 @@ const LayoutHashContext = struct {
                 }
             },
             .box, .list, .ptr => try self.hashIdx(hasher, layout_val.getIdx()),
-            .box_of_zst, .list_of_zst, .erased_callable, .zst => {},
+            .box_of_zst, .erased_box, .list_of_zst, .erased_callable, .zst => {},
             .closure => try self.hashIdx(hasher, layout_val.getClosure().captures_layout_idx),
             .struct_ => {
                 const info = self.layouts.getStructInfo(layout_val);
@@ -9488,6 +9488,10 @@ fn compileLlvmAppObject(
     defer ctx.gpa.free(static_rc_helpers);
     codegen.static_data_rc_helpers = static_rc_helpers;
 
+    const static_data_procs = try backend.collectReferencedProcs(ctx.gpa, static_data_exports);
+    defer ctx.gpa.free(static_data_procs);
+    codegen.static_data_procs = static_data_procs;
+
     const llvm_entrypoints = try ctx.arena.alloc(llvm_codegen.MonoLlvmCodeGen.Entrypoint, entrypoints.len);
     for (entrypoints, 0..) |entrypoint, i| {
         llvm_entrypoints[i] = .{
@@ -11282,6 +11286,15 @@ fn buildCliTestPlan(
     }
 
     for (modules, 0..) |module, module_index| {
+        // `roc test` runs the `expect`s the developer wrote. A dependency the
+        // build downloaded, and the platforms embedded in the compiler, carry
+        // tests belonging to whoever published them, so their roots are not
+        // part of this run. Dependencies reached through filesystem paths are
+        // the developer's own sources and are tested alongside the root.
+        switch (module.package_origin) {
+            .root, .local_path_dependency => {},
+            .fetched, .compiler_owned => continue,
+        }
         const artifact = module.semantic.checked_artifact orelse continue;
         const test_roots = try collectTestRootRequests(ctx.gpa, artifact);
         errdefer ctx.gpa.free(test_roots);
@@ -15673,7 +15686,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [19]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [22]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
@@ -15695,6 +15708,9 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [19]
         .{ .name = "Generated-private nodes visited", .count = graph.generated_private_nodes_visited },
         .{ .name = "Finished-Monotype scans", .count = graph.finished_mono_scans },
         .{ .name = "Finished-Monotype nodes visited", .count = graph.finished_mono_nodes_visited },
+        .{ .name = "Nominal backing lookups", .count = graph.nominal_backing_lookups },
+        .{ .name = "Nominal backing instances scanned", .count = graph.nominal_backing_instances_scanned },
+        .{ .name = "Union-find resolutions", .count = graph.union_find_resolutions },
     };
 }
 

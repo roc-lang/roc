@@ -113,6 +113,26 @@ test "evidence params enumerate in signature order" {
     try std.testing.expect(params.items[0].dispatcher_var != params.items[1].dispatcher_var);
 }
 
+test "independent same-name method uses share one evidence target" {
+    const source =
+        \\f1 = |list| list.map(|item| U32.to_u64(item))
+        \\f2 = |list| list.map(|item| U32.to_u128(item))
+        \\g = |list| (f1(list), f2(list))
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    const gpa = std.testing.allocator;
+    const env = test_env.module_env;
+    var params = std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam).empty;
+    defer params.deinit(gpa);
+    try enumerate(gpa, env, try defVar(env, "g"), &params);
+
+    try std.testing.expectEqual(@as(usize, 1), params.items.len);
+    const idents = env.getIdentStoreConst();
+    try std.testing.expectEqualStrings("map", idents.getText(params.items[0].constraint.fn_name));
+}
+
 test "evidence params reach vars bound only inside constraint fn types" {
     // The clauses on `b` are phantom (the body never dispatches them), which
     // keeps this a valid polymorphic signature; the enumeration must still

@@ -2361,21 +2361,16 @@ fn appendExposedAppProcedureRoots(
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
 ) Allocator.Error!void {
     const module_env = module.moduleEnvConst();
-    var exposed_iter = module_env.common.exposed_items.iterator();
-    while (exposed_iter.next()) |entry| {
-        const raw_node_idx = entry.target.valueDefNode() orelse continue;
-        if (raw_node_idx >= module.nodeCount()) {
-            checkedArtifactInvariant(
-                "checked artifact invariant violated: app exposed item {s} points at out-of-range node {d}",
-                .{ module_env.getIdent(@bitCast(entry.ident_idx)), raw_node_idx },
-            );
-        }
-        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
-        if (module.nodeTag(node_idx) != .def) continue;
-
-        const def_idx: CIR.Def.Idx = @enumFromInt(raw_node_idx);
+    // `exports` is canonicalization's exact app-header `provides` inventory.
+    // `common.exposed_items` is broader: it also publishes associated methods
+    // for module imports, including compiler-owned generated-method markers.
+    // Those methods are public API, but they are not app entrypoints.
+    for (module_env.store.sliceDefs(module_env.exports)) |def_idx| {
         const top_level = top_level_values.lookupByDef(def_idx) orelse {
-            checkedArtifactInvariant("app exposed value definition had no top-level value entry", .{});
+            checkedArtifactInvariant(
+                "app-provided definition {d} had no top-level value entry",
+                .{@intFromEnum(def_idx)},
+            );
         };
         const procedure_binding = switch (top_level.value) {
             .procedure_binding => |binding| binding,
@@ -7930,10 +7925,11 @@ fn appendCheckedTypeRootWithRowDefault(
     store: *CheckedTypeStore,
     active: *CheckedSourceTypeRoots,
     var_: Var,
-    row_default: ?RowDefault,
+    row_default_candidate: ?RowDefault,
 ) Allocator.Error!CheckedTypeId {
     const resolved = module.typeStoreConst().resolveVar(var_);
     const resolved_var = resolved.var_;
+    const row_default = checkedTypeVariableRowDefault(resolved.desc.content, row_default_candidate);
 
     // The checker explicitly marks an otherwise-unresolved identity when it
     // closes that identity to `[]`. Preserve the surviving root as a checked
@@ -8081,6 +8077,22 @@ fn appendCheckedTypeRootWithRowDefault(
     store.payloads.items[@intFromEnum(id)] = stored;
     applyCheckedTypeRowDefault(store, id, row_default);
     return id;
+}
+
+/// A row-tail occurrence supplies a close-to-empty default only when its
+/// variable has no static-dispatch requirements. A constrained row must stay
+/// open so each use can instantiate both the row and its evidence together.
+fn checkedTypeVariableRowDefault(
+    content: types.Content,
+    candidate: ?RowDefault,
+) ?RowDefault {
+    const default = candidate orelse return null;
+    const constraints = switch (content) {
+        .flex => |flex| flex.constraints,
+        .rigid => |rigid| rigid.constraints,
+        .err, .alias, .field_presence, .structure => return null,
+    };
+    return if (constraints.len() == 0) default else null;
 }
 
 fn applyCheckedTypeRowDefault(
@@ -9090,6 +9102,32 @@ const EmptyTagCheckedOutputTestError = @import("test/TestEnv.zig").TestEnvError 
     ExpectedFlexIdentity,
     ExpectedFunctionPayload,
 };
+
+test "checked row defaults apply only to unconstrained type variables" {
+    const no_constraints = types.StaticDispatchConstraint.SafeList.Range.empty();
+    const one_constraint = types.StaticDispatchConstraint.SafeList.Range{
+        // The helper inspects only the range count, so no backing-list index is read.
+        .start = undefined,
+        .count = 1,
+    };
+
+    try std.testing.expectEqual(
+        RowDefault.empty_record,
+        checkedTypeVariableRowDefault(.{ .flex = .{ .name = null, .constraints = no_constraints } }, .empty_record).?,
+    );
+    try std.testing.expectEqual(
+        RowDefault.empty_tag_union,
+        checkedTypeVariableRowDefault(.{ .rigid = .{ .name = Ident.Idx.NONE, .constraints = no_constraints } }, .empty_tag_union).?,
+    );
+    try std.testing.expectEqual(
+        null,
+        checkedTypeVariableRowDefault(.{ .flex = .{ .name = null, .constraints = one_constraint } }, .empty_record),
+    );
+    try std.testing.expectEqual(
+        null,
+        checkedTypeVariableRowDefault(.{ .rigid = .{ .name = Ident.Idx.NONE, .constraints = one_constraint } }, .empty_tag_union),
+    );
+}
 
 fn withEmptyTagCheckedOutputForTest(
     allocator: Allocator,
@@ -17037,7 +17075,12 @@ const EvidencePass = struct {
         // finished evidence vector across the checked-artifact boundary.
         for (self.platform_requirement_solutions, self.platform_requirement_root_evidence) |solution, *out| {
             out.* = .{};
-            if (!solution.is_function or try solutionVarsReachErr(self.allocator, self.module, solution)) continue;
+            switch (solution.outcome) {
+                .checked_error => continue,
+                .success => {},
+                .pending => checkedArtifactInvariant("platform requirement solution was not finalized before evidence publication", .{}),
+            }
+            if (!solution.is_function) continue;
 
             params.clearRetainingCapacity();
             try self.enumerateParams(solution.solved_var, &params);
@@ -17321,12 +17364,25 @@ const EvidencePass = struct {
         return numericDefaultPhaseForConstraints(self.module, constraints);
     }
 
-    /// The canonical `(depth, index)` of `dispatcher_root`'s `method`
-    /// obligation in the chain, searching innermost-out.
-    fn chainParamIndex(self: *EvidencePass, chain: []const []const EvidenceParam, dispatcher_root: Var, method: canonical.MethodNameId) Allocator.Error!?static_dispatch.EvidenceChainIndex {
+    /// The canonical `(depth, index)` of one method target in the chain,
+    /// searching innermost-out. Independent same-name callable relations share
+    /// the target slot, while their checked plans retain the per-call shape.
+    fn chainParamIndex(
+        self: *EvidencePass,
+        chain: []const []const EvidenceParam,
+        dispatcher_root: Var,
+        method: canonical.MethodNameId,
+        constraint_fn_var: ?Var,
+    ) Allocator.Error!?struct {
+        index: static_dispatch.EvidenceChainIndex,
+        exact_callable: bool,
+    } {
         for (chain, 0..) |params, depth| {
-            if (try self.paramIndexFor(params, dispatcher_root, method)) |k| {
-                return .{ .depth = @intCast(depth), .index = @intCast(k) };
+            if (try self.paramIndexFor(params, dispatcher_root, method, constraint_fn_var)) |match| {
+                return .{
+                    .index = .{ .depth = @intCast(depth), .index = @intCast(match.index) },
+                    .exact_callable = match.exact_callable,
+                };
             }
         }
         return null;
@@ -17386,15 +17442,36 @@ const EvidencePass = struct {
         }
     }
 
-    /// The canonical param index of `dispatcher_root`'s `method` obligation.
-    fn paramIndexFor(self: *EvidencePass, params: []const EvidenceParam, dispatcher_root: Var, method: canonical.MethodNameId) Allocator.Error!?u32 {
+    /// The canonical param index of one dispatch obligation.
+    fn paramIndexFor(
+        self: *EvidencePass,
+        params: []const EvidenceParam,
+        dispatcher_root: Var,
+        method: canonical.MethodNameId,
+        constraint_fn_var: ?Var,
+    ) Allocator.Error!?struct {
+        index: u32,
+        exact_callable: bool,
+    } {
         const idents = self.module.identStoreConst();
+        const constraint_fn_root = if (constraint_fn_var) |fn_var|
+            self.types.resolveVar(fn_var).var_
+        else
+            null;
+        var same_method_fallback: ?u32 = null;
         for (params, 0..) |param, k| {
             if (self.types.resolveVar(param.dispatcher_var).var_ != dispatcher_root) continue;
             if (try self.names.internMethodIdent(idents, param.constraint.fn_name) != method) continue;
-            return @intCast(k);
+            if (same_method_fallback == null) same_method_fallback = @intCast(k);
+            if (constraint_fn_root) |fn_root| {
+                if (self.types.resolveVar(param.constraint.fn_var).var_ != fn_root) continue;
+            }
+            return .{ .index = @intCast(k), .exact_callable = true };
         }
-        return null;
+        return if (same_method_fallback) |index|
+            .{ .index = index, .exact_callable = false }
+        else
+            null;
     }
 
     fn resolvePlan(self: *EvidencePass, plan_id: static_dispatch.StaticDispatchPlanId, chain: []const []const EvidenceParam, commit_unpinned: bool) Allocator.Error!void {
@@ -17611,20 +17688,11 @@ const EvidencePass = struct {
         chain: []const []const EvidenceParam,
         commit_unpinned: bool,
     ) Allocator.Error!?static_dispatch.CheckedCallResolution {
-        if (try self.chainParamIndex(chain, dispatcher_root, method)) |ref| {
-            // A constraint(k) resolution consumes evidence entry k, whose
-            // callable is the scheme's pristine constraint fn type. The
-            // obligation's own callable must be that same type: same-named
-            // constraints on a shared dispatcher var unify their fn vars, so
-            // a mismatched root here means the site's callable was pinned to
-            // one instantiation's concrete type.
-            if (constraint_fn_var) |fn_var| {
-                const chain_fn_var = chain[ref.depth][ref.index].constraint.fn_var;
-                if (self.types.resolveVar(fn_var).var_ != self.types.resolveVar(chain_fn_var).var_) {
-                    checkedArtifactInvariant("constraint-resolved dispatch callable was not the scheme-pristine constraint fn type", .{});
-                }
-            }
-            return .{ .evidence_dependent = ref };
+        if (try self.chainParamIndex(chain, dispatcher_root, method, constraint_fn_var)) |match| {
+            return .{ .evidence_dependent = .{
+                .index = match.index,
+                .independent_callable = !match.exact_callable,
+            } };
         }
 
         // Not bound by this chain. During template walks another template's
@@ -18078,7 +18146,10 @@ const EvidencePass = struct {
             .resolution = switch (resolution) {
                 .direct_pending => |node| .{ .direct = node },
                 .direct_closed, .direct_parametric => checkedArtifactInvariant("call resolution was finalized before evidence publication completed", .{}),
-                .evidence_dependent => |ref| .{ .constraint = ref },
+                .evidence_dependent => |dependent| .{ .constraint = .{
+                    .index = dependent.index,
+                    .independent_callable = dependent.independent_callable,
+                } },
                 .structural => |kind| blk: {
                     const callable_var = fresh_fn_var orelse param.constraint.fn_var;
                     const callable_ty = self.checked_types.rootForSourceVar(self.module, callable_var) orelse
@@ -19467,6 +19538,9 @@ pub const CheckedProcedureTemplateTable = struct {
 
         for (value_binding_defs) |def_idx| {
             const def = module.def(def_idx);
+            if (def.expr.data == .e_derived_method) {
+                checkedArtifactInvariant("generated method marker reached procedure-template publication", .{});
+            }
             if (!topLevelExprIsAlreadyProcedure(module, def_idx, def.expr.data)) continue;
 
             const export_name = if (def.patternName()) |name|
@@ -21106,7 +21180,11 @@ fn platformRequirementSolutionTableFromInputs(
     errdefer identity_solutions.deinit(allocator);
 
     for (inputs, root_evidence) |input, evidence| {
-        if (try solutionVarsReachErr(allocator, module, input)) continue;
+        switch (input.outcome) {
+            .checked_error => continue,
+            .success => {},
+            .pending => checkedArtifactInvariant("platform requirement solution was not finalized by checking", .{}),
+        }
 
         const top_level = top_level_values.lookupByDef(input.def) orelse {
             checkedArtifactInvariant("platform requirement solution references a def with no published top-level value", .{});
@@ -21161,28 +21239,6 @@ fn platformRequirementSolutionTableFromInputs(
         .solutions = try solutions.toOwnedSlice(allocator),
         .identity_solutions = try identity_solutions.toOwnedSlice(allocator),
     };
-}
-
-fn solutionVarsReachErr(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    input: requirement_solution.SolutionInput,
-) Allocator.Error!bool {
-    if (try canonical_type_keys.containsError(
-        allocator,
-        module.typeStoreConst(),
-        module.moduleEnvConst(),
-        input.solved_var,
-    )) return true;
-    for (input.identity_vars) |identity_var| {
-        if (try canonical_type_keys.containsError(
-            allocator,
-            module.typeStoreConst(),
-            module.moduleEnvConst(),
-            identity_var,
-        )) return true;
-    }
-    return false;
 }
 
 /// Public `PlatformRequiredBinding` declaration.
@@ -23877,6 +23933,9 @@ pub const CompileTimeRootTable = struct {
         const module_env = module.moduleEnvConst();
         for (value_binding_defs) |def_idx| {
             const def = module.def(def_idx);
+            if (def.expr.data == .e_derived_method) {
+                checkedArtifactInvariant("generated method marker reached compile-time-root publication", .{});
+            }
             if (topLevelDefSourceIdent(def) == null) continue;
             if (procedure_templates.lookupByDef(def_idx) != null) continue;
             // An annotation-only declaration has no value to evaluate; its
@@ -25346,6 +25405,9 @@ pub const TopLevelValueTable = struct {
 
         for (value_binding_defs) |def_idx| {
             const def = module.def(def_idx);
+            if (def.expr.data == .e_derived_method) {
+                checkedArtifactInvariant("generated method marker reached top-level-value publication", .{});
+            }
             const checked_pattern = checkedPatternIdForSource(checked_bodies, def.pattern.idx);
             const source_name = try topLevelDefSourceName(module, names, def) orelse continue;
             const source_ty = module.defType(def_idx);
@@ -29330,7 +29392,9 @@ pub const CheckedModuleArtifact = struct {
     // whose site lives inside a defaulted-field expression names the
     // declaring module's content identity so const-store restore resolves
     // the default-root site (design.md "Defaulted Fields").
-    const serialized_layout_version: u32 = 74;
+    // Version 75 preserves whether forwarded evidence supplies an exact
+    // callable relation or only the shared method target.
+    const serialized_layout_version: u32 = 75;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -32515,6 +32579,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .diag_type_from_missing_module,
             .diag_module_not_imported,
             .diag_nested_type_not_found,
+            .diag_internal_builtin_type,
             .diag_nested_value_not_found,
             .diag_record_builder_map2_not_found,
             .diag_too_many_exports,
@@ -35304,7 +35369,7 @@ test "module source input hash uses explicit file dependency state" {
     var missing_env = try ModuleEnv.init(gpa, "");
     defer missing_env.deinit();
     try missing_env.initCIRFields("Test");
-    const missing_idx = try missing_env.recordFileDependency("data.txt");
+    const missing_idx = try missing_env.recordFileDependency("data.txt", 0, 0);
     missing_env.setFileDependencyMissing(missing_idx);
     const missing_hash = hashModuleSourceInputs(&missing_env);
 
@@ -35315,14 +35380,14 @@ test "module source input hash uses explicit file dependency state" {
     var unreadable_env = try ModuleEnv.init(gpa, "");
     defer unreadable_env.deinit();
     try unreadable_env.initCIRFields("Test");
-    const unreadable_idx = try unreadable_env.recordFileDependency("data.txt");
+    const unreadable_idx = try unreadable_env.recordFileDependency("data.txt", 0, 0);
     unreadable_env.setFileDependencyUnreadable(unreadable_idx);
     const unreadable_hash = hashModuleSourceInputs(&unreadable_env);
 
     var present_env = try ModuleEnv.init(gpa, "");
     defer present_env.deinit();
     try present_env.initCIRFields("Test");
-    const present_idx = try present_env.recordFileDependency("data.txt");
+    const present_idx = try present_env.recordFileDependency("data.txt", 0, 0);
     present_env.setFileDependencyContentHash(present_idx, [_]u8{0} ** 32);
     const present_hash = hashModuleSourceInputs(&present_env);
 
@@ -35499,8 +35564,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x3B, 0x04, 0x74, 0x07, 0xEC, 0x86, 0x65, 0xE5, 0x59, 0xC4, 0x4F, 0x9F, 0xBE, 0xC2, 0x29, 0xA7,
-        0x9A, 0xC8, 0xDE, 0x4E, 0x79, 0x7A, 0xBB, 0x6E, 0x5F, 0xCB, 0x3B, 0xE8, 0x4C, 0x46, 0x82, 0x8E,
+        0xBE, 0x73, 0xFF, 0x0A, 0xA4, 0x67, 0xCB, 0xAD, 0x3B, 0xC5, 0x16, 0x28, 0x76, 0xC2, 0x2B, 0xCA,
+        0xA5, 0xA5, 0xA5, 0x4A, 0x2D, 0xF8, 0x2D, 0x64, 0x3C, 0x87, 0x7C, 0x5C, 0x9A, 0x32, 0xCC, 0xFB,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -35520,7 +35585,7 @@ test "closed direct evidence excludes specialization-dependent nested recipes" {
     const context_anchor = testIndexId(CheckedStatementId, 0);
 
     var refs = [_]static_dispatch.CheckedEvidence{
-        .{ .dispatcher_ty = callable_ty, .runtime_dictionary = true, .resolution = .{ .constraint = .{ .depth = 0, .index = 0 } } },
+        .{ .dispatcher_ty = callable_ty, .runtime_dictionary = true, .resolution = .{ .constraint = .{ .index = .{ .depth = 0, .index = 0 } } } },
         .{ .dispatcher_ty = callable_ty, .runtime_dictionary = true, .resolution = .{ .direct = evidence_0 } },
         .{ .dispatcher_ty = callable_ty, .runtime_dictionary = true, .resolution = .{ .direct = evidence_1 } },
     };
@@ -35625,7 +35690,7 @@ test "template dispatch classification separates direct calls from graph relatio
         .{ .expr = testIndexId(CheckedExprId, 0), .method = method, .dispatcher = .type_only, .dispatcher_ty = callable_ty, .callable_ty = callable_ty, .result_mode = .value, .resolution = .{ .direct_closed = .{ .evidence = evidence_0 } } },
         .{ .expr = testIndexId(CheckedExprId, 1), .method = method, .dispatcher = .type_only, .dispatcher_ty = callable_ty, .callable_ty = callable_ty, .result_mode = .value, .resolution = .{ .direct_parametric = .{ .evidence = evidence_1 } } },
         .{ .expr = testIndexId(CheckedExprId, 2), .method = method, .dispatcher = .type_only, .dispatcher_ty = callable_ty, .callable_ty = callable_ty, .result_mode = .value, .resolution = .{ .direct_closed = .{ .evidence = evidence_2 } } },
-        .{ .expr = testIndexId(CheckedExprId, 3), .method = method, .dispatcher = .type_only, .dispatcher_ty = callable_ty, .callable_ty = callable_ty, .result_mode = .value, .resolution = .{ .evidence_dependent = .{ .depth = 0, .index = 0 } } },
+        .{ .expr = testIndexId(CheckedExprId, 3), .method = method, .dispatcher = .type_only, .dispatcher_ty = callable_ty, .callable_ty = callable_ty, .result_mode = .value, .resolution = .{ .evidence_dependent = .{ .index = .{ .depth = 0, .index = 0 } } } },
     };
     var refs = [_]static_dispatch.StaticDispatchPlanId{
         plan_0,

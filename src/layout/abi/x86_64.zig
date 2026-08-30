@@ -103,7 +103,7 @@ pub fn classifyWindows(store: *const Store, idx: Idx) Class {
                 .vector => return .win_i128,
             }
         },
-        .box, .box_of_zst, .ptr => return .integer, // single pointer
+        .box, .box_of_zst, .erased_box, .ptr => return .integer, // single pointer
         .list, .list_of_zst => return .memory, // 24-byte aggregate
         .struct_, .tag_union, .closure, .erased_callable => {},
         .zst => unreachable,
@@ -145,7 +145,7 @@ pub fn classifySystemV(store: *const Store, idx: Idx, ctx: Context) [8]Class {
         // exactly like a box. Classifying it as an aggregate would recurse
         // forever: classifyAggregateSysV has no case for it and would route
         // it right back here.
-        .box, .box_of_zst, .ptr, .erased_callable => return Class.one_integer,
+        .box, .box_of_zst, .erased_box, .ptr, .erased_callable => return Class.one_integer,
         .list, .list_of_zst => return integerAggregateSysV(size),
         .struct_, .tag_union, .closure => {
             if (size > 64) return Class.stack;
@@ -208,6 +208,7 @@ fn classifyAggregateSysV(store: *const Store, result: *[8]Class, base_offset: u3
         .scalar,
         .box,
         .box_of_zst,
+        .erased_box,
         .list,
         .list_of_zst,
         .erased_callable,
@@ -226,6 +227,7 @@ fn classifyMemberSysV(store: *const Store, result: *[8]Class, offset: u32, idx: 
         .scalar,
         .box,
         .box_of_zst,
+        .erased_box,
         .list,
         .list_of_zst,
         .erased_callable,

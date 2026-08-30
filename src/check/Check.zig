@@ -63,6 +63,8 @@ const TypeDeclDependency = struct {
     dependency: u32,
 };
 
+const InterpolationPartsIdx = InterpolationPartMetadata.SafeList.Idx;
+
 const no_type_decl_dense_index = std.math.maxInt(u32);
 
 const no_def_group = std.math.maxInt(u32);
@@ -310,8 +312,9 @@ u64_var: Var,
 builtin_types_copied: bool,
 /// Map representation of Ident -> Var, used in checking static dispatch constraints
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
-/// Interpolation constraint function vars whose custom part checks have already run.
-checked_interpolation_part_constraints: std.AutoHashMap(Var, void),
+/// Interpolation metadata ranges whose occurrence-specific custom part checks
+/// have already run.
+checked_interpolation_part_constraints: std.AutoHashMap(InterpolationPartsIdx, void),
 /// Vars that originated as single-quote (.int_unbound) literals.
 int_unbound_vars: std.AutoHashMap(Var, void),
 /// Dispatcher/method pairs already reported by `reportConstraintError`, so a
@@ -2389,7 +2392,7 @@ fn initAssumePrepared(
         .u64_var = undefined,
         .builtin_types_copied = false,
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
-        .checked_interpolation_part_constraints = std.AutoHashMap(Var, void).init(gpa),
+        .checked_interpolation_part_constraints = std.AutoHashMap(InterpolationPartsIdx, void).init(gpa),
         .scratch_generated_codec_calls = .empty,
         .int_unbound_vars = std.AutoHashMap(Var, void).init(gpa),
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
@@ -7494,7 +7497,53 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     try self.finalizeBindingSchemeNodes();
 
+    try self.finalizePlatformRequirementSolutions();
+
     self.debugAssertNominalDeclTableComplete();
+}
+
+/// Turn every provisional platform-requirement row into the explicit
+/// successful-binding or checked-error outcome consumed by artifact
+/// publication. This runs after all checker error poisoning, while the checker
+/// still owns the exact source def and solved vars.
+fn finalizePlatformRequirementSolutions(self: *Self) Allocator.Error!void {
+    for (self.platform_requirement_solutions.items) |*solution| {
+        const def = self.cir.store.getDef(solution.def);
+        var checked_error = self.erroneous_value_exprs.contains(def.expr) or
+            self.erroneous_value_patterns.contains(def.pattern);
+
+        if (!checked_error) {
+            checked_error = try canonical_type_keys.containsError(
+                self.gpa,
+                self.types,
+                self.cir,
+                ModuleEnv.varFrom(def.expr),
+            );
+        }
+        if (!checked_error) {
+            checked_error = try canonical_type_keys.containsError(
+                self.gpa,
+                self.types,
+                self.cir,
+                solution.solved_var,
+            );
+        }
+        if (!checked_error) {
+            for (solution.identity_vars) |identity_var| {
+                if (try canonical_type_keys.containsError(
+                    self.gpa,
+                    self.types,
+                    self.cir,
+                    identity_var,
+                )) {
+                    checked_error = true;
+                    break;
+                }
+            }
+        }
+
+        solution.outcome = if (checked_error) .checked_error else .success;
+    }
 }
 
 /// Finish canonicalization's strict-demand relation with the exact local
@@ -11890,6 +11939,7 @@ fn predeclareAnnotationScheme(
     );
     try self.judgeFieldKindsAtBoundary(env);
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+    try self.deduplicateGeneralizedDispatchRequirements(scheme_var);
     try self.publishBindingScheme(scheme_var);
     env.var_pool.popRank();
 
@@ -12263,6 +12313,7 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
         for (scc.defs) |member_def_idx| {
             const member_def = self.cir.store.getDef(member_def_idx);
             const expr_var = ModuleEnv.varFrom(member_def.expr);
+            try self.deduplicateGeneralizedDispatchRequirements(expr_var);
             try self.publishBindingScheme(expr_var);
             try self.bindBindingSchemeVar(expr_var, ModuleEnv.varFrom(member_def.pattern));
             try self.bindBindingSchemeVar(expr_var, ModuleEnv.varFrom(member_def_idx));
@@ -14981,6 +15032,17 @@ fn setBuiltinTypeContent(
 const Expected = struct {
     annotation: ?CIR.Annotation.Idx = null,
     expected_type: ?ExpectedType = null,
+    /// A type whose aggregate shape may guide nested construction checking,
+    /// without making this expression node itself own the final relation.
+    ///
+    /// Stored values (list elements, tuple elements, record fields, and tag
+    /// payloads) can generalize before the enclosing aggregate relates their
+    /// instantiated use to its slot. Passing `expected_type` to those children
+    /// would constrain the generalized scheme rather than that use. This
+    /// separate channel lets aggregate expressions project child slots early;
+    /// their owner still establishes the ordinary relation after
+    /// `checkStoredValueExpr` returns the instantiated value.
+    contextual_type: ?ExpectedType = null,
     branch_result: ?Var = null,
     comptime_condition_warnings: enum { emit, suppress } = .emit,
     hoist_position: HoistPosition = .suppressed,
@@ -15002,6 +15064,7 @@ const Expected = struct {
         return .{
             .annotation = annotation_idx,
             .expected_type = self.expected_type,
+            .contextual_type = self.contextual_type,
             .branch_result = self.branch_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = self.hoist_position,
@@ -15012,6 +15075,7 @@ const Expected = struct {
         return .{
             .annotation = self.annotation,
             .expected_type = expected_type,
+            .contextual_type = self.contextual_type,
             .branch_result = self.branch_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = self.hoist_position,
@@ -15022,16 +15086,33 @@ const Expected = struct {
         return .{
             .annotation = null,
             .expected_type = expected_type,
+            .contextual_type = self.contextual_type,
             .branch_result = self.branch_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = self.hoist_position,
         };
     }
 
+    fn withContextualType(self: Expected, contextual_type: ExpectedType) Expected {
+        return .{
+            .annotation = self.annotation,
+            .expected_type = self.expected_type,
+            .contextual_type = contextual_type,
+            .branch_result = self.branch_result,
+            .comptime_condition_warnings = self.comptime_condition_warnings,
+            .hoist_position = self.hoist_position,
+        };
+    }
+
+    fn aggregateType(self: Expected) ?ExpectedType {
+        return self.expected_type orelse self.contextual_type;
+    }
+
     fn withBranchResult(self: Expected, branch_result: Var) Expected {
         return .{
             .annotation = self.annotation,
             .expected_type = self.expected_type,
+            .contextual_type = self.contextual_type,
             .branch_result = branch_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = self.hoist_position,
@@ -15042,6 +15123,7 @@ const Expected = struct {
         return .{
             .annotation = self.annotation,
             .expected_type = self.expected_type,
+            .contextual_type = self.contextual_type,
             .branch_result = self.branch_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = hoist_position,
@@ -15056,6 +15138,7 @@ const Expected = struct {
         return .{
             .annotation = self.annotation,
             .expected_type = self.expected_type,
+            .contextual_type = self.contextual_type,
             .branch_result = self.branch_result,
             .comptime_condition_warnings = .suppress,
             .hoist_position = .comptime_root,
@@ -15064,6 +15147,11 @@ const Expected = struct {
 
     fn forBranchBody(self: Expected) Expected {
         return .{
+            // The branch checker owns the final branch-to-result relation, so
+            // branch bodies receive only the structural channel. This lets a
+            // nested aggregate see the branch result shape without binding a
+            // generalized stored value directly to it.
+            .contextual_type = self.expected_type orelse self.contextual_type,
             .branch_result = self.branch_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = .suppressed,
@@ -15089,6 +15177,7 @@ const Expected = struct {
         return .{
             .annotation = self.annotation,
             .expected_type = self.expected_type,
+            .contextual_type = self.contextual_type,
             .branch_result = self.branch_result,
             .comptime_condition_warnings = .suppress,
             .hoist_position = self.hoist_position,
@@ -16014,6 +16103,65 @@ fn checkStoredValueExpr(
     };
 }
 
+/// Project an aggregate's child slots from an expected type before checking
+/// those children. The projection is performed against a rigids-flexed orphan
+/// copy: child checking may refine the copy, while the pristine expected var
+/// remains available to the expression that owns the final relation and its
+/// diagnostic.
+///
+/// `shape_var` is a freshly-built aggregate skeleton whose child vars the
+/// caller retains. A non-matching expected constructor is not itself an error
+/// here; the owning relation reports that mismatch after the expression has
+/// checked all of its children.
+fn projectExpectedAggregateShape(
+    self: *Self,
+    expected: Expected,
+    shape_var: Var,
+    env: *Env,
+) std.mem.Allocator.Error!bool {
+    const aggregate_type = expected.aggregateType() orelse return false;
+    // An erroneous expected graph carries no trustworthy construction shape.
+    // Projecting its Error nodes into an otherwise valid child would make the
+    // child—and then its enclosing lambda or binding—spuriously erroneous.
+    self.var_set.clearRetainingCapacity();
+    const expected_contains_error = try self.varContainsError(aggregate_type.var_, &self.var_set);
+    self.var_set.clearRetainingCapacity();
+    if (expected_contains_error) return false;
+
+    const expected_copy = try self.instantiateVarOrphanFlexed(aggregate_type.var_, env, .use_last_var);
+
+    var commit_probe = try self.beginCommitProbe(env);
+    var committed = false;
+    defer if (!committed) commit_probe.rollback();
+    const result = try commit_probe.unifyInContext(expected_copy, shape_var, aggregate_type.context);
+    if (!result.isEstablished()) return false;
+    committed = true;
+    commit_probe.commit();
+    return true;
+}
+
+/// Commit a stored value's relation to a successfully projected aggregate
+/// slot without taking ownership of a mismatch diagnostic. The enclosing
+/// aggregate's ordinary relation owns any rejection and has the full
+/// constructor shape required by specialized reports. A successful relation
+/// is kept so type/evidence information is available to later sibling checks
+/// and dispatch resolution.
+fn commitProjectedStoredValue(
+    self: *Self,
+    projected: Var,
+    actual: Var,
+    env: *Env,
+) std.mem.Allocator.Error!bool {
+    var commit_probe = try self.beginCommitProbe(env);
+    var committed = false;
+    defer if (!committed) commit_probe.rollback();
+    const result = try commit_probe.unify(projected, actual);
+    if (!result.isEstablished()) return false;
+    committed = true;
+    commit_probe.commit();
+    return true;
+}
+
 fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -16332,18 +16480,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // recorded) and the annotation mismatch is reported after
                 // the switch, exactly as without seeding.
                 const mb_seed_elem_var: ?Var = seed: {
-                    const expected_type = nested_expected.expected_type orelse break :seed null;
-                    const expected_copy = try self.instantiateVarOrphanFlexed(expected_type.var_, env, .use_last_var);
+                    _ = nested_expected.aggregateType() orelse break :seed null;
                     const seed_elem_var = try self.fresh(env, expr_region);
                     const seed_list_var = try self.freshFromContent(try self.mkListContent(seed_elem_var), env, expr_region);
-
-                    var commit_probe = try self.beginCommitProbe(env);
-                    var committed = false;
-                    defer if (!committed) commit_probe.rollback();
-                    const result = try commit_probe.unify(expected_copy, seed_list_var);
-                    if (!result.isEstablished()) break :seed null;
-                    committed = true;
-                    commit_probe.commit();
+                    if (!try self.projectExpectedAggregateShape(nested_expected, seed_list_var, env)) break :seed null;
                     break :seed seed_elem_var;
                 };
 
@@ -16351,7 +16491,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // constrain the rest of the list
 
                 // Check the first elem
-                const first_elem = try self.checkStoredValueExpr(elems[0], env, child_expected);
+                const first_expected = if (mb_seed_elem_var) |seed_elem_var|
+                    child_expected.withContextualType(.{
+                        .var_ = seed_elem_var,
+                        .context = nested_expected.aggregateType().?.context,
+                    })
+                else
+                    child_expected;
+                const first_elem = try self.checkStoredValueExpr(elems[0], env, first_expected);
                 does_fx = first_elem.does_fx or does_fx;
 
                 // Fold the first element into the seeded accumulator: one
@@ -16362,7 +16509,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // expected type's own context, at the element's region.
                 var first_elem_ok = true;
                 const elem_var = if (mb_seed_elem_var) |seed_elem_var| acc: {
-                    const result = try self.unifyInContext(seed_elem_var, first_elem.var_, env, nested_expected.expected_type.?.context);
+                    const result = try self.unifyInContext(seed_elem_var, first_elem.var_, env, nested_expected.aggregateType().?.context);
                     first_elem_ok = result.isEstablished();
                     break :acc seed_elem_var;
                 } else first_elem.var_;
@@ -16371,7 +16518,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // Iterate over the remaining elements
                     var last_elem_expr_idx = elems[0];
                     for (elems[1..], 1..) |elem_expr_idx, i| {
-                        const current_elem = try self.checkStoredValueExpr(elem_expr_idx, env, child_expected);
+                        const elem_expected = if (mb_seed_elem_var) |seed_elem_var|
+                            child_expected.withContextualType(.{
+                                .var_ = seed_elem_var,
+                                .context = nested_expected.aggregateType().?.context,
+                            })
+                        else
+                            child_expected;
+                        const current_elem = try self.checkStoredValueExpr(elem_expr_idx, env, elem_expected);
                         does_fx = current_elem.does_fx or does_fx;
                         const cur_elem_var = current_elem.var_;
 
@@ -16414,13 +16568,48 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         // tuple //
         .e_tuple => |tuple| {
-            // Check tuple elements
             const elems_slice = self.cir.store.exprSlice(tuple.elems);
+
+            // Establish a tuple skeleton first, so an enclosing relation can
+            // supply each element's shape before that element is checked.
+            const mb_projected_elems: ?Var.SafeList.Range = projected: {
+                _ = nested_expected.aggregateType() orelse break :projected null;
+                const projected_top = self.scratch_vars.top();
+                defer self.scratch_vars.clearFrom(projected_top);
+                for (elems_slice) |_| {
+                    try self.scratch_vars.append(try self.fresh(env, expr_region));
+                }
+                const projected_elems = try self.types.appendVars(self.scratch_vars.sliceFromStart(projected_top));
+                const projected_tuple = try self.freshFromContent(.{ .structure = .{
+                    .tuple = .{ .elems = projected_elems },
+                } }, env, expr_region);
+                if (!try self.projectExpectedAggregateShape(nested_expected, projected_tuple, env)) {
+                    break :projected null;
+                }
+                break :projected projected_elems;
+            };
+
+            // Check tuple elements, then relate each instantiated stored value
+            // to the slot projected above.
             const scratch_vars_top = self.scratch_vars.top();
             defer self.scratch_vars.clearFrom(scratch_vars_top);
-            for (elems_slice) |single_elem_expr_idx| {
-                const elem = try self.checkStoredValueExpr(single_elem_expr_idx, env, child_expected);
+            for (elems_slice, 0..) |single_elem_expr_idx, elem_index| {
+                const elem_expected = if (mb_projected_elems) |projected_elems|
+                    child_expected.withContextualType(.{
+                        .var_ = self.types.getVarAt(projected_elems, @intCast(elem_index)),
+                        .context = nested_expected.aggregateType().?.context,
+                    })
+                else
+                    child_expected;
+                const elem = try self.checkStoredValueExpr(single_elem_expr_idx, env, elem_expected);
                 does_fx = elem.does_fx or does_fx;
+                if (mb_projected_elems) |projected_elems| {
+                    _ = try self.commitProjectedStoredValue(
+                        self.types.getVarAt(projected_elems, @intCast(elem_index)),
+                        elem.var_,
+                        env,
+                    );
+                }
                 try self.scratch_vars.append(elem.var_);
             }
 
@@ -16462,10 +16651,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 for (self.cir.store.sliceRecordFields(e.fields)) |field_idx| {
                     const field = self.cir.store.getRecordField(field_idx);
 
-                    // Check the field value expression
-                    const field_value = try self.checkStoredValueExpr(field.value, env, child_expected);
-                    does_fx = field_value.does_fx or does_fx;
-
                     // A supplied update field has CREATION semantics: like a
                     // record-literal field, its KIND is undetermined—the
                     // update can set a required, defaulted, or optional field
@@ -16479,6 +16664,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // the update judgment commits it to required before its
                     // owning generalization boundary.
                     const field_kind_var = try self.fresh(env, expr_region);
+                    const projected_field_value = try self.fresh(env, expr_region);
                     try self.pending_record_updates.append(self.gpa, .{
                         .presence_var = field_kind_var,
                         .region = expr_region,
@@ -16489,18 +16675,56 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         .structure = .{
                             .record_unbound = try self.types.appendRecordFields(&.{types_mod.RecordField{
                                 .name = field.name,
-                                .presence = .unknown(field_kind_var, field_value.var_),
+                                .presence = .unknown(field_kind_var, projected_field_value),
                             }}),
                         },
                     }, env, expr_region);
 
-                    // Unify this record update with the record we're updating
-                    _ = try self.unifyInContext(record_being_updated_var, single_field_record, env, .{ .record_update = .{
+                    // Relate the update slot to the base row before checking
+                    // its value, so a nested aggregate sees the field shape
+                    // declared by the base record.
+                    const update_context = problem.Context{ .record_update = .{
                         .field_name = field.name,
                         .field_region_idx = @enumFromInt(@intFromEnum(field.value)),
                         .record_region_idx = @enumFromInt(@intFromEnum(record_being_updated_var)),
                         .record_name = record_being_updated_name,
-                    } });
+                    } };
+                    const slot_projected = try self.projectExpectedAggregateShape(
+                        child_expected.withContextualType(.{
+                            .var_ = record_being_updated_var,
+                            .context = update_context,
+                        }),
+                        single_field_record,
+                        env,
+                    );
+
+                    const field_expected = if (slot_projected)
+                        child_expected.withContextualType(.{
+                            .var_ = projected_field_value,
+                            .context = update_context,
+                        })
+                    else
+                        child_expected;
+                    const field_value = try self.checkStoredValueExpr(field.value, env, field_expected);
+                    does_fx = field_value.does_fx or does_fx;
+
+                    // The base row owns the final update judgment and its
+                    // record-aware diagnostic. Use the instantiated stored
+                    // value here; the projection above was context only.
+                    const actual_field_record = try self.freshFromContent(.{
+                        .structure = .{
+                            .record_unbound = try self.types.appendRecordFields(&.{types_mod.RecordField{
+                                .name = field.name,
+                                .presence = .unknown(field_kind_var, field_value.var_),
+                            }}),
+                        },
+                    }, env, expr_region);
+                    _ = try self.unifyInContext(
+                        record_being_updated_var,
+                        actual_field_record,
+                        env,
+                        update_context,
+                    );
                 }
 
                 // Process each unset field. The probe mirrors `.?`-access
@@ -16546,17 +16770,78 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // Then unify with the actual expression
                 _ = try self.unify(record_being_updated_var, expr_var, env);
             } else {
+                const source_fields = self.cir.store.sliceRecordFields(e.fields);
+
+                // Build a record skeleton with one payload slot per supplied
+                // field. Relating an orphan expected copy to this skeleton
+                // admits omitted defaulted fields at the real source record
+                // construction, and pins each supplied field's payload before
+                // its expression is checked.
+                const mb_projected_field_values: ?Var.SafeList.Range = projected: {
+                    _ = nested_expected.aggregateType() orelse break :projected null;
+                    const projected_fields_top = self.scratch_record_fields.top();
+                    defer self.scratch_record_fields.clearFrom(projected_fields_top);
+                    const projected_values_top = self.scratch_vars.top();
+                    defer self.scratch_vars.clearFrom(projected_values_top);
+
+                    for (source_fields) |field_idx| {
+                        const field = self.cir.store.getRecordField(field_idx);
+                        const projected_value = try self.fresh(env, expr_region);
+                        try self.scratch_vars.append(projected_value);
+                        try self.scratch_record_fields.append(.{
+                            .name = field.name,
+                            .presence = .unknown(
+                                try self.fresh(env, expr_region),
+                                projected_value,
+                            ),
+                        });
+                    }
+
+                    const projected_values = try self.types.appendVars(self.scratch_vars.sliceFromStart(projected_values_top));
+                    const projected_fields_scratch = self.scratch_record_fields.sliceFromStart(projected_fields_top);
+                    std.mem.sort(
+                        types_mod.RecordField,
+                        projected_fields_scratch,
+                        self.cir.getIdentStore(),
+                        types_mod.RecordField.sortByNameAsc,
+                    );
+                    const projected_fields = try self.types.appendRecordFields(projected_fields_scratch);
+                    const projected_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, expr_region);
+                    const projected_record = try self.freshFromContent(.{ .structure = .{ .record = .{
+                        .fields = projected_fields,
+                        .ext = projected_ext,
+                    } } }, env, expr_region);
+                    if (!try self.projectExpectedAggregateShape(nested_expected, projected_record, env)) {
+                        break :projected null;
+                    }
+                    break :projected projected_values;
+                };
+
                 // Write down the top of the scratch records array
                 const record_fields_top = self.scratch_record_fields.top();
                 defer self.scratch_record_fields.clearFrom(record_fields_top);
 
                 // Process each field
-                for (self.cir.store.sliceRecordFields(e.fields)) |field_idx| {
+                for (source_fields, 0..) |field_idx, field_index| {
                     const field = self.cir.store.getRecordField(field_idx);
 
                     // Check the field value expression
-                    const field_value = try self.checkStoredValueExpr(field.value, env, child_expected);
+                    const field_expected = if (mb_projected_field_values) |projected_values|
+                        child_expected.withContextualType(.{
+                            .var_ = self.types.getVarAt(projected_values, @intCast(field_index)),
+                            .context = nested_expected.aggregateType().?.context,
+                        })
+                    else
+                        child_expected;
+                    const field_value = try self.checkStoredValueExpr(field.value, env, field_expected);
                     does_fx = field_value.does_fx or does_fx;
+                    if (mb_projected_field_values) |projected_values| {
+                        _ = try self.commitProjectedStoredValue(
+                            self.types.getVarAt(projected_values, @intCast(field_index)),
+                            field_value.var_,
+                            env,
+                        );
+                    }
 
                     // A literal field's KIND is undetermined: the literal
                     // can serve as a required field or as an optional one
@@ -16638,15 +16923,56 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.unifyWith(expr_var, tag_union_content, env);
         },
         .e_tag => |e| {
-            // Create a tag type in the type system and assign it the expr_var
-
-            // Process each tag arg
             const arg_expr_idx_slice = self.cir.store.sliceExpr(e.args);
+
+            // Project this constructor's payload slots from the expected tag
+            // union before checking payload expressions.
+            const mb_projected_args: ?Var.SafeList.Range = projected: {
+                // A zero-payload tag has no nested construction to guide. Its
+                // ordinary enclosing relation must remain the sole place that
+                // grounds and discharges the expected type's constraints.
+                if (arg_expr_idx_slice.len == 0) break :projected null;
+                _ = nested_expected.aggregateType() orelse break :projected null;
+                const projected_top = self.scratch_vars.top();
+                defer self.scratch_vars.clearFrom(projected_top);
+                for (arg_expr_idx_slice) |_| {
+                    try self.scratch_vars.append(try self.fresh(env, expr_region));
+                }
+                const projected_args = try self.types.appendVars(self.scratch_vars.sliceFromStart(projected_top));
+                const projected_ext = try self.fresh(env, expr_region);
+                const projected_tag = try self.types.mkTag(e.name, self.types.sliceVars(projected_args));
+                const projected_union = try self.freshFromContent(
+                    try self.types.mkTagUnion(&[_]types_mod.Tag{projected_tag}, projected_ext),
+                    env,
+                    expr_region,
+                );
+                if (!try self.projectExpectedAggregateShape(nested_expected, projected_union, env)) {
+                    break :projected null;
+                }
+                break :projected projected_args;
+            };
+
+            // Process each tag arg, preserving the stored-value instantiation
+            // edge before relating it to the projected payload slot.
             const scratch_vars_top = self.scratch_vars.top();
             defer self.scratch_vars.clearFrom(scratch_vars_top);
-            for (arg_expr_idx_slice) |arg_expr_idx| {
-                const arg = try self.checkStoredValueExpr(arg_expr_idx, env, child_expected);
+            for (arg_expr_idx_slice, 0..) |arg_expr_idx, arg_index| {
+                const arg_expected = if (mb_projected_args) |projected_args|
+                    child_expected.withContextualType(.{
+                        .var_ = self.types.getVarAt(projected_args, @intCast(arg_index)),
+                        .context = nested_expected.aggregateType().?.context,
+                    })
+                else
+                    child_expected;
+                const arg = try self.checkStoredValueExpr(arg_expr_idx, env, arg_expected);
                 does_fx = arg.does_fx or does_fx;
+                if (mb_projected_args) |projected_args| {
+                    _ = try self.commitProjectedStoredValue(
+                        self.types.getVarAt(projected_args, @intCast(arg_index)),
+                        arg.var_,
+                        env,
+                    );
+                }
                 try self.scratch_vars.append(arg.var_);
             }
 
@@ -16661,44 +16987,72 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         // nominal //
         .e_nominal => |nominal| {
-            // Check the backing expression first
-            const backing = try self.checkStoredValueExpr(nominal.backing_expr, env, child_expected);
-            does_fx = backing.does_fx or does_fx;
-            const actual_backing_var = backing.var_;
-
-            // Use shared nominal type checking logic
-            _ = try self.checkNominalTypeUsage(
+            const prepared = try self.prepareNominalTypeUsage(
                 expr_var,
-                actual_backing_var,
                 ModuleEnv.varFrom(nominal.nominal_type_decl),
-                nominal.backing_type,
                 expr_region,
                 env,
-                if (self.exprIsFreshRecordConstruction(nominal.backing_expr)) .construction else .exact,
-                expr_idx,
             );
-        },
-        .e_nominal_external => |nominal| {
-            // Check the backing expression first
-            const backing = try self.checkStoredValueExpr(nominal.backing_expr, env, child_expected);
+            const backing_expected = if (prepared) |usage|
+                child_expected.withContextualType(.{
+                    .var_ = usage.backing_var,
+                    .context = .{ .nominal_constructor = .{
+                        .backing_type = @enumFromInt(@intFromEnum(nominal.backing_type)),
+                    } },
+                })
+            else
+                child_expected;
+            const backing = try self.checkStoredValueExpr(nominal.backing_expr, env, backing_expected);
             does_fx = backing.does_fx or does_fx;
             const actual_backing_var = backing.var_;
 
-            // Resolve the external type declaration
-            if (try self.resolveVarFromExternal(nominal.module_idx, nominal.target_node_idx)) |ext_ref| {
-                // Use shared nominal type checking logic
-                _ = try self.checkNominalTypeUsage(
+            if (prepared) |usage| {
+                _ = try self.finishNominalTypeUsage(
                     expr_var,
                     actual_backing_var,
-                    ext_ref.local_var,
+                    usage,
                     nominal.backing_type,
-                    expr_region,
                     env,
                     if (self.exprIsFreshRecordConstruction(nominal.backing_expr)) .construction else .exact,
                     expr_idx,
                 );
-            } else {
+            }
+        },
+        .e_nominal_external => |nominal| {
+            // Resolve the external type declaration
+            const prepared = if (try self.resolveVarFromExternal(nominal.module_idx, nominal.target_node_idx)) |ext_ref|
+                try self.prepareNominalTypeUsage(
+                    expr_var,
+                    ext_ref.local_var,
+                    expr_region,
+                    env,
+                )
+            else prepared: {
                 try self.markErroneous(expr_var);
+                break :prepared null;
+            };
+            const backing_expected = if (prepared) |usage|
+                child_expected.withContextualType(.{
+                    .var_ = usage.backing_var,
+                    .context = .{ .nominal_constructor = .{
+                        .backing_type = @enumFromInt(@intFromEnum(nominal.backing_type)),
+                    } },
+                })
+            else
+                child_expected;
+            const backing = try self.checkStoredValueExpr(nominal.backing_expr, env, backing_expected);
+            does_fx = backing.does_fx or does_fx;
+
+            if (prepared) |usage| {
+                _ = try self.finishNominalTypeUsage(
+                    expr_var,
+                    backing.var_,
+                    usage,
+                    nominal.backing_type,
+                    env,
+                    if (self.exprIsFreshRecordConstruction(nominal.backing_expr)) .construction else .exact,
+                    expr_idx,
+                );
             }
         },
         // lookup //
@@ -17284,211 +17638,166 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             break :blk_instantiate call_func_expr_var;
                         }
                     };
-                    // The instantiated callable is the authoritative callee result.
-                    // Imported static methods can use an erroneous source placeholder
-                    // whose binding scheme instantiates to a valid callable here.
-                    var did_err = self.types.resolveVar(func_var).desc.content == .err;
-
-                    // Second, check the arguments being called
-                    // It could be effectful, e.g. `fn(mk_arg!())`
                     const call_arg_expr_idxs = self.cir.store.sliceExpr(call.args);
-                    for (call_arg_expr_idxs) |call_arg_idx| {
+                    const func_name: ?Ident.Idx = self.getExprPatternIdent(call.func);
+
+                    // Determine whether a concrete callee already fixes arity,
+                    // solely to select the arity diagnostic for the call-shape
+                    // relation below. The relation itself is uniform for known
+                    // functions, aliases, and still-flex callables.
+                    const mb_known_func: ?types_mod.Func = known: {
+                        var var_ = func_var;
+                        var guard = types_mod.debug.IterationGuard.init("checkExpr.call.knownFunc");
+                        while (true) {
+                            guard.tick();
+                            switch (self.types.resolveVar(var_).desc.content) {
+                                .structure => |flat_type| switch (flat_type) {
+                                    .fn_pure, .fn_unbound, .fn_effectful => |func| break :known func,
+                                    .record,
+                                    .record_unbound,
+                                    .tuple,
+                                    .nominal_type,
+                                    .empty_record,
+                                    .tag_union,
+                                    .empty_tag_union,
+                                    => break :known null,
+                                },
+                                .alias => |alias| var_ = self.types.getAliasBackingVar(alias),
+                                .flex, .rigid, .field_presence, .err => break :known null,
+                            }
+                        }
+                    };
+
+                    // A known function already is the arity-shaped constraint
+                    // for this call, so use its formal slots directly. A flex
+                    // or non-function callee gets one fresh call shape before
+                    // argument checking; a known arity mismatch gets the same
+                    // shape solely to record the existing arity diagnostic.
+                    // In the matching case, shared formal variables naturally
+                    // flow through the left-to-right argument fold, replacing
+                    // the previous pairwise O(n^2) scan.
+                    const call_shape: struct {
+                        func: types_mod.Func,
+                        result: unifier.Result,
+                    } = shape: {
+                        if (mb_known_func) |known_func| {
+                            if (known_func.args.len() == call_arg_expr_idxs.len) {
+                                break :shape .{ .func = known_func, .result = .unified };
+                            }
+                        }
+
+                        const expected_args_top = self.scratch_vars.top();
+                        defer self.scratch_vars.clearFrom(expected_args_top);
+                        for (call_arg_expr_idxs) |_| {
+                            try self.scratch_vars.append(try self.fresh(env, expr_region));
+                        }
+                        const expected_arg_vars = try self.types.appendVars(self.scratch_vars.sliceFromStart(expected_args_top));
+                        const call_func_ret = try self.fresh(env, expr_region);
+                        const call_func = types_mod.Func{
+                            .args = expected_arg_vars,
+                            .ret = call_func_ret,
+                            .effect_deps = Var.SafeList.Range.empty(),
+                        };
+                        const call_func_var = try self.freshFromContent(.{ .structure = .{
+                            .fn_unbound = call_func,
+                        } }, env, expr_region);
+                        const call_shape_context: problem.Context = if (mb_known_func) |known_func|
+                            .{ .fn_call_arity = .{
+                                .fn_name = func_name,
+                                .expected_args = @intCast(known_func.args.len()),
+                                .actual_args = @intCast(call_arg_expr_idxs.len),
+                            } }
+                        else
+                            .none;
+                        break :shape .{
+                            .func = call_func,
+                            .result = try self.unifyOwnedRelation(
+                                func_var,
+                                call_func_var,
+                                env,
+                                call_shape_context,
+                                .exact,
+                            ),
+                        };
+                    };
+
+                    // Check every argument against its formal slot's
+                    // structural shape. The owned relations are committed in
+                    // a second linear fold, after all argument expressions
+                    // have checked, preserving error isolation between sibling
+                    // operands.
+                    for (call_arg_expr_idxs, 0..) |call_arg_idx, arg_index| {
+                        const expected_arg_var = self.types.getVarAt(call_shape.func.args, @intCast(arg_index));
+                        const arg_context = problem.Context{ .fn_call_arg = .{
+                            .fn_name = func_name,
+                            .call_expr = expr_idx,
+                            .arg_index = @intCast(arg_index),
+                            .num_args = @intCast(call_arg_expr_idxs.len),
+                            .arg_var = ModuleEnv.varFrom(call_arg_idx),
+                        } };
+                        const arg_expected = if (call_shape.result.isEstablished())
+                            child_expected.withContextualType(.{
+                                .var_ = expected_arg_var,
+                                .context = arg_context,
+                            })
+                        else
+                            child_expected;
+
                         self.checking_call_arg = true;
                         self.checking_immediate_callee = false;
-                        does_fx = try self.checkExpr(call_arg_idx, env, child_expected) or does_fx;
+                        does_fx = try self.checkExpr(call_arg_idx, env, arg_expected) or does_fx;
                     }
+
+                    var arg_relation_failed = false;
+                    if (call_shape.result.isEstablished() and
+                        !self.callLikeOperandsContainErroneousValue(call_arg_expr_idxs))
+                    {
+                        for (call_arg_expr_idxs, 0..) |call_arg_idx, arg_index| {
+                            const expected_arg_var = self.types.getVarAt(call_shape.func.args, @intCast(arg_index));
+                            const arg_context = problem.Context{ .fn_call_arg = .{
+                                .fn_name = func_name,
+                                .call_expr = expr_idx,
+                                .arg_index = @intCast(arg_index),
+                                .num_args = @intCast(call_arg_expr_idxs.len),
+                                .arg_var = ModuleEnv.varFrom(call_arg_idx),
+                            } };
+                            const arg_result = try self.unifyOwnedRelation(
+                                expected_arg_var,
+                                ModuleEnv.varFrom(call_arg_idx),
+                                env,
+                                arg_context,
+                                if (self.exprIsFreshRecordConstruction(call_arg_idx)) .construction else .exact,
+                            );
+                            arg_relation_failed = arg_result.isProblem();
+                            if (arg_relation_failed) break;
+                        }
+                    }
+
                     const args_did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, call_arg_expr_idxs);
-                    did_err = args_did_err or did_err;
+                    if (call_shape.result.isProblem()) {
+                        // The call owns the callable/arity diagnostic, but its
+                        // result slot remains a valid continuation type. Keep
+                        // that type graph intact while lowering replaces only
+                        // this call with a runtime error.
+                        try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+                    }
+                    const did_err = self.types.resolveVar(func_var).desc.content == .err or
+                        arg_relation_failed or
+                        args_did_err;
 
                     if (did_err) {
                         try self.retireCallLikeExpr(expr_idx, expr_var);
                     } else {
-                        // From the base function type, extract its shape. Effect
-                        // classification happens only after arguments unify below:
-                        // those unifications may resolve directed higher-order
-                        // effect dependencies carried by this function type.
-                        const mb_func: ?types_mod.Func = inner_blk: {
-                            // Here, we unwrap the function, following aliases, to get
-                            // the actual function we want to check against
-                            var var_ = func_var;
-                            var guard = types_mod.debug.IterationGuard.init("checkExpr.call.unwrapFuncVar");
-                            while (true) {
-                                guard.tick();
-                                switch (self.types.resolveVar(var_).desc.content) {
-                                    .structure => |flat_type| {
-                                        switch (flat_type) {
-                                            .fn_pure, .fn_unbound, .fn_effectful => |func| break :inner_blk func,
-                                            .record,
-                                            .record_unbound,
-                                            .tuple,
-                                            .nominal_type,
-                                            .empty_record,
-                                            .tag_union,
-                                            .empty_tag_union,
-                                            => break :inner_blk null,
-                                        }
-                                    },
-                                    .alias => |alias| {
-                                        var_ = self.types.getAliasBackingVar(alias);
-                                    },
-                                    .flex, .rigid, .field_presence, .err => break :inner_blk null,
-                                }
-                            }
-                        };
-                        // Get the name of the function (for error messages)
-                        const func_name: ?Ident.Idx = self.getExprPatternIdent(call.func);
-
-                        // Now, check the call args against the type of function
-                        if (mb_func) |func| {
-                            // Use index-based iteration instead of slices because unifyInContext
-                            // may trigger reallocations that would invalidate slice pointers
-                            const func_args_range = func.args;
-                            const func_args_len = func_args_range.len();
-
-                            if (func_args_len == call_arg_expr_idxs.len) {
-                                // First, find all the "rigid" variables in a the function's type
-                                // and unify the matching corresponding call arguments together.
-                                //
-                                // Here, "rigid" is in quotes because at this point, the expected function
-                                // has been instantiated such that the rigid variables should all resolve
-                                // to the same exact flex variable. So we are actually checking for flex
-                                // variables here.
-                                for (0..func_args_len) |i| {
-                                    const expected_arg_1 = self.types.getVarAt(func_args_range, @intCast(i));
-                                    const expected_resolved_1 = self.types.resolveVar(expected_arg_1);
-
-                                    // Ensure the above comment is true. That is, that all
-                                    // rigid vars for this function have been instantiated to
-                                    // flex vars by the time we get here.
-                                    // std.debug.assert(expected_resolved_1.desc.content != .rigid);
-
-                                    // Skip any concrete arguments
-                                    if (expected_resolved_1.desc.content != .flex and expected_resolved_1.desc.content != .rigid) {
-                                        continue;
-                                    }
-
-                                    // Look for other arguments with the same type variable
-                                    for (i + 1..func_args_len) |j| {
-                                        const expected_arg_2 = self.types.getVarAt(func_args_range, @intCast(j));
-                                        const expected_resolved_2 = self.types.resolveVar(expected_arg_2);
-                                        if (expected_resolved_1.var_ == expected_resolved_2.var_) {
-                                            // These two argument indexes in the called *function's*
-                                            // type have the same rigid variable! So, we unify
-                                            // the corresponding *call args*
-
-                                            const arg_1 = @as(Var, ModuleEnv.varFrom(call_arg_expr_idxs[i]));
-                                            const arg_2 = @as(Var, ModuleEnv.varFrom(call_arg_expr_idxs[j]));
-
-                                            const row_width_relation: unifier.RowWidthRelation = if (self.exprIsFreshRecordConstruction(call_arg_expr_idxs[i]) or
-                                                self.exprIsFreshRecordConstruction(call_arg_expr_idxs[j])) .construction else .exact;
-                                            const unify_result = try self.unifyOwnedRelation(arg_1, arg_2, env, .{
-                                                .fn_args_bound_var = .{
-                                                    .fn_name = func_name,
-                                                    .first_arg_var = arg_1,
-                                                    .second_arg_var = arg_2,
-                                                    .first_arg_index = @intCast(i),
-                                                    .second_arg_index = @intCast(j),
-                                                    .num_args = @intCast(call_arg_expr_idxs.len),
-                                                },
-                                            }, row_width_relation);
-                                            if (unify_result.isProblem()) {
-                                                // Context already set by unifyInContext
-                                                // Stop execution
-                                                try self.markErroneous(expr_var);
-                                                try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
-                                                break :blk;
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Check the function's arguments against the actual
-                                // called arguments, unifying each one
-                                for (call_arg_expr_idxs, 0..) |call_expr_idx, arg_index| {
-                                    const expected_arg_var = self.types.getVarAt(func_args_range, @intCast(arg_index));
-                                    const unify_result = try self.unifyOwnedRelation(expected_arg_var, ModuleEnv.varFrom(call_expr_idx), env, .{ .fn_call_arg = .{
-                                        .fn_name = func_name,
-                                        .call_expr = expr_idx,
-                                        .arg_index = @intCast(arg_index),
-                                        .num_args = @intCast(call_arg_expr_idxs.len),
-                                        .arg_var = ModuleEnv.varFrom(call_expr_idx),
-                                    } }, if (self.exprIsFreshRecordConstruction(call_expr_idx)) .construction else .exact);
-                                    if (unify_result.isProblem()) {
-                                        // Stop execution
-                                        try self.markErroneous(expr_var);
-                                        try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
-                                        break :blk;
-                                    }
-                                }
-
-                                if (call.called_via == .record_builder) {
-                                    const result = try self.enforceRecordBuilderMap2Return(func, env, expr_idx, func_name);
-                                    if (result.isProblem()) {
-                                        try self.markErroneous(expr_var);
-                                        try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
-                                        break :blk;
-                                    }
-                                }
-
-                                // Redirect the expr to the function's return type
-                                _ = try self.unify(expr_var, func.ret, env);
-                            } else {
-                                // We get here, then the arity of the function
-                                // being called and the callsite do not match.
-                                // This means it's a  regular type mismatch
-
-                                // In this case, we fall back to a regular
-                                // mismatch to show the actual vs expected, and
-                                // allow the problem reporting  hint mechanism
-                                // to add some context
-
-                                const call_arg_vars: []Var = @ptrCast(call_arg_expr_idxs);
-                                const call_func_ret = try self.fresh(env, expr_region);
-                                const call_func_content = try self.types.mkFuncUnbound(call_arg_vars, call_func_ret);
-                                const call_func_var = try self.freshFromContent(call_func_content, env, expr_region);
-
-                                const arity_result = try self.unifyOwnedRelation(func_var, call_func_var, env, .{ .fn_call_arity = .{
-                                    .fn_name = func_name,
-                                    .expected_args = @intCast(func_args_len),
-                                    .actual_args = @intCast(call_arg_expr_idxs.len),
-                                } }, .exact);
-                                if (arity_result.isProblem()) {
-                                    try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
-                                }
-
-                                // Then, we set the root expr to redirect to the return
-                                // type of that function, since a call expr ultimate
-                                // resolve to the  returned type
-                                _ = try self.unify(expr_var, call_func_ret, env);
-                            }
-                        } else {
-                            // We get here if the type of expr being called
-                            // (`mk_fn` in `(mk_fn())(arg)`) is NOT already
-                            // inferred to be a function type.
-
-                            // This can mean a regular type mismatch, but it can also
-                            // mean that the thing being called yet has not yet been
-                            // inferred (like if this is an anonymous function param)
-
-                            // Either way, we know what the type  *should* be, based
-                            // on how it's being used here. So we create that func
-                            // type and unify the function being called against it
-
-                            const call_arg_vars: []Var = @ptrCast(call_arg_expr_idxs);
-                            const call_func_ret = try self.fresh(env, expr_region);
-                            const call_func_content = try self.types.mkFuncUnbound(call_arg_vars, call_func_ret);
-                            const call_func_var = try self.freshFromContent(call_func_content, env, expr_region);
-
-                            const call_result = try self.unifyOwnedRelation(func_var, call_func_var, env, .none, .exact);
-                            if (call_result.isProblem()) {
+                        if (call.called_via == .record_builder and call_shape.result.isEstablished()) {
+                            const result = try self.enforceRecordBuilderMap2Return(call_shape.func, env, expr_idx, func_name);
+                            if (result.isProblem()) {
+                                try self.markErroneous(expr_var);
                                 try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+                                break :blk;
                             }
-
-                            // Then, we set the root expr to redirect to the return
-                            // type of that function, since a call expr ultimate
-                            // resolve to the  returned type
-                            _ = try self.unify(expr_var, call_func_ret, env);
                         }
+
+                        _ = try self.unify(expr_var, call_shape.func.ret, env);
 
                         // Argument unification above is the point at which an
                         // effect-polymorphic callback can become pure or
@@ -18150,6 +18459,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         }
         try self.judgeFieldKindsAtBoundary(env);
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+        try self.deduplicateGeneralizedDispatchRequirements(expr_var_raw);
         try self.publishBindingScheme(expr_var_raw);
         self.retireNonGeneralizedTypeSchemes(&.{.{ .owner = expr_var_raw, .interface = expr_var }});
         try self.retireStructurallyPublishedTypeSchemeRequirements(
@@ -19304,6 +19614,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     try self.defaultLiteralsAtGeneralizationBoundary(.{ .owner = decl_pattern_var, .interface = decl_pattern_var }, env);
                     try self.judgeFieldKindsAtBoundary(env);
                     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+                    try self.deduplicateGeneralizedDispatchRequirements(decl_pattern_var);
                     try self.publishBindingScheme(decl_pattern_var);
                     try self.bindBindingSchemeVar(decl_pattern_var, decl_expr_var);
                     self.retireNonGeneralizedTypeSchemes(&.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }});
@@ -22115,36 +22426,22 @@ fn openNominalBackingForApp(
     );
 }
 
-/// This is the shared logic for `.nominal`, `.nominal_external`, `.e_nominal`, and `.e_nominal_external`.
-///
-/// Parameters:
-/// - target_var: The type variable to unify with (pattern_var or expr_var)
-/// - actual_backing_var: The type variable of the backing expression/pattern
-/// - nominal_type_decl_var: The type variable from the nominal type declaration
-/// - backing_type: The kind of backing type (tag, record, tuple, value)
-/// - region: The source region for instantiation
-/// - env: The type checking environment
-/// - owner_expr: the constructor expression, for the expression forms. A
-///   nominal pattern's backing is a sub-pattern of the same pattern, and a
-///   pattern has no node a rejection could replace with a runtime error, so the
-///   pattern forms pass null and are decided once, at relation time. Their
-///   operand is pinned by the scrutinee the pattern is checked against, so the
-///   widening the settled-state re-decision exists to catch cannot reach them.
-fn checkNominalTypeUsage(
+const PreparedNominalTypeUsage = struct {
+    nominal_var: Var,
+    backing_var: Var,
+};
+
+/// Instantiate and explicitly open a nominal application before checking its
+/// backing syntax. Expression constructors use `backing_var` as structural
+/// context for nested aggregates; patterns use the same prepared application
+/// immediately at relation time.
+fn prepareNominalTypeUsage(
     self: *Self,
     target_var: Var,
-    actual_backing_var: Var,
     nominal_type_decl_var: Var,
-    backing_type: CIR.Expr.NominalBackingType,
     region: Region,
     env: *Env,
-    row_width_relation: unifier.RowWidthRelation,
-    owner_expr: ?CIR.Expr.Idx,
-) std.mem.Allocator.Error!NominalCheckResult {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    // Instantiate the nominal type declaration
+) std.mem.Allocator.Error!?PreparedNominalTypeUsage {
     const nominal_var = try self.instantiateVar(nominal_type_decl_var, env, .{ .explicit = region });
     const nominal_resolved = self.types.resolveVar(nominal_var).desc.content;
 
@@ -22161,7 +22458,7 @@ fn checkNominalTypeUsage(
 
             // Mark the entire expression as having a type error
             try self.markErroneous(target_var);
-            return .err;
+            return null;
         }
 
         // The explicit opening operation: resolve the declaration and
@@ -22173,84 +22470,125 @@ fn checkNominalTypeUsage(
             // The declaration is invalid (already reported) or unresolvable;
             // poison this use silently.
             try self.markErroneous(target_var);
-            return .err;
+            return null;
         };
 
-        // Unify what the user wrote with the backing type of the nominal
-        // E.g. ConList.Cons(...) <-> [Cons(a, ConsList(a)), Nil]
-        //              ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^
-        // Convert CIR.Expr.NominalBackingType to Context.NominalConstructorContext.BackingType
-        const context_backing_type: problem.Context.NominalConstructorContext.BackingType = @enumFromInt(@intFromEnum(backing_type));
-        const constructor_context: problem.Context.NominalConstructorContext = .{ .backing_type = context_backing_type };
-        // Only an anonymous expected backing can be inverse-lifted through, and
-        // an accepted relation merges that side away, so the settled state can
-        // no longer read it: take both the verdict and the shape it describes
-        // here, while they still mean something.
-        const recheck_at_settled_state: ?struct { expr: CIR.Expr.Idx, expected: types_mod.Content } = blk: {
-            const owner = owner_expr orelse break :blk null;
-            const is_anonymous = unifier.constructorBackingIsAnonymous(self.types, nominal_backing_var) orelse
-                break :blk null;
-            if (!is_anonymous) break :blk null;
-            break :blk .{ .expr = owner, .expected = self.types.resolveVar(nominal_backing_var).desc.content };
+        return .{
+            .nominal_var = nominal_var,
+            .backing_var = nominal_backing_var,
         };
-        const result = try self.unifyNominalConstructorBacking(
-            nominal_backing_var,
-            actual_backing_var,
-            env,
-            constructor_context,
-            row_width_relation,
-        );
-
-        // Handle the result of unification
-        switch (result) {
-            .unified => {
-                // If unification succeeded, this is a valid instance of the nominal type
-                // So we set the target's type to be the nominal type
-                _ = try self.unify(target_var, nominal_var, env);
-                if (recheck_at_settled_state) |recheck| {
-                    try self.accepted_nominal_constructor_backings.append(self.gpa, .{
-                        .expr_idx = recheck.expr,
-                        .expected_backing_content = recheck.expected,
-                        .actual_backing = actual_backing_var,
-                        .context = constructor_context,
-                    });
-                }
-                return .ok;
-            },
-            .suppressed_by_error => {
-                // The backing relation was not established, so it cannot
-                // authorize the nominal wrapper. The existing nested error is
-                // already responsible for the diagnostic.
-                try self.markErroneous(target_var);
-                return .err;
-            },
-            // `.mismatch` cannot occur here (this path never passes
-            // `write_no_report`), but a reported problem and an unreported
-            // mismatch both mean the constructor is incompatible.
-            .problem, .mismatch => {
-                // Only the constructor node becomes erroneous. Its operand keeps
-                // the type it legitimately has, so every other expression that
-                // shares that solved class stays lowerable.
-                try self.markErroneous(target_var);
-                return .err;
-            },
-        }
     } else if (nominal_resolved == .err) {
         // The declaration itself is poisoned (malformed backing or invalid
         // recursion) and that error was already reported at the declaration.
         // Poison this use silently instead of piling on a resolution error.
         try self.markErroneous(target_var);
-        return .err;
+        return null;
     } else {
-        // If the nominal type resolves to something other than a nominal_type structure,
-        // report the error and set the expression to error type
+        // If the nominal type resolves to something other than a nominal_type
+        // structure, report the error and set the expression to error type.
         _ = try self.problems.appendProblem(self.cir.gpa, .{ .nominal_type_resolution_failed = .{
             .var_ = target_var,
             .nominal_type_decl_var = nominal_type_decl_var,
         } });
         try self.markErroneous(target_var);
-        return .err;
+        return null;
     }
+}
+
+/// Finish a prepared nominal use by relating the checked backing value and
+/// publishing the nominal result.
+fn finishNominalTypeUsage(
+    self: *Self,
+    target_var: Var,
+    actual_backing_var: Var,
+    prepared: PreparedNominalTypeUsage,
+    backing_type: CIR.Expr.NominalBackingType,
+    env: *Env,
+    row_width_relation: unifier.RowWidthRelation,
+    owner_expr: ?CIR.Expr.Idx,
+) std.mem.Allocator.Error!NominalCheckResult {
+    const nominal_backing_var = prepared.backing_var;
+
+    // Convert CIR.Expr.NominalBackingType to the diagnostic context's backing
+    // kind, then relate what the user wrote to the opened declaration backing.
+    const context_backing_type: problem.Context.NominalConstructorContext.BackingType = @enumFromInt(@intFromEnum(backing_type));
+    const constructor_context: problem.Context.NominalConstructorContext = .{ .backing_type = context_backing_type };
+    // Only an anonymous expected backing can be inverse-lifted through, and an
+    // accepted relation merges that side away, so capture the settled-state
+    // recheck shape before the relation.
+    const recheck_at_settled_state: ?struct { expr: CIR.Expr.Idx, expected: types_mod.Content } = blk: {
+        const owner = owner_expr orelse break :blk null;
+        const is_anonymous = unifier.constructorBackingIsAnonymous(self.types, nominal_backing_var) orelse
+            break :blk null;
+        if (!is_anonymous) break :blk null;
+        break :blk .{ .expr = owner, .expected = self.types.resolveVar(nominal_backing_var).desc.content };
+    };
+    const result = try self.unifyNominalConstructorBacking(
+        nominal_backing_var,
+        actual_backing_var,
+        env,
+        constructor_context,
+        row_width_relation,
+    );
+
+    switch (result) {
+        .unified => {
+            _ = try self.unify(target_var, prepared.nominal_var, env);
+            if (recheck_at_settled_state) |recheck| {
+                try self.accepted_nominal_constructor_backings.append(self.gpa, .{
+                    .expr_idx = recheck.expr,
+                    .expected_backing_content = recheck.expected,
+                    .actual_backing = actual_backing_var,
+                    .context = constructor_context,
+                });
+            }
+            return .ok;
+        },
+        .suppressed_by_error => {
+            try self.markErroneous(target_var);
+            return .err;
+        },
+        // `.mismatch` cannot occur here (this path never passes
+        // `write_no_report`), but either rejection makes the constructor
+        // incompatible while leaving its independently-checked operand intact.
+        .problem, .mismatch => {
+            try self.markErroneous(target_var);
+            return .err;
+        },
+    }
+}
+
+/// Shared one-shot path for nominal patterns and any caller that does not need
+/// the prepared backing before checking a child expression.
+fn checkNominalTypeUsage(
+    self: *Self,
+    target_var: Var,
+    actual_backing_var: Var,
+    nominal_type_decl_var: Var,
+    backing_type: CIR.Expr.NominalBackingType,
+    region: Region,
+    env: *Env,
+    row_width_relation: unifier.RowWidthRelation,
+    owner_expr: ?CIR.Expr.Idx,
+) std.mem.Allocator.Error!NominalCheckResult {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const prepared = (try self.prepareNominalTypeUsage(
+        target_var,
+        nominal_type_decl_var,
+        region,
+        env,
+    )) orelse return .err;
+    return self.finishNominalTypeUsage(
+        target_var,
+        actual_backing_var,
+        prepared,
+        backing_type,
+        env,
+        row_width_relation,
+        owner_expr,
+    );
 }
 
 // validate constraints //
@@ -24728,6 +25066,163 @@ fn typeSchemeHasRequirement(
         return true;
     }
     return false;
+}
+
+const GeneralizedSchemeRequirementKey = struct {
+    receiver_root: Var,
+    fn_name: Ident.Idx,
+    origin_tag: std.meta.Tag(StaticDispatchConstraint.Origin),
+    origin_flag: bool,
+    callable_shape: [32]u8,
+};
+
+const GeneralizedAttachedConstraintKey = struct {
+    fn_name: Ident.Idx,
+    origin_tag: std.meta.Tag(StaticDispatchConstraint.Origin),
+    origin_flag: bool,
+    callable_shape: [32]u8,
+};
+
+fn generalizedCallableShape(
+    self: *Self,
+    anchors: *const std.AutoHashMap(Var, void),
+    cache: *std.AutoHashMap(Var, [32]u8),
+    fn_var: Var,
+) Allocator.Error![32]u8 {
+    const fn_root = self.types.resolveVar(fn_var).var_;
+    if (cache.get(fn_root)) |shape| return shape;
+
+    const shape = (try canonical_type_keys.fromVarWithAnchoredIdentities(
+        self.gpa,
+        self.types,
+        self.cir,
+        fn_root,
+        anchors,
+    )).bytes;
+    try cache.put(fn_root, shape);
+    return shape;
+}
+
+fn dispatchConstraintOriginFlag(origin: StaticDispatchConstraint.Origin) bool {
+    return switch (origin) {
+        .desugared_binop => |binop| binop.negated,
+        .where_clause => |where_clause| where_clause.body_required,
+        .desugared_unaryop, .method_call, .from_literal => false,
+    };
+}
+
+/// Collapse requirements that ask for the same target with the same finalized
+/// callable shape. Variables exposed through the enclosing scheme remain fixed
+/// anchors; only requirement-private generalized variables may be renamed.
+/// This keeps repeated helper uses compact without conflating call results that
+/// a caller can still specialize differently. Shape keys are memoized by
+/// finalized callable root for the duration of this pass because attached and
+/// side-table requirements commonly refer to the same callable graph.
+fn deduplicateGeneralizedDispatchRequirements(
+    self: *Self,
+    scheme_var: Var,
+) Allocator.Error!void {
+    const identity_vars = try canonical_type_keys.identityVarsFromVarIgnoringConstraints(
+        self.gpa,
+        self.types,
+        self.cir,
+        scheme_var,
+    );
+    defer self.gpa.free(identity_vars);
+
+    var anchors = std.AutoHashMap(Var, void).init(self.gpa);
+    defer anchors.deinit();
+    try anchors.ensureTotalCapacity(@intCast(identity_vars.len));
+    for (identity_vars) |identity_var| {
+        anchors.putAssumeCapacity(self.types.resolveVar(identity_var).var_, {});
+    }
+
+    var callable_shapes = std.AutoHashMap(Var, [32]u8).init(self.gpa);
+    defer callable_shapes.deinit();
+
+    var retained_constraints: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty;
+    defer retained_constraints.deinit(self.gpa);
+    var seen_attached = std.AutoHashMap(GeneralizedAttachedConstraintKey, void).init(self.gpa);
+    defer seen_attached.deinit();
+
+    for (identity_vars) |identity_var| {
+        const resolved = self.types.resolveVar(identity_var);
+        const constraints_range = contentConstraintRange(resolved.desc.content) orelse continue;
+        const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
+        if (constraints.len <= 1) continue;
+
+        retained_constraints.clearRetainingCapacity();
+        seen_attached.clearRetainingCapacity();
+        try retained_constraints.ensureTotalCapacity(self.gpa, constraints.len);
+        try seen_attached.ensureTotalCapacity(@intCast(constraints.len));
+        for (constraints) |constraint| {
+            // Literal metadata is aggregated by the literal-specific path.
+            if (constraint.origin == .from_literal) {
+                retained_constraints.appendAssumeCapacity(constraint);
+                continue;
+            }
+            const callable_shape = try self.generalizedCallableShape(
+                &anchors,
+                &callable_shapes,
+                constraint.fn_var,
+            );
+            const key = GeneralizedAttachedConstraintKey{
+                .fn_name = constraint.fn_name,
+                .origin_tag = std.meta.activeTag(constraint.origin),
+                .origin_flag = dispatchConstraintOriginFlag(constraint.origin),
+                .callable_shape = callable_shape,
+            };
+            if (seen_attached.contains(key)) continue;
+            seen_attached.putAssumeCapacity(key, {});
+            retained_constraints.appendAssumeCapacity(constraint);
+        }
+        if (retained_constraints.items.len == constraints.len) continue;
+
+        const retained_range = try self.types.appendStaticDispatchConstraints(retained_constraints.items);
+        const retained_content: Content = switch (resolved.desc.content) {
+            .flex => |flex| .{ .flex = flex.withConstraints(retained_range) },
+            .rigid => |rigid| .{ .rigid = rigid.withConstraints(retained_range) },
+            .alias, .structure, .field_presence, .err => unreachable,
+        };
+        try self.types.setVarContent(resolved.var_, retained_content);
+    }
+
+    const scheme_idx = self.typeSchemeIndexForRoot(scheme_var) orelse return;
+    const scheme = &self.type_schemes.items[scheme_idx];
+    if (scheme.dispatch_requirements.items.len <= 1) return;
+
+    var seen = std.AutoHashMap(GeneralizedSchemeRequirementKey, void).init(self.gpa);
+    defer seen.deinit();
+    try seen.ensureTotalCapacity(@intCast(scheme.dispatch_requirements.items.len));
+
+    var write: usize = 0;
+    for (scheme.dispatch_requirements.items) |requirement| {
+        // Literal metadata participates in defaulting and is intentionally
+        // aggregated by the literal-specific path, not this method-target pass.
+        if (requirement.constraint.origin == .from_literal) {
+            scheme.dispatch_requirements.items[write] = requirement;
+            write += 1;
+            continue;
+        }
+
+        const callable_shape = try self.generalizedCallableShape(
+            &anchors,
+            &callable_shapes,
+            requirement.constraint.fn_var,
+        );
+        const key = GeneralizedSchemeRequirementKey{
+            .receiver_root = self.types.resolveVar(requirement.receiver_var).var_,
+            .fn_name = requirement.constraint.fn_name,
+            .origin_tag = std.meta.activeTag(requirement.constraint.origin),
+            .origin_flag = dispatchConstraintOriginFlag(requirement.constraint.origin),
+            .callable_shape = callable_shape,
+        };
+        if (seen.contains(key)) continue;
+        seen.putAssumeCapacity(key, {});
+        scheme.dispatch_requirements.items[write] = requirement;
+        write += 1;
+    }
+    scheme.dispatch_requirements.shrinkRetainingCapacity(write);
 }
 
 /// Retire side-table requirements only after their exact deferred callable was
@@ -28524,8 +29019,12 @@ fn ensureCustomInterpolationPartsChecked(
         unreachable;
     }
 
-    const checked_key = self.types.resolveVar(constraint.fn_var).var_;
-    if ((try self.checked_interpolation_part_constraints.getOrPut(checked_key)).found_existing) return;
+    // Empty interpolations have no part constraints to validate and their
+    // SafeList range intentionally has no usable start index.
+    if (metadata.interpolated_parts.isEmpty()) return;
+    if ((try self.checked_interpolation_part_constraints.getOrPut(
+        metadata.interpolated_parts.start,
+    )).found_existing) return;
 
     const item_var = metadata.item_var;
     // Use the captured part metadata, not the original CIR `parts`, so an instantiated call
@@ -30003,11 +30502,41 @@ fn reportInvalidBuiltinFromNumeralLiteral(
     env: *Env,
 ) Allocator.Error!bool {
     const num_literal = constraint.origin.numeralInfo() orelse return false;
-    if (!try self.reportInvalidBuiltinFromNumeralInfo(dispatcher_var, num_kind, num_literal, env)) return false;
+    if (validateBuiltinFromNumeralLiteral(num_kind, num_literal) == null) return false;
 
-    try self.poisonConstraintSourceExpr(dispatcher_var, constraint);
-    try self.markStaticDispatchRejected(constraint);
+    // Constraint merging retains aggregate fit facts, while this occurrence
+    // table retains the source literal responsible for a concrete rejection.
+    const rejected_entry = self.firstRejectedOpenNumeral(
+        dispatcher_var,
+        num_kind,
+    );
+    const rejected_constraint = if (rejected_entry) |entry| entry.constraint else constraint;
+    const rejected_literal = rejected_constraint.origin.numeralInfo().?;
+    if (!try self.reportInvalidBuiltinFromNumeralInfo(dispatcher_var, num_kind, rejected_literal, env)) return false;
+
+    const rejected_expr: ?CIR.Expr.Idx = if (rejected_entry) |entry| if (entry.source_node) |node_idx|
+        if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) @enumFromInt(@intFromEnum(node_idx)) else null
+    else
+        null else null;
+    try self.poisonConstraintFailureSource(dispatcher_var, rejected_constraint, rejected_expr);
+    try self.markStaticDispatchRejected(rejected_constraint);
     return true;
+}
+
+fn firstRejectedOpenNumeral(
+    self: *Self,
+    dispatcher_var: Var,
+    num_kind: CIR.NumKind,
+) ?OpenNumeralLiteral {
+    const dispatcher_root = self.types.resolveVar(dispatcher_var).var_;
+    for (self.open_numeral_literals.items) |entry| {
+        if (self.types.resolveVar(entry.var_).var_ != dispatcher_root) continue;
+        const info = entry.constraint.origin.numeralInfo() orelse continue;
+        if (validateBuiltinFromNumeralLiteral(num_kind, info) != null) {
+            return entry;
+        }
+    }
+    return null;
 }
 
 fn reportInvalidBuiltinFromNumeralInfo(

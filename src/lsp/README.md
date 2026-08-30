@@ -3,17 +3,71 @@ The Roc compiler can now expose an experimental Language Server Protocol (LSP) e
 written in Zig as part of the Rust to Zig rewrite.
 
 ## Current state
-The experimental LSP currently only holds the scaffolding for the incoming implementation.
-It doesn't provide any features yet, but it does connect to your editor, detect file change
-and store the buffer in memory. 
-The following request have been handled :
-- `initialize`
-- `shutdown`
-The following notifications have been handled :
-- `initialized`
-- `exit`
-- `didOpen` (stores the buffer into a `StringHashMap`, but doesn't do any action on it)
-- `didChange` (same as `didOpen`, but also supports incremental changes)
+The following requests are handled:
+- `initialize`, `shutdown`
+- `textDocument/hover`
+- `textDocument/definition`
+- `textDocument/completion`
+- `textDocument/documentSymbol`
+- `textDocument/documentHighlight`
+- `textDocument/references`
+- `textDocument/formatting`
+- `textDocument/foldingRange`
+- `textDocument/selectionRange`
+- `textDocument/semanticTokens/full`
+- `textDocument/rename`, `textDocument/prepareRename`
+
+The following notifications are handled:
+- `initialized`, `exit`
+- `didOpen` (stores the buffer into a `StringHashMap`)
+- `didChange` (same as `didOpen`, and supports incremental changes)
+
+Diagnostics are pushed as `textDocument/publishDiagnostics` when a document is opened or changed.
+
+### References
+
+`textDocument/references` reports every place a symbol is written in the requested document.
+Occurrences come from the CIR, so a reference resolves to the binding it actually names rather
+than to matching text, and a same-named binding in another scope is not reported. Unlike rename
+it only reports, so it is not limited to plain bindings—a destructured field can have its uses
+listed even though renaming one is refused.
+
+`includeDeclaration` controls whether the binding site and the name on its type annotation are
+included; both count as the declaration. A client that omits the field gets everything.
+
+Only the requested document is searched, so a short result is not proof that a symbol is unused
+across a project—see the cross-module note below.
+
+### Positions
+
+Positions are exchanged in UTF-16 code units, as the protocol specifies and as the server
+advertises with `positionEncoding`. `src/lsp/position.zig` owns the conversion in both
+directions, with an ASCII fast path, and the same helper backs the incremental edits in
+`document_store.zig` in a strict mode: a query rounds a column that lands inside a character
+to the nearest boundary, an edit refuses it.
+
+### Rename
+
+Rename edits only the document it was asked about. It rewrites the binding, the name on
+its type annotation, and every reference, taking the occurrences from the CIR so shadowing
+is respected.
+
+It refuses rather than producing a partial rewrite, because editing every occurrence but one
+silently breaks the program. It refuses when:
+- the document does not compile, so there is no CIR to read occurrences from
+- the position names something other than a plain local binding—a type, a tag, a record
+  field, or a destructuring pattern
+- the new name is not a single Roc identifier
+- the new name would change what the name *means*: case separates types from values, and the
+  `!`, `_` and `$` markers carry meaning, so `foo` cannot be renamed to `foo!`
+- another binding of the new name is live where the renamed one is, which would capture a
+  reference or shadow a binding
+
+### Cross-module limits
+
+Neither references nor rename looks past the requested document. References will miss uses in
+other modules, and rename edits only the one file, so renaming an exported name breaks its
+importers. The editor cannot warn about either, so it is on the author to check.
 
 
 ## How to implement new LSP capabilities

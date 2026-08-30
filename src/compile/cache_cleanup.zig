@@ -115,13 +115,9 @@ fn runCleanup(bases: Bases, std_io: Io) void {
     const now_ns = nowNs(std_io);
 
     // TODO: REMOVE THIS FOR THE 0.1.0 RELEASE - NOT NEEDED ANYMORE
-    // This is just to clean up people who have old stale Roc caches from before
-    // we restructured the cache directories to use roc/{version}/ structure.
-    // The legacy temp layout lived directly in the system temp dir (the parent
-    // of `<tmp>/roc`), so walk that parent.
-    if (std.fs.path.dirname(bases.tempBase())) |legacy_temp_root| {
-        cleanupLegacyTempDirs(std_io, legacy_temp_root, null);
-    }
+    // This is just to clean up people who have old stale persistent Roc caches
+    // from before we restructured the cache directories to use roc/{version}/
+    // structure.
     cleanupLegacyPersistentCache(std_io, bases.cacheBase(), null);
     // END OF LEGACY CLEANUP - REMOVE ABOVE FOR 0.1.0
 
@@ -288,31 +284,8 @@ pub fn deleteTempDir(std_io: Io, temp_dir_path: []const u8) void {
 }
 
 // TODO: REMOVE THESE FOR THE 0.1.0 RELEASE - NOT NEEDED ANYMORE
-// These clean up old cache directories from before we restructured to use
-// the roc/{version}/ directory structure.
-
-/// Clean up legacy temp directories that used the old "roc-*" prefix pattern.
-/// Old structure: <legacy_temp_root>/roc-{random}/ (directly in temp, with roc- prefix)
-/// New structure: <legacy_temp_root>/roc/{version}/{random}/
-fn cleanupLegacyTempDirs(std_io: Io, legacy_temp_root: []const u8, maybe_stats: ?*CleanupStats) void {
-    var root = Dir.cwd().openDir(std_io, legacy_temp_root, .{ .iterate = true }) catch return;
-    defer root.close(std_io);
-
-    // Look for directories matching the old "roc-*" naming convention and
-    // remove them unconditionally (this format is no longer produced).
-    var it = root.iterate();
-    while (true) {
-        const entry = (it.next(std_io) catch break) orelse break;
-        if (entry.kind != .directory) continue;
-        if (!std.mem.startsWith(u8, entry.name, "roc-")) continue;
-
-        root.deleteTree(std_io, entry.name) catch {
-            if (maybe_stats) |stats| stats.errors += 1;
-            continue;
-        };
-        if (maybe_stats) |stats| stats.temp_dirs_deleted += 1;
-    }
-}
+// This cleans up old persistent cache entries from before we restructured to
+// use the roc/{version}/ directory structure.
 
 /// Clean up legacy persistent cache that used the old flat structure.
 /// Old structure: ~/.cache/roc/{hash}/ or ~/.cache/roc/*.rcache (flat)
@@ -372,6 +345,39 @@ test "CleanupStats initializes to zero" {
     try std.testing.expectEqual(@as(u32, 0), stats.cache_files_deleted);
     try std.testing.expectEqual(@as(u32, 0), stats.empty_dirs_deleted);
     try std.testing.expectEqual(@as(u32, 0), stats.errors);
+}
+
+test "background cleanup preserves unrelated roc-prefixed temp directories" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const root_path = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path });
+    defer allocator.free(root_path);
+    const temp_base = try std.fs.path.join(allocator, &.{ root_path, "roc" });
+    defer allocator.free(temp_base);
+    const cache_base = try std.fs.path.join(allocator, &.{ root_path, "cache" });
+    defer allocator.free(cache_base);
+    const unrelated_dir = try std.fs.path.join(allocator, &.{ root_path, "roc-active-cache" });
+    defer allocator.free(unrelated_dir);
+    const sentinel_path = try std.fs.path.join(allocator, &.{ unrelated_dir, "sentinel" });
+    defer allocator.free(sentinel_path);
+
+    try Dir.cwd().createDirPath(std.testing.io, temp_base);
+    try Dir.cwd().createDirPath(std.testing.io, cache_base);
+    try Dir.cwd().createDirPath(std.testing.io, unrelated_dir);
+    (try Dir.cwd().createFile(std.testing.io, sentinel_path, .{})).close(std.testing.io);
+
+    var bases = Bases{};
+    @memcpy(bases.temp_buf[0..temp_base.len], temp_base);
+    bases.temp_len = temp_base.len;
+    @memcpy(bases.cache_buf[0..cache_base.len], cache_base);
+    bases.cache_len = cache_base.len;
+
+    runCleanup(bases, std.testing.io);
+
+    try Dir.cwd().access(std.testing.io, sentinel_path, .{});
 }
 
 test "deleteTempDir deletes directory and coordination file" {

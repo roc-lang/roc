@@ -295,6 +295,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
         try low_level_map.put(list_len_ident, .list_len);
     }
+    if (env.common.findIdent("Builtin.List.capacity")) |list_cap_ident| {
+        try low_level_map.put(list_cap_ident, .list_capacity);
+    }
     if (env.common.findIdent("u8_list_len")) |ident| {
         try low_level_map.put(ident, .list_len);
     }
@@ -339,6 +342,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     }
     if (env.common.findIdent("list_release_excess_capacity")) |list_release_excess_capacity_ident| {
         try low_level_map.put(list_release_excess_capacity_ident, .list_release_excess_capacity);
+    }
+    if (env.common.findIdent("list_sort_with")) |ident| {
+        try low_level_map.put(ident, .list_sort_with);
     }
     if (env.common.findIdent("Builtin.List.drop_at")) |list_drop_at_ident| {
         try low_level_map.put(list_drop_at_ident, .list_drop_at);

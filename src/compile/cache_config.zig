@@ -156,7 +156,11 @@ pub const Constants = struct {
     /// 68: `??` defaults restricted to nominal backing records (new diagnostic).
     /// 69: Defaults are any pure expression; the not-literal diagnostic became
     ///     the CAN default-cycle diagnostic.
-    pub const CACHE_VERSION = 69;
+    /// 70: Serialized canonicalization diagnostics retain the explicit codec
+    ///     family for internal builtin types.
+    /// 71: Annotation node payload packs its boolean flags into one byte and
+    ///     records the source region of the annotated name.
+    pub const CACHE_VERSION = 71;
 };
 
 /// Configuration for the Roc cache system.

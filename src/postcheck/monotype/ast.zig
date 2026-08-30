@@ -1929,8 +1929,25 @@ pub const ProgramBuilder = struct {
     }
 
     pub fn addStaticDataValue(self: *ProgramBuilder, value: StaticDataValue) std.mem.Allocator.Error!Common.StaticDataId {
+        try self.ensureStaticDataValueCapacity(1);
+        return self.addStaticDataValueAssumeCapacity(value);
+    }
+
+    /// Preflight static-data publication so parallel identity tables cannot
+    /// diverge if allocation fails midway through a logical append.
+    pub fn ensureStaticDataValueCapacity(
+        self: *ProgramBuilder,
+        additional: usize,
+    ) std.mem.Allocator.Error!void {
+        try self.static_data_values.ensureUnusedCapacity(self.allocator, additional);
+    }
+
+    pub fn addStaticDataValueAssumeCapacity(
+        self: *ProgramBuilder,
+        value: StaticDataValue,
+    ) Common.StaticDataId {
         const id: Common.StaticDataId = @enumFromInt(@as(u32, @intCast(self.static_data_values.len())));
-        try self.static_data_values.append(self.allocator, value);
+        self.static_data_values.appendAssumeCapacity(value);
         return id;
     }
 
