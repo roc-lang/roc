@@ -4046,8 +4046,9 @@ representation.
 
 SpecConstr separates symbolic structure from strict work. A cloned value is a
 pair of an owned `BindingChain` and a symbolic `Value`. The chain contains the
-strict computations which produce the value's opaque leaves, in source
-evaluation order. Before a value may be reused through substitution, every
+strict computations which produce the value's opaque leaves, plus any exact
+recursive statement which owns a symbolic back-edge, in source evaluation
+order. Before a value may be reused through substitution, every
 non-work-free leaf is named in that chain and replaced by the resulting local;
 budget exhaustion names the entire remaining sub-value as one strict binding.
 Cloning a constructor concatenates its children's chains in field or item order.
@@ -4058,6 +4059,29 @@ bindings before the case outside the join, keeps arm bindings around the
 corresponding arm jump, and keeps continuation bindings in the join body. No
 binding chain is stored in ambient cloner state, and a nested clone cannot
 observe, capture, flush, or move a chain owned by its caller.
+
+A recursive binding is an explicit finite-graph anchor, not a reason to make
+the whole enclosing value opaque. The clone reserves a fresh runtime binder
+before cloning the initializer, so every recursive occurrence becomes an exact
+local back-edge and the initializer's outer constructor and callable structure
+can still flow symbolically into the continuation. Every binding chain produced
+while cloning that initializer remains inside the recursive statement's value,
+where the fresh binder is in scope. The retained recursive statement itself may
+then occupy its source position in an enclosing chain. The continuation's
+symbolic value pairs that exact runtime local with finite known structure.
+Opaque consumers always reuse the runtime local; structural consumers inspect
+the paired structure, whose accessible record and tuple children are exact
+field and tuple-item reads from that local. A leaf that would duplicate runtime
+work through structural reuse, or that references an initializer-private
+binding, becomes such a read. If no field or tuple-item read exists, only that
+substructure becomes opaque. Materializing the pair therefore never
+reconstructs or copies the recursive value. Materializing a chain with a
+recursive anchor emits an ordinary block in source order; an acyclic chain
+retains the ordinary nested-let representation. This finite structure ending
+in an explicit local back-edge permits the same call-pattern and
+callable-worker specialization as an acyclic value without unrolling
+recursion, moving runtime work out of recursive scope, or reconstructing a
+vanished source binding.
 
 This follows the useful ownership discipline of GHC's simplifier floats: an
 expression transformation produces an ordered binding collection together with
@@ -12002,8 +12026,10 @@ Minimum boundary checks:
 - Monotype Lifted IR contains no reachable closure expressions, local function
   definitions in expression position, definition references in expression
   position, or direct calls whose callee is still a Monotype function template.
-- SpecConstr binding chains are well-linked, source-ordered, type-correct, and
-  placed by their owning expression, statement, branch, or jump site.
+- SpecConstr binding chains are well-linked, source-ordered, type-correct,
+  contain only exact retained recursive anchors, and are placed by their owning
+  expression, statement, branch, or jump site. Initializer-owned chains remain
+  inside their recursive anchor's value.
 - Rewritten Monotype Lifted bodies have only lexically scoped local references
   and jumps whose target is in scope and whose argument count matches its join.
 - Lambda Solved IR has every function type in `args/callable/ret` form.
