@@ -796,15 +796,16 @@ pub const Store = struct {
         source: *const Store,
         source_names: *const names.NameStore,
         destination: *const Store,
-        destination_names: *const names.NameStore,
+        destination_names: *names.NameStore,
         map: collections.DenseMap(TypeId, TypeId),
+        name_relocation: names.NameRelocation,
 
         pub fn init(
             allocator: std.mem.Allocator,
             source: *const Store,
             source_names: *const names.NameStore,
             destination: *const Store,
-            destination_names: *const names.NameStore,
+            destination_names: *names.NameStore,
         ) TypeRelocation {
             if (source == destination) {
                 Common.compilerBug("Monotype relocation source and destination stores must differ");
@@ -815,16 +816,22 @@ pub const Store = struct {
                 .destination = destination,
                 .destination_names = destination_names,
                 .map = collections.DenseMap(TypeId, TypeId).init(allocator),
+                .name_relocation = names.NameRelocation.init(allocator, source_names, destination_names),
             };
         }
 
         pub fn deinit(self: *TypeRelocation) void {
+            self.name_relocation.deinit();
             self.map.deinit();
             self.* = undefined;
         }
 
         pub fn mappedCount(self: *const TypeRelocation) usize {
             return self.map.count();
+        }
+
+        pub fn namesRelocation(self: *TypeRelocation) *names.NameRelocation {
+            return &self.name_relocation;
         }
 
         /// Return the destination id when this exact source id was imported.
@@ -1174,7 +1181,6 @@ pub const Store = struct {
 
         for (closure.items, reserved) |source_ty, destination_ty| {
             const imported = try self.importContent(
-                destination_names,
                 source,
                 source_names,
                 &source_offsets,
@@ -1413,11 +1419,10 @@ pub const Store = struct {
 
     fn importContent(
         self: *Store,
-        destination_names: *names.NameStore,
         source: *const Store,
         source_names: *const names.NameStore,
         source_offsets: *const collections.DenseMap(TypeId, u32),
-        relocation: *const TypeRelocation,
+        relocation: *TypeRelocation,
         reserved: []const TypeId,
         scratch: *ImportScratch,
         source_ty: TypeId,
@@ -1438,13 +1443,13 @@ pub const Store = struct {
                 try scratch.fields.resize(self.allocator, span_.len);
                 for (scratch.fields.items, 0..) |*field, index| {
                     field.* = GuardedList.at(source_fields, index);
-                    field.name = try destination_names.internRecordFieldLabel(source_names.recordFieldLabelText(field.name));
+                    field.name = try relocation.name_relocation.relocateRecordFieldLabel(source_names, field.name);
                     field.ty = importType(source_offsets, relocation, reserved, field.ty);
                     if (field.value_ty) |value_ty| {
                         field.value_ty = importType(source_offsets, relocation, reserved, value_ty);
                     }
                     if (field.default) |*default| {
-                        default.module = try destination_names.internModuleIdentity(source_names.moduleIdentityBytes(default.module));
+                        default.module = try relocation.name_relocation.relocateModuleIdentity(source_names, default.module);
                     }
                 }
                 break :blk .{ .record = try self.addFields(scratch.fields.items) };
@@ -1454,8 +1459,8 @@ pub const Store = struct {
                 try scratch.tags.resize(self.allocator, span_.len);
                 for (scratch.tags.items, 0..) |*tag, index| {
                     tag.* = GuardedList.at(source_tags, index);
-                    tag.name = try destination_names.internTagLabel(source_names.tagLabelText(tag.name));
-                    tag.checked_name = try destination_names.internTagLabel(source_names.tagLabelText(tag.checked_name));
+                    tag.name = try relocation.name_relocation.relocateTagLabel(source_names, tag.name);
+                    tag.checked_name = try relocation.name_relocation.relocateTagLabel(source_names, tag.checked_name);
                     tag.payloads = try self.importTypeSpan(source, source_offsets, relocation, reserved, scratch, tag.payloads);
                 }
                 break :blk .{ .tag_union = try self.addTags(scratch.tags.items) };
@@ -1463,18 +1468,18 @@ pub const Store = struct {
             .named => |source_named| blk: {
                 var imported = source_named;
                 imported.named_type.module = source_named.named_type.module;
-                imported.def.module = try destination_names.internModuleIdentity(source_names.moduleIdentityBytes(source_named.def.module));
-                imported.def.type_name = try destination_names.internTypeName(source_names.typeNameText(source_named.def.type_name));
+                imported.def.module = try relocation.name_relocation.relocateModuleIdentity(source_names, source_named.def.module);
+                imported.def.type_name = try relocation.name_relocation.relocateTypeName(source_names, source_named.def.type_name);
                 if (imported.def.iterator_topology) |*topology| {
-                    topology.len_field = try destination_names.internRecordFieldLabel(source_names.recordFieldLabelText(topology.len_field));
-                    topology.step_field = try destination_names.internRecordFieldLabel(source_names.recordFieldLabelText(topology.step_field));
-                    topology.known_tag = try destination_names.internTagLabel(source_names.tagLabelText(topology.known_tag));
-                    topology.unknown_tag = try destination_names.internTagLabel(source_names.tagLabelText(topology.unknown_tag));
-                    topology.done_tag = try destination_names.internTagLabel(source_names.tagLabelText(topology.done_tag));
-                    topology.one_tag = try destination_names.internTagLabel(source_names.tagLabelText(topology.one_tag));
-                    topology.skip_tag = try destination_names.internTagLabel(source_names.tagLabelText(topology.skip_tag));
-                    topology.item_field = try destination_names.internRecordFieldLabel(source_names.recordFieldLabelText(topology.item_field));
-                    topology.rest_field = try destination_names.internRecordFieldLabel(source_names.recordFieldLabelText(topology.rest_field));
+                    topology.len_field = try relocation.name_relocation.relocateRecordFieldLabel(source_names, topology.len_field);
+                    topology.step_field = try relocation.name_relocation.relocateRecordFieldLabel(source_names, topology.step_field);
+                    topology.known_tag = try relocation.name_relocation.relocateTagLabel(source_names, topology.known_tag);
+                    topology.unknown_tag = try relocation.name_relocation.relocateTagLabel(source_names, topology.unknown_tag);
+                    topology.done_tag = try relocation.name_relocation.relocateTagLabel(source_names, topology.done_tag);
+                    topology.one_tag = try relocation.name_relocation.relocateTagLabel(source_names, topology.one_tag);
+                    topology.skip_tag = try relocation.name_relocation.relocateTagLabel(source_names, topology.skip_tag);
+                    topology.item_field = try relocation.name_relocation.relocateRecordFieldLabel(source_names, topology.item_field);
+                    topology.rest_field = try relocation.name_relocation.relocateRecordFieldLabel(source_names, topology.rest_field);
                 }
                 imported.args = try self.importTypeSpan(source, source_offsets, relocation, reserved, scratch, source_named.args);
                 if (imported.backing) |*backing| {
@@ -1485,7 +1490,7 @@ pub const Store = struct {
                 for (scratch.declared_fields.items, 0..) |*field, index| {
                     field.* = GuardedList.at(source_declared, index);
                     switch (field.*) {
-                        .named => |name| field.* = .{ .named = try destination_names.internRecordFieldLabel(source_names.recordFieldLabelText(name)) },
+                        .named => |name| field.* = .{ .named = try relocation.name_relocation.relocateRecordFieldLabel(source_names, name) },
                         .padding => |ty| field.* = .{ .padding = importType(source_offsets, relocation, reserved, ty) },
                     }
                 }
@@ -3866,6 +3871,12 @@ test "monotype cross-store import relocates names, side pools, sharing, and recu
         destination_names.moduleIdentityBytes(imported_field.default.?.module),
     );
     try std.testing.expectEqualStrings("value", destination_names.recordFieldLabelText(imported_field.name));
+    try std.testing.expectEqual(@as(usize, 4), relocation.namesRelocation().mappedCount());
+    try std.testing.expectEqual(
+        imported_field.name,
+        try relocation.namesRelocation().relocateRecordFieldLabel(&source_names, field_name),
+    );
+    try std.testing.expectEqual(@as(usize, 4), relocation.namesRelocation().mappedCount());
     try std.testing.expect(destination.verify(&destination_names) == null);
 
     // Keep the otherwise deliberately interned nominal metadata live in this
