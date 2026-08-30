@@ -822,6 +822,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// The LIR store containing expressions to compile
         store: *const LirStore,
 
+        /// Locals every write of which is image data, computed on first use.
+        /// Reference-count traffic on them can only ever decide to do nothing,
+        /// so no call is emitted. See `src/lir/immortal_locals.zig`.
+        immortal_locals: ?lir.ImmortalLocals.ImmortalLocals = null,
+
         /// Layout store for accessing struct/tag field offsets
         layout_store: *const LayoutStore,
 
@@ -1362,6 +1367,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Clean up resources
         pub fn deinit(self: *Self) void {
+            if (self.immortal_locals) |*set| set.deinit(self.allocator);
             self.codegen.deinit();
             self.clearStaticDataSymbolNames();
             self.static_data_symbol_names.deinit(self.allocator);
@@ -20216,8 +20222,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for incref operation.
+        /// Whether `local` holds image data, whose refcount word is
+        /// `REFCOUNT_STATIC_DATA`. Both `increfRcPtr` and `decrefRcPtr` return
+        /// without touching a count when they read that value, so the helper
+        /// call can only ever decide to do nothing.
+        fn localIsImmortal(self: *Self, local: LocalId) Allocator.Error!bool {
+            if (self.immortal_locals == null) {
+                self.immortal_locals = try lir.ImmortalLocals.compute(self.allocator, self.store);
+            }
+            return self.immortal_locals.?.contains(local);
+        }
+
         fn generateIncref(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
             const value_loc = try self.generateRcOperandValue(rc_op.value);
+            if (try self.localIsImmortal(rc_op.value)) return value_loc;
             try self.emitExplicitRcStmtHelperCallForValue(rc_op.rc, .incref, rc_op.atomicity, value_loc, self.localLayout(rc_op.value), rc_op.count);
             return value_loc;
         }
@@ -20225,6 +20243,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for decref operation.
         fn generateDecref(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
             const value_loc = try self.generateRcOperandValue(rc_op.value);
+            if (try self.localIsImmortal(rc_op.value)) return value_loc;
             try self.emitExplicitRcStmtHelperCallForValue(rc_op.rc, .decref, rc_op.atomicity, value_loc, self.localLayout(rc_op.value), 1);
             return value_loc;
         }
