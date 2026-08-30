@@ -131,7 +131,7 @@ test "issue 10295: dev backend preserves deep structural equality under register
     var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, &.{}, .preserve, roc_target.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
-    const generated = try codegen.generateCode(root, .bool, 1);
+    const generated = try codegen.generateCode(root, .bool);
     defer allocator.free(generated.code);
 
     var executable = try dev.ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
@@ -202,7 +202,7 @@ test "issue 10295: nested list equality has bounded register pressure" {
     var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, &.{}, .preserve, roc_target.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
-    const generated = try codegen.generateCode(root, .bool, 1);
+    const generated = try codegen.generateCode(root, .bool);
     defer allocator.free(generated.code);
 
     var executable = try dev.ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
@@ -232,10 +232,10 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
     // `var ordering: u8` stack slot, so any wider store smashes the caller's
     // frame and segfaults `List.sort` under the machine-code shim.
     //
-    // The three return layouts cover every copy shape: a register-sized
-    // scalar (1 byte), a sub-word aggregate (3 bytes: 2-byte + 1-byte
-    // chunks), and a non-word-multiple aggregate above 8 bytes (12 bytes:
-    // one whole word plus an overlapping 8-byte tail).
+    // The four return layouts cover every copy shape: a register-sized
+    // scalar (1 byte), sub-word aggregates with and without an overlapping
+    // tail chunk (3 and 7 bytes), and a non-word-multiple aggregate above
+    // 8 bytes (12 bytes: one whole word plus an overlapping 8-byte tail).
     const std = @import("std");
     const layout = @import("layout");
     const lir = @import("lir");
@@ -276,7 +276,7 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
             field_layout: layout.Idx,
             field_values: []const i64,
         ) std.mem.Allocator.Error!lir.CFStmtId {
-            var field_locals: [3]lir.LIR.LocalId = undefined;
+            var field_locals: [7]lir.LIR.LocalId = undefined;
             for (field_values, 0..) |_, i| {
                 field_locals[i] = try s.addLocal(.{ .layout_idx = field_layout });
             }
@@ -330,6 +330,18 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
     const u8x3_body = try helpers.addStructBody(&store, u8x3_layout, .u8, &.{ 0x11, 0x22, 0x33 });
     const u8x3_proc = try helpers.addErasedProc(&store, &layout_store, u8x3_body, u8x3_layout);
 
+    const u8x7_layout = try layout_store.putStructFields(&.{
+        .{ .index = 0, .layout = .u8 },
+        .{ .index = 1, .layout = .u8 },
+        .{ .index = 2, .layout = .u8 },
+        .{ .index = 3, .layout = .u8 },
+        .{ .index = 4, .layout = .u8 },
+        .{ .index = 5, .layout = .u8 },
+        .{ .index = 6, .layout = .u8 },
+    });
+    const u8x7_body = try helpers.addStructBody(&store, u8x7_layout, .u8, &.{ 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47 });
+    const u8x7_proc = try helpers.addErasedProc(&store, &layout_store, u8x7_body, u8x7_layout);
+
     const u32x3_layout = try layout_store.putStructFields(&.{
         .{ .index = 0, .layout = .u32 },
         .{ .index = 1, .layout = .u32 },
@@ -372,6 +384,7 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
     }{
         .{ .proc_id = scalar_proc, .expected = &.{2} },
         .{ .proc_id = u8x3_proc, .expected = &.{ 0x11, 0x22, 0x33 } },
+        .{ .proc_id = u8x7_proc, .expected = &.{ 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47 } },
         .{ .proc_id = u32x3_proc, .expected = &.{ 0x04, 0x03, 0x02, 0x01, 0x08, 0x07, 0x06, 0x05, 0x0C, 0x0B, 0x0A, 0x09 } },
     };
 

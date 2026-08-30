@@ -1539,12 +1539,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// - Second arg (RSI/X1) contains the pointer to RocOps
         /// - The function writes the result to the result buffer and returns
         ///
-        /// For tuples, pass tuple_len > 1 to copy all elements to the result buffer.
         pub fn generateCode(
             self: *Self,
             root_proc_id: lir.LIR.LirProcSpecId,
             result_layout: layout.Idx,
-            tuple_len: usize,
         ) Allocator.Error!CodeResult {
             // Clear any leftover state from compileAllProcSpecs
             self.clearLocalLocationsRetainingCapacity();
@@ -1628,7 +1626,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (final_result != .noreturn) {
                 const ret_size = self.getLayoutSize(actual_ret_layout);
                 if (ret_size > 0) {
-                    try self.storeResultToSavedPtr(final_result, actual_ret_layout, result_ptr_save_reg, tuple_len);
+                    try self.storeResultToSavedPtr(final_result, actual_ret_layout, result_ptr_save_reg);
                 }
             }
 
@@ -15883,13 +15881,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (inner_layout.tag == .tag_union) {
                     const box_ptr_reg = try self.ensureInGeneralReg(raw_value_loc);
                     const dest_offset = self.codegen.allocStackSlot(payload_size);
-                    // The box allocation holds exactly payload_size bytes, so a
-                    // word-rounded copy would read past the heap allocation.
-                    if (payload_size > 0) {
-                        const temp_reg = try self.allocTempGeneral();
-                        try self.copyChunked(temp_reg, box_ptr_reg, 0, frame_ptr, dest_offset, payload_size);
-                        self.codegen.freeGeneral(temp_reg);
-                    }
+                    // The box allocation holds the inner tag union layout's
+                    // size, which can be smaller than a word-rounded payload
+                    // copy, so the copy must read exactly payload_size bytes.
+                    const temp_reg = try self.allocTempGeneral();
+                    try self.copyChunked(temp_reg, box_ptr_reg, 0, frame_ptr, dest_offset, payload_size);
+                    self.codegen.freeGeneral(temp_reg);
                     self.codegen.freeGeneral(box_ptr_reg);
                     const raw_payload_loc = self.fieldLocationFromLayout(dest_offset, payload_size, payload_layout_idx);
                     return self.requireExactValueLocationToLayout(raw_payload_loc, payload_layout_idx, tps.target_layout, "tag_payload_struct_access.boxed");
@@ -19125,59 +19122,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Store the result to the output buffer pointed to by a saved register
         /// This is used when the original result pointer (X0/RDI) may have been clobbered
-        fn storeResultToSavedPtr(self: *Self, loc: ValueLocation, result_layout: layout.Idx, saved_ptr_reg: GeneralReg, tuple_len: usize) Allocator.Error!void {
-            // Handle tuples specially - copy all elements from stack to result buffer
-            if (tuple_len > 1) {
-                switch (loc) {
-                    .stack => |s| {
-                        const base_offset = s.offset;
-                        // Use layout store for accurate element offsets and sizes
-                        {
-                            const ls = self.layout_store;
-                            const tuple_layout = ls.getLayout(result_layout);
-                            if (tuple_layout.tag == .struct_) {
-                                const tuple_data = ls.getStructData(tuple_layout.getStruct().idx);
-                                const total_size = tuple_data.size.get(ls.targetUsize());
-
-                                // The result buffer holds exactly total_size
-                                // bytes of caller-owned storage, so the copy
-                                // must not round up to whole words.
-                                if (total_size > 0) {
-                                    const temp_reg = try self.allocTempGeneral();
-                                    try self.copyChunked(temp_reg, frame_ptr, base_offset, saved_ptr_reg, 0, total_size);
-                                    self.codegen.freeGeneral(temp_reg);
-                                }
-                                return;
-                            }
-                        }
-
-                        // Non-struct tuple layouts still copy exactly the
-                        // layout's byte count into the caller-owned buffer.
-                        const total_size = self.getLayoutSize(result_layout);
-                        if (total_size > 0) {
-                            const temp_reg = try self.allocTempGeneral();
-                            try self.copyChunked(temp_reg, frame_ptr, base_offset, saved_ptr_reg, 0, total_size);
-                            self.codegen.freeGeneral(temp_reg);
-                        }
-                        return;
-                    },
-                    .general_reg,
-                    .float_reg,
-                    .vector_reg,
-                    .stack_i128,
-                    .stack_str,
-                    .list_stack,
-                    .immediate_i64,
-                    .immediate_f32,
-                    .immediate_f64,
-                    .immediate_i128,
-                    .noreturn,
-                    => {
-                        // Fallback - just store the single value
-                    },
-                }
-            }
-
+        fn storeResultToSavedPtr(self: *Self, loc: ValueLocation, result_layout: layout.Idx, saved_ptr_reg: GeneralReg) Allocator.Error!void {
             switch (result_layout) {
                 .i64, .u64 => {
                     const reg = try self.ensureInGeneralReg(loc);
@@ -20003,36 +19948,41 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// buffers whose exact extent someone else owns (heap allocations,
         /// caller-owned result storage). Any codegen that writes through a
         /// pointer it did not size itself must use this instead of a
-        /// word-rounded copy loop. Sizes above 8 that are not word multiples
-        /// finish with an 8-byte copy of the final `size - 8` tail, which
-        /// re-copies up to 7 earlier bytes; source and destination therefore
-        /// must not overlap.
+        /// word-rounded copy loop. Sizes that are not chunk multiples finish
+        /// with an overlapping copy of the tail, which re-copies earlier
+        /// bytes; source and destination therefore must not overlap.
         fn copyChunked(self: *Self, temp_reg: GeneralReg, src_base: GeneralReg, src_offset: i32, dst_base: GeneralReg, dst_offset: i32, size: u32) Allocator.Error!void {
-            std.debug.assert(size > 0);
+            if (size == 0) return;
             if (size == 8) {
                 try self.emitLoad(.w64, temp_reg, src_base, src_offset);
                 try self.emitStore(.w64, dst_base, dst_offset, temp_reg);
                 return;
             }
             if (size < 8) {
-                var remaining = size;
-                var off: i32 = 0;
-                if (remaining >= 4) {
-                    try self.emitLoad(.w32, temp_reg, src_base, src_offset + off);
-                    try self.emitStore(.w32, dst_base, dst_offset + off, temp_reg);
-                    remaining -= 4;
-                    off += 4;
+                // A leading chunk plus an overlapping tail chunk of the same
+                // width cover any sub-word size in at most two copies.
+                if (size >= 4) {
+                    const tail: i32 = @intCast(size - 4);
+                    try self.emitLoad(.w32, temp_reg, src_base, src_offset);
+                    try self.emitStore(.w32, dst_base, dst_offset, temp_reg);
+                    if (tail > 0) {
+                        try self.emitLoad(.w32, temp_reg, src_base, src_offset + tail);
+                        try self.emitStore(.w32, dst_base, dst_offset + tail, temp_reg);
+                    }
+                    return;
                 }
-                if (remaining >= 2) {
-                    try self.emitLoadW16(temp_reg, src_base, src_offset + off);
-                    try self.emitStoreW16(dst_base, dst_offset + off, temp_reg);
-                    remaining -= 2;
-                    off += 2;
+                if (size >= 2) {
+                    const tail: i32 = @intCast(size - 2);
+                    try self.emitLoadW16(temp_reg, src_base, src_offset);
+                    try self.emitStoreW16(dst_base, dst_offset, temp_reg);
+                    if (tail > 0) {
+                        try self.emitLoadW16(temp_reg, src_base, src_offset + tail);
+                        try self.emitStoreW16(dst_base, dst_offset + tail, temp_reg);
+                    }
+                    return;
                 }
-                if (remaining >= 1) {
-                    try self.emitLoadW8(temp_reg, src_base, src_offset + off);
-                    try self.emitStoreW8(dst_base, dst_offset + off, temp_reg);
-                }
+                try self.emitLoadW8(temp_reg, src_base, src_offset);
+                try self.emitStoreW8(dst_base, dst_offset, temp_reg);
                 return;
             }
 
@@ -22190,16 +22140,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .stack_i128 => |off| off,
                 .general_reg => |reg| switch (ret_size) {
                     1, 2, 4, 8 => {
-                        // On aarch64 the register allocator can hand out the
-                        // scratch register, so the result may already be in
-                        // ptr_reg; address through temp_reg in that case.
-                        const addr_reg: GeneralReg = if (reg == ptr_reg) temp_reg else ptr_reg;
-                        try self.emitLoad(.w64, addr_reg, frame_ptr, ret_ptr_stack_slot);
-                        try self.emitStoreScalarToPtr(addr_reg, reg, ret_size);
+                        // The register allocator never hands out scratch_reg
+                        // (both x86_64 masks exclude R11 and the aarch64 mask
+                        // excludes X9), so the result value cannot alias
+                        // ptr_reg.
+                        try self.emitLoad(.w64, ptr_reg, frame_ptr, ret_ptr_stack_slot);
+                        try self.emitStoreScalarToPtr(ptr_reg, reg, ret_size);
                         self.codegen.freeGeneral(reg);
                         return;
                     },
-                    else => try self.ensureOnStack(result_loc, ret_size),
+                    else => blk: {
+                        // A general register holds at most 8 bytes; a wider
+                        // return value can never be materialized here.
+                        if (builtin.mode == .Debug and ret_size > 8) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: general-register return value has size {d}",
+                                .{ret_size},
+                            );
+                        }
+                        break :blk try self.ensureOnStack(result_loc, ret_size);
+                    },
                 },
                 .immediate_i64 => |val| switch (ret_size) {
                     1, 2, 4, 8 => {
@@ -24399,7 +24359,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (self.getLayoutSize(proc_spec.ret_layout) > 0) {
                 const ret_ptr_reg = try self.allocTempGeneral();
                 try self.emitLoad(.w64, ret_ptr_reg, frame_ptr, ret_ptr_slot);
-                try self.storeResultToSavedPtr(result_loc, proc_spec.ret_layout, ret_ptr_reg, 1);
+                try self.storeResultToSavedPtr(result_loc, proc_spec.ret_layout, ret_ptr_reg);
                 self.codegen.freeGeneral(ret_ptr_reg);
             }
 
@@ -24929,7 +24889,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .none => {},
                 .indirect => {
                     if (self.getLayoutSize(ret_layout) > 0) {
-                        try self.storeResultToSavedPtr(result_loc, ret_layout, sret_reg, 1);
+                        try self.storeResultToSavedPtr(result_loc, ret_layout, sret_reg);
                     }
                     // Both SysV and Win64 require the sret pointer back in RAX.
                     if (comptime target.toCpuArch() == .x86_64) {
@@ -25069,7 +25029,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const arg_infos = try self.materializeEntrypointArgInfos(arg_layouts, args_ptr_reg);
             const result_loc = try self.callCompiledOffsetWithArgInfos(compiled, arg_infos, ret_layout, null);
             if (self.getLayoutSize(ret_layout) > 0) {
-                try self.storeResultToSavedPtr(result_loc, ret_layout, ret_ptr_reg, 1);
+                try self.storeResultToSavedPtr(result_loc, ret_layout, ret_ptr_reg);
             }
         }
 
@@ -25436,7 +25396,7 @@ fn compileRootWithFloatNanMode(
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
 
-    const result = try codegen.generateCode(root_proc, ret_layout, 1);
+    const result = try codegen.generateCode(root_proc, ret_layout);
     errdefer allocator.free(result.code);
     const unwind_functions = try allocator.dupe(coff.FunctionInfo, codegen.getUnwindFunctions());
     return .{
