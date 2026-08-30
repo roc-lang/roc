@@ -1827,6 +1827,28 @@ to choose separate `a`s, but one stored result of `mk({})` cannot subsequently
 be called at two different types. Roc has no rank-2 or rank-n interpretation
 under which that returned function could itself retain `forall a`.
 
+Call checking exposes the instantiated callee's formal parameter slots BEFORE
+checking argument expressions. A known function already supplies that arity
+shape; an unresolved callable is related once to a fresh arity-shaped function.
+Arguments are checked with those formal shapes, then the ordinary formal/actual
+relations are committed in one linear fold. Shared formal variables therefore
+flow through one graph relation; the checker never performs a pairwise
+argument scan.
+
+Expected aggregate structure is recursive checking context, not a second owner
+of the expression's root relation. Lists, tuples, records, and tag payloads
+project child slots by relating an aggregate skeleton to a rigids-flexed orphan
+copy of the expected type. Nominal constructors explicitly open their declared
+backing before checking the backing expression, and record updates project each
+supplied field from the base row before checking that field's value. A stored
+child is checked and instantiated first; a successful projected-child relation
+is then committed so sibling checking and dispatch can consume it. A rejected
+projected-child relation records no standalone mismatch: the enclosing aggregate's
+ordinary full-shape relation owns the diagnostic. This preserves the explicit
+stored-value scheme-use edge, gives nested constructions their declared field
+kinds before siblings meet, and keeps the shared expected graph pristine for
+the owning relation and its error report.
+
 The checker records scheme-ness as explicit binding metadata at each
 generalization boundary. After rank adjustment, it walks the binding's type
 interface once and classifies the binding as a scheme exactly when a reachable
