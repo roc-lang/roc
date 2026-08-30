@@ -256,6 +256,55 @@ test "folding range handler finds bracket ranges with test syntax driver" {
     }
 }
 
+test "folding range handler reports true line numbers past 4096 lines" {
+    // The handlers used to build their own line tables into a fixed
+    // `[4096]u32`, silently stopping there. Every position past line 4096 in a
+    // longer file was then reported as line 4095.
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file_uri = try tempFileUri(allocator, &tmp, "long.roc");
+    defer allocator.free(file_uri);
+
+    const blank_lines = 5000;
+
+    // A foldable record well past the old cap. The document text is embedded in
+    // a JSON string, so newlines are escaped.
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "x = 1");
+    for (0..blank_lines) |_| {
+        try source.appendSlice(allocator, "\\n");
+    }
+    try source.appendSlice(allocator, "y = {\\n    a: 1,\\n}");
+
+    const folding_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/foldingRange","params":{{"textDocument":{{"uri":"{s}"}}}}}}
+    , .{file_uri});
+    defer allocator.free(folding_body);
+    const input = try requestInput(allocator, file_uri, source.items, folding_body);
+    defer allocator.free(input);
+
+    var writer_buffer: [16384]u8 = undefined;
+    const run = try runUnitServer(allocator, input, &writer_buffer);
+    defer freeRun(allocator, run);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, try responseWithId(allocator, run.responses, 2), .{});
+    defer parsed.deinit();
+    const result = parsed.value.object.get("result") orelse return error.MissingResult;
+    try std.testing.expect(result == .array);
+    try std.testing.expect(result.array.items.len >= 1);
+
+    // `y = {` sits on the line after the blanks, and its `}` two lines later.
+    const range = result.array.items[0];
+    const start_line = range.object.get("startLine") orelse return error.MissingResult;
+    const end_line = range.object.get("endLine") orelse return error.MissingResult;
+    try std.testing.expect(start_line == .integer);
+    try std.testing.expect(end_line == .integer);
+    try std.testing.expectEqual(@as(i64, blank_lines), start_line.integer);
+    try std.testing.expectEqual(@as(i64, blank_lines + 2), end_line.integer);
+}
+
 test "selection range handler returns range hierarchy with test syntax driver" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

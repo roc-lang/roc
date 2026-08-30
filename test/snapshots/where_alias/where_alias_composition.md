@@ -7,7 +7,7 @@ type=snippet
 ~~~roc
 a.Showable : where [a.to_str : a -> Str]
 
-a.Comparable : where [a.compare : a -> [LT, EQ, GT]]
+a.Comparable : where [a.order_relative_to : a -> [Before, Same, After]]
 
 a.Sortable : where [a.Showable, a.Comparable]
 
@@ -46,14 +46,14 @@ EndOfFile,
 				(args))
 			(ty-var (raw "a"))
 			(where
-				(method (mod-of "a") (name "compare")
+				(method (mod-of "a") (name "order_relative_to")
 					(args
 						(ty-var (raw "a")))
 					(ty-tag-union
 						(tags
-							(ty (name "LT"))
-							(ty (name "EQ"))
-							(ty (name "GT")))))))
+							(ty (name "Before"))
+							(ty (name "Same"))
+							(ty (name "After")))))))
 		(s-type-decl
 			(header (name ".Sortable")
 				(args))
@@ -84,7 +84,7 @@ EndOfFile,
 ~~~roc
 a.Showable :  where [a.to_str : a -> Str]
 
-a.Comparable :  where [a.compare : a -> [LT, EQ, GT]]
+a.Comparable :  where [a.order_relative_to : a -> [Before, Same, After]]
 
 a.Sortable :  where [a.Showable, a.Comparable]
 
@@ -124,13 +124,13 @@ describe = |value| value.to_str()
 		(ty-header (name "Comparable"))
 		(ty-rigid-var (name "a"))
 		(where
-			(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "compare")
+			(method (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "order_relative_to")
 				(args
 					(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
 				(ty-tag-union
-					(ty-tag-name (name "LT"))
-					(ty-tag-name (name "EQ"))
-					(ty-tag-name (name "GT"))))))
+					(ty-tag-name (name "Before"))
+					(ty-tag-name (name "Same"))
+					(ty-tag-name (name "After"))))))
 	(s-where-alias-decl
 		(ty-header (name "Sortable"))
 		(ty-rigid-var (name "a"))
@@ -146,14 +146,14 @@ describe = |value| value.to_str()
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> Str where [a.compare : a -> [EQ, GT, LT], a.to_str : a -> Str]")))
+		(patt (type "a -> Str where [a.order_relative_to : a -> [After, Before, Same], a.to_str : a -> Str]")))
 	(type_decls
 		(where-alias (type "a where [a.to_str : a -> Str]")
 			(ty-header (name "Showable")))
-		(where-alias (type "a where [a.compare : a -> [EQ, GT, LT]]")
+		(where-alias (type "a where [a.order_relative_to : a -> [After, Before, Same]]")
 			(ty-header (name "Comparable")))
-		(where-alias (type "a where [a.compare : a -> [EQ, GT, LT], a.to_str : a -> Str]")
+		(where-alias (type "a where [a.order_relative_to : a -> [After, Before, Same], a.to_str : a -> Str]")
 			(ty-header (name "Sortable"))))
 	(expressions
-		(expr (type "a -> Str where [a.compare : a -> [EQ, GT, LT], a.to_str : a -> Str]"))))
+		(expr (type "a -> Str where [a.order_relative_to : a -> [After, Before, Same], a.to_str : a -> Str]"))))
 ~~~

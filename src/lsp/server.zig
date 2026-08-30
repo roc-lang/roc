@@ -30,6 +30,8 @@ const folding_range_handler_mod = @import("handlers/folding_range.zig");
 const selection_range_handler_mod = @import("handlers/selection_range.zig");
 const document_highlight_handler_mod = @import("handlers/document_highlight.zig");
 const completion_handler_mod = @import("handlers/completion.zig");
+const rename_handler_mod = @import("handlers/rename.zig");
+const references_handler_mod = @import("handlers/references.zig");
 
 const log = std.log.scoped(.roc_lsp_server);
 
@@ -74,6 +76,9 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         const SelectionRangeHandler = selection_range_handler_mod.handler(Self);
         const DocumentHighlightHandler = document_highlight_handler_mod.handler(Self);
         const CompletionHandler = completion_handler_mod.handler(Self);
+        const RenameHandler = rename_handler_mod.handler(Self);
+        const PrepareRenameHandler = rename_handler_mod.prepareHandler(Self);
+        const ReferencesHandler = references_handler_mod.handler(Self);
         const request_handlers = std.StaticStringMap(HandlerPtr).initComptime(.{
             .{ "initialize", &InitializeHandler.call },
             .{ "shutdown", &ShutdownHandler.call },
@@ -86,6 +91,9 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             .{ "textDocument/selectionRange", &SelectionRangeHandler.call },
             .{ "textDocument/documentHighlight", &DocumentHighlightHandler.call },
             .{ "textDocument/completion", &CompletionHandler.call },
+            .{ "textDocument/rename", &RenameHandler.call },
+            .{ "textDocument/prepareRename", &PrepareRenameHandler.call },
+            .{ "textDocument/references", &ReferencesHandler.call },
         });
         const DidOpenHandler = did_open_handler_mod.handler(Self);
         const DidChangeHandler = did_change_handler_mod.handler(Self);

@@ -557,22 +557,41 @@ pub const ReportBuilder = struct {
         }
         try report.document.addLineBreak();
 
-        // Print the actual
-        try D.renderSlice(actual_label, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        const actual_type_str = try report.addOwnedString(self.getFormattedString(actual_snapshot));
-        try report.document.addCodeBlock(actual_type_str);
+        const actual_formatted = self.getFormattedString(actual_snapshot);
+        const expected_formatted = self.getFormattedString(expected_snapshot);
 
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        if (std.mem.eql(u8, actual_formatted, expected_formatted)) {
+            try D.renderSlice(&.{D.bytes("The type involved is:")}, self, &report);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const type_str = try report.addOwnedString(actual_formatted);
+            try report.document.addCodeBlock(type_str);
 
-        // Print the expected
-        try D.renderSlice(expected_label, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        const expected_type_str = try report.addOwnedString(self.getFormattedString(expected_snapshot));
-        try report.document.addCodeBlock(expected_type_str);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try D.renderSlice(
+                &.{D.bytes("The difference is inside this type, but it is not visible in this display.")},
+                self,
+                &report,
+            );
+        } else {
+            // Print the actual
+            try D.renderSlice(actual_label, self, &report);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const actual_type_str = try report.addOwnedString(actual_formatted);
+            try report.document.addCodeBlock(actual_type_str);
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            // Print the expected
+            try D.renderSlice(expected_label, self, &report);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const expected_type_str = try report.addOwnedString(expected_formatted);
+            try report.document.addCodeBlock(expected_type_str);
+        }
 
         // Print static hints
         for (hints, 0..) |hint, i| {
@@ -2136,7 +2155,7 @@ pub const ReportBuilder = struct {
 
         try D.renderSlice(&.{
             D.bytes("A where alias names a set of method constraints, declared like"),
-            D.bytes("a.Sortable : where [a.compare : a -> [LT, EQ, GT]]").withAnnotation(.inline_code),
+            D.bytes("a.Sortable : where [a.order_relative_to : a -> [Before, Same, After]]").withAnnotation(.inline_code),
             D.bytes("and written in a where clause as"),
             D.bytes("where [a.Sortable]").withAnnotation(.inline_code),
         }, self, &report);

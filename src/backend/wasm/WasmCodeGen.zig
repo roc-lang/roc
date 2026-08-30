@@ -15,6 +15,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const base = @import("base");
+const numeric_conversion = base.numeric_conversion;
 const builtins = @import("builtins");
 const layout = @import("layout");
 /// Dec's scaling factor (10^18) as an i64, sourced from the canonical Dec type.
@@ -230,13 +231,12 @@ fn tryUnsafeOffsets(self: *const Self, ret_layout: layout.Idx) TryUnsafeOffsets 
 
 fn builtinInternalListAbi(self: *const Self, comptime _: []const u8, list_layout_idx: layout.Idx) BuiltinListAbi {
     const abi = self.getLayoutStore().builtinListAbi(list_layout_idx);
-    const elements_refcounted = abi.contains_refcounted or self.getLayoutStore().layoutContainsRcErasedBox(abi.elem_layout);
     return .{
         .elem_layout_idx = abi.elem_layout_idx,
         .elem_layout = abi.elem_layout,
         .elem_size = abi.elem_size,
         .elem_align = abi.elem_alignment,
-        .elements_refcounted = elements_refcounted,
+        .elements_refcounted = abi.contains_refcounted,
     };
 }
 
@@ -504,6 +504,7 @@ list_append_le_bytes_import: ?u32 = null,
 list_drop_at_import: ?u32 = null,
 list_reserve_import: ?u32 = null,
 list_reverse_import: ?u32 = null,
+list_sort_with_import: ?u32 = null,
 list_replace_import: ?u32 = null,
 list_set_import: ?u32 = null,
 list_swap_import: ?u32 = null,
@@ -842,6 +843,7 @@ fn hostBuiltinImports(self: *const Self) HostBuiltinImports {
             .list_str_eq => self.list_str_eq_import,
             .list_list_eq => self.list_list_eq_import,
             .list_reverse => self.list_reverse_import,
+            .list_sort_with => self.list_sort_with_import,
             .simd_store_16 => self.simd_store_16_import,
             .simd_append_16 => self.simd_append_16_import,
             .allocate_with_refcount => null,
@@ -1596,7 +1598,7 @@ fn boxyListElementDescForLocals(
 ) ?BoxyListElementDesc {
     const elem_layout = list_abi.elem_layout_idx orelse return null;
     const elem_layout_value = self.getLayoutStore().getLayout(elem_layout);
-    const elem_is_erased_box = elem_layout_value.tag == .box_of_zst;
+    const elem_is_erased_box = elem_layout_value.tag == .erased_box;
     if (!elem_is_erased_box and elem_layout_value.tag != .box) return null;
 
     for (list_locals) |local| {
@@ -2241,6 +2243,10 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
     const list_reverse_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32 }, &.{});
     self.list_reverse_import = try self.module.addImport("env", "roc_list_reverse", list_reverse_type);
 
+    const list_sort_with_sig = BuiltinSignatures.sigOf(.list_sort_with);
+    const list_sort_with_type = try self.module.addFuncType(list_sort_with_sig.wasm_params, list_sort_with_sig.wasm_results);
+    self.list_sort_with_import = try self.module.addImport("env", list_sort_with_sig.name, list_sort_with_type);
+
     // roc_list_replace(list_ptr, elem_width, alignment, index, element_ptr, out_element_ptr, result_ptr)
     const list_replace_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i64, .i32, .i32, .i32 }, &.{});
     self.list_replace_import = try self.module.addImport("env", "roc_list_replace", list_replace_type);
@@ -2542,7 +2548,6 @@ pub fn generateModule(
         error.InvalidSection,
         error.InvalidVersion,
         error.MissingLinkingSection,
-        error.MissingRelocCode,
         error.Overflow,
         error.UnexpectedEnd,
         => wasmInvariantFmt("WASM/codegen invariant violated: invalid eval builtin object: {s}", .{@errorName(err)}),
@@ -4628,6 +4633,7 @@ fn emitStructuralEq(self: *Self, lhs: ProcLocalId, rhs: ProcLocalId, negate: boo
         const ls = self.getLayoutStore();
         const l = ls.getLayout(lay_idx);
         switch (l.tag) {
+            .erased_box => wasmInvariantFmt("WasmCodeGen invariant violated: erased-box equality survived Boxy lowering", .{}),
             .struct_ => {
                 try self.compareCompositeByLayout(lhs_local, rhs_local, lay_idx);
                 if (negate) {
@@ -4828,6 +4834,7 @@ fn expandComposite(self: *Self, work: *std.ArrayList(EqWork), wa: Allocator, lhs
     const l = ls.getLayout(layout_idx);
 
     switch (l.tag) {
+        .erased_box => wasmInvariantFmt("WasmCodeGen invariant violated: erased-box equality survived Boxy lowering", .{}),
         .struct_ => {
             const struct_idx = l.getStruct().idx;
             const struct_data = ls.getStructData(struct_idx);
@@ -5036,6 +5043,7 @@ fn expandField(
 
     const field_layout = ls.getLayout(field_layout_idx);
     switch (field_layout.tag) {
+        .erased_box => wasmInvariantFmt("WasmCodeGen invariant violated: erased-box field equality survived Boxy lowering", .{}),
         .list => {
             const elem_layout = field_layout.getIdx();
             const lhs_list_local = try self.emitAddressOffsetToLocal(lhs_local, field_offset);
@@ -7131,7 +7139,7 @@ fn emitI128Mul(self: *Self, lhs_local: u32, rhs_local: u32) Allocator.Error!void
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), result_local) catch return error.OutOfMemory;
 }
 
-const I128CmpOp = enum { lt, lte, gt, gte };
+const I128CmpOp = enum { eq, lt, lte, gt, gte };
 
 fn emitI128CompareWithSignedness(self: *Self, lhs_local: u32, rhs_local: u32, cmp_op: I128CmpOp, is_signed: bool) Allocator.Error!void {
     // Signed i128 comparison strategy:
@@ -7178,6 +7186,7 @@ fn emitI128CompareWithSignedness(self: *Self, lhs_local: u32, rhs_local: u32, cm
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), rhs_local) catch return error.OutOfMemory;
     try self.emitLoadOp(.i64, 0);
     const low_cmp: u8 = switch (cmp_op) {
+        .eq => Op.i64_eq,
         .lt => Op.i64_lt_u,
         .lte => Op.i64_le_u,
         .gt => Op.i64_gt_u,
@@ -7192,6 +7201,7 @@ fn emitI128CompareWithSignedness(self: *Self, lhs_local: u32, rhs_local: u32, cm
     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), b_high) catch return error.OutOfMemory;
     const high_cmp: u8 = switch (cmp_op) {
+        .eq => Op.i64_eq,
         .lt => if (is_signed) Op.i64_lt_s else Op.i64_lt_u,
         .lte => if (is_signed) Op.i64_le_s else Op.i64_le_u,
         .gt => if (is_signed) Op.i64_gt_s else Op.i64_gt_u,
@@ -7613,95 +7623,10 @@ fn emitIntToI128(self: *Self, signed: bool) Allocator.Error!void {
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), result_local) catch return error.OutOfMemory;
 }
 
-const DecIntTryInfo = struct {
-    val_size: u32,
-    signed: bool,
-    min: i64,
-    max_exclusive: i64,
-};
-
-const DecIntTryOp = enum {
-    dec_to_i8_try_unsafe,
-    dec_to_u8_try_unsafe,
-    dec_to_i16_try_unsafe,
-    dec_to_u16_try_unsafe,
-    dec_to_i32_try_unsafe,
-    dec_to_u32_try_unsafe,
-    dec_to_i64_try_unsafe,
-    dec_to_u64_try_unsafe,
-};
-
-fn decIntTryInfo(op: DecIntTryOp) DecIntTryInfo {
-    return switch (op) {
-        .dec_to_i8_try_unsafe => .{ .val_size = 1, .signed = true, .min = -128, .max_exclusive = 128 },
-        .dec_to_u8_try_unsafe => .{ .val_size = 1, .signed = false, .min = 0, .max_exclusive = 256 },
-        .dec_to_i16_try_unsafe => .{ .val_size = 2, .signed = true, .min = -32768, .max_exclusive = 32768 },
-        .dec_to_u16_try_unsafe => .{ .val_size = 2, .signed = false, .min = 0, .max_exclusive = 65536 },
-        .dec_to_i32_try_unsafe => .{ .val_size = 4, .signed = true, .min = -2147483648, .max_exclusive = 2147483648 },
-        .dec_to_u32_try_unsafe => .{ .val_size = 4, .signed = false, .min = 0, .max_exclusive = 4294967296 },
-        .dec_to_i64_try_unsafe => .{ .val_size = 8, .signed = true, .min = std.math.minInt(i64), .max_exclusive = 0 },
-        .dec_to_u64_try_unsafe => .{ .val_size = 8, .signed = false, .min = 0, .max_exclusive = 0 },
-    };
-}
-
-const FloatIntTryInfo = struct {
-    src_is_f32: bool,
-    target_bits: u32,
-    val_size: u32,
-    signed: bool,
-};
-
-const FloatIntTryOp = enum {
-    f32_to_i8_try_unsafe,
-    f64_to_i8_try_unsafe,
-    f32_to_u8_try_unsafe,
-    f64_to_u8_try_unsafe,
-    f32_to_i16_try_unsafe,
-    f64_to_i16_try_unsafe,
-    f32_to_u16_try_unsafe,
-    f64_to_u16_try_unsafe,
-    f32_to_i32_try_unsafe,
-    f64_to_i32_try_unsafe,
-    f32_to_u32_try_unsafe,
-    f64_to_u32_try_unsafe,
-    f32_to_i64_try_unsafe,
-    f64_to_i64_try_unsafe,
-    f32_to_u64_try_unsafe,
-    f64_to_u64_try_unsafe,
-    f32_to_i128_try_unsafe,
-    f64_to_i128_try_unsafe,
-    f32_to_u128_try_unsafe,
-    f64_to_u128_try_unsafe,
-};
-
-fn floatIntTryInfo(op: FloatIntTryOp) FloatIntTryInfo {
-    return switch (op) {
-        .f32_to_i8_try_unsafe => .{ .src_is_f32 = true, .target_bits = 8, .val_size = 1, .signed = true },
-        .f64_to_i8_try_unsafe => .{ .src_is_f32 = false, .target_bits = 8, .val_size = 1, .signed = true },
-        .f32_to_u8_try_unsafe => .{ .src_is_f32 = true, .target_bits = 8, .val_size = 1, .signed = false },
-        .f64_to_u8_try_unsafe => .{ .src_is_f32 = false, .target_bits = 8, .val_size = 1, .signed = false },
-        .f32_to_i16_try_unsafe => .{ .src_is_f32 = true, .target_bits = 16, .val_size = 2, .signed = true },
-        .f64_to_i16_try_unsafe => .{ .src_is_f32 = false, .target_bits = 16, .val_size = 2, .signed = true },
-        .f32_to_u16_try_unsafe => .{ .src_is_f32 = true, .target_bits = 16, .val_size = 2, .signed = false },
-        .f64_to_u16_try_unsafe => .{ .src_is_f32 = false, .target_bits = 16, .val_size = 2, .signed = false },
-        .f32_to_i32_try_unsafe => .{ .src_is_f32 = true, .target_bits = 32, .val_size = 4, .signed = true },
-        .f64_to_i32_try_unsafe => .{ .src_is_f32 = false, .target_bits = 32, .val_size = 4, .signed = true },
-        .f32_to_u32_try_unsafe => .{ .src_is_f32 = true, .target_bits = 32, .val_size = 4, .signed = false },
-        .f64_to_u32_try_unsafe => .{ .src_is_f32 = false, .target_bits = 32, .val_size = 4, .signed = false },
-        .f32_to_i64_try_unsafe => .{ .src_is_f32 = true, .target_bits = 64, .val_size = 8, .signed = true },
-        .f64_to_i64_try_unsafe => .{ .src_is_f32 = false, .target_bits = 64, .val_size = 8, .signed = true },
-        .f32_to_u64_try_unsafe => .{ .src_is_f32 = true, .target_bits = 64, .val_size = 8, .signed = false },
-        .f64_to_u64_try_unsafe => .{ .src_is_f32 = false, .target_bits = 64, .val_size = 8, .signed = false },
-        .f32_to_i128_try_unsafe => .{ .src_is_f32 = true, .target_bits = 128, .val_size = 16, .signed = true },
-        .f64_to_i128_try_unsafe => .{ .src_is_f32 = false, .target_bits = 128, .val_size = 16, .signed = true },
-        .f32_to_u128_try_unsafe => .{ .src_is_f32 = true, .target_bits = 128, .val_size = 16, .signed = false },
-        .f64_to_u128_try_unsafe => .{ .src_is_f32 = false, .target_bits = 128, .val_size = 16, .signed = false },
-    };
-}
-
-fn emitFloatToIntTryBuiltin(self: *Self, op: FloatIntTryOp, ret_layout: layout.Idx, arg: ProcLocalId) Allocator.Error!void {
+fn emitFloatToIntTryBuiltin(self: *Self, op: lir.LowLevel, ret_layout: layout.Idx, arg: ProcLocalId) Allocator.Error!void {
     const offsets = self.tryUnsafeOffsets(ret_layout);
-    const info = floatIntTryInfo(op);
+    const spec = numeric_conversion.getConversionSpec(op).?;
+    std.debug.assert(spec.src.class() == .float and spec.dst.class() == .int);
     const result_size = try self.layoutStorageByteSize(ret_layout);
     const result_align = try self.layoutStorageByteAlign(ret_layout);
     const result_offset = try self.allocStackMemory(result_size, result_align);
@@ -7711,13 +7636,13 @@ fn emitFloatToIntTryBuiltin(self: *Self, op: FloatIntTryOp, ret_layout: layout.I
     try self.emitLocalSet(result_local);
     try self.emitLocalGet(result_local);
     try self.emitProcLocal(arg);
-    try self.emitI32Const(@intCast(info.target_bits));
-    try self.emitI32Const(@intFromBool(info.signed));
-    try self.emitI32Const(@intCast(info.val_size));
+    try self.emitI32Const(spec.dst.bits());
+    try self.emitI32Const(@intFromBool(spec.dst.isSigned()));
+    try self.emitI32Const(spec.dst.bytes());
     try self.emitI32Const(@intCast(offsets.success));
     try self.emitI32Const(@intCast(offsets.value));
 
-    if (info.src_is_f32) {
+    if (spec.src == .f32) {
         try self.emitBuiltinCall(.f32_to_int_try_unsafe, self.f32_to_int_try_unsafe_import);
     } else {
         try self.emitBuiltinCall(.f64_to_int_try_unsafe, self.f64_to_int_try_unsafe_import);
@@ -7726,16 +7651,19 @@ fn emitFloatToIntTryBuiltin(self: *Self, op: FloatIntTryOp, ret_layout: layout.I
     try self.emitLocalGet(result_local);
 }
 
-fn emitDecToIntTryUnsafe(self: *Self, op: DecIntTryOp, ret_layout: layout.Idx, arg: ProcLocalId) Allocator.Error!void {
+fn emitDecToIntTryUnsafe(self: *Self, op: lir.LowLevel, ret_layout: layout.Idx, arg: ProcLocalId) Allocator.Error!void {
     const offsets = self.tryUnsafeOffsets(ret_layout);
-    const info = decIntTryInfo(op);
+    const spec = numeric_conversion.getConversionSpec(op).?;
+    std.debug.assert(spec.src == .dec and spec.dst.class() == .int);
+    const val_size: u32 = spec.dst.bytes();
+    const signed = spec.dst.isSigned();
 
     try self.emitProcLocal(arg);
     const src = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(src);
 
-    const total_size: u32 = if (info.val_size == 8) 16 else 8;
-    const alignment: u32 = if (info.val_size == 8) 8 else 4;
+    const total_size: u32 = if (val_size == 8) 16 else 8;
+    const alignment: u32 = if (val_size == 8) 8 else 4;
     const result_offset = try self.allocStackMemory(total_size, alignment);
     const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitFpOffset(result_offset);
@@ -7747,9 +7675,9 @@ fn emitDecToIntTryUnsafe(self: *Self, op: DecIntTryOp, ret_layout: layout.Idx, a
         try self.emitLoadOp(.i64, 0);
         try self.emitLocalGet(src);
         try self.emitLoadOp(.i64, 8);
-        try self.emitI32Const(@intCast(info.val_size * 8));
-        try self.emitI32Const(@intFromBool(info.signed));
-        try self.emitI32Const(@intCast(info.val_size));
+        try self.emitI32Const(@intCast(val_size * 8));
+        try self.emitI32Const(@intFromBool(signed));
+        try self.emitI32Const(@intCast(val_size));
         try self.emitI32Const(@intCast(offsets.success));
         try self.emitI32Const(@intCast(offsets.value));
         try self.emitBuiltinCall(.dec_to_int_try_unsafe, null);
@@ -7764,7 +7692,7 @@ fn emitDecToIntTryUnsafe(self: *Self, op: DecIntTryOp, ret_layout: layout.Idx, a
 
     try self.emitLocalGet(src);
     try self.emitLocalGet(int_local);
-    try self.emitBuiltinCall(.dec_to_int_try_unsafe, if (info.signed) self.dec_to_i128_import else self.dec_to_u128_import);
+    try self.emitBuiltinCall(.dec_to_int_try_unsafe, if (signed) self.dec_to_i128_import else self.dec_to_u128_import);
     const host_success = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(host_success);
 
@@ -7779,7 +7707,7 @@ fn emitDecToIntTryUnsafe(self: *Self, op: DecIntTryOp, ret_layout: layout.Idx, a
     try self.emitLocalSet(high);
 
     const in_range = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    if (info.signed) {
+    if (signed) {
         try self.emitLocalGet(high);
         self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
         WasmModule.leb128WriteI64(self.allocator, self.currentCode(), -1) catch return error.OutOfMemory;
@@ -7796,16 +7724,17 @@ fn emitDecToIntTryUnsafe(self: *Self, op: DecIntTryOp, ret_layout: layout.Idx, a
         self.currentCode().append(self.allocator, Op.i64_lt_s) catch return error.OutOfMemory;
         self.currentCode().append(self.allocator, Op.select) catch return error.OutOfMemory;
 
-        if (info.val_size < 8) {
+        if (val_size < 8) {
+            const magnitude_bits: u6 = @intCast(spec.dst.bits() - 1);
             try self.emitLocalGet(low);
             self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI64(self.allocator, self.currentCode(), info.min) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, self.currentCode(), -(@as(i64, 1) << magnitude_bits)) catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, Op.i64_ge_s) catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
 
             try self.emitLocalGet(low);
             self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI64(self.allocator, self.currentCode(), info.max_exclusive) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, self.currentCode(), @as(i64, 1) << magnitude_bits) catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, Op.i64_lt_s) catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
         }
@@ -7815,10 +7744,10 @@ fn emitDecToIntTryUnsafe(self: *Self, op: DecIntTryOp, ret_layout: layout.Idx, a
         WasmModule.leb128WriteI64(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
         self.currentCode().append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
 
-        if (info.val_size < 8) {
+        if (val_size < 8) {
             try self.emitLocalGet(low);
             self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI64(self.allocator, self.currentCode(), info.max_exclusive) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, self.currentCode(), @as(i64, 1) << @intCast(spec.dst.bits())) catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, Op.i64_lt_u) catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
         }
@@ -7840,11 +7769,11 @@ fn emitDecToIntTryUnsafe(self: *Self, op: DecIntTryOp, ret_layout: layout.Idx, a
     self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
     try self.emitLocalGet(result_local);
     try self.emitLocalGet(low);
-    if (info.val_size == 8) {
+    if (val_size == 8) {
         try self.emitStoreOp(.i64, offsets.value);
     } else {
         self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
-        try self.emitStoreOpSized(.i32, info.val_size, offsets.value);
+        try self.emitStoreOpSized(.i32, val_size, offsets.value);
     }
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 
@@ -9264,6 +9193,7 @@ pub fn registerBoxySymbolTargets(self: *Self) HostedSymbolError!void {
     try self.registerBoxySymbol("roc_boxy_list_set", &.{ .i32, .i32, .i32, .i32, .i32, .i64, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_swap", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i64, .i64, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_reverse", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
+    try self.registerBoxySymbol("roc_boxy_list_sort_with", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_reserve", &.{ .i32, .i32, .i32, .i32, .i32, .i64, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_release_excess_capacity", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
 }
@@ -10381,6 +10311,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         .assign_list => |assign| {
             try self.generateList(.{
                 .elems = assign.elems,
+                .list_layout = self.procLocalLayoutIdx(assign.target),
                 .elem_layout = self.listElemLayout(self.procLocalLayoutIdx(assign.target)),
             });
             try self.bindAssignedLocal(assign.target);
@@ -11081,6 +11012,7 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                     try self.emitProcLocal(disc.source);
                     break :blk try self.procLocalValType(disc.source);
                 },
+                .erased_box => wasmInvariantFmt("WasmCodeGen invariant violated: erased-box discriminant access survived Boxy lowering", .{}),
             };
 
             switch (source_vt) {
@@ -11128,6 +11060,7 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner.getTagUnion().idx));
                     break :blk variants.get(payload.variant_index).payload_layout;
                 },
+                .erased_box => wasmInvariantFmt("WasmCodeGen invariant violated: erased-box tag payload access survived Boxy lowering", .{}),
                 .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => .zst,
             };
             const payload_layout = ls.getLayout(payload_layout_idx);
@@ -11164,6 +11097,7 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner.getTagUnion().idx));
                     break :blk variants.get(payload.variant_index).payload_layout;
                 },
+                .erased_box => wasmInvariantFmt("WasmCodeGen invariant violated: erased-box tag payload access survived Boxy lowering", .{}),
                 .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => .zst,
             };
             if (builtin.mode == .Debug and payload_layout_idx != target_layout) {
@@ -11225,7 +11159,7 @@ fn listElemLayout(self: *Self, list_layout_idx: layout.Idx) layout.Idx {
     return switch (list_layout.tag) {
         .list => self.runtimeRepresentationLayoutIdx(list_layout.getIdx()),
         .list_of_zst => list_layout_idx,
-        .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => unreachable,
+        .scalar, .box, .box_of_zst, .erased_box, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => unreachable,
     };
 }
 
@@ -11236,7 +11170,7 @@ fn runtimeRepresentationLayoutIdx(self: *const Self, layout_idx: layout.Idx) lay
         const layout_val = ls.getLayout(current);
         switch (layout_val.tag) {
             .closure => current = layout_val.getClosure().captures_layout_idx,
-            .scalar, .box, .box_of_zst, .list, .list_of_zst, .struct_, .erased_callable, .zst, .tag_union, .ptr => return current,
+            .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .erased_callable, .zst, .tag_union, .ptr => return current,
         }
     }
 }
@@ -11539,19 +11473,17 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
         4,
         @intCast(builtins.erased_callable.capture_offset + metadata_offset + @offsetOf(builtins.erased_callable.CompilerMetadata, "result_desc")),
     );
-    if (c.result_desc != null) {
-        const proc_spec = self.store.getProcSpec(c.proc);
-        try self.emitFunctionTableIndexConst(table_idx);
-        try self.emitI32Const(@intCast(@intFromEnum(c.proc)));
-        try self.emitI32Const(@intCast(@intFromEnum(self.runtimeRepresentationLayoutIdx(proc_spec.ret_layout))));
-        try self.emitI32Const(@intCast(metadata_offset));
-        try self.emitI32Const(@intCast(proc_spec.erased_arg_layouts.start));
-        try self.emitI32Const(@intCast(proc_spec.erased_arg_layouts.len));
-        try self.emitI32Const(@intCast(proc_spec.erased_arg_desc_offsets.start));
-        try self.emitI32Const(@intCast(proc_spec.erased_arg_desc_offsets.len));
-        try self.emitI32Const(0);
-        try self.emitBoxyCall("roc_boxy_register_erased_proc");
-    }
+    const proc_spec = self.store.getProcSpec(c.proc);
+    try self.emitFunctionTableIndexConst(table_idx);
+    try self.emitI32Const(@intCast(@intFromEnum(c.proc)));
+    try self.emitI32Const(@intCast(@intFromEnum(self.runtimeRepresentationLayoutIdx(proc_spec.ret_layout))));
+    try self.emitI32Const(@intCast(metadata_offset));
+    try self.emitI32Const(@intCast(proc_spec.erased_arg_layouts.start));
+    try self.emitI32Const(@intCast(proc_spec.erased_arg_layouts.len));
+    try self.emitI32Const(@intCast(proc_spec.erased_arg_desc_offsets.start));
+    try self.emitI32Const(@intCast(proc_spec.erased_arg_desc_offsets.len));
+    try self.emitI32Const(0);
+    try self.emitBoxyCall("roc_boxy_register_erased_proc");
 
     try self.emitLocalGet(payload_ptr);
 }
@@ -11724,7 +11656,7 @@ fn layoutStorageByteSize(self: *const Self, layout_idx: layout.Idx) Allocator.Er
             .vector => 16,
         },
         .list, .list_of_zst => 12,
-        .box, .box_of_zst => 4,
+        .box, .box_of_zst, .erased_box => 4,
         .tag_union => (try WasmLayout.tagUnionLayoutWithStore(l.getTagUnion().idx, ls)).size,
         .struct_ => try WasmLayout.structSizeWithStore(l.getStruct().idx, ls),
         .closure, .erased_callable, .ptr => try self.layoutByteSize(layout_idx),
@@ -11742,7 +11674,7 @@ fn layoutByteAlign(self: *const Self, layout_idx: layout.Idx) Allocator.Error!u3
         .stack_memory => {
             const l = ls.getLayout(layout_idx);
             return switch (l.tag) {
-                .list, .list_of_zst, .box, .box_of_zst => 4,
+                .list, .list_of_zst, .box, .box_of_zst, .erased_box => 4,
                 .scalar => if (l.getScalar().tag == .str) 4 else @intCast(ls.layoutSizeAlign(l).alignment.toByteUnits()),
                 .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => @intCast(ls.layoutSizeAlign(l).alignment.toByteUnits()),
             };
@@ -11772,7 +11704,7 @@ fn layoutStorageByteAlign(self: *const Self, layout_idx: layout.Idx) Allocator.E
             },
             .vector => 16,
         },
-        .list, .list_of_zst, .box, .box_of_zst => 4,
+        .list, .list_of_zst, .box, .box_of_zst, .erased_box => 4,
         .tag_union => WasmLayout.layoutAlignWasm(l),
         .struct_ => WasmLayout.layoutAlignWasm(l),
         .closure, .erased_callable, .ptr => try self.layoutByteAlign(layout_idx),
@@ -12197,7 +12129,7 @@ fn generateStructAccess(self: *Self, sa: anytype) Allocator.Error!void {
     const source_layout = ls.getLayout(sa.struct_layout);
     const struct_layout_idx = switch (source_layout.tag) {
         .box => source_layout.getIdx(),
-        .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => sa.struct_layout,
+        .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => sa.struct_layout,
     };
     const struct_layout = ls.getLayout(struct_layout_idx);
     if (struct_layout.tag != .struct_) {
@@ -12400,6 +12332,60 @@ fn generateStoreAggregateValue(self: *Self, dest: ProcLocalId, value_layout: lay
 /// Generate a discriminant switch expression.
 /// Evaluates the tag union value, loads its discriminant, and generates
 /// cascading if/else branches indexed by discriminant value.
+/// Emit the canonical value for a list of zero-width elements: such a list owns
+/// no allocation, so its data pointer is null and its stored capacity is zero,
+/// and it carries nothing but the length held in `len_local`. Leaves a pointer
+/// to the list value on the operand stack.
+fn emitZstListWithLen(self: *Self, len_local: u32) Allocator.Error!void {
+    const offset = try self.allocStackMemory(12, 4);
+    const list_base = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitFpOffset(offset);
+    try self.emitLocalSet(list_base);
+    try self.emitZeroInit(list_base, 12);
+    try self.emitLocalGet(len_local);
+    try self.emitStoreToMem(list_base, 4, .i32);
+    try self.emitLocalGet(list_base);
+}
+
+/// Emit the canonical zero-width list carrying the length currently on the
+/// operand stack.
+fn emitZstListFromStackLen(self: *Self) Allocator.Error!void {
+    const len_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(len_local);
+    try self.emitZstListWithLen(len_local);
+}
+
+/// Read the length out of the list value pointed to by `list_local`.
+fn emitListLenLocal(self: *Self, list_local: u32) Allocator.Error!u32 {
+    const len_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalGet(list_local);
+    try self.emitLoadOp(.i32, 4);
+    try self.emitLocalSet(len_local);
+    return len_local;
+}
+
+/// Push `a -| b` for the unsigned i32 locals `a` and `b`.
+fn emitU32SaturatingSub(self: *Self, a: u32, b: u32) Allocator.Error!void {
+    try self.emitLocalGet(a);
+    try self.emitLocalGet(b);
+    self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
+    try self.emitI32Const(0);
+    try self.emitLocalGet(a);
+    try self.emitLocalGet(b);
+    self.currentCode().append(self.allocator, Op.i32_ge_u) catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, Op.select) catch return error.OutOfMemory;
+}
+
+/// Push `@min(a, b)` for the unsigned i32 locals `a` and `b`.
+fn emitU32Min(self: *Self, a: u32, b: u32) Allocator.Error!void {
+    try self.emitLocalGet(a);
+    try self.emitLocalGet(b);
+    try self.emitLocalGet(a);
+    try self.emitLocalGet(b);
+    self.currentCode().append(self.allocator, Op.i32_lt_u) catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, Op.select) catch return error.OutOfMemory;
+}
+
 fn generateList(self: *Self, l: anytype) Allocator.Error!void {
     const ls = self.getLayoutStore();
     const elems = self.store.getLocalSpan(l.elems);
@@ -12417,14 +12403,17 @@ fn generateList(self: *Self, l: anytype) Allocator.Error!void {
         return;
     }
 
-    // Get element layout and size
-    const elem_size: u32 = try self.layoutStorageByteSize(l.elem_layout);
-    const elem_align: u32 = try self.layoutStorageByteAlign(l.elem_layout);
+    // Get element layout and size. `listElemLayout` hands back the list layout
+    // itself for a list of zero-sized elements, so read the element width from
+    // the list layout's tag instead of measuring that stand-in layout.
+    const elems_are_zero_sized = ls.getLayout(l.list_layout).tag == .list_of_zst;
+    const elem_size: u32 = if (elems_are_zero_sized) 0 else try self.layoutStorageByteSize(l.elem_layout);
+    const elem_align: u32 = if (elems_are_zero_sized) 1 else try self.layoutStorageByteAlign(l.elem_layout);
 
     // Allocate space for all elements on the heap so list literals remain valid
     // when returned from functions (callee stack frames are reclaimed on return).
     const total_data_size = elem_size * @as(u32, @intCast(elems.len));
-    const elements_refcounted = ls.layoutContainsRcErasedBox(ls.getLayout(l.elem_layout));
+    const elements_refcounted = ls.layoutContainsRefcounted(ls.getLayout(l.elem_layout));
     const data_base = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     if (total_data_size > 0) {
         try self.emitHeapAllocWithRefcountConst(total_data_size, elem_align, elements_refcounted);
@@ -12478,9 +12467,11 @@ fn generateList(self: *Self, l: anytype) Allocator.Error!void {
     WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(elems.len)) catch return error.OutOfMemory;
     try self.emitStoreToMem(list_base, 4, .i32);
 
-    // Store encoded capacity (offset 8).
+    // Store encoded capacity (offset 8). A list of zero-sized elements holds no
+    // allocation, so its stored capacity is zero however many elements it carries.
+    const encoded_capacity: u32 = if (elem_size == 0) 0 else @as(u32, @intCast(elems.len)) << 1;
     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(elems.len << 1)) catch return error.OutOfMemory;
+    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(encoded_capacity)) catch return error.OutOfMemory;
     try self.emitStoreToMem(list_base, 8, .i32);
 
     // Push pointer to the RocList struct
@@ -13436,6 +13427,15 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const list_abi = self.builtinInternalListAbi("wasm.list_drop_first.builtin_list_abi", ll.ret_layout);
             const elem_size = list_abi.elem_size;
 
+            // Zero-width elements have no bytes to skip past, so dropping a
+            // prefix only shortens the length of an unallocated list.
+            if (elem_size == 0) {
+                const len_local = try self.emitListLenLocal(list_local);
+                try self.emitU32SaturatingSub(len_local, count_local);
+                try self.emitZstListFromStackLen();
+                return;
+            }
+
             // new_ptr = old_ptr + count * elem_size
             self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, self.currentCode(), result_local) catch return error.OutOfMemory;
@@ -13491,6 +13491,18 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.currentCode().append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, self.currentCode(), count_local) catch return error.OutOfMemory;
 
+            // Zero-width elements have no bytes to drop, so removing a suffix
+            // only shortens the length of an unallocated list.
+            {
+                const drop_abi = self.builtinInternalListAbi("wasm.list_drop_last.builtin_list_abi", ll.ret_layout);
+                if (drop_abi.elem_size == 0) {
+                    const len_local = try self.emitListLenLocal(list_local);
+                    try self.emitU32SaturatingSub(len_local, count_local);
+                    try self.emitZstListFromStackLen();
+                    return;
+                }
+            }
+
             // Allocate result RocList (12 bytes)
             const result_offset = try self.allocStackMemory(12, 4);
             const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -13544,6 +13556,18 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const count_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, Op.local_set) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, self.currentCode(), count_local) catch return error.OutOfMemory;
+
+            // Zero-width elements have no bytes to keep, so taking a prefix
+            // only shortens the length of an unallocated list.
+            {
+                const take_abi = self.builtinInternalListAbi("wasm.list_take_first.builtin_list_abi", ll.ret_layout);
+                if (take_abi.elem_size == 0) {
+                    const len_local = try self.emitListLenLocal(list_local);
+                    try self.emitU32Min(count_local, len_local);
+                    try self.emitZstListFromStackLen();
+                    return;
+                }
+            }
 
             const result_offset = try self.allocStackMemory(12, 4);
             const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -13637,6 +13661,14 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const list_abi = self.builtinInternalListAbi("wasm.list_take_last.builtin_list_abi", ll.ret_layout);
             const elem_size = list_abi.elem_size;
 
+            // Zero-width elements have no bytes to keep, so taking a suffix
+            // only shortens the length of an unallocated list.
+            if (elem_size == 0) {
+                try self.emitU32Min(count_local, len_local);
+                try self.emitZstListFromStackLen();
+                return;
+            }
+
             // new_ptr = old_ptr + (len - actual_count) * elem_size
             self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, self.currentCode(), result_local) catch return error.OutOfMemory;
@@ -13723,6 +13755,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // list_reverse(list) -> reversed list
             try self.generateLLListReverse(args, ll.ret_layout, ll.target, ll.unique_args);
         },
+        .list_sort_with => try self.generateLLListSortWith(args, ll.ret_layout, ll.target, ll.unique_args),
         // list_with_capacity(capacity) -> empty list with given capacity
         .list_with_capacity => {
             try self.generateLLListWithCapacity(args, ll.ret_layout);
@@ -13802,6 +13835,29 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteU32(self.allocator, self.currentCode(), rec_local) catch return error.OutOfMemory;
 
             const boxy_list_abi = self.builtinInternalListAbi("wasm.list_sublist.boxy_list_abi", ll.ret_layout);
+
+            // Zero-width elements have no bytes to slice, so the result is the
+            // window length alone: min(len, size -| start).
+            if (boxy_list_abi.elem_size == 0) {
+                const size_local = try self.emitListLenLocal(list_local);
+                const start_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                try self.emitLocalGet(rec_local);
+                try self.emitLoadOp(.i64, start_field_off);
+                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+                try self.emitLocalSet(start_local);
+                const want_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                try self.emitLocalGet(rec_local);
+                try self.emitLoadOp(.i64, len_field_off);
+                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+                try self.emitLocalSet(want_local);
+                const avail_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                try self.emitU32SaturatingSub(size_local, start_local);
+                try self.emitLocalSet(avail_local);
+                try self.emitU32Min(want_local, avail_local);
+                try self.emitZstListFromStackLen();
+                return;
+            }
+
             const boxy_elem = if (self.external_calls == .builtin_relocs)
                 self.boxyListElementDescForLocals(boxy_list_abi, &.{GuardedList.at(args, 0)}, ll.target)
             else
@@ -14321,7 +14377,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                                 inner_bad_utf8_disc = info.disc;
                             }
                         },
-                        .scalar, .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .zst, .ptr => {},
+                        .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .zst, .ptr => {},
                     }
                 }
             }
@@ -14353,7 +14409,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                         .u64, .i64 => true,
                         .u8, .i8, .u16, .i16, .u32, .i32, .u128, .i128 => false,
                     },
-                    .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => false,
+                    .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => false,
                 };
                 if (is_index) {
                     index_off = field_offset;
@@ -14468,7 +14524,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const tu_layout = try WasmLayout.tagUnionLayoutWithStore(ret_layout_val.getTagUnion().idx, ls);
             const disc_offset: u32 = tu_layout.discriminant_offset;
             const result_offset = try self.allocStackMemory(tu_layout.size, 4);
-            const parse_spec = ll.op.numericParseSpec() orelse unreachable;
+            const parse_spec = numeric_conversion.getNumericParseSpec(ll.op) orelse unreachable;
 
             try self.emitProcLocal(GuardedList.at(args, 0));
             const input = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -15048,7 +15104,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitProcLocal(GuardedList.at(args, 0));
         },
 
-        // Compare—returns Ordering enum (EQ=0, GT=1, LT=2)
+        // Compare—returns Ordering enum (After=0, Before=1, Same=2)
         .compare => {
             try self.emitProcLocal(GuardedList.at(args, 0));
             try self.emitProcLocal(GuardedList.at(args, 1));
@@ -15074,8 +15130,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     switch (arg_layout) {
                         .u128, .i128, .dec => {
                             const is_signed = arg_layout == .i128 or arg_layout == .dec;
-                            try self.emitI128CompareWithSignedness(a, b, .gt, is_signed);
                             try self.emitI128CompareWithSignedness(a, b, .lt, is_signed);
+                            try self.emitI128CompareWithSignedness(a, b, .eq, is_signed);
                             self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                             WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
                             self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
@@ -15085,23 +15141,22 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                         .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .f32, .f64, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => {},
                     }
 
-                    // gt_flag = (a > b) ? 1 : 0
-                    // gt_flag
-                    self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), a) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
-                    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), b) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, if (is_unsigned) Op.i32_gt_u else Op.i32_gt_s) catch return error.OutOfMemory;
-                    // lt_flag * 2
+                    // before_flag = (a < b) ? 1 : 0
                     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), a) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), b) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, if (is_unsigned) Op.i32_lt_u else Op.i32_lt_s) catch return error.OutOfMemory;
+                    // same_flag * 2
+                    self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), a) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), b) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                     WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-                    // result = gt_flag + lt_flag * 2
+                    // result = before_flag + same_flag * 2
                     self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
                 },
                 .i64 => {
@@ -15115,12 +15170,12 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), a) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), b) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, if (is_unsigned) Op.i64_gt_u else Op.i64_gt_s) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, if (is_unsigned) Op.i64_lt_u else Op.i64_lt_s) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), a) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), b) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, if (is_unsigned) Op.i64_lt_u else Op.i64_lt_s) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                     WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
@@ -15137,12 +15192,12 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), a) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), b) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.f32_gt) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, Op.f32_lt) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), a) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), b) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.f32_lt) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, Op.f32_eq) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                     WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
@@ -15159,12 +15214,12 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), a) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), b) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.f64_gt) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, Op.f64_lt) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), a) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), b) catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, Op.f64_lt) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, Op.f64_eq) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                     WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
@@ -16018,14 +16073,15 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         // Dec try_unsafe conversions return { success, val_or_memory_garbage }.
         // The fractional part is truncated toward zero before range checking.
-        .dec_to_i8_try_unsafe => try self.emitDecToIntTryUnsafe(.dec_to_i8_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .dec_to_i16_try_unsafe => try self.emitDecToIntTryUnsafe(.dec_to_i16_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .dec_to_i32_try_unsafe => try self.emitDecToIntTryUnsafe(.dec_to_i32_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .dec_to_i64_try_unsafe => try self.emitDecToIntTryUnsafe(.dec_to_i64_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .dec_to_u8_try_unsafe => try self.emitDecToIntTryUnsafe(.dec_to_u8_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .dec_to_u16_try_unsafe => try self.emitDecToIntTryUnsafe(.dec_to_u16_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .dec_to_u32_try_unsafe => try self.emitDecToIntTryUnsafe(.dec_to_u32_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .dec_to_u64_try_unsafe => try self.emitDecToIntTryUnsafe(.dec_to_u64_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
+        .dec_to_i8_try_unsafe,
+        .dec_to_i16_try_unsafe,
+        .dec_to_i32_try_unsafe,
+        .dec_to_i64_try_unsafe,
+        .dec_to_u8_try_unsafe,
+        .dec_to_u16_try_unsafe,
+        .dec_to_u32_try_unsafe,
+        .dec_to_u64_try_unsafe,
+        => try self.emitDecToIntTryUnsafe(ll.op, ll.ret_layout, GuardedList.at(args, 0)),
         // Dec → u128: divide by 10^18
         .dec_to_u128_try_unsafe => {
             const offsets = self.tryUnsafeOffsets(ll.ret_layout);
@@ -16124,26 +16180,27 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         // Float try_unsafe conversions return { success, val_or_memory_garbage }.
         // The wrapper ABI preserves the source width exactly: F32 never passes
         // through an F64 Wasm value or helper parameter.
-        .f32_to_i8_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_i8_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_i8_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_i8_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_u8_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_u8_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_u8_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_u8_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_i16_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_i16_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_i16_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_i16_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_u16_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_u16_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_u16_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_u16_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_i32_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_i32_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_i32_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_i32_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_u32_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_u32_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_u32_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_u32_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_i64_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_i64_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_i64_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_i64_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_u64_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_u64_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_u64_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_u64_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_i128_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_i128_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_i128_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_i128_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_u128_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_u128_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_u128_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_u128_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
+        .f32_to_i8_try_unsafe,
+        .f64_to_i8_try_unsafe,
+        .f32_to_u8_try_unsafe,
+        .f64_to_u8_try_unsafe,
+        .f32_to_i16_try_unsafe,
+        .f64_to_i16_try_unsafe,
+        .f32_to_u16_try_unsafe,
+        .f64_to_u16_try_unsafe,
+        .f32_to_i32_try_unsafe,
+        .f64_to_i32_try_unsafe,
+        .f32_to_u32_try_unsafe,
+        .f64_to_u32_try_unsafe,
+        .f32_to_i64_try_unsafe,
+        .f64_to_i64_try_unsafe,
+        .f32_to_u64_try_unsafe,
+        .f64_to_u64_try_unsafe,
+        .f32_to_i128_try_unsafe,
+        .f64_to_i128_try_unsafe,
+        .f32_to_u128_try_unsafe,
+        .f64_to_u128_try_unsafe,
+        => try self.emitFloatToIntTryBuiltin(ll.op, ll.ret_layout, GuardedList.at(args, 0)),
         .f64_to_f32_try_unsafe => {
             const offsets = self.tryUnsafeOffsets(ll.ret_layout);
             try self.emitProcLocal(GuardedList.at(args, 0));
@@ -16326,6 +16383,7 @@ fn numericOpFromLowLevel(op: LIR.LowLevel) NumericOp {
         .list_take_first,
         .list_take_last,
         .list_reverse,
+        .list_sort_with,
         .list_reserve,
         .list_release_excess_capacity,
         .list_split_first,
@@ -18227,9 +18285,12 @@ fn emitStrToUtf8(self: *Self, str_arg: ProcLocalId) Allocator.Error!void {
         try self.emitLocalSet(str_cap);
 
         // Non-SSO Str.to_utf8 returns a List(U8) that aliases the string bytes.
-        // Retain the shared backing so dropping the list does not invalidate the
-        // input Str that ARC still owns.
-        try self.emitDataPtrIncref(str_data, 1);
+        // A seamless string slice's data pointer points inside its allocation,
+        // so decode the allocation pointer before retaining the shared backing.
+        const alloc_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        const is_small = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitDecodeStrAllocPtr(str_ptr, alloc_ptr, is_small);
+        try self.emitDataPtrIncref(alloc_ptr, 1);
 
         try self.emitLocalGet(result_ptr);
         try self.emitLocalGet(str_data);
@@ -20475,6 +20536,18 @@ fn generateLLListPrepend(self: *Self, args: anytype, ret_layout: layout.Idx, tar
     try self.emitProcLocal(GuardedList.at(args, 0));
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(list_ptr);
+
+    // A zero-width element has no bytes to place at the front, so prepending
+    // one only bumps the length.
+    if (elem_size == 0) {
+        const len_local = try self.emitListLenLocal(list_ptr);
+        try self.emitLocalGet(len_local);
+        try self.emitI32Const(1);
+        self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+        try self.emitZstListFromStackLen();
+        return;
+    }
+
     const list_local = GuardedList.at(args, 0);
     if (self.external_calls == .builtin_relocs) {
         if (self.boxyListElementDescForLocals(list_abi, &.{list_local}, target)) |boxy_elem| {
@@ -20941,7 +21014,9 @@ fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx, targ
         WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
         try self.emitLocalSet(zero);
 
-        try self.buildRocListWithCap(zero, new_len, new_len);
+        // Zero-width elements own no allocation, so the joined list carries a
+        // length and a stored capacity of zero.
+        try self.buildRocListWithCap(zero, new_len, zero);
         return;
     }
 
@@ -21012,6 +21087,30 @@ fn generateLLListDropAt(self: *Self, args: anytype, ret_layout: layout.Idx, targ
     try self.emitConversion(try self.procLocalValType(GuardedList.at(args, 1)), .i64);
     const index_local = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
     try self.emitLocalSet(index_local);
+
+    // Zero-width elements have no bytes to move, so dropping one only shortens
+    // the length, and only when the index is in bounds.
+    if (elem_size == 0) {
+        const len_local = try self.emitListLenLocal(list_ptr);
+        const index_i32 = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitLocalGet(index_local);
+        self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+        try self.emitLocalSet(index_i32);
+        const one_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitI32Const(1);
+        try self.emitLocalSet(one_local);
+        const dropped = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitU32SaturatingSub(len_local, index_i32);
+        try self.emitLocalSet(dropped);
+        // dropped is nonzero exactly when the index is in bounds, so removing
+        // min(dropped, 1) elements covers both the in- and out-of-bounds cases.
+        const shrink = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitU32Min(dropped, one_local);
+        try self.emitLocalSet(shrink);
+        try self.emitU32SaturatingSub(len_local, shrink);
+        try self.emitZstListFromStackLen();
+        return;
+    }
 
     const result_offset = try self.allocStackMemory(12, 4);
     switch (self.external_calls) {
@@ -21114,6 +21213,75 @@ fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx, tar
     try self.emitFpOffset(result_offset);
 }
 
+fn generateLLListSortWith(self: *Self, args: anytype, ret_layout: layout.Idx, target: ?ProcLocalId, unique_args: u64) Allocator.Error!void {
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListSortWith.builtin_list_abi", ret_layout);
+    if (list_abi.elem_size == 0) {
+        try self.emitProcLocal(GuardedList.at(args, 0));
+        return;
+    }
+    try self.emitProcLocal(GuardedList.at(args, 0));
+    const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(list_ptr);
+    try self.emitProcLocal(GuardedList.at(args, 1));
+    const callable_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(callable_ptr);
+    const result_offset = try self.allocStackMemory(12, 4);
+    const fields = try self.loadRocListFields(list_ptr);
+    switch (self.external_calls) {
+        .builtin_relocs => {
+            if (self.boxyListElementDescForLocals(list_abi, &.{GuardedList.at(args, 0)}, target)) |boxy_elem| {
+                try self.emitFpOffset(result_offset);
+                try self.emitRocListFields(fields);
+                try self.emitLocalGet(callable_ptr);
+                try self.emitI32Const(@intCast(list_abi.elem_align));
+                try self.emitI32Const(@intCast(list_abi.elem_size));
+                try self.emitI32Const(1);
+                try self.emitI32Const(0);
+                try self.emitI32Const(0);
+                try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
+                try self.resolveBoxyDesc(boxy_elem.desc);
+                try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+                try self.emitI32Const(0);
+                try self.emitI32Const(0);
+                try self.emitLocalGet(self.roc_ops_local);
+                try self.emitBoxyCall("roc_boxy_list_sort_with");
+            } else {
+                const callbacks = try self.listElementCallbacks(list_abi);
+                try self.emitFpOffset(result_offset);
+                try self.emitRocListFields(fields);
+                try self.emitLocalGet(callable_ptr);
+                try self.emitI32Const(@intCast(list_abi.elem_align));
+                try self.emitI32Const(@intCast(list_abi.elem_size));
+                try self.emitI32Const(@intCast(callbacks.elements_refcounted));
+                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
+                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
+                try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+                try self.emitI32Const(0);
+                try self.emitI32Const(0);
+                try self.emitLocalGet(self.roc_ops_local);
+                try self.emitBuiltinCall(.list_sort_with, null);
+            }
+        },
+        .host_imports => {
+            try self.emitFpOffset(result_offset);
+            try self.emitRocListFields(fields);
+            try self.emitLocalGet(callable_ptr);
+            try self.emitI32Const(@intCast(list_abi.elem_align));
+            try self.emitI32Const(@intCast(list_abi.elem_size));
+            try self.emitI32Const(0);
+            try self.emitI32Const(0);
+            try self.emitI32Const(0);
+            try self.emitI32Const(0);
+            try self.emitI32Const(0);
+            try self.emitI32Const(0);
+            try self.emitLocalGet(self.roc_ops_local);
+            try self.emitBuiltinCall(.list_sort_with, self.list_sort_with_import);
+        },
+        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_sort_with", .{}),
+    }
+    try self.emitFpOffset(result_offset);
+}
+
 /// Build a RocList struct on the stack frame from data ptr and length locals.
 fn buildRocList(self: *Self, data_local: u32, len_local: u32) Allocator.Error!void {
     const list_offset = try self.allocStackMemory(12, 4);
@@ -21170,6 +21338,17 @@ fn buildRocListWithCap(self: *Self, data_local: u32, len_local: u32, cap_local: 
 fn generateLLListWithCapacity(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.generateLLListWithCapacity.builtin_list_abi", ret_layout);
     const elem_size = list_abi.elem_size;
+
+    // Zero-width elements need no storage, so a reservation allocates nothing
+    // and the result is the canonical empty list.
+    if (elem_size == 0) {
+        const zero_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitI32Const(0);
+        try self.emitLocalSet(zero_len);
+        try self.emitZstListWithLen(zero_len);
+        return;
+    }
+
     const elem_align = list_abi.elem_align;
 
     // Generate capacity arg (may be i64 from MonoIR layout; convert to i32 for wasm32)
@@ -21522,6 +21701,14 @@ fn generateLLListSwap(self: *Self, args: anytype, ret_layout: layout.Idx, target
 fn generateLLListReserve(self: *Self, args: anytype, ret_layout: layout.Idx, target: ?ProcLocalId, unique_args: u64) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.generateLLListReserve.builtin_list_abi", ret_layout);
     const elem_size = list_abi.elem_size;
+
+    // Zero-width elements need no storage, so there is nothing to reserve and
+    // the list passes through unchanged.
+    if (elem_size == 0) {
+        try self.emitProcLocal(GuardedList.at(args, 0));
+        return;
+    }
+
     const elem_align = list_abi.elem_align;
 
     try self.emitProcLocal(GuardedList.at(args, 0));
@@ -21581,6 +21768,14 @@ fn generateLLListReserve(self: *Self, args: anytype, ret_layout: layout.Idx, tar
 fn generateLLListReleaseExcessCapacity(self: *Self, args: anytype, ret_layout: layout.Idx, target: ?ProcLocalId, unique_args: u64) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.generateLLListReleaseExcessCapacity.builtin_list_abi", ret_layout);
     const elem_size = list_abi.elem_size;
+
+    // A zero-width list holds no allocation, so it has no excess to release and
+    // passes through unchanged.
+    if (elem_size == 0) {
+        try self.emitProcLocal(GuardedList.at(args, 0));
+        return;
+    }
+
     const elem_align = list_abi.elem_align;
 
     // Generate list arg

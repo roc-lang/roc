@@ -2186,6 +2186,139 @@ test "unify - flex with constraints unifies with flex with same constraints" {
     try std.testing.expectEqual(.unified, result);
 }
 
+test "unify - declarative static dispatch representative survives repeated merges" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const method_name = try env.module_env.getIdentStore().insert(
+        env.module_env.gpa,
+        Ident.for_text("combine"),
+    );
+    const argument = try env.module_env.types.fresh();
+    const result_var = try env.module_env.types.fresh();
+    const declarative_fn = try env.module_env.types.freshFromContent(
+        try env.mkFuncPure(&.{argument}, result_var),
+    );
+    const first_call_fn = try env.module_env.types.freshFromContent(
+        try env.mkFuncPure(&.{argument}, result_var),
+    );
+    const second_call_fn = try env.module_env.types.freshFromContent(
+        try env.mkFuncPure(&.{argument}, result_var),
+    );
+
+    const declarative_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = method_name,
+        .fn_var = declarative_fn,
+        .origin = .{ .desugared_binop = .{ .negated = true } },
+    };
+    const first_call_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = method_name,
+        .fn_var = first_call_fn,
+        .origin = .method_call,
+    };
+    const second_call_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = method_name,
+        .fn_var = second_call_fn,
+        .origin = .method_call,
+    };
+
+    const declarative_range = try env.module_env.types.appendStaticDispatchConstraints(
+        &.{declarative_constraint},
+    );
+    const first_call_range = try env.module_env.types.appendStaticDispatchConstraints(
+        &.{first_call_constraint},
+    );
+    const second_call_range = try env.module_env.types.appendStaticDispatchConstraints(
+        &.{second_call_constraint},
+    );
+
+    const receiver = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = declarative_range,
+    } });
+    const first_call_receiver = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = first_call_range,
+    } });
+    const second_call_receiver = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = second_call_range,
+    } });
+
+    try std.testing.expectEqual(.unified, try env.unify(receiver, first_call_receiver));
+    try std.testing.expectEqual(.unified, try env.unify(receiver, second_call_receiver));
+
+    const resolved = env.module_env.types.resolveVar(receiver);
+    try std.testing.expect(resolved.desc.content == .flex);
+    const retained = env.module_env.types.sliceStaticDispatchConstraints(
+        resolved.desc.content.flex.constraints,
+    );
+    try std.testing.expectEqual(@as(usize, 1), retained.len);
+    try std.testing.expect(retained[0].origin == .desugared_binop);
+    try std.testing.expect(retained[0].origin.desugared_binop.negated);
+}
+
+test "unify - static dispatch method ordering ignores ident interning order" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Deliberately intern and produce zeta first. Partitioning must still use
+    // lexical method order because Ident.Idx values are remapped by imports.
+    const zeta = try env.module_env.getIdentStore().insert(
+        env.module_env.gpa,
+        Ident.for_text("zeta"),
+    );
+    const alpha = try env.module_env.getIdentStore().insert(
+        env.module_env.gpa,
+        Ident.for_text("alpha"),
+    );
+    try std.testing.expect(zeta.idx < alpha.idx);
+
+    const argument = try env.module_env.types.fresh();
+    const result_var = try env.module_env.types.fresh();
+    const fn_var = try env.module_env.types.freshFromContent(
+        try env.mkFuncPure(&.{argument}, result_var),
+    );
+    const zeta_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = zeta,
+        .fn_var = fn_var,
+        .origin = .method_call,
+    };
+    const alpha_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = alpha,
+        .fn_var = fn_var,
+        .origin = .method_call,
+    };
+    const first_range = try env.module_env.types.appendStaticDispatchConstraints(
+        &.{ zeta_constraint, alpha_constraint },
+    );
+    const second_range = try env.module_env.types.appendStaticDispatchConstraints(
+        &.{ zeta_constraint, alpha_constraint },
+    );
+    const first = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = first_range,
+    } });
+    const second = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = second_range,
+    } });
+
+    try std.testing.expectEqual(.unified, try env.unify(first, second));
+    const resolved = env.module_env.types.resolveVar(first);
+    try std.testing.expect(resolved.desc.content == .flex);
+    const retained = env.module_env.types.sliceStaticDispatchConstraints(
+        resolved.desc.content.flex.constraints,
+    );
+    try std.testing.expectEqual(@as(usize, 4), retained.len);
+    try std.testing.expect(retained[0].fn_name.eql(alpha));
+    try std.testing.expect(retained[1].fn_name.eql(zeta));
+    try std.testing.expect(retained[2].fn_name.eql(alpha));
+    try std.testing.expect(retained[3].fn_name.eql(zeta));
+}
+
 // capture constraints
 
 test "unify - flex with constraints vs structure captures deferred check" {

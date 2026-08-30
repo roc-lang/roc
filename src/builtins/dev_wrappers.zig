@@ -2532,6 +2532,25 @@ pub fn roc_builtins_list_reverse(out: *RocList, list_bytes: ?[*]u8, list_len: us
     }
 }
 
+/// Stable Fluxsort using the uniform boxed-erased-callable ABI. The list's
+/// ownership unit is consumed; the callable is borrowed for the whole sort.
+pub fn roc_builtins_list_sort_with(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, callable: ?[*]u8, alignment: u32, element_width: usize, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, update_mode: utils.UpdateMode, in_process: bool, test_context: ?*anyopaque, roc_ops: *RocOps) callconv(.c) void {
+    const input = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    if (list_len < 2 or element_width == 0) {
+        out.* = input;
+        return;
+    }
+
+    const callable_ptr = callable orelse unreachable;
+    if (elements_refcounted) {
+        var inc_ctx = CallbackElementIncrefContext{ .callback = element_incref orelse unreachable, .roc_ops = roc_ops };
+        var dec_ctx = CallbackElementDecrefContext{ .callback = element_decref orelse unreachable, .roc_ops = roc_ops };
+        out.* = list.listSortWith(input, callable_ptr, alignment, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, in_process, test_context, roc_ops);
+    } else {
+        out.* = list.listSortWith(input, callable_ptr, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, in_process, test_context, roc_ops);
+    }
+}
+
 /// i32 modulo (floored division mod, not truncated remainder)
 pub fn roc_builtins_i32_mod_by(a: i32, b: i32) callconv(.c) i32 {
     return @mod(a, b);

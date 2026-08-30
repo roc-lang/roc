@@ -127,6 +127,24 @@ export fn roc_fallible_str_ok() callconv(.c) FallibleStrResult {
     };
 }
 
+const json_input = "{\"favoritesCount\":14}";
+var json_input_storage: [@sizeOf(usize) + json_input.len]u8 align(@alignOf(usize)) =
+    ([_]u8{0} ** @sizeOf(usize)) ++ json_input.*;
+
+export fn roc_json_input() callconv(.c) RocStr {
+    const HostRocStr = extern struct {
+        bytes: ?[*]u8,
+        capacity_or_alloc_ptr: usize,
+        length: usize,
+    };
+    const bytes = json_input_storage[@sizeOf(usize)..].ptr;
+    return @bitCast(HostRocStr{
+        .bytes = bytes,
+        .capacity_or_alloc_ptr = RocStr.encodeCapacity(json_input.len),
+        .length = json_input.len,
+    });
+}
+
 fn canaryBlob(comptime marker: []const u8) [4096]u8 {
     @setEvalBranchQuota(20000);
     var blob: [4096]u8 = undefined;

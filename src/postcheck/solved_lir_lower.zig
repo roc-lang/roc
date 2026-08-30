@@ -461,6 +461,8 @@ const Lowerer = struct {
     fn_reachable: std.ArrayList(bool),
     fn_reach_queue: std.ArrayList(Type.FnId),
     inline_plan: SolvedInline.Plan,
+    inline_scope_rebases: std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId),
+    inline_scope_outer: LIR.InlineScopeId = .none,
     inline_expects: InlineExpectMode,
     list_in_place_map: bool,
     dict_seed_mode: DictSeedMode,
@@ -524,6 +526,11 @@ const Lowerer = struct {
 
     const ProcLocalSet = std.AutoArrayHashMapUnmanaged(u32, void);
 
+    const InlineScopeRebaseKey = struct {
+        source: Lifted.InlineScopeId,
+        outer: LIR.InlineScopeId,
+    };
+
     const LoopContext = struct {
         join_id: LIR.JoinPointId,
         params: LIR.LocalSpan,
@@ -579,6 +586,7 @@ const Lowerer = struct {
             .fn_reachable = .empty,
             .fn_reach_queue = .empty,
             .inline_plan = options.inline_plan,
+            .inline_scope_rebases = std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId).init(allocator),
             .inline_expects = options.inline_expects,
             .list_in_place_map = options.list_in_place_map,
             .dict_seed_mode = options.dict_seed_mode,
@@ -621,6 +629,7 @@ const Lowerer = struct {
     }
 
     fn deinit(self: *Lowerer) void {
+        self.inline_scope_rebases.deinit();
         self.folded_map_matches.deinit(self.allocator);
         self.return_forwarding_locals.deinit();
         self.erased_call_owner_uses.deinit(self.allocator);
@@ -668,6 +677,7 @@ const Lowerer = struct {
             .lir_result = self.result,
             .runtime_schemas = self.runtime_schemas,
         };
+        self.inline_scope_rebases.deinit();
         self.folded_map_matches.deinit(self.allocator);
         self.return_forwarding_locals.deinit();
         self.erased_call_owner_uses.deinit(self.allocator);
@@ -769,19 +779,62 @@ const Lowerer = struct {
         try self.result.store.inline_scopes.ensureTotalCapacity(self.allocator, lifted.inline_scopes.len);
         for (lifted.inline_scopes, 0..) |scope, index| {
             const expected: LIR.InlineScopeId = @enumFromInt(@as(u32, @intCast(index)));
-            const source_name = if (self.solved.lifted.procDebugName(scope.source_symbol)) |name|
-                try self.result.store.insertString(self.solved.lifted.names.exportNameText(name))
-            else
-                base.StringLiteral.Idx.none;
             const actual = try self.result.store.addInlineScope(.{
                 .source_symbol = lirSymbol(scope.source_symbol),
-                .source_name = source_name,
+                .source_name = try self.lowerInlineScopeSourceName(scope.source_symbol),
                 .source_loc = scope.source_loc,
                 .call_site = scope.call_site,
                 .parent = lirInlineScopeId(scope.parent),
             });
             if (actual != expected) Common.invariant("LIR inline-scope identities diverged from lifted inline-scope identities");
         }
+    }
+
+    fn lowerInlineScopeSourceName(
+        self: *Lowerer,
+        source_symbol: Common.Symbol,
+    ) Common.LowerError!base.StringLiteral.Idx {
+        const name = self.solved.lifted.procDebugName(source_symbol) orelse
+            return base.StringLiteral.Idx.none;
+        return try self.result.store.insertString(self.solved.lifted.names.exportNameText(name));
+    }
+
+    fn liftedInlineScopeUnder(
+        self: *Lowerer,
+        source: Lifted.InlineScopeId,
+        outer: LIR.InlineScopeId,
+    ) Common.LowerError!LIR.InlineScopeId {
+        if (source == Lifted.InlineScopeId.none) return outer;
+        if (outer == LIR.InlineScopeId.none) return lirInlineScopeId(source);
+
+        const key = InlineScopeRebaseKey{ .source = source, .outer = outer };
+        if (self.inline_scope_rebases.get(key)) |existing| return existing;
+
+        const source_scope = self.solved.lifted.inlineScope(source);
+        const rebased_parent = try self.liftedInlineScopeUnder(source_scope.parent, outer);
+        const rebased = try self.result.store.addInlineScope(.{
+            .source_symbol = lirSymbol(source_scope.source_symbol),
+            .source_name = try self.lowerInlineScopeSourceName(source_scope.source_symbol),
+            .source_loc = source_scope.source_loc,
+            .call_site = source_scope.call_site,
+            .parent = rebased_parent,
+        });
+        try self.inline_scope_rebases.put(key, rebased);
+        return rebased;
+    }
+
+    fn addKnownCallInlineScope(
+        self: *Lowerer,
+        source_fn: Lifted.Fn,
+        body_expr: Lifted.ExprId,
+    ) Common.LowerError!LIR.InlineScopeId {
+        return try self.result.store.addInlineScope(.{
+            .source_symbol = lirSymbol(source_fn.symbol),
+            .source_name = try self.lowerInlineScopeSourceName(source_fn.symbol),
+            .source_loc = self.solved.lifted.exprLoc(body_expr),
+            .call_site = self.result.store.current_loc,
+            .parent = self.result.store.current_inline_scope,
+        });
     }
 
     fn indexSourceFns(self: *Lowerer) Common.LowerError!void {
@@ -2735,7 +2788,10 @@ const Lowerer = struct {
         defer self.result.store.current_region = saved_region;
         const saved_inline_scope = self.result.store.current_inline_scope;
         defer self.result.store.current_inline_scope = saved_inline_scope;
-        self.result.store.current_inline_scope = lirInlineScopeId(self.solved.lifted.exprInlineScope(expr_id));
+        self.result.store.current_inline_scope = try self.liftedInlineScopeUnder(
+            self.solved.lifted.exprInlineScope(expr_id),
+            self.inline_scope_outer,
+        );
         const expr_loc = self.solved.lifted.exprLoc(expr_id);
         if (expr_loc.hasLocation()) {
             self.result.store.current_loc = expr_loc;
@@ -2899,7 +2955,10 @@ const Lowerer = struct {
         defer self.result.store.current_inline_scope = saved_inline_scope;
         self.result.store.current_loc = self.solved.lifted.exprLoc(expr_id);
         self.result.store.current_region = self.solved.lifted.exprRegion(expr_id);
-        self.result.store.current_inline_scope = lirInlineScopeId(self.solved.lifted.exprInlineScope(expr_id));
+        self.result.store.current_inline_scope = try self.liftedInlineScopeUnder(
+            self.solved.lifted.exprInlineScope(expr_id),
+            self.inline_scope_outer,
+        );
 
         return switch (expr_data.data) {
             .local => |local| try self.lowerLocalInto(target, local, ty, next),
@@ -3759,6 +3818,7 @@ const Lowerer = struct {
             => lhs.eql(rhs),
             .zst,
             .box_of_zst,
+            .erased_box,
             .list_of_zst,
             => true,
             .box,
@@ -4407,6 +4467,10 @@ const Lowerer = struct {
                 self.local_map[@intFromEnum(arg.local)] = saved[i];
             }
         }
+
+        const saved_inline_scope_outer = self.inline_scope_outer;
+        defer self.inline_scope_outer = saved_inline_scope_outer;
+        self.inline_scope_outer = try self.addKnownCallInlineScope(source_fn, body_expr);
 
         return try self.lowerExprInto(target, body_expr, next);
     }
@@ -5247,7 +5311,10 @@ const Lowerer = struct {
         defer self.result.store.current_region = saved_region;
         const saved_inline_scope = self.result.store.current_inline_scope;
         defer self.result.store.current_inline_scope = saved_inline_scope;
-        self.result.store.current_inline_scope = lirInlineScopeId(self.solved.lifted.stmtInlineScope(stmt_id));
+        self.result.store.current_inline_scope = try self.liftedInlineScopeUnder(
+            self.solved.lifted.stmtInlineScope(stmt_id),
+            self.inline_scope_outer,
+        );
         const stmt_loc = self.solved.lifted.stmtLoc(stmt_id);
         if (stmt_loc.hasLocation()) {
             self.result.store.current_loc = stmt_loc;
@@ -7403,11 +7470,30 @@ const Lowerer = struct {
         return true;
     }
 
+    /// Whether an operand's alias may be emitted after the operands that
+    /// follow it have been evaluated. Reading a local is order-independent:
+    /// Lifted locals are bound once, and the only thing that rebinds a join
+    /// parameter is a jump, which leaves the operand list rather than
+    /// returning to it. Placing such an alias next to its consumer instead of
+    /// ahead of a later operand's branching keeps its live range from
+    /// spanning that branch, which is what otherwise costs the value a
+    /// second ownership unit.
+    fn operandIsPlainLocalRead(self: *const Lowerer, expr_id: Lifted.ExprId) bool {
+        return self.solved.lifted.getExpr(expr_id).data == .local;
+    }
+
     fn prependExprs(self: *Lowerer, lowered: LoweredExprLocals, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         var current = next;
         var i = lowered.ids.len;
         while (i > 0) {
             i -= 1;
+            if (!self.operandIsPlainLocalRead(lowered.exprs[i])) continue;
+            current = try self.lowerExprInto(lowered.ids[i], lowered.exprs[i], current);
+        }
+        i = lowered.ids.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.operandIsPlainLocalRead(lowered.exprs[i])) continue;
             current = try self.lowerExprInto(lowered.ids[i], lowered.exprs[i], current);
         }
         return current;
@@ -7424,6 +7510,13 @@ const Lowerer = struct {
         var i = lowered.ids.len;
         while (i > 0) {
             i -= 1;
+            if (!self.operandIsPlainLocalRead(lowered.exprs[i])) continue;
+            current = try self.lowerExprIntoAtType(lowered.ids[i], lowered.exprs[i], tys[i], current);
+        }
+        i = lowered.ids.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.operandIsPlainLocalRead(lowered.exprs[i])) continue;
             current = try self.lowerExprIntoAtType(lowered.ids[i], lowered.exprs[i], tys[i], current);
         }
         return current;
@@ -9391,7 +9484,7 @@ const Lowerer = struct {
             .box => self.tagUnionPayloadLayout(tag_union_layout.getIdx(), variant_index),
             .box_of_zst => .zst,
             .zst, .scalar => .zst,
-            .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => Common.invariant("tag payload operation expected tag-union layout"),
+            .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => Common.invariant("tag payload operation expected tag-union layout"),
         };
     }
 
@@ -9412,7 +9505,7 @@ const Lowerer = struct {
         return switch (list_layout.tag) {
             .list => list_layout.getIdx(),
             .list_of_zst => .zst,
-            .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => Common.invariant("list expression target was not a list layout"),
+            .scalar, .box, .box_of_zst, .erased_box, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => Common.invariant("list expression target was not a list layout"),
         };
     }
 

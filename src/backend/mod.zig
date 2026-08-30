@@ -42,6 +42,7 @@ pub const RunImage = dev.RunImage;
 pub const procSymbolName = dev.procSymbolName;
 pub const atomicRcHelperSymbolName = dev.atomicRcHelperSymbolName;
 pub const collectRequiredRcHelpers = dev.collectRequiredRcHelpers;
+pub const collectReferencedProcs = dev.collectReferencedProcs;
 pub const ObjectFileCompiler = dev.ObjectFileCompiler;
 pub const CompilationResult = dev.CompilationResult;
 pub const CompilationError = dev.CompilationError;

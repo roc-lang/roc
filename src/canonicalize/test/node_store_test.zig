@@ -1222,6 +1222,15 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .internal_builtin_type = .{
+            .parent_name = rand_ident_idx(),
+            .nested_name = rand_ident_idx(),
+            .kind = .http_header,
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .nested_value_not_found = .{
             .parent_name = rand_ident_idx(),
             .nested_name = rand_ident_idx(),

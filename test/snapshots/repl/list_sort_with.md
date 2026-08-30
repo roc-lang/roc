@@ -5,17 +5,17 @@ type=repl
 ~~~
 # SOURCE
 ~~~roc
-» List.len(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))
-» List.len(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ))
-» List.len(List.sort_with(List.drop_first([0], 1), |a, b| if a < b LT else if a > b GT else EQ))
-» List.len(List.sort_with([42], |a, b| if a < b LT else if a > b GT else EQ))
-» List.first(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))
-» List.first(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ))
-» List.first(List.sort_with([5, 4, 3, 2, 1], |a, b| if a > b LT else if a < b GT else EQ))
-» List.len(List.sort_with([1, 1, 1, 1], |a, b| if a < b LT else if a > b GT else EQ))
-» List.first(List.sort_with([1, 1, 1, 1], |a, b| if a < b LT else if a > b GT else EQ))
-» List.len(List.sort_with([2, 1], |a, b| if a < b LT else if a > b GT else EQ))
-» List.first(List.sort_with([2, 1], |a, b| if a < b LT else if a > b GT else EQ))
+» List.len(List.sort_with([3, 1, 2], |a, b| if a < b Before else if a > b After else Same))
+» List.len(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b Before else if a > b After else Same))
+» List.len(List.sort_with(List.drop_first([0], 1), |a, b| if a < b Before else if a > b After else Same))
+» List.len(List.sort_with([42], |a, b| if a < b Before else if a > b After else Same))
+» List.first(List.sort_with([3, 1, 2], |a, b| if a < b Before else if a > b After else Same))
+» List.first(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b Before else if a > b After else Same))
+» List.first(List.sort_with([5, 4, 3, 2, 1], |a, b| if a > b Before else if a < b After else Same))
+» List.len(List.sort_with([1, 1, 1, 1], |a, b| if a < b Before else if a > b After else Same))
+» List.first(List.sort_with([1, 1, 1, 1], |a, b| if a < b Before else if a > b After else Same))
+» List.len(List.sort_with([2, 1], |a, b| if a < b Before else if a > b After else Same))
+» List.first(List.sort_with([2, 1], |a, b| if a < b Before else if a > b After else Same))
 ~~~
 # OUTPUT
 3

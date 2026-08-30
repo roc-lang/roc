@@ -146,6 +146,76 @@ const ResolvedWorkerBody = union(enum) {
     generated_interpolation_step: Plan.GeneratedInterpolationStepSource,
 };
 
+fn resolvedWorkerIsListMapCanReuseWrapper(resolved: ResolvedWorker) bool {
+    const body = switch (resolved.body) {
+        .checked_expr => |checked_body| checked_body.root_expr,
+        .intrinsic,
+        .hosted,
+        .unimplemented,
+        .generated_codec,
+        .generated_field_iterator,
+        .generated_interpolation_step,
+        => return false,
+    };
+    return checkedExprIsListMapCanReuseWrapper(resolved.module, body);
+}
+
+fn checkedExprIsListMapCanReuseWrapper(
+    module: ProcedureModuleView,
+    expr_id: checked.CheckedExprId,
+) bool {
+    return switch (module.checked_bodies.expr(expr_id).data) {
+        .run_low_level => |low_level| low_level.op == .list_map_can_reuse,
+        .lambda => |lambda| checkedExprIsListMapCanReuseWrapper(module, lambda.body),
+        .block => |block| block.statements.len == 0 and
+            checkedExprIsListMapCanReuseWrapper(module, block.final_expr),
+        .pending,
+        .numeral,
+        .str_from_quote,
+        .str_segment,
+        .str,
+        .bytes_literal,
+        .lookup_local,
+        .lookup_external,
+        .lookup_required,
+        .list,
+        .empty_list,
+        .tuple,
+        .match_,
+        .if_,
+        .call,
+        .record,
+        .empty_record,
+        .tag,
+        .nominal,
+        .zero_argument_tag,
+        .closure,
+        .binop,
+        .unary_minus,
+        .unary_not,
+        .field_access,
+        .dispatch_call,
+        .interpolation,
+        .structural_eq,
+        .structural_hash,
+        .method_eq,
+        .type_dispatch_call,
+        .tuple_access,
+        .runtime_error,
+        .crash,
+        .dbg,
+        .expect_err,
+        .expect,
+        .ellipsis,
+        .anno_only,
+        .break_,
+        .return_,
+        .for_,
+        .hosted_lambda,
+        => false,
+    };
+}
+
 const ResolvedWorkers = struct {
     allocator: Allocator,
     items: []ResolvedWorker,
@@ -2793,7 +2863,7 @@ const ProcedureBuilder = struct {
                 } else if (child.role == .tuple_elem)
                     self.recordPayloadFieldLayout(worker_payload_layout, child.role.tuple_elem)
                 else if (child.role == .box_payload)
-                    self.boxPayloadLayout(worker_payload_layout)
+                    self.descriptorPayloadLayoutForRep(child.rep)
                 else if (child.role == .list_elem)
                     self.listElementLayout(worker_payload_layout)
                 else
@@ -3529,7 +3599,7 @@ const ProcedureBuilder = struct {
                 } else if (child.role == .tuple_elem)
                     self.recordPayloadFieldLayout(payload_layout, child.role.tuple_elem)
                 else if (child.role == .box_payload)
-                    self.boxPayloadLayout(payload_layout)
+                    self.descriptorPayloadLayoutForRep(child.rep)
                 else if (child.role == .list_elem)
                     self.listElementLayout(payload_layout)
                 else
@@ -3797,19 +3867,20 @@ const ProcedureBuilder = struct {
 
     fn layoutIsBoxStorage(self: *const ProcedureBuilder, layout_idx: layout.Idx) bool {
         const tag = self.result.layouts.getLayout(layout_idx).tag;
-        return tag == .box or tag == .box_of_zst;
+        return tag == .box or tag == .box_of_zst or tag == .erased_box;
     }
 
     fn layoutNeedsNestedBoxyDesc(self: *const ProcedureBuilder, layout_idx: layout.Idx) bool {
         return switch (self.result.layouts.getLayout(layout_idx).tag) {
             .box,
-            .box_of_zst,
+            .erased_box,
             .list,
             .list_of_zst,
             .struct_,
             .tag_union,
             => true,
             .scalar,
+            .box_of_zst,
             .closure,
             .erased_callable,
             .zst,
@@ -3880,16 +3951,6 @@ const ProcedureBuilder = struct {
         }
         if (payload_layout_value.tag == .zst) return .zst;
         boxyLowerInvariant("record descriptor had non-struct payload layout");
-    }
-
-    fn boxPayloadLayout(self: *const ProcedureBuilder, payload_layout: layout.Idx) layout.Idx {
-        const payload_layout_value = self.result.layouts.getLayout(payload_layout);
-        if (payload_layout_value.tag == .box) return payload_layout_value.getIdx();
-        if (payload_layout_value.tag == .box_of_zst) return .zst;
-        // Box(fn) is the erased callable allocation itself, so the Box
-        // payload occupies that same committed layout.
-        if (payload_layout_value.tag == .erased_callable) return payload_layout;
-        boxyLowerInvariant("box descriptor had non-box payload layout");
     }
 
     fn listElementLayout(self: *const ProcedureBuilder, payload_layout: layout.Idx) layout.Idx {
@@ -13569,7 +13630,7 @@ const ProcBodyBuilder = struct {
         const target_layout = self.parent.result.store.getLocal(target).layout_idx;
         const source_layout = self.parent.result.store.getLocal(source).layout_idx;
         if (target_layout == source_layout and self.descriptorStorageRep(target_rep) == self.descriptorStorageRep(source_rep)) {
-            if (self.parent.result.store.getLocal(source).boxy_desc == null and try self.layoutContainsBoxOfZst(source_layout)) {
+            if (self.parent.result.store.getLocal(source).boxy_desc == null and self.repContainsDynamicStorage(source_rep)) {
                 const desc = try self.descriptorRefForSourceLocalRep(source, source_rep);
                 self.parent.result.store.setLocalBoxyDesc(source, desc);
             }
@@ -16562,7 +16623,7 @@ const ProcBodyBuilder = struct {
         const layout_value = self.parent.result.layouts.getLayout(capture_layout);
         try self.parent.result.boxy_type_descs.append(self.parent.allocator, .{
             .payload_layout = capture_layout,
-            .contains_refcounted = self.parent.result.layouts.layoutContainsRcErasedBox(layout_value),
+            .contains_refcounted = self.parent.result.layouts.layoutContainsRefcounted(layout_value),
             .nested_descs = .{ .start = nested_start, .len = @intCast(refs.items.len) },
         });
 
@@ -16644,7 +16705,7 @@ const ProcBodyBuilder = struct {
                     });
                 }
             },
-            .scalar, .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .tag_union, .ptr => boxyLowerInvariant("boxy erased capture descriptor field expected struct capture layout"),
+            .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .tag_union, .ptr => boxyLowerInvariant("boxy erased capture descriptor field expected struct capture layout"),
         }
 
         try fields.append(self.parent.allocator, .{
@@ -16661,7 +16722,7 @@ const ProcBodyBuilder = struct {
     fn erasedCallableOnDrop(self: *ProcBodyBuilder, maybe_capture_layout: ?layout.Idx) LIR.ErasedCallableOnDrop {
         const capture_layout = maybe_capture_layout orelse return .none;
         const helper_key = layout.RcHelper{ .op = .decref, .layout_idx = capture_layout };
-        return if (self.parent.result.layouts.rcHelperPlanErasedBox(helper_key) == .noop)
+        return if (self.parent.result.layouts.rcHelperPlan(helper_key) == .noop)
             .none
         else
             .{ .rc_helper = helper_key };
@@ -18795,7 +18856,7 @@ const ProcBodyBuilder = struct {
                             target_payloads.len,
                         );
                         const target_payload_tag = self.parent.result.layouts.getLayout(target_payload_layout).tag;
-                        const target_payload_is_box = target_payload_tag == .box or target_payload_tag == .box_of_zst;
+                        const target_payload_is_box = target_payload_tag == .box or target_payload_tag == .box_of_zst or target_payload_tag == .erased_box;
                         const target_standalone_layout = self.workerRuntimeLayoutForRep(target_payloads[payload_index].rep).layoutIdx();
                         const adapted_payload_desc_info = if (self.representationBoundaryIsDirect(
                             target_payloads[payload_index].rep,
@@ -19453,8 +19514,8 @@ const ProcBodyBuilder = struct {
         const source_layout = self.workerRuntimeLayoutForRep(source_rep).layoutIdx();
         const target_tag = self.parent.result.layouts.getLayout(target_layout).tag;
         const source_tag = self.parent.result.layouts.getLayout(source_layout).tag;
-        const target_is_box = target_tag == .box or target_tag == .box_of_zst;
-        const source_is_box = source_tag == .box or source_tag == .box_of_zst;
+        const target_is_box = target_tag == .box or target_tag == .box_of_zst or target_tag == .erased_box;
+        const source_is_box = source_tag == .box or source_tag == .box_of_zst or source_tag == .erased_box;
 
         // A bare dynamic box has no target shape beyond the concrete source
         // allocation, so its descriptor must remain the exact source
@@ -19466,7 +19527,7 @@ const ProcBodyBuilder = struct {
             result.preserves_source_desc = true;
             return result;
         }
-        if (target_is_bare_dynamic and target_is_box and source_is_box and target_layout == source_layout and target_tag == .box_of_zst) {
+        if (target_is_bare_dynamic and target_is_box and source_is_box and target_layout == source_layout and target_tag == .erased_box) {
             var result = source_desc_info;
             result.preserves_source_desc = true;
             return result;
@@ -19723,6 +19784,7 @@ const ProcBodyBuilder = struct {
         branches: []const checked.CheckedMatchBranch,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        if (try self.foldListMapCanReuseMatch(target, match_ty, cond, branches, next)) |folded| return folded;
         const cond_expr = self.module.checked_bodies.expr(cond);
         const cond_rep = self.matchConditionRep(cond, self.repForType(cond_expr.ty));
         try self.reserveMatchBranchRepresentativeBindings(branches, cond_rep);
@@ -19757,6 +19819,140 @@ const ProcBodyBuilder = struct {
         } });
         self.restoreDescriptorBindings(outer_descriptors);
         return match_stmt;
+    }
+
+    const ListMapCanReuseMatch = struct {
+        args: []const checked.CheckedExprId,
+        zero_branch_body: checked.CheckedExprId,
+    };
+
+    /// When the explicit target configuration or committed representations
+    /// make list-buffer reuse impossible, lower only the arm selected by the
+    /// primitive's constant-zero result. This is the Boxy counterpart of
+    /// direct lowering's `foldListMapCanReuseMatch`: both consume the checked
+    /// low-level operation and the same exact layout-eligibility decision.
+    fn foldListMapCanReuseMatch(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        result_ty: checked.CheckedTypeId,
+        cond: checked.CheckedExprId,
+        branches: []const checked.CheckedMatchBranch,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!?LIR.CFStmtId {
+        const match = self.listMapCanReuseMatch(cond, branches) orelse return null;
+        const interchangeable = self.listMapLayoutsInterchangeable(match.args);
+        if (interchangeable.get(.u32) or interchangeable.get(.u64)) return null;
+        return try self.lowerExprExpectedInto(target, result_ty, match.zero_branch_body, next);
+    }
+
+    fn listMapCanReuseMatch(
+        self: *ProcBodyBuilder,
+        cond: checked.CheckedExprId,
+        branches: []const checked.CheckedMatchBranch,
+    ) ?ListMapCanReuseMatch {
+        const args = self.listMapCanReuseArgs(cond) orelse return null;
+
+        for (branches) |branch| {
+            if (branch.guard != null) return null;
+            const patterns = branch.patternsSlice(self.module.checked_bodies);
+            if (patterns.len != 1 or patterns[0].degenerate) return null;
+            if (patterns[0].binderRemapsSlice(self.module.checked_bodies).len != 0) return null;
+
+            const pattern = self.module.checked_bodies.pattern(patterns[0].pattern);
+            switch (pattern.data) {
+                .numeral_literal => |literal| {
+                    if (literal.conversion != null) return null;
+                    const magnitude = exact_numeral.intMagnitude(
+                        self.module.module_env.exactNumeral(literal.literal),
+                    ) orelse return null;
+                    if (magnitude == 0) {
+                        return .{ .args = args, .zero_branch_body = branch.value };
+                    }
+                },
+                .underscore => return .{ .args = args, .zero_branch_body = branch.value },
+                .pending,
+                .assign,
+                .as,
+                .applied_tag,
+                .nominal,
+                .record_destructure,
+                .list,
+                .tuple,
+                .str_literal,
+                .str_interpolation,
+                .runtime_error,
+                => return null,
+            }
+        }
+        return null;
+    }
+
+    fn listMapCanReuseArgs(
+        self: *ProcBodyBuilder,
+        cond: checked.CheckedExprId,
+    ) ?[]const checked.CheckedExprId {
+        const expr = self.module.checked_bodies.expr(cond);
+        return switch (expr.data) {
+            .run_low_level => |low_level| if (low_level.op == .list_map_can_reuse) low_level.args else null,
+            .block => |block| if (block.statements.len == 0)
+                self.listMapCanReuseArgs(block.final_expr)
+            else
+                null,
+            .call => |call| blk: {
+                if (call.direct_target == null) break :blk null;
+                const direct = self.parent.plan.directCallPlanForCall(
+                    .{ .module = self.module.key, .expr = cond },
+                    self.worker_layout.worker,
+                ) orelse break :blk null;
+                const resolved = self.parent.resolved_workers.items[@intFromEnum(direct.worker)];
+                if (!resolvedWorkerIsListMapCanReuseWrapper(resolved)) break :blk null;
+                break :blk call.args;
+            },
+            .pending,
+            .numeral,
+            .str_from_quote,
+            .str_segment,
+            .str,
+            .bytes_literal,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .list,
+            .empty_list,
+            .tuple,
+            .match_,
+            .if_,
+            .record,
+            .empty_record,
+            .tag,
+            .nominal,
+            .zero_argument_tag,
+            .closure,
+            .lambda,
+            .binop,
+            .unary_minus,
+            .unary_not,
+            .field_access,
+            .dispatch_call,
+            .interpolation,
+            .structural_eq,
+            .structural_hash,
+            .method_eq,
+            .type_dispatch_call,
+            .tuple_access,
+            .runtime_error,
+            .crash,
+            .dbg,
+            .expect_err,
+            .expect,
+            .ellipsis,
+            .anno_only,
+            .break_,
+            .return_,
+            .for_,
+            .hosted_lambda,
+            => null,
+        };
     }
 
     fn matchConditionRep(
@@ -20285,7 +20481,7 @@ const ProcBodyBuilder = struct {
             }
             if (self.isZstLocal(target)) return try self.assignZst(target, next);
             const target_layout = self.parent.result.layouts.getLayout(self.parent.result.store.getLocal(target).layout_idx);
-            const assign_tag = if (target_layout.tag == .box_of_zst) blk: {
+            const assign_tag = if (target_layout.tag == .erased_box) blk: {
                 const target_desc = target_desc_ref orelse
                     boxyLowerInvariant("descriptor-erased tag construction had no target descriptor");
                 break :blk try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
@@ -22042,11 +22238,11 @@ const ProcBodyBuilder = struct {
                 const source_desc = try self.descriptorRefForSourceLocalRep(source, source_rep);
                 const target_desc_info = try self.storageDescriptorForRepIfNeeded(record_rep);
                 // A `.dynamic`-rep record reports no static storage descriptor, but
-                // when its unboxed payload carries an erased `box_of_zst` the value
+                // when its unboxed payload carries an `erased_box` the value
                 // must be reference-counted through a descriptor. The unboxed payload
                 // has the box's payload shape, so reuse the source box's descriptor.
                 const payload_desc: ?LIR.BoxyDescRef = target_desc_info.desc orelse
-                    if (try self.layoutContainsBoxOfZst(payload_layout)) source_desc else null;
+                    if (self.repContainsDynamicStorage(record_rep)) source_desc else null;
                 if (payload_desc) |desc| {
                     self.parent.result.store.setLocalBoxyDesc(payload, desc);
                 }
@@ -24251,7 +24447,7 @@ const ProcBodyBuilder = struct {
             => return try self.lowerBoxBoundaryLowLevelInto(target, result_ty, op, args, next),
             .box_unbox_borrowed => boxyLowerInvariant("ARC-only Box.unbox variant reached boxy lowering"),
             .list_map_can_reuse => return try self.lowerListMapCanReuseInto(target, args, next),
-            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
+            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_release_excess_capacity, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
         }
         try self.markLocalDescriptorForType(target, result_ty);
 
@@ -24270,7 +24466,7 @@ const ProcBodyBuilder = struct {
         // A generalized worker can represent that result with erased payload
         // storage, so compute the builtin into its concrete ABI and cross the
         // explicit descriptor-guided representation boundary afterwards.
-        if (op.numericParseSpec()) |parse_spec| {
+        if (base.numeric_conversion.getNumericParseSpec(op)) |parse_spec| {
             const result_rep = self.repForType(result_ty);
             const number_layout = numericParsePayloadLayout(parse_spec);
             const concrete_layout = try self.parent.result.layouts.putTagUnion(&.{ .zst, number_layout });
@@ -24401,7 +24597,7 @@ const ProcBodyBuilder = struct {
         return continuation;
     }
 
-    fn numericParsePayloadLayout(spec: base.LowLevel.NumericParseSpec) layout.Idx {
+    fn numericParsePayloadLayout(spec: base.numeric_conversion.NumericParseSpec) layout.Idx {
         return switch (spec) {
             .int => |int| switch (int.width_bytes) {
                 1 => if (int.signed) .i8 else .u8,
@@ -24533,7 +24729,7 @@ const ProcBodyBuilder = struct {
                         return assign;
                     },
                     .box_unbox_borrowed => boxyLowerInvariant("ARC-only Box.unbox variant reached boxy lowering"),
-                    .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
+                    .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_release_excess_capacity, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
                 }
             }
             return try self.assignLocal(target, source, next);
@@ -24563,7 +24759,7 @@ const ProcBodyBuilder = struct {
                     return try self.assignUnaryLowLevel(target, .box_unbox, source, next);
                 }
             },
-            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
+            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_release_excess_capacity, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
         }
 
         boxyLowerInvariant("Box boundary low-level operation required descriptor-backed box adaptation lowering");
@@ -25347,7 +25543,7 @@ const ProcBodyBuilder = struct {
                 .tag_union => descriptor_layout_value,
                 .box => self.parent.result.layouts.getLayout(descriptor_layout_value.getIdx()),
                 .zst => null,
-                .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("boxy descriptor read_path tag had a non-tag payload layout"),
+                .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("boxy descriptor read_path tag had a non-tag payload layout"),
             };
 
             if (tag_layout) |layout_value| {
@@ -25421,7 +25617,7 @@ const ProcBodyBuilder = struct {
                     break :blk layout_idx;
                 },
                 .tuple_elem => |index| self.parent.recordPayloadFieldLayout(payload_layout, index),
-                .box_payload => self.parent.boxPayloadLayout(payload_layout),
+                .box_payload => self.parent.descriptorPayloadLayoutForRep(child.rep),
                 .list_elem => self.parent.listElementLayout(payload_layout),
                 .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
             };
@@ -25499,7 +25695,7 @@ const ProcBodyBuilder = struct {
                     break :blk field_layout;
                 },
                 .tuple_elem => |index| self.parent.recordPayloadFieldLayout(payload_layout, index),
-                .box_payload => self.parent.boxPayloadLayout(payload_layout),
+                .box_payload => self.parent.descriptorPayloadLayoutForRep(child.rep),
                 .list_elem => self.parent.listElementLayout(payload_layout),
                 .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
             };
@@ -25940,8 +26136,8 @@ const ProcBodyBuilder = struct {
 
         const source_layout_value = self.parent.result.layouts.getLayout(source_layout);
         const target_layout_value = self.parent.result.layouts.getLayout(target_layout);
-        const source_is_box = source_layout_value.tag == .box or source_layout_value.tag == .box_of_zst;
-        const target_is_box = target_layout_value.tag == .box or target_layout_value.tag == .box_of_zst;
+        const source_is_box = source_layout_value.tag == .box or source_layout_value.tag == .box_of_zst or source_layout_value.tag == .erased_box;
+        const target_is_box = target_layout_value.tag == .box or target_layout_value.tag == .box_of_zst or target_layout_value.tag == .erased_box;
 
         if (source_is_box and !target_is_box) {
             const source_desc = try self.descriptorRefForSourceLocalRep(source, rep_id);
@@ -26596,7 +26792,7 @@ const ProcBodyBuilder = struct {
                         break :blk field_layout;
                     },
                     .tuple_elem => |index| self.parent.recordPayloadFieldLayout(payload_layout, index),
-                    .box_payload => self.parent.boxPayloadLayout(payload_layout),
+                    .box_payload => self.parent.descriptorPayloadLayoutForRep(child.rep),
                     .list_elem => self.parent.listElementLayout(payload_layout),
                     .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
                 };
@@ -26610,7 +26806,7 @@ const ProcBodyBuilder = struct {
         const tag_layout = switch (layout_value.tag) {
             .tag_union => layout_value,
             .box => self.parent.result.layouts.getLayout(layout_value.getIdx()),
-            .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return false,
+            .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return false,
         };
         if (tag_layout.tag != .tag_union) return false;
 
@@ -26906,7 +27102,7 @@ const ProcBodyBuilder = struct {
                         break :blk field_layout;
                     },
                     .tuple_elem => |index| self.parent.recordPayloadFieldLayout(payload_layout, index),
-                    .box_payload => self.parent.boxPayloadLayout(payload_layout),
+                    .box_payload => self.parent.descriptorTemplatePayloadLayoutForRep(child.rep),
                     .list_elem => self.parent.listElementLayout(payload_layout),
                     .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
                 };
@@ -26947,7 +27143,7 @@ const ProcBodyBuilder = struct {
         const tag_layout = switch (layout_value.tag) {
             .tag_union => layout_value,
             .box => self.parent.result.layouts.getLayout(layout_value.getIdx()),
-            .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return .{},
+            .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return .{},
         };
         if (tag_layout.tag != .tag_union) return .{};
 
@@ -29908,8 +30104,8 @@ const ProcBodyBuilder = struct {
         // boxed, not reinterpreted; the descriptor records the payload layout.
         const target_layout_value = self.parent.result.layouts.getLayout(target_layout);
         const source_layout_value = self.parent.result.layouts.getLayout(source_layout);
-        const target_is_box = target_layout_value.tag == .box or target_layout_value.tag == .box_of_zst;
-        const source_is_box = source_layout_value.tag == .box or source_layout_value.tag == .box_of_zst;
+        const target_is_box = target_layout_value.tag == .box or target_layout_value.tag == .box_of_zst or target_layout_value.tag == .erased_box;
+        const source_is_box = source_layout_value.tag == .box or source_layout_value.tag == .box_of_zst or source_layout_value.tag == .erased_box;
         const source_is_list = source_layout_value.tag == .list or source_layout_value.tag == .list_of_zst;
         if (target_is_box and !source_is_box and !source_is_list) {
             const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
@@ -30160,11 +30356,11 @@ const ProcBodyBuilder = struct {
         const target_layout = self.workerRuntimeLayoutForRep(target_rep).layoutIdx();
         const source_layout = self.workerRuntimeLayoutForRep(source_rep).layoutIdx();
         const target_is_box = switch (self.parent.result.layouts.getLayout(target_layout).tag) {
-            .box, .box_of_zst => true,
+            .box, .box_of_zst, .erased_box => true,
             .scalar, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => false,
         };
         return target_is_box and switch (self.parent.result.layouts.getLayout(source_layout).tag) {
-            .box, .box_of_zst => true,
+            .box, .box_of_zst, .erased_box => true,
             .scalar, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => false,
         };
     }
@@ -30909,7 +31105,7 @@ const ProcBodyBuilder = struct {
                 .tag_union => descriptor_layout_value,
                 .box => self.parent.result.layouts.getLayout(descriptor_layout_value.getIdx()),
                 .zst => null,
-                .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("boxy callable descriptor read_path tag had a non-tag payload layout"),
+                .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("boxy callable descriptor read_path tag had a non-tag payload layout"),
             };
             if (tag_layout) |layout_value| {
                 if (layout_value.tag != .tag_union) {
@@ -31004,7 +31200,7 @@ const ProcBodyBuilder = struct {
                     break :blk field_layout;
                 },
                 .tuple_elem => |index| self.parent.recordPayloadFieldLayout(payload_layout, index),
-                .box_payload => self.parent.boxPayloadLayout(payload_layout),
+                .box_payload => self.parent.descriptorPayloadLayoutForRep(child.rep),
                 .list_elem => self.parent.listElementLayout(payload_layout),
                 .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
             };
@@ -31579,7 +31775,7 @@ const ProcBodyBuilder = struct {
                     break :blk field_layout;
                 },
                 .tuple_elem => |index| self.parent.recordPayloadFieldLayout(payload_layout, index),
-                .box_payload => self.parent.boxPayloadLayout(payload_layout),
+                .box_payload => self.parent.descriptorPayloadLayoutForRep(child.rep),
                 .list_elem => self.parent.listElementLayout(payload_layout),
                 .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
             };
@@ -31823,6 +32019,7 @@ const ProcBodyBuilder = struct {
         switch (a_layout.tag) {
             .scalar => return std.meta.eql(a_layout.getScalar(), b_layout.getScalar()),
             .zst => return true,
+            .erased_box => return true,
             .box, .box_of_zst => {
                 return try self.boundaryLayoutsInterchangeableInner(
                     layouts.getBoxInfo(a_layout).elem_layout_idx,
@@ -32075,12 +32272,12 @@ const ProcBodyBuilder = struct {
                     const target_desc_info = try self.storageDescriptorForRepIfNeeded(identity_target_rep);
                     // A `.dynamic`-rep target reports no static storage descriptor,
                     // but when its unboxed storage layout carries an erased
-                    // `box_of_zst` the value must still be reference-counted through
+                    // `erased_box` the value must still be reference-counted through
                     // a descriptor (a layout-driven concrete RC walk cannot align
                     // the box's allocation). The unboxed storage has the same shape
                     // as the box payload, so reuse the source box's descriptor.
                     var selected_target_desc = target_desc_info;
-                    if (selected_target_desc.desc == null and try self.layoutContainsBoxOfZst(target_layout)) {
+                    if (selected_target_desc.desc == null and self.repContainsDynamicStorage(identity_target_rep)) {
                         selected_target_desc.desc = source_desc;
                     }
                     const resolved_target_desc = self.resultDescriptorForCallTarget(target, selected_target_desc);
@@ -32161,11 +32358,10 @@ const ProcBodyBuilder = struct {
         source_mode: LIR.BoxyTransferMode,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const target_layout = self.parent.result.store.getLocal(target).layout_idx;
         const source_desc = try self.descriptorRefForSourceLocalRep(source, source_rep);
         const target_desc_info = try self.storageDescriptorForRepIfNeeded(target_rep);
         var selected_target_desc = target_desc_info;
-        if (selected_target_desc.desc == null and try self.layoutContainsBoxOfZst(target_layout)) {
+        if (selected_target_desc.desc == null and self.repContainsDynamicStorage(target_rep)) {
             if (self.parent.result.store.getLocal(target).boxy_desc == null) {
                 selected_target_desc.desc = source_desc;
             }
@@ -32292,10 +32488,10 @@ const ProcBodyBuilder = struct {
 
         const source_payload = try self.addFrameLocal(source_payload_layout);
         // The unboxed source payload lives past the field conversions and is then
-        // dropped. When it carries an erased `box_of_zst` it must be
+        // dropped. When it carries an `erased_box` it must be
         // reference-counted through a descriptor, so tag it with the source box's
         // descriptor (which describes exactly this payload shape).
-        const source_payload_desc: ?LIR.BoxyDescRef = if (try self.layoutContainsBoxOfZst(source_payload_layout))
+        const source_payload_desc: ?LIR.BoxyDescRef = if (self.repContainsDynamicStorage(source_record_rep))
             try self.descriptorRefForSourceLocalRep(source, source_rep)
         else
             null;
@@ -32441,7 +32637,7 @@ const ProcBodyBuilder = struct {
         const boxed_source_layout = self.workerRuntimeLayoutForRep(source_record_rep).layoutIdx();
         const boxed_source_layout_value = self.parent.result.layouts.getLayout(boxed_source_layout);
         const source_backing_is_box = switch (boxed_source_layout_value.tag) {
-            .box, .box_of_zst => true,
+            .box, .box_of_zst, .erased_box => true,
             .scalar, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => false,
         };
         // A plan-dynamic record whose backing is concrete at this site (fully
@@ -32986,7 +33182,7 @@ const ProcBodyBuilder = struct {
                     if (!self.parent.result.layouts.isZeroSized(self.parent.result.layouts.getLayout(payload_layout))) return null;
                 }
             },
-            .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return null,
+            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return null,
         }
 
         const source_tag_count = self.checkedTagUnionCountForBoundary(source_rep) orelse return null;
@@ -33368,7 +33564,7 @@ const ProcBodyBuilder = struct {
                 // under the target rep's identity, so it is only sound when the
                 // source and target agree on how each payload field is stored.
                 // A worker can return a tag whose payload fields are erased
-                // (`box_of_zst`) while the dynamic target realizes them inline
+                // (`erased_box`) while the dynamic target realizes them inline
                 // (a fully-concrete instantiation, e.g. `Ok(val, input)` at a
                 // call site where both are `Str`). Reusing the erased source
                 // descriptor there would leave the boxed fields where the
@@ -34099,7 +34295,7 @@ const ProcBodyBuilder = struct {
             desc = .{ .local = try self.addFrameLocal(.opaque_ptr) };
         } else {
             desc = try self.frameDescriptorRefForRep(rep_id);
-            if (desc == null and try self.layoutContainsBoxOfZst(layout_idx)) {
+            if (desc == null and self.repContainsDynamicStorage(rep_id)) {
                 desc = try self.parent.staticDescRefForRep(identity_rep);
             }
         }
@@ -34145,7 +34341,7 @@ const ProcBodyBuilder = struct {
         {
             const desc_local = try self.addFrameLocal(.opaque_ptr);
             self.parent.result.store.setLocalBoxyDesc(local, .{ .local = desc_local });
-        } else if (try self.layoutContainsBoxOfZst(layout_idx)) {
+        } else if (self.repContainsDynamicStorage(rep_id)) {
             self.parent.result.store.setLocalBoxyDesc(local, try self.parent.staticDescRefForRep(identity_rep));
         } else if (try self.descriptorRefForRepIfNeeded(rep_id)) |desc| {
             switch (desc) {
@@ -34209,7 +34405,7 @@ const ProcBodyBuilder = struct {
             ((exact.contains_dynamic or identity.contains_dynamic) and
                 self.parent.layoutNeedsNestedBoxyDesc(runtime.layoutIdx())))
             .{ .local = try self.addFrameLocal(.opaque_ptr) }
-        else if (try self.layoutContainsBoxOfZst(runtime.layoutIdx()))
+        else if (self.repContainsDynamicStorage(rep_id))
             try self.parent.staticDescRefForRep(identity_rep)
         else
             null;
@@ -35309,7 +35505,7 @@ const ProcBodyBuilder = struct {
                 @intCast(field_index),
             ),
             .zst => .zst,
-            .scalar, .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .tag_union, .ptr => boxyLowerInvariant("aggregate field layout requested for non-struct layout"),
+            .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .tag_union, .ptr => boxyLowerInvariant("aggregate field layout requested for non-struct layout"),
         };
     }
 
@@ -35343,6 +35539,13 @@ const ProcBodyBuilder = struct {
                 .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .tuple, .list, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return current,
             }
         }
+    }
+
+    fn repContainsDynamicStorage(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) bool {
+        const identity_rep = self.descriptorStorageRep(rep_id);
+        const exact = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        const identity = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
+        return exact.contains_dynamic or identity.contains_dynamic;
     }
 
     fn dictionaryIdentityRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
@@ -36270,7 +36473,7 @@ const ProcBodyBuilder = struct {
                 break :blk variants.get(@intCast(variant_index)).payload_layout;
             },
             .zst, .scalar => .zst,
-            .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("tag payload operation expected tag-union layout"),
+            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("tag payload operation expected tag-union layout"),
         };
     }
 
@@ -36280,56 +36483,12 @@ const ProcBodyBuilder = struct {
         return switch (list_layout.tag) {
             .list => list_layout.getIdx(),
             .list_of_zst => .zst,
-            .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => boxyLowerInvariant("list expression target was not a list layout"),
+            .scalar, .box, .box_of_zst, .erased_box, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => boxyLowerInvariant("list expression target was not a list layout"),
         };
     }
 
     fn layoutIsBoxyDynamicStorage(self: *const ProcBodyBuilder, layout_idx: layout.Idx) bool {
-        return self.parent.result.layouts.getLayout(layout_idx).tag == .box_of_zst;
-    }
-
-    /// Whether a layout transitively contains an erased `box_of_zst`. Such a box
-    /// carries no static payload shape (its `box_of_zst` alignment is 1), so a
-    /// layout-driven concrete RC walk would decref its allocation with the wrong
-    /// alignment; a value holding one must be reference-counted through its
-    /// runtime descriptor instead.
-    fn layoutContainsBoxOfZst(self: *const ProcBodyBuilder, layout_idx: layout.Idx) Allocator.Error!bool {
-        var seen = std.AutoHashMap(layout.Idx, void).init(self.parent.allocator);
-        defer seen.deinit();
-        return try self.layoutContainsBoxOfZstInner(layout_idx, &seen);
-    }
-
-    fn layoutContainsBoxOfZstInner(
-        self: *const ProcBodyBuilder,
-        layout_idx: layout.Idx,
-        seen: *std.AutoHashMap(layout.Idx, void),
-    ) Allocator.Error!bool {
-        if ((try seen.getOrPut(layout_idx)).found_existing) return false;
-        const layouts = self.parent.result.layouts;
-        const value = layouts.getLayout(layout_idx);
-        return switch (value.tag) {
-            .box_of_zst => true,
-            .box, .list => try self.layoutContainsBoxOfZstInner(value.getIdx(), seen),
-            .list_of_zst => false,
-            .struct_ => blk: {
-                const struct_idx = value.getStruct().idx;
-                const fields = layouts.struct_fields.sliceRange(layouts.getStructData(struct_idx).getFields());
-                var i: u32 = 0;
-                while (i < fields.len) : (i += 1) {
-                    if (try self.layoutContainsBoxOfZstInner(fields.get(i).layout, seen)) break :blk true;
-                }
-                break :blk false;
-            },
-            .tag_union => blk: {
-                const info = layouts.getTagUnionInfo(value);
-                var i: u32 = 0;
-                while (i < info.variants.len) : (i += 1) {
-                    if (try self.layoutContainsBoxOfZstInner(info.variants.get(i).payload_layout, seen)) break :blk true;
-                }
-                break :blk false;
-            },
-            .scalar, .closure, .erased_callable, .zst, .ptr => false,
-        };
+        return self.parent.result.layouts.getLayout(layout_idx).tag == .erased_box;
     }
 
     fn isZstLocal(self: *const ProcBodyBuilder, local: LIR.LocalId) bool {

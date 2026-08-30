@@ -1779,6 +1779,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .type_from_missing_module,
         .module_not_imported,
         .nested_type_not_found,
+        .internal_builtin_type,
         .nested_value_not_found,
         .record_builder_map2_not_found,
         .too_many_exports,

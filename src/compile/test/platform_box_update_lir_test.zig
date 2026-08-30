@@ -140,68 +140,26 @@ fn expectNoInlineOwnership(store: *const lir.LirStore, layouts: *const layout.St
 
 fn expectWrapperInlineOwnership(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
     var total = Counts{};
-    var found_straight = false;
-    var found_adapter = false;
-    var found_append = false;
-    var found_cursor = false;
-    var found_pattern = false;
-    var found_erased = false;
 
     for (store.getProcSpecs(), 0..) |_, index| {
         const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
         const counts = try countProc(store, layouts, proc_id, null, null);
         total.add(counts);
-        const name = store.procDebugName(proc_id) orelse continue;
-
-        if (std.mem.eql(u8, name, "update_straight_for_host")) {
-            try expectProcCounts(counts, 1, 1, 0, 0);
-            found_straight = true;
-        } else if (std.mem.eql(u8, name, "update_adapter_for_host!")) {
-            try expectProcCounts(counts, 1, 3, 0, 0);
-            found_adapter = true;
-        } else if (std.mem.eql(u8, name, "update_append_for_host!")) {
-            try expectProcCounts(counts, 1, 0, 2, 1);
-            found_append = true;
-        } else if (std.mem.eql(u8, name, "update_pattern_for_host!")) {
-            // Divergent arms consume different committed model fields. Each
-            // edge must carry or settle its exact residual field places, so
-            // neither checked mutation needs a defensive list retain.
-            try expectProcCounts(counts, 1, 1, 0, 1);
-            found_pattern = true;
-        } else if (std.mem.eql(u8, name, "update_erased_for_host!")) {
-            try expectProcCounts(counts, 1, 0, 0, 0);
-            found_erased = true;
-        } else if (std.mem.eql(u8, name, "cursor_for_host")) {
-            try expectProcCounts(counts, 1, 0, 0, 0);
-            found_cursor = true;
-        }
     }
 
-    try std.testing.expect(found_straight);
-    try std.testing.expect(found_adapter);
-    try std.testing.expect(found_append);
-    try std.testing.expect(found_cursor);
-    try std.testing.expect(found_pattern);
-    try std.testing.expect(found_erased);
+    // Exact single-use inlining may move every platform update into the host
+    // root, so procedure names are not part of this ownership invariant. The
+    // complete reachable graph must still contain all six unbox/release pairs
+    // and every checked list mutation without adding a defensive retain.
     try std.testing.expectEqual(@as(usize, 0), total.prepare_update);
     try std.testing.expectEqual(@as(usize, 0), total.owned_unbox);
     try std.testing.expectEqual(@as(usize, 6), total.borrowed_unbox);
     try std.testing.expectEqual(@as(usize, 6), total.box_release);
     try std.testing.expectEqual(@as(usize, 5), total.list_set);
     try std.testing.expectEqual(@as(usize, 2), total.list_replace);
+    try std.testing.expectEqual(@as(usize, 4), total.list_append);
     try std.testing.expectEqual(@as(usize, 0), total.box_retain);
     try std.testing.expectEqual(@as(usize, 0), total.list_retain);
-}
-
-fn expectProcCounts(counts: Counts, normalized_unbox: usize, list_set: usize, list_replace: usize, list_append: usize) harness.LowerToLirHarnessError!void {
-    try std.testing.expectEqual(@as(usize, 0), counts.owned_unbox);
-    try std.testing.expectEqual(normalized_unbox, counts.borrowed_unbox);
-    try std.testing.expectEqual(normalized_unbox, counts.box_release);
-    try std.testing.expectEqual(list_set, counts.list_set);
-    try std.testing.expectEqual(list_replace, counts.list_replace);
-    try std.testing.expectEqual(list_append, counts.list_append);
-    try std.testing.expectEqual(@as(usize, 0), counts.box_retain);
-    try std.testing.expectEqual(@as(usize, 0), counts.list_retain);
 }
 
 fn findNamedProc(store: *const lir.LirStore, expected_name: []const u8) ?lir.LIR.LirProcSpecId {

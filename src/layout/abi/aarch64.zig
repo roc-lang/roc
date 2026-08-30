@@ -69,7 +69,7 @@ pub fn classifyType(store: *const Store, idx: Idx) Class {
             }
         },
         // A Box is a single pointer.
-        .box, .box_of_zst, .ptr => return .byval,
+        .box, .box_of_zst, .erased_box, .ptr => return .byval,
         // RocList is a three-word aggregate.
         .list, .list_of_zst => return classifyBySize(store, lay),
         .struct_ => {
@@ -148,7 +148,7 @@ fn countVectors(store: *const Store, idx: Idx, maybe_kind: *?layout.Vector) u8 {
             if (info.variants.len != 1 or info.data.discriminant_size != 0) return invalid_float_count;
             return countVectors(store, info.variants.get(0).payload_layout, maybe_kind);
         },
-        .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .zst, .ptr => return invalid_float_count,
+        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .zst, .ptr => return invalid_float_count,
     }
 }
 
@@ -211,7 +211,7 @@ fn countFloats(store: *const Store, idx: Idx, maybe_float_bits: *?u16) u8 {
         },
         // Anything else (pointer, list, box, non-transparent tag union, …)
         // makes the aggregate non-homogeneous.
-        .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .zst, .ptr => return invalid_float_count,
+        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .zst, .ptr => return invalid_float_count,
     }
 }
 

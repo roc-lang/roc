@@ -10,6 +10,24 @@ const SemanticToken = semantic_tokens.SemanticToken;
 const SemanticType = semantic_tokens.SemanticType;
 const LineInfo = line_info.LineInfo;
 
+test "semantic tokens do not read file imports" {
+    const allocator = std.testing.allocator;
+    const source = "import \"does-not-exist.txt\" as input : Str\nmain = input";
+
+    var info = try LineInfo.init(allocator, source);
+    defer info.deinit();
+
+    const tokens = try semantic_tokens.extractSemanticTokensWithImports(
+        allocator,
+        source,
+        &info,
+        null,
+    );
+    defer allocator.free(tokens);
+
+    try std.testing.expect(tokens.len > 0);
+}
+
 // Token tag mapping tests
 
 test "tokenTagToSemanticType maps keywords" {
@@ -394,4 +412,26 @@ test "extractSemanticTokens empty source" {
 
     // Empty source should produce no semantic tokens
     try std.testing.expectEqual(@as(usize, 0), tokens.len);
+}
+
+test "semantic tokens survive invalid utf8 in the source" {
+    const allocator = std.testing.allocator;
+    // 0xFF starts no UTF-8 sequence. The tokenizer reports InvalidUtf8InSource
+    // and keeps going, so the offsets of every later token are converted
+    // against a line holding that byte. That conversion used to abort the
+    // server instead of returning a column.
+    const source = "main = \"a\xffb\"\nnext = 1";
+
+    var info = try LineInfo.init(allocator, source);
+    defer info.deinit();
+
+    const tokens = try semantic_tokens.extractSemanticTokensWithImports(
+        allocator,
+        source,
+        &info,
+        null,
+    );
+    defer allocator.free(tokens);
+
+    try std.testing.expect(tokens.len > 0);
 }

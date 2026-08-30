@@ -82,6 +82,7 @@ const Printer = struct {
                         .list_reinterpret => |l| try writer.print("ref.list_reinterpret l{d}", .{@intFromEnum(l.backing_ref)}),
                         .nominal => |n| try writer.print("ref.nominal l{d}", .{@intFromEnum(n.backing_ref)}),
                     }
+                    if (s.take_kind == .take) try writer.writeAll(" take");
                     const absent_fields = self.store.getU32Span(s.residual_shell_absent_fields);
                     if (absent_fields.len != 0) {
                         try writer.writeAll(" shell_absent={");
@@ -336,7 +337,9 @@ const Printer = struct {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.print("low_level {s}(", .{@tagName(s.op)});
                     try self.writeLocals(s.args, writer);
-                    try writer.writeAll(")\n");
+                    try writer.writeAll(")");
+                    if (s.unique_args != 0) try writer.print(" unique=0x{x}", .{s.unique_args});
+                    try writer.writeAll("\n");
                     current = s.next;
                 },
                 .assign_list => |s| {

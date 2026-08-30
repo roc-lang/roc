@@ -63,6 +63,8 @@ const TypeDeclDependency = struct {
     dependency: u32,
 };
 
+const InterpolationPartsIdx = InterpolationPartMetadata.SafeList.Idx;
+
 const no_type_decl_dense_index = std.math.maxInt(u32);
 
 const no_def_group = std.math.maxInt(u32);
@@ -307,8 +309,9 @@ u64_var: Var,
 builtin_types_copied: bool,
 /// Map representation of Ident -> Var, used in checking static dispatch constraints
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
-/// Interpolation constraint function vars whose custom part checks have already run.
-checked_interpolation_part_constraints: std.AutoHashMap(Var, void),
+/// Interpolation metadata ranges whose occurrence-specific custom part checks
+/// have already run.
+checked_interpolation_part_constraints: std.AutoHashMap(InterpolationPartsIdx, void),
 /// Vars that originated as single-quote (.int_unbound) literals.
 int_unbound_vars: std.AutoHashMap(Var, void),
 /// Dispatcher/method pairs already reported by `reportConstraintError`, so a
@@ -2375,7 +2378,7 @@ fn initAssumePrepared(
         .u64_var = undefined,
         .builtin_types_copied = false,
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
-        .checked_interpolation_part_constraints = std.AutoHashMap(Var, void).init(gpa),
+        .checked_interpolation_part_constraints = std.AutoHashMap(InterpolationPartsIdx, void).init(gpa),
         .scratch_generated_codec_calls = .empty,
         .int_unbound_vars = std.AutoHashMap(Var, void).init(gpa),
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
@@ -7454,7 +7457,53 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     try self.finalizeBindingSchemeNodes();
 
+    try self.finalizePlatformRequirementSolutions();
+
     self.debugAssertNominalDeclTableComplete();
+}
+
+/// Turn every provisional platform-requirement row into the explicit
+/// successful-binding or checked-error outcome consumed by artifact
+/// publication. This runs after all checker error poisoning, while the checker
+/// still owns the exact source def and solved vars.
+fn finalizePlatformRequirementSolutions(self: *Self) Allocator.Error!void {
+    for (self.platform_requirement_solutions.items) |*solution| {
+        const def = self.cir.store.getDef(solution.def);
+        var checked_error = self.erroneous_value_exprs.contains(def.expr) or
+            self.erroneous_value_patterns.contains(def.pattern);
+
+        if (!checked_error) {
+            checked_error = try canonical_type_keys.containsError(
+                self.gpa,
+                self.types,
+                self.cir,
+                ModuleEnv.varFrom(def.expr),
+            );
+        }
+        if (!checked_error) {
+            checked_error = try canonical_type_keys.containsError(
+                self.gpa,
+                self.types,
+                self.cir,
+                solution.solved_var,
+            );
+        }
+        if (!checked_error) {
+            for (solution.identity_vars) |identity_var| {
+                if (try canonical_type_keys.containsError(
+                    self.gpa,
+                    self.types,
+                    self.cir,
+                    identity_var,
+                )) {
+                    checked_error = true;
+                    break;
+                }
+            }
+        }
+
+        solution.outcome = if (checked_error) .checked_error else .success;
+    }
 }
 
 /// Finish canonicalization's strict-demand relation with the exact local
@@ -11850,6 +11899,7 @@ fn predeclareAnnotationScheme(
     );
     try self.judgeFieldKindsAtBoundary(env);
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+    try self.deduplicateGeneralizedDispatchRequirements(scheme_var);
     try self.publishBindingScheme(scheme_var);
     env.var_pool.popRank();
 
@@ -12223,6 +12273,7 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
         for (scc.defs) |member_def_idx| {
             const member_def = self.cir.store.getDef(member_def_idx);
             const expr_var = ModuleEnv.varFrom(member_def.expr);
+            try self.deduplicateGeneralizedDispatchRequirements(expr_var);
             try self.publishBindingScheme(expr_var);
             try self.bindBindingSchemeVar(expr_var, ModuleEnv.varFrom(member_def.pattern));
             try self.bindBindingSchemeVar(expr_var, ModuleEnv.varFrom(member_def_idx));
@@ -18271,6 +18322,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         }
         try self.judgeFieldKindsAtBoundary(env);
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+        try self.deduplicateGeneralizedDispatchRequirements(expr_var_raw);
         try self.publishBindingScheme(expr_var_raw);
         self.retireNonGeneralizedTypeSchemes(&.{.{ .owner = expr_var_raw, .interface = expr_var }});
         try self.retireStructurallyPublishedTypeSchemeRequirements(
@@ -19425,6 +19477,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     try self.defaultLiteralsAtGeneralizationBoundary(.{ .owner = decl_pattern_var, .interface = decl_pattern_var }, env);
                     try self.judgeFieldKindsAtBoundary(env);
                     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+                    try self.deduplicateGeneralizedDispatchRequirements(decl_pattern_var);
                     try self.publishBindingScheme(decl_pattern_var);
                     try self.bindBindingSchemeVar(decl_pattern_var, decl_expr_var);
                     self.retireNonGeneralizedTypeSchemes(&.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }});
@@ -24131,6 +24184,163 @@ fn typeSchemeHasRequirement(
     return false;
 }
 
+const GeneralizedSchemeRequirementKey = struct {
+    receiver_root: Var,
+    fn_name: Ident.Idx,
+    origin_tag: std.meta.Tag(StaticDispatchConstraint.Origin),
+    origin_flag: bool,
+    callable_shape: [32]u8,
+};
+
+const GeneralizedAttachedConstraintKey = struct {
+    fn_name: Ident.Idx,
+    origin_tag: std.meta.Tag(StaticDispatchConstraint.Origin),
+    origin_flag: bool,
+    callable_shape: [32]u8,
+};
+
+fn generalizedCallableShape(
+    self: *Self,
+    anchors: *const std.AutoHashMap(Var, void),
+    cache: *std.AutoHashMap(Var, [32]u8),
+    fn_var: Var,
+) Allocator.Error![32]u8 {
+    const fn_root = self.types.resolveVar(fn_var).var_;
+    if (cache.get(fn_root)) |shape| return shape;
+
+    const shape = (try canonical_type_keys.fromVarWithAnchoredIdentities(
+        self.gpa,
+        self.types,
+        self.cir,
+        fn_root,
+        anchors,
+    )).bytes;
+    try cache.put(fn_root, shape);
+    return shape;
+}
+
+fn dispatchConstraintOriginFlag(origin: StaticDispatchConstraint.Origin) bool {
+    return switch (origin) {
+        .desugared_binop => |binop| binop.negated,
+        .where_clause => |where_clause| where_clause.body_required,
+        .desugared_unaryop, .method_call, .from_literal => false,
+    };
+}
+
+/// Collapse requirements that ask for the same target with the same finalized
+/// callable shape. Variables exposed through the enclosing scheme remain fixed
+/// anchors; only requirement-private generalized variables may be renamed.
+/// This keeps repeated helper uses compact without conflating call results that
+/// a caller can still specialize differently. Shape keys are memoized by
+/// finalized callable root for the duration of this pass because attached and
+/// side-table requirements commonly refer to the same callable graph.
+fn deduplicateGeneralizedDispatchRequirements(
+    self: *Self,
+    scheme_var: Var,
+) Allocator.Error!void {
+    const identity_vars = try canonical_type_keys.identityVarsFromVarIgnoringConstraints(
+        self.gpa,
+        self.types,
+        self.cir,
+        scheme_var,
+    );
+    defer self.gpa.free(identity_vars);
+
+    var anchors = std.AutoHashMap(Var, void).init(self.gpa);
+    defer anchors.deinit();
+    try anchors.ensureTotalCapacity(@intCast(identity_vars.len));
+    for (identity_vars) |identity_var| {
+        anchors.putAssumeCapacity(self.types.resolveVar(identity_var).var_, {});
+    }
+
+    var callable_shapes = std.AutoHashMap(Var, [32]u8).init(self.gpa);
+    defer callable_shapes.deinit();
+
+    var retained_constraints: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty;
+    defer retained_constraints.deinit(self.gpa);
+    var seen_attached = std.AutoHashMap(GeneralizedAttachedConstraintKey, void).init(self.gpa);
+    defer seen_attached.deinit();
+
+    for (identity_vars) |identity_var| {
+        const resolved = self.types.resolveVar(identity_var);
+        const constraints_range = contentConstraintRange(resolved.desc.content) orelse continue;
+        const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
+        if (constraints.len <= 1) continue;
+
+        retained_constraints.clearRetainingCapacity();
+        seen_attached.clearRetainingCapacity();
+        try retained_constraints.ensureTotalCapacity(self.gpa, constraints.len);
+        try seen_attached.ensureTotalCapacity(@intCast(constraints.len));
+        for (constraints) |constraint| {
+            // Literal metadata is aggregated by the literal-specific path.
+            if (constraint.origin == .from_literal) {
+                retained_constraints.appendAssumeCapacity(constraint);
+                continue;
+            }
+            const callable_shape = try self.generalizedCallableShape(
+                &anchors,
+                &callable_shapes,
+                constraint.fn_var,
+            );
+            const key = GeneralizedAttachedConstraintKey{
+                .fn_name = constraint.fn_name,
+                .origin_tag = std.meta.activeTag(constraint.origin),
+                .origin_flag = dispatchConstraintOriginFlag(constraint.origin),
+                .callable_shape = callable_shape,
+            };
+            if (seen_attached.contains(key)) continue;
+            seen_attached.putAssumeCapacity(key, {});
+            retained_constraints.appendAssumeCapacity(constraint);
+        }
+        if (retained_constraints.items.len == constraints.len) continue;
+
+        const retained_range = try self.types.appendStaticDispatchConstraints(retained_constraints.items);
+        const retained_content: Content = switch (resolved.desc.content) {
+            .flex => |flex| .{ .flex = flex.withConstraints(retained_range) },
+            .rigid => |rigid| .{ .rigid = rigid.withConstraints(retained_range) },
+            .alias, .structure, .field_presence, .err => unreachable,
+        };
+        try self.types.setVarContent(resolved.var_, retained_content);
+    }
+
+    const scheme_idx = self.typeSchemeIndexForRoot(scheme_var) orelse return;
+    const scheme = &self.type_schemes.items[scheme_idx];
+    if (scheme.dispatch_requirements.items.len <= 1) return;
+
+    var seen = std.AutoHashMap(GeneralizedSchemeRequirementKey, void).init(self.gpa);
+    defer seen.deinit();
+    try seen.ensureTotalCapacity(@intCast(scheme.dispatch_requirements.items.len));
+
+    var write: usize = 0;
+    for (scheme.dispatch_requirements.items) |requirement| {
+        // Literal metadata participates in defaulting and is intentionally
+        // aggregated by the literal-specific path, not this method-target pass.
+        if (requirement.constraint.origin == .from_literal) {
+            scheme.dispatch_requirements.items[write] = requirement;
+            write += 1;
+            continue;
+        }
+
+        const callable_shape = try self.generalizedCallableShape(
+            &anchors,
+            &callable_shapes,
+            requirement.constraint.fn_var,
+        );
+        const key = GeneralizedSchemeRequirementKey{
+            .receiver_root = self.types.resolveVar(requirement.receiver_var).var_,
+            .fn_name = requirement.constraint.fn_name,
+            .origin_tag = std.meta.activeTag(requirement.constraint.origin),
+            .origin_flag = dispatchConstraintOriginFlag(requirement.constraint.origin),
+            .callable_shape = callable_shape,
+        };
+        if (seen.contains(key)) continue;
+        seen.putAssumeCapacity(key, {});
+        scheme.dispatch_requirements.items[write] = requirement;
+        write += 1;
+    }
+    scheme.dispatch_requirements.shrinkRetainingCapacity(write);
+}
+
 /// Retire side-table requirements only after their exact deferred callable was
 /// consumed or rejected. A receiver becoming concrete, rigid, aliased, or
 /// erroneous is not by itself evidence that this relation was visited.
@@ -27925,8 +28135,12 @@ fn ensureCustomInterpolationPartsChecked(
         unreachable;
     }
 
-    const checked_key = self.types.resolveVar(constraint.fn_var).var_;
-    if ((try self.checked_interpolation_part_constraints.getOrPut(checked_key)).found_existing) return;
+    // Empty interpolations have no part constraints to validate and their
+    // SafeList range intentionally has no usable start index.
+    if (metadata.interpolated_parts.isEmpty()) return;
+    if ((try self.checked_interpolation_part_constraints.getOrPut(
+        metadata.interpolated_parts.start,
+    )).found_existing) return;
 
     const item_var = metadata.item_var;
     // Use the captured part metadata, not the original CIR `parts`, so an instantiated call
@@ -29404,11 +29618,41 @@ fn reportInvalidBuiltinFromNumeralLiteral(
     env: *Env,
 ) Allocator.Error!bool {
     const num_literal = constraint.origin.numeralInfo() orelse return false;
-    if (!try self.reportInvalidBuiltinFromNumeralInfo(dispatcher_var, num_kind, num_literal, env)) return false;
+    if (validateBuiltinFromNumeralLiteral(num_kind, num_literal) == null) return false;
 
-    try self.poisonConstraintSourceExpr(dispatcher_var, constraint);
-    try self.markStaticDispatchRejected(constraint);
+    // Constraint merging retains aggregate fit facts, while this occurrence
+    // table retains the source literal responsible for a concrete rejection.
+    const rejected_entry = self.firstRejectedOpenNumeral(
+        dispatcher_var,
+        num_kind,
+    );
+    const rejected_constraint = if (rejected_entry) |entry| entry.constraint else constraint;
+    const rejected_literal = rejected_constraint.origin.numeralInfo().?;
+    if (!try self.reportInvalidBuiltinFromNumeralInfo(dispatcher_var, num_kind, rejected_literal, env)) return false;
+
+    const rejected_expr: ?CIR.Expr.Idx = if (rejected_entry) |entry| if (entry.source_node) |node_idx|
+        if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) @enumFromInt(@intFromEnum(node_idx)) else null
+    else
+        null else null;
+    try self.poisonConstraintFailureSource(dispatcher_var, rejected_constraint, rejected_expr);
+    try self.markStaticDispatchRejected(rejected_constraint);
     return true;
+}
+
+fn firstRejectedOpenNumeral(
+    self: *Self,
+    dispatcher_var: Var,
+    num_kind: CIR.NumKind,
+) ?OpenNumeralLiteral {
+    const dispatcher_root = self.types.resolveVar(dispatcher_var).var_;
+    for (self.open_numeral_literals.items) |entry| {
+        if (self.types.resolveVar(entry.var_).var_ != dispatcher_root) continue;
+        const info = entry.constraint.origin.numeralInfo() orelse continue;
+        if (validateBuiltinFromNumeralLiteral(num_kind, info) != null) {
+            return entry;
+        }
+    }
+    return null;
 }
 
 fn reportInvalidBuiltinFromNumeralInfo(

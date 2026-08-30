@@ -91,7 +91,7 @@ test "Monotype record expression lowering does not keep mutable field-store slic
 
     try expectContains(lower_record_expr, "const target_fields");
     try expectContains(lower_record_expr, "const target_field_count");
-    try expectContains(lower_record_expr, "const target_field_list = try GuardedList.dupe(self.allocator, Type.Field, self.builder.program.types.fieldSpan(target_fields));");
+    try expectContains(lower_record_expr, "const target_field_list = try GuardedList.dupe(self.allocator, Type.Field, self.typeStore().fieldSpan(target_fields));");
     try expectContains(lower_record_expr, "const field = target_field_list[i];");
     try std.testing.expect(std.mem.find(u8, lower_record_expr, "target_field_borrow") == null);
     try std.testing.expect(std.mem.find(u8, lower_record_expr, "for (target_fields") == null);
@@ -1084,7 +1084,9 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
         "fn typeIsProvenUninhabited(self: *BodyContext",
         "fn checkedPatternIsProvenUninhabited(",
     );
-    try expectContains(durable_inhabitation, "self.builder.typeIsProvenUninhabited(ty)");
+    try expectContains(durable_inhabitation, "self.draft.uninhabited_type_cache.get(ty)");
+    try expectContains(durable_inhabitation, "const types_ = self.typeStore()");
+    try expectContains(durable_inhabitation, "defer _ = visiting.remove(ty)");
     try expectNotContains(durable_inhabitation, "activeNodeFromType");
     const inspect_call = sourceSliceBetween(
         lower_source,

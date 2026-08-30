@@ -24,6 +24,7 @@ const rc_conformance = @import("rc_conformance.zig");
 const backend = @import("backend");
 const host_trampoline = @import("host_trampoline.zig");
 const builtins = @import("builtins");
+const numeric_conversion = base.numeric_conversion;
 const sljmp = @import("sljmp");
 const build_options = @import("build_options");
 const boxy_runtime = @import("boxy_runtime.zig");
@@ -859,6 +860,7 @@ pub const Interpreter = struct {
                 .scalar,
                 .box,
                 .box_of_zst,
+                .erased_box,
                 .list,
                 .list_of_zst,
                 .closure,
@@ -1148,7 +1150,7 @@ pub const Interpreter = struct {
         }
 
         pub fn layoutContainsRc(self: BoxyFrameHooks, layout_idx: layout_mod.Idx) bool {
-            return self.interp.layout_store.layoutContainsRcErasedBox(self.interp.layout_store.getLayout(layout_idx));
+            return self.interp.layout_store.layoutContainsRefcounted(self.interp.layout_store.getLayout(layout_idx));
         }
 
         pub fn allocValue(self: BoxyFrameHooks, layout_idx: layout_mod.Idx) Error!Value {
@@ -1160,15 +1162,15 @@ pub const Interpreter = struct {
         }
 
         pub fn rcPlanFor(self: BoxyFrameHooks, helper: layout_mod.RcHelperKey) layout_mod.RcHelperPlan {
-            return self.interp.layout_store.rcHelperPlanErasedBox(helper);
+            return self.interp.layout_store.rcHelperPlan(helper);
         }
 
         pub fn rcStructFieldPlan(self: BoxyFrameHooks, struct_plan: layout_mod.RcStructPlan, field_index: u32) ?layout_mod.RcFieldPlan {
-            return self.interp.layout_store.rcHelperStructFieldPlanErasedBox(struct_plan, field_index);
+            return self.interp.layout_store.rcHelperStructFieldPlan(struct_plan, field_index);
         }
 
         pub fn rcTagVariantPlan(self: BoxyFrameHooks, tag_plan: layout_mod.RcTagUnionPlan, variant_index: u32) ?layout_mod.RcHelperKey {
-            return self.interp.layout_store.rcHelperTagUnionVariantPlanErasedBox(tag_plan, variant_index);
+            return self.interp.layout_store.rcHelperTagUnionVariantPlan(tag_plan, variant_index);
         }
 
         pub fn traceProcId(self: BoxyFrameHooks) u32 {
@@ -1605,7 +1607,7 @@ pub const Interpreter = struct {
                     }
                 }
             },
-            .zst, .box_of_zst => return,
+            .zst, .box_of_zst, .erased_box => return,
             // Compiler-internal pointers (TRMC holes) are opaque here: the slot they
             // point at may be a not-yet-filled hole, so there is nothing to validate.
             .ptr => return,
@@ -2112,7 +2114,7 @@ pub const Interpreter = struct {
         const layout_val = self.layout_store.getLayout(layout_idx);
         debugPrint("{s}{d}: {s}\n", .{ debugIndent(indent), @intFromEnum(layout_idx), @tagName(layout_val.tag) });
         switch (layout_val.tag) {
-            .scalar, .zst, .box_of_zst, .list_of_zst, .erased_callable => {},
+            .scalar, .zst, .box_of_zst, .erased_box, .list_of_zst, .erased_callable => {},
             .box, .ptr => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
             .list => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
             .closure => self.debugPrintLayoutShapeLines(layout_val.getClosure().captures_layout_idx, indent + 1, visited),
@@ -2317,7 +2319,7 @@ pub const Interpreter = struct {
                 const expected_layout_val = self.layout_store.getLayout(param_layout);
                 if (actual_layout_val.tag == .struct_ or expected_layout_val.tag == .struct_ or
                     actual_layout_val.tag == .tag_union or expected_layout_val.tag == .tag_union or
-                    (actual_layout_val.tag == .scalar and (expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst)))
+                    (actual_layout_val.tag == .scalar and (expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst or expected_layout_val.tag == .erased_box)))
                 {
                     debugPrint(
                         "LIR/interpreter invariant violated before proc arg coercion: proc={d} name={d} arg_index={d} actual_layout={d} ({s}) expected_layout={d} ({s}) param_local={d}\n",
@@ -3936,6 +3938,7 @@ pub const Interpreter = struct {
                     .scalar,
                     .box,
                     .box_of_zst,
+                    .erased_box,
                     .list,
                     .list_of_zst,
                     .closure,
@@ -4700,6 +4703,7 @@ pub const Interpreter = struct {
                 };
             },
             .scalar,
+            .erased_box,
             .list,
             .list_of_zst,
             .closure,
@@ -5392,7 +5396,7 @@ pub const Interpreter = struct {
     }
 
     fn builtinInternalContainsRefcounted(self: *LirInterpreter, comptime _: []const u8, layout_idx: layout_mod.Idx) bool {
-        return self.layout_store.layoutContainsRcErasedBox(self.layout_store.getLayout(layout_idx));
+        return self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(layout_idx));
     }
 
     fn rcHelperForLayout(self: *LirInterpreter, op: RcOp, layout_idx: layout_mod.Idx) layout_mod.RcHelper {
@@ -5404,7 +5408,7 @@ pub const Interpreter = struct {
     }
 
     fn performRcHelperRequired(self: *LirInterpreter, helper: layout_mod.RcHelper, val: Value, count: u16, atomicity: RcAtomicity) void {
-        const plan = self.layout_store.rcHelperPlanErasedBox(helper);
+        const plan = self.layout_store.rcHelperPlan(helper);
         if (plan == .noop) {
             self.invariantFailed(
                 "LIR/interpreter invariant violated: explicit RC statement used noop helper for layout {d}",
@@ -5417,7 +5421,7 @@ pub const Interpreter = struct {
     fn cachedRcPlan(self: *LirInterpreter, helper: layout_mod.RcHelperKey) layout_mod.RcHelperPlan {
         const id = helper.encode();
         if (self.rc_plans.get(id)) |plan| return plan;
-        const plan = self.layout_store.rcHelperPlanErasedBox(helper);
+        const plan = self.layout_store.rcHelperPlan(helper);
         self.rc_plans.putAssumeCapacity(id, plan);
         return plan;
     }
@@ -5429,7 +5433,7 @@ pub const Interpreter = struct {
     ) ?layout_mod.RcFieldPlan {
         const id = helperChildPlanId(@intCast(struct_plan.struct_idx.int_idx), struct_plan.child_op, field_index);
         if (self.struct_field_plans.get(id)) |plan| return plan;
-        const plan = self.layout_store.rcHelperStructFieldPlanErasedBox(struct_plan, field_index);
+        const plan = self.layout_store.rcHelperStructFieldPlan(struct_plan, field_index);
         self.struct_field_plans.putAssumeCapacity(id, plan);
         return plan;
     }
@@ -5441,7 +5445,7 @@ pub const Interpreter = struct {
     ) ?layout_mod.RcHelperKey {
         const id = helperChildPlanId(@intCast(tag_plan.tag_union_idx.int_idx), tag_plan.child_op, variant_index);
         if (self.tag_variant_plans.get(id)) |plan| return plan;
-        const plan = self.layout_store.rcHelperTagUnionVariantPlanErasedBox(tag_plan, variant_index);
+        const plan = self.layout_store.rcHelperTagUnionVariantPlan(tag_plan, variant_index);
         self.tag_variant_plans.putAssumeCapacity(id, plan);
         return plan;
     }
@@ -5840,7 +5844,7 @@ pub const Interpreter = struct {
     fn listElementRcContext(self: *LirInterpreter, ll: LowLevelEvalInput, list_layout: layout_mod.Idx) Error!ListElementRcContext {
         const elem_layout = self.listElemLayout(list_layout);
         const elem_layout_value = self.layout_store.getLayout(elem_layout);
-        const elem_is_erased_box = elem_layout_value.tag == .box_of_zst;
+        const elem_is_erased_box = elem_layout_value.tag == .erased_box;
         const elem_is_box = elem_is_erased_box or elem_layout_value.tag == .box;
         var elem_desc: ?*const LirProgram.BoxyTypeDesc = null;
 
@@ -5917,6 +5921,7 @@ pub const Interpreter = struct {
 
         return switch (ll.op) {
             .num_plus, .num_minus, .num_times => unreachable,
+            .list_sort_with => self.evalListSortWith(args[0], args[1], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
             // ── String ops ──
             .str_is_eq => blk: {
                 const result = builtins.str.strEqual(valueToRocStr(args[0]), valueToRocStr(args[1]));
@@ -6159,6 +6164,7 @@ pub const Interpreter = struct {
                             .scalar,
                             .box,
                             .box_of_zst,
+                            .erased_box,
                             .list,
                             .list_of_zst,
                             .closure,
@@ -6253,38 +6259,23 @@ pub const Interpreter = struct {
             },
 
             // ── Numeric to_str ops ──
-            .u8_to_str => self.numToStr(u8, args[0], ll.ret_layout),
-            .i8_to_str => self.numToStr(i8, args[0], ll.ret_layout),
-            .u16_to_str => self.numToStr(u16, args[0], ll.ret_layout),
-            .i16_to_str => self.numToStr(i16, args[0], ll.ret_layout),
-            .u32_to_str => self.numToStr(u32, args[0], ll.ret_layout),
-            .i32_to_str => self.numToStr(i32, args[0], ll.ret_layout),
-            .u64_to_str => self.numToStr(u64, args[0], ll.ret_layout),
             .i64_to_str => blk: {
                 trace.log("i64_to_str: arg={d} ret_layout={any}", .{ args[0].read(i64), ll.ret_layout });
-                break :blk self.numToStr(i64, args[0], ll.ret_layout);
+                break :blk self.numberToString(comptime numeric_conversion.getStringConversionSpec(.i64_to_str).?, args[0], ll.ret_layout);
             },
-            .u128_to_str => self.numToStr(u128, args[0], ll.ret_layout),
-            .i128_to_str => self.numToStr(i128, args[0], ll.ret_layout),
-            .dec_to_str => blk: {
-                const dec = RocDec{ .num = args[0].read(i128) };
-                var crash_boundary = self.enterCrashBoundary();
-                defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
-                const result = builtins.dec.to_str(dec, &self.roc_ops);
-                break :blk self.rocStrToValue(result, ll.ret_layout);
-            },
-            .f32_to_str => blk: {
-                const bits: u64 = @as(u64, @as(u32, @bitCast(args[0].read(f32))));
-                const result = builtins.str.floatToStrFromBits(bits, true, &self.roc_ops);
-                break :blk self.rocStrToValue(result, ll.ret_layout);
-            },
-            .f64_to_str => blk: {
-                const bits: u64 = @bitCast(args[0].read(f64));
-                const result = builtins.str.floatToStrFromBits(bits, false, &self.roc_ops);
-                break :blk self.rocStrToValue(result, ll.ret_layout);
-            },
+            inline .u8_to_str,
+            .i8_to_str,
+            .u16_to_str,
+            .i16_to_str,
+            .u32_to_str,
+            .i32_to_str,
+            .u64_to_str,
+            .u128_to_str,
+            .i128_to_str,
+            .dec_to_str,
+            .f32_to_str,
+            .f64_to_str,
+            => |op| self.numberToString(comptime numeric_conversion.getStringConversionSpec(op).?, args[0], ll.ret_layout),
             .f32_to_bits => blk: {
                 const val = try self.alloc(ll.ret_layout);
                 val.write(u32, builtins.float_bits.normalizeF32NanBits(@bitCast(args[0].read(f32))));
@@ -6345,11 +6336,10 @@ pub const Interpreter = struct {
             .list_capacity => blk: {
                 const rl = self.valueToRocListForLayout(args[0], arg_layout);
                 const val = try self.alloc(ll.ret_layout);
-                // Canonical zero-width lists carry no allocation, so their
-                // stored capacity is zero even when they hold elements; every
-                // held element is trivially within capacity.
-                const capacity = @max(rl.getCapacity(), rl.len());
-                val.write(u64, @intCast(capacity));
+                // A list of zero-width elements never allocates, so its stored
+                // capacity is zero however many elements it holds. Report the
+                // stored capacity as it is.
+                val.write(u64, @intCast(rl.getCapacity()));
                 break :blk val;
             },
             .list_slack_unique => blk: {
@@ -7208,7 +7198,7 @@ pub const Interpreter = struct {
             .f32_from_str,
             .f64_from_str,
             => blk: {
-                const parse_spec = ll.op.numericParseSpec() orelse
+                const parse_spec = numeric_conversion.getNumericParseSpec(ll.op) orelse
                     return self.runtimeError("typed from_str low-level missing numeric parse spec");
                 const ret_layout_val = self.layout_store.getLayout(ll.ret_layout);
                 if (ret_layout_val.tag != .tag_union) {
@@ -7249,258 +7239,253 @@ pub const Interpreter = struct {
             },
 
             // ── Numeric conversions ──
-            .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128 => self.numWiden(u8, args[0], ll.ret_layout),
-            .u8_to_f32, .u8_to_f64 => self.intToFloat(u8, args[0], ll.ret_layout),
-            .u8_to_dec => self.intToDec(u8, args[0], ll.ret_layout),
-            .u8_to_i8_wrap => self.numTruncate(u8, i8, args[0], ll.ret_layout),
-            .u8_to_i8_try => self.numTry(u8, i8, args[0], ll.ret_layout),
-
-            .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128 => self.numWiden(i8, args[0], ll.ret_layout),
-            .i8_to_u8_wrap => self.numTruncate(i8, u8, args[0], ll.ret_layout),
-            .i8_to_u8_try => self.numTry(i8, u8, args[0], ll.ret_layout),
-            .i8_to_u16_wrap => self.numTruncateWiden(i8, i16, u16, args[0], ll.ret_layout),
-            .i8_to_u16_try => self.numTry(i8, u16, args[0], ll.ret_layout),
-            .i8_to_u32_wrap => self.numTruncateWiden(i8, i32, u32, args[0], ll.ret_layout),
-            .i8_to_u32_try => self.numTry(i8, u32, args[0], ll.ret_layout),
-            .i8_to_u64_wrap => self.numTruncateWiden(i8, i64, u64, args[0], ll.ret_layout),
-            .i8_to_u64_try => self.numTry(i8, u64, args[0], ll.ret_layout),
-            .i8_to_u128_wrap => self.numTruncateWiden(i8, i128, u128, args[0], ll.ret_layout),
-            .i8_to_u128_try => self.numTry(i8, u128, args[0], ll.ret_layout),
-            .i8_to_f32, .i8_to_f64 => self.intToFloat(i8, args[0], ll.ret_layout),
-            .i8_to_dec => self.intToDec(i8, args[0], ll.ret_layout),
-
-            .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u32, .u16_to_u64, .u16_to_u128 => self.numWiden(u16, args[0], ll.ret_layout),
-            .u16_to_i8_wrap => self.numTruncate(u16, i8, args[0], ll.ret_layout),
-            .u16_to_i8_try => self.numTry(u16, i8, args[0], ll.ret_layout),
-            .u16_to_i16_wrap => self.numTruncate(u16, i16, args[0], ll.ret_layout),
-            .u16_to_i16_try => self.numTry(u16, i16, args[0], ll.ret_layout),
-            .u16_to_u8_wrap => self.numTruncate(u16, u8, args[0], ll.ret_layout),
-            .u16_to_u8_try => self.numTry(u16, u8, args[0], ll.ret_layout),
-            .u16_to_f32, .u16_to_f64 => self.intToFloat(u16, args[0], ll.ret_layout),
-            .u16_to_dec => self.intToDec(u16, args[0], ll.ret_layout),
-
-            .i16_to_i32, .i16_to_i64, .i16_to_i128 => self.numWiden(i16, args[0], ll.ret_layout),
-            .i16_to_i8_wrap => self.numTruncate(i16, i8, args[0], ll.ret_layout),
-            .i16_to_i8_try => self.numTry(i16, i8, args[0], ll.ret_layout),
-            .i16_to_u8_wrap => self.numTruncate(i16, u8, args[0], ll.ret_layout),
-            .i16_to_u8_try => self.numTry(i16, u8, args[0], ll.ret_layout),
-            .i16_to_u16_wrap => self.numTruncate(i16, u16, args[0], ll.ret_layout),
-            .i16_to_u16_try => self.numTry(i16, u16, args[0], ll.ret_layout),
-            .i16_to_u32_wrap => self.numTruncateWiden(i16, i32, u32, args[0], ll.ret_layout),
-            .i16_to_u32_try => self.numTry(i16, u32, args[0], ll.ret_layout),
-            .i16_to_u64_wrap => self.numTruncateWiden(i16, i64, u64, args[0], ll.ret_layout),
-            .i16_to_u64_try => self.numTry(i16, u64, args[0], ll.ret_layout),
-            .i16_to_u128_wrap => self.numTruncateWiden(i16, i128, u128, args[0], ll.ret_layout),
-            .i16_to_u128_try => self.numTry(i16, u128, args[0], ll.ret_layout),
-            .i16_to_f32, .i16_to_f64 => self.intToFloat(i16, args[0], ll.ret_layout),
-            .i16_to_dec => self.intToDec(i16, args[0], ll.ret_layout),
-
-            .u32_to_i64, .u32_to_i128, .u32_to_u64, .u32_to_u128 => self.numWiden(u32, args[0], ll.ret_layout),
-            .u32_to_i8_wrap => self.numTruncate(u32, i8, args[0], ll.ret_layout),
-            .u32_to_i8_try => self.numTry(u32, i8, args[0], ll.ret_layout),
-            .u32_to_i16_wrap => self.numTruncate(u32, i16, args[0], ll.ret_layout),
-            .u32_to_i16_try => self.numTry(u32, i16, args[0], ll.ret_layout),
-            .u32_to_i32_wrap => self.numTruncate(u32, i32, args[0], ll.ret_layout),
-            .u32_to_i32_try => self.numTry(u32, i32, args[0], ll.ret_layout),
-            .u32_to_u8_wrap => self.numTruncate(u32, u8, args[0], ll.ret_layout),
-            .u32_to_u8_try => self.numTry(u32, u8, args[0], ll.ret_layout),
-            .u32_to_u16_wrap => self.numTruncate(u32, u16, args[0], ll.ret_layout),
-            .u32_to_u16_try => self.numTry(u32, u16, args[0], ll.ret_layout),
-            .u32_to_f32, .u32_to_f64 => self.intToFloat(u32, args[0], ll.ret_layout),
-            .u32_to_dec => self.intToDec(u32, args[0], ll.ret_layout),
-
-            .i32_to_i64, .i32_to_i128 => self.numWiden(i32, args[0], ll.ret_layout),
-            .i32_to_i8_wrap => self.numTruncate(i32, i8, args[0], ll.ret_layout),
-            .i32_to_i8_try => self.numTry(i32, i8, args[0], ll.ret_layout),
-            .i32_to_i16_wrap => self.numTruncate(i32, i16, args[0], ll.ret_layout),
-            .i32_to_i16_try => self.numTry(i32, i16, args[0], ll.ret_layout),
-            .i32_to_u8_wrap => self.numTruncate(i32, u8, args[0], ll.ret_layout),
-            .i32_to_u8_try => self.numTry(i32, u8, args[0], ll.ret_layout),
-            .i32_to_u16_wrap => self.numTruncate(i32, u16, args[0], ll.ret_layout),
-            .i32_to_u16_try => self.numTry(i32, u16, args[0], ll.ret_layout),
-            .i32_to_u32_wrap => self.numTruncate(i32, u32, args[0], ll.ret_layout),
-            .i32_to_u32_try => self.numTry(i32, u32, args[0], ll.ret_layout),
-            .i32_to_u64_wrap => self.numTruncateWiden(i32, i64, u64, args[0], ll.ret_layout),
-            .i32_to_u64_try => self.numTry(i32, u64, args[0], ll.ret_layout),
-            .i32_to_u128_wrap => self.numTruncateWiden(i32, i128, u128, args[0], ll.ret_layout),
-            .i32_to_u128_try => self.numTry(i32, u128, args[0], ll.ret_layout),
-            .i32_to_f32, .i32_to_f64 => self.intToFloat(i32, args[0], ll.ret_layout),
-            .i32_to_dec => self.intToDec(i32, args[0], ll.ret_layout),
-
-            .u64_to_i128, .u64_to_u128 => self.numWiden(u64, args[0], ll.ret_layout),
-            .u64_to_i8_wrap => self.numTruncate(u64, i8, args[0], ll.ret_layout),
-            .u64_to_i8_try => self.numTry(u64, i8, args[0], ll.ret_layout),
-            .u64_to_i16_wrap => self.numTruncate(u64, i16, args[0], ll.ret_layout),
-            .u64_to_i16_try => self.numTry(u64, i16, args[0], ll.ret_layout),
-            .u64_to_i32_wrap => self.numTruncate(u64, i32, args[0], ll.ret_layout),
-            .u64_to_i32_try => self.numTry(u64, i32, args[0], ll.ret_layout),
-            .u64_to_i64_wrap => self.numTruncate(u64, i64, args[0], ll.ret_layout),
-            .u64_to_i64_try => self.numTry(u64, i64, args[0], ll.ret_layout),
-            .u64_to_u8_wrap => self.numTruncate(u64, u8, args[0], ll.ret_layout),
-            .u64_to_u8_try => self.numTry(u64, u8, args[0], ll.ret_layout),
-            .u64_to_u16_wrap => self.numTruncate(u64, u16, args[0], ll.ret_layout),
-            .u64_to_u16_try => self.numTry(u64, u16, args[0], ll.ret_layout),
-            .u64_to_u32_wrap => self.numTruncate(u64, u32, args[0], ll.ret_layout),
-            .u64_to_u32_try => self.numTry(u64, u32, args[0], ll.ret_layout),
-            .u64_to_f32, .u64_to_f64 => self.intToFloat(u64, args[0], ll.ret_layout),
-            .u64_to_dec => self.intToDec(u64, args[0], ll.ret_layout),
-
-            .i64_to_i128 => self.numWiden(i64, args[0], ll.ret_layout),
-            .i64_to_i8_wrap => self.numTruncate(i64, i8, args[0], ll.ret_layout),
-            .i64_to_i8_try => self.numTry(i64, i8, args[0], ll.ret_layout),
-            .i64_to_i16_wrap => self.numTruncate(i64, i16, args[0], ll.ret_layout),
-            .i64_to_i16_try => self.numTry(i64, i16, args[0], ll.ret_layout),
-            .i64_to_i32_wrap => self.numTruncate(i64, i32, args[0], ll.ret_layout),
-            .i64_to_i32_try => self.numTry(i64, i32, args[0], ll.ret_layout),
-            .i64_to_u8_wrap => self.numTruncate(i64, u8, args[0], ll.ret_layout),
-            .i64_to_u8_try => self.numTry(i64, u8, args[0], ll.ret_layout),
-            .i64_to_u16_wrap => self.numTruncate(i64, u16, args[0], ll.ret_layout),
-            .i64_to_u16_try => self.numTry(i64, u16, args[0], ll.ret_layout),
-            .i64_to_u32_wrap => self.numTruncate(i64, u32, args[0], ll.ret_layout),
-            .i64_to_u32_try => self.numTry(i64, u32, args[0], ll.ret_layout),
-            .i64_to_u64_wrap => self.numTruncate(i64, u64, args[0], ll.ret_layout),
-            .i64_to_u64_try => self.numTry(i64, u64, args[0], ll.ret_layout),
-            .i64_to_u128_wrap => self.numTruncateWiden(i64, i128, u128, args[0], ll.ret_layout),
-            .i64_to_u128_try => self.numTry(i64, u128, args[0], ll.ret_layout),
-            .i64_to_f32, .i64_to_f64 => self.intToFloat(i64, args[0], ll.ret_layout),
-            .i64_to_dec => self.intToDec(i64, args[0], ll.ret_layout),
-
-            .u128_to_i8_wrap => self.numTruncate(u128, i8, args[0], ll.ret_layout),
-            .u128_to_i8_try => self.numTry(u128, i8, args[0], ll.ret_layout),
-            .u128_to_i16_wrap => self.numTruncate(u128, i16, args[0], ll.ret_layout),
-            .u128_to_i16_try => self.numTry(u128, i16, args[0], ll.ret_layout),
-            .u128_to_i32_wrap => self.numTruncate(u128, i32, args[0], ll.ret_layout),
-            .u128_to_i32_try => self.numTry(u128, i32, args[0], ll.ret_layout),
-            .u128_to_i64_wrap => self.numTruncate(u128, i64, args[0], ll.ret_layout),
-            .u128_to_i64_try => self.numTry(u128, i64, args[0], ll.ret_layout),
-            .u128_to_i128_wrap => self.numTruncate(u128, i128, args[0], ll.ret_layout),
-            .u128_to_i128_try => self.numTry(u128, i128, args[0], ll.ret_layout),
-            .u128_to_u8_wrap => self.numTruncate(u128, u8, args[0], ll.ret_layout),
-            .u128_to_u8_try => self.numTry(u128, u8, args[0], ll.ret_layout),
-            .u128_to_u16_wrap => self.numTruncate(u128, u16, args[0], ll.ret_layout),
-            .u128_to_u16_try => self.numTry(u128, u16, args[0], ll.ret_layout),
-            .u128_to_u32_wrap => self.numTruncate(u128, u32, args[0], ll.ret_layout),
-            .u128_to_u32_try => self.numTry(u128, u32, args[0], ll.ret_layout),
-            .u128_to_u64_wrap => self.numTruncate(u128, u64, args[0], ll.ret_layout),
-            .u128_to_u64_try => self.numTry(u128, u64, args[0], ll.ret_layout),
-            .u128_to_f32, .u128_to_f64 => self.intToFloat(u128, args[0], ll.ret_layout),
-            .u128_to_dec_try_unsafe => self.intToDecTry(u128, args[0], ll.ret_layout),
-
-            .i128_to_i8_wrap => self.numTruncate(i128, i8, args[0], ll.ret_layout),
-            .i128_to_i8_try => self.numTry(i128, i8, args[0], ll.ret_layout),
-            .i128_to_i16_wrap => self.numTruncate(i128, i16, args[0], ll.ret_layout),
-            .i128_to_i16_try => self.numTry(i128, i16, args[0], ll.ret_layout),
-            .i128_to_i32_wrap => self.numTruncate(i128, i32, args[0], ll.ret_layout),
-            .i128_to_i32_try => self.numTry(i128, i32, args[0], ll.ret_layout),
-            .i128_to_i64_wrap => self.numTruncate(i128, i64, args[0], ll.ret_layout),
-            .i128_to_i64_try => self.numTry(i128, i64, args[0], ll.ret_layout),
-            .i128_to_u8_wrap => self.numTruncate(i128, u8, args[0], ll.ret_layout),
-            .i128_to_u8_try => self.numTry(i128, u8, args[0], ll.ret_layout),
-            .i128_to_u16_wrap => self.numTruncate(i128, u16, args[0], ll.ret_layout),
-            .i128_to_u16_try => self.numTry(i128, u16, args[0], ll.ret_layout),
-            .i128_to_u32_wrap => self.numTruncate(i128, u32, args[0], ll.ret_layout),
-            .i128_to_u32_try => self.numTry(i128, u32, args[0], ll.ret_layout),
-            .i128_to_u64_wrap => self.numTruncate(i128, u64, args[0], ll.ret_layout),
-            .i128_to_u64_try => self.numTry(i128, u64, args[0], ll.ret_layout),
-            .i128_to_u128_wrap => self.numTruncate(i128, u128, args[0], ll.ret_layout),
-            .i128_to_u128_try => self.numTry(i128, u128, args[0], ll.ret_layout),
-            .i128_to_f32, .i128_to_f64 => self.intToFloat(i128, args[0], ll.ret_layout),
-            .i128_to_dec_try_unsafe => self.intToDecTry(i128, args[0], ll.ret_layout),
-
-            // Float → int (truncating)
-            .f32_to_i8_trunc => self.floatToInt(f32, i8, args[0], ll.ret_layout),
-            .f32_to_i16_trunc => self.floatToInt(f32, i16, args[0], ll.ret_layout),
-            .f32_to_i32_trunc => self.floatToInt(f32, i32, args[0], ll.ret_layout),
-            .f32_to_i64_trunc => self.floatToInt(f32, i64, args[0], ll.ret_layout),
-            .f32_to_i128_trunc => self.floatToInt(f32, i128, args[0], ll.ret_layout),
-            .f32_to_u8_trunc => self.floatToInt(f32, u8, args[0], ll.ret_layout),
-            .f32_to_u16_trunc => self.floatToInt(f32, u16, args[0], ll.ret_layout),
-            .f32_to_u32_trunc => self.floatToInt(f32, u32, args[0], ll.ret_layout),
-            .f32_to_u64_trunc => self.floatToInt(f32, u64, args[0], ll.ret_layout),
-            .f32_to_u128_trunc => self.floatToInt(f32, u128, args[0], ll.ret_layout),
-            .f32_to_f64 => self.floatWiden(f32, f64, args[0], ll.ret_layout),
-            // Float → int (try)
-            .f32_to_i8_try_unsafe => self.floatToIntTry(f32, i8, args[0], ll.ret_layout),
-            .f32_to_i16_try_unsafe => self.floatToIntTry(f32, i16, args[0], ll.ret_layout),
-            .f32_to_i32_try_unsafe => self.floatToIntTry(f32, i32, args[0], ll.ret_layout),
-            .f32_to_i64_try_unsafe => self.floatToIntTry(f32, i64, args[0], ll.ret_layout),
-            .f32_to_i128_try_unsafe => self.floatToIntTry(f32, i128, args[0], ll.ret_layout),
-            .f32_to_u8_try_unsafe => self.floatToIntTry(f32, u8, args[0], ll.ret_layout),
-            .f32_to_u16_try_unsafe => self.floatToIntTry(f32, u16, args[0], ll.ret_layout),
-            .f32_to_u32_try_unsafe => self.floatToIntTry(f32, u32, args[0], ll.ret_layout),
-            .f32_to_u64_try_unsafe => self.floatToIntTry(f32, u64, args[0], ll.ret_layout),
-            .f32_to_u128_try_unsafe => self.floatToIntTry(f32, u128, args[0], ll.ret_layout),
-
-            .f64_to_i8_trunc => self.floatToInt(f64, i8, args[0], ll.ret_layout),
-            .f64_to_i16_trunc => self.floatToInt(f64, i16, args[0], ll.ret_layout),
-            .f64_to_i32_trunc => self.floatToInt(f64, i32, args[0], ll.ret_layout),
-            .f64_to_i64_trunc => self.floatToInt(f64, i64, args[0], ll.ret_layout),
-            .f64_to_i128_trunc => self.floatToInt(f64, i128, args[0], ll.ret_layout),
-            .f64_to_u8_trunc => self.floatToInt(f64, u8, args[0], ll.ret_layout),
-            .f64_to_u16_trunc => self.floatToInt(f64, u16, args[0], ll.ret_layout),
-            .f64_to_u32_trunc => self.floatToInt(f64, u32, args[0], ll.ret_layout),
-            .f64_to_u64_trunc => self.floatToInt(f64, u64, args[0], ll.ret_layout),
-            .f64_to_u128_trunc => self.floatToInt(f64, u128, args[0], ll.ret_layout),
-            .f64_to_f32_wrap => self.floatNarrow(f64, f32, args[0], ll.ret_layout),
-            .f64_to_i8_try_unsafe => self.floatToIntTry(f64, i8, args[0], ll.ret_layout),
-            .f64_to_i16_try_unsafe => self.floatToIntTry(f64, i16, args[0], ll.ret_layout),
-            .f64_to_i32_try_unsafe => self.floatToIntTry(f64, i32, args[0], ll.ret_layout),
-            .f64_to_i64_try_unsafe => self.floatToIntTry(f64, i64, args[0], ll.ret_layout),
-            .f64_to_i128_try_unsafe => self.floatToIntTry(f64, i128, args[0], ll.ret_layout),
-            .f64_to_u8_try_unsafe => self.floatToIntTry(f64, u8, args[0], ll.ret_layout),
-            .f64_to_u16_try_unsafe => self.floatToIntTry(f64, u16, args[0], ll.ret_layout),
-            .f64_to_u32_try_unsafe => self.floatToIntTry(f64, u32, args[0], ll.ret_layout),
-            .f64_to_u64_try_unsafe => self.floatToIntTry(f64, u64, args[0], ll.ret_layout),
-            .f64_to_u128_try_unsafe => self.floatToIntTry(f64, u128, args[0], ll.ret_layout),
-            .f64_to_f32_try_unsafe => blk: {
-                const sv = args[0].read(f64);
-                if (builtins.numeric_conversions.f64FitsF32(sv)) {
-                    break :blk try self.writeLowLevelTryRecord(f32, ll.ret_layout, @floatCast(sv));
-                } else {
-                    break :blk try self.writeLowLevelTryRecord(f32, ll.ret_layout, null);
-                }
-            },
-
-            // Dec → numeric
-            .dec_to_i8_trunc => self.decToInt(i8, args[0], ll.ret_layout),
-            .dec_to_i16_trunc => self.decToInt(i16, args[0], ll.ret_layout),
-            .dec_to_i32_trunc => self.decToInt(i32, args[0], ll.ret_layout),
-            .dec_to_i64_trunc => self.decToInt(i64, args[0], ll.ret_layout),
-            .dec_to_i128_trunc => self.decToInt(i128, args[0], ll.ret_layout),
-            .dec_to_u8_trunc => self.decToInt(u8, args[0], ll.ret_layout),
-            .dec_to_u16_trunc => self.decToInt(u16, args[0], ll.ret_layout),
-            .dec_to_u32_trunc => self.decToInt(u32, args[0], ll.ret_layout),
-            .dec_to_u64_trunc => self.decToInt(u64, args[0], ll.ret_layout),
-            .dec_to_u128_trunc => self.decToInt(u128, args[0], ll.ret_layout),
-            .dec_to_i8_try_unsafe => self.decToIntTry(i8, args[0], ll.ret_layout),
-            .dec_to_i16_try_unsafe => self.decToIntTry(i16, args[0], ll.ret_layout),
-            .dec_to_i32_try_unsafe => self.decToIntTry(i32, args[0], ll.ret_layout),
-            .dec_to_i64_try_unsafe => self.decToIntTry(i64, args[0], ll.ret_layout),
-            .dec_to_u8_try_unsafe => self.decToIntTry(u8, args[0], ll.ret_layout),
-            .dec_to_u16_try_unsafe => self.decToIntTry(u16, args[0], ll.ret_layout),
-            .dec_to_u32_try_unsafe => self.decToIntTry(u32, args[0], ll.ret_layout),
-            .dec_to_u64_try_unsafe => self.decToIntTry(u64, args[0], ll.ret_layout),
-            .dec_to_u128_try_unsafe => self.decToIntTry(u128, args[0], ll.ret_layout),
-            .dec_to_f32_wrap => blk: {
-                const dec = RocDec{ .num = args[0].read(i128) };
-                const val = try self.alloc(ll.ret_layout);
-                val.write(f32, builtins.dec.toF32(dec));
-                break :blk val;
-            },
-            .dec_to_f32_try_unsafe => blk: {
-                const dec = RocDec{ .num = args[0].read(i128) };
-                if (builtins.dec.toF32Try(dec)) |f| {
-                    break :blk try self.writeLowLevelTryRecord(f32, ll.ret_layout, f);
-                } else {
-                    break :blk try self.writeLowLevelTryRecord(f32, ll.ret_layout, null);
-                }
-            },
-            .dec_to_f64 => blk: {
-                const dec = RocDec{ .num = args[0].read(i128) };
-                const val = try self.alloc(ll.ret_layout);
-                val.write(f64, dec.toF64());
-                break :blk val;
-            },
+            // ── Numeric conversions ──
+            inline .u8_to_i16,
+            .u8_to_i32,
+            .u8_to_i64,
+            .u8_to_i128,
+            .u8_to_u16,
+            .u8_to_u32,
+            .u8_to_u64,
+            .u8_to_u128,
+            .u8_to_f32,
+            .u8_to_f64,
+            .u8_to_dec,
+            .u8_to_i8_wrap,
+            .u8_to_i8_try,
+            .i8_to_i16,
+            .i8_to_i32,
+            .i8_to_i64,
+            .i8_to_i128,
+            .i8_to_u8_wrap,
+            .i8_to_u8_try,
+            .i8_to_u16_wrap,
+            .i8_to_u16_try,
+            .i8_to_u32_wrap,
+            .i8_to_u32_try,
+            .i8_to_u64_wrap,
+            .i8_to_u64_try,
+            .i8_to_u128_wrap,
+            .i8_to_u128_try,
+            .i8_to_f32,
+            .i8_to_f64,
+            .i8_to_dec,
+            .u16_to_i32,
+            .u16_to_i64,
+            .u16_to_i128,
+            .u16_to_u32,
+            .u16_to_u64,
+            .u16_to_u128,
+            .u16_to_i8_wrap,
+            .u16_to_i8_try,
+            .u16_to_i16_wrap,
+            .u16_to_i16_try,
+            .u16_to_u8_wrap,
+            .u16_to_u8_try,
+            .u16_to_f32,
+            .u16_to_f64,
+            .u16_to_dec,
+            .i16_to_i32,
+            .i16_to_i64,
+            .i16_to_i128,
+            .i16_to_i8_wrap,
+            .i16_to_i8_try,
+            .i16_to_u8_wrap,
+            .i16_to_u8_try,
+            .i16_to_u16_wrap,
+            .i16_to_u16_try,
+            .i16_to_u32_wrap,
+            .i16_to_u32_try,
+            .i16_to_u64_wrap,
+            .i16_to_u64_try,
+            .i16_to_u128_wrap,
+            .i16_to_u128_try,
+            .i16_to_f32,
+            .i16_to_f64,
+            .i16_to_dec,
+            .u32_to_i64,
+            .u32_to_i128,
+            .u32_to_u64,
+            .u32_to_u128,
+            .u32_to_i8_wrap,
+            .u32_to_i8_try,
+            .u32_to_i16_wrap,
+            .u32_to_i16_try,
+            .u32_to_i32_wrap,
+            .u32_to_i32_try,
+            .u32_to_u8_wrap,
+            .u32_to_u8_try,
+            .u32_to_u16_wrap,
+            .u32_to_u16_try,
+            .u32_to_f32,
+            .u32_to_f64,
+            .u32_to_dec,
+            .i32_to_i64,
+            .i32_to_i128,
+            .i32_to_i8_wrap,
+            .i32_to_i8_try,
+            .i32_to_i16_wrap,
+            .i32_to_i16_try,
+            .i32_to_u8_wrap,
+            .i32_to_u8_try,
+            .i32_to_u16_wrap,
+            .i32_to_u16_try,
+            .i32_to_u32_wrap,
+            .i32_to_u32_try,
+            .i32_to_u64_wrap,
+            .i32_to_u64_try,
+            .i32_to_u128_wrap,
+            .i32_to_u128_try,
+            .i32_to_f32,
+            .i32_to_f64,
+            .i32_to_dec,
+            .u64_to_i128,
+            .u64_to_u128,
+            .u64_to_i8_wrap,
+            .u64_to_i8_try,
+            .u64_to_i16_wrap,
+            .u64_to_i16_try,
+            .u64_to_i32_wrap,
+            .u64_to_i32_try,
+            .u64_to_i64_wrap,
+            .u64_to_i64_try,
+            .u64_to_u8_wrap,
+            .u64_to_u8_try,
+            .u64_to_u16_wrap,
+            .u64_to_u16_try,
+            .u64_to_u32_wrap,
+            .u64_to_u32_try,
+            .u64_to_f32,
+            .u64_to_f64,
+            .u64_to_dec,
+            .i64_to_i128,
+            .i64_to_i8_wrap,
+            .i64_to_i8_try,
+            .i64_to_i16_wrap,
+            .i64_to_i16_try,
+            .i64_to_i32_wrap,
+            .i64_to_i32_try,
+            .i64_to_u8_wrap,
+            .i64_to_u8_try,
+            .i64_to_u16_wrap,
+            .i64_to_u16_try,
+            .i64_to_u32_wrap,
+            .i64_to_u32_try,
+            .i64_to_u64_wrap,
+            .i64_to_u64_try,
+            .i64_to_u128_wrap,
+            .i64_to_u128_try,
+            .i64_to_f32,
+            .i64_to_f64,
+            .i64_to_dec,
+            .u128_to_i8_wrap,
+            .u128_to_i8_try,
+            .u128_to_i16_wrap,
+            .u128_to_i16_try,
+            .u128_to_i32_wrap,
+            .u128_to_i32_try,
+            .u128_to_i64_wrap,
+            .u128_to_i64_try,
+            .u128_to_i128_wrap,
+            .u128_to_i128_try,
+            .u128_to_u8_wrap,
+            .u128_to_u8_try,
+            .u128_to_u16_wrap,
+            .u128_to_u16_try,
+            .u128_to_u32_wrap,
+            .u128_to_u32_try,
+            .u128_to_u64_wrap,
+            .u128_to_u64_try,
+            .u128_to_f32,
+            .u128_to_f64,
+            .u128_to_dec_try_unsafe,
+            .i128_to_i8_wrap,
+            .i128_to_i8_try,
+            .i128_to_i16_wrap,
+            .i128_to_i16_try,
+            .i128_to_i32_wrap,
+            .i128_to_i32_try,
+            .i128_to_i64_wrap,
+            .i128_to_i64_try,
+            .i128_to_u8_wrap,
+            .i128_to_u8_try,
+            .i128_to_u16_wrap,
+            .i128_to_u16_try,
+            .i128_to_u32_wrap,
+            .i128_to_u32_try,
+            .i128_to_u64_wrap,
+            .i128_to_u64_try,
+            .i128_to_u128_wrap,
+            .i128_to_u128_try,
+            .i128_to_f32,
+            .i128_to_f64,
+            .i128_to_dec_try_unsafe,
+            .f32_to_i8_trunc,
+            .f32_to_i16_trunc,
+            .f32_to_i32_trunc,
+            .f32_to_i64_trunc,
+            .f32_to_i128_trunc,
+            .f32_to_u8_trunc,
+            .f32_to_u16_trunc,
+            .f32_to_u32_trunc,
+            .f32_to_u64_trunc,
+            .f32_to_u128_trunc,
+            .f32_to_f64,
+            .f32_to_i8_try_unsafe,
+            .f32_to_i16_try_unsafe,
+            .f32_to_i32_try_unsafe,
+            .f32_to_i64_try_unsafe,
+            .f32_to_i128_try_unsafe,
+            .f32_to_u8_try_unsafe,
+            .f32_to_u16_try_unsafe,
+            .f32_to_u32_try_unsafe,
+            .f32_to_u64_try_unsafe,
+            .f32_to_u128_try_unsafe,
+            .f64_to_i8_trunc,
+            .f64_to_i16_trunc,
+            .f64_to_i32_trunc,
+            .f64_to_i64_trunc,
+            .f64_to_i128_trunc,
+            .f64_to_u8_trunc,
+            .f64_to_u16_trunc,
+            .f64_to_u32_trunc,
+            .f64_to_u64_trunc,
+            .f64_to_u128_trunc,
+            .f64_to_f32_wrap,
+            .f64_to_i8_try_unsafe,
+            .f64_to_i16_try_unsafe,
+            .f64_to_i32_try_unsafe,
+            .f64_to_i64_try_unsafe,
+            .f64_to_i128_try_unsafe,
+            .f64_to_u8_try_unsafe,
+            .f64_to_u16_try_unsafe,
+            .f64_to_u32_try_unsafe,
+            .f64_to_u64_try_unsafe,
+            .f64_to_u128_try_unsafe,
+            .f64_to_f32_try_unsafe,
+            .dec_to_i8_trunc,
+            .dec_to_i16_trunc,
+            .dec_to_i32_trunc,
+            .dec_to_i64_trunc,
+            .dec_to_i128_trunc,
+            .dec_to_u8_trunc,
+            .dec_to_u16_trunc,
+            .dec_to_u32_trunc,
+            .dec_to_u64_trunc,
+            .dec_to_u128_trunc,
+            .dec_to_i8_try_unsafe,
+            .dec_to_i16_try_unsafe,
+            .dec_to_i32_try_unsafe,
+            .dec_to_i64_try_unsafe,
+            .dec_to_u8_try_unsafe,
+            .dec_to_u16_try_unsafe,
+            .dec_to_u32_try_unsafe,
+            .dec_to_u64_try_unsafe,
+            .dec_to_u128_try_unsafe,
+            .dec_to_f32_wrap,
+            .dec_to_f32_try_unsafe,
+            .dec_to_f64,
+            => |op| self.numericConversion(comptime numeric_conversion.getConversionSpec(op).?, args[0], ll.ret_layout),
 
             // ── Box ops ──
             .box_box => try self.evalBoxBox(args[0], ll.ret_layout),
@@ -7898,7 +7883,7 @@ pub const Interpreter = struct {
         if (op == .eq and switch (layout_val.tag) {
             .zst, .struct_, .list, .list_of_zst, .tag_union => true,
             .scalar => layout_val.getScalar().tag == .str,
-            .box, .box_of_zst, .closure, .erased_callable, .ptr => false,
+            .box, .box_of_zst, .erased_box, .closure, .erased_callable, .ptr => false,
         }) {
             val.write(u8, if (try self.valuesEqual(a, b, arg_layout)) 1 else 0);
             return val;
@@ -7961,7 +7946,7 @@ pub const Interpreter = struct {
 
     fn evalCompare(self: *LirInterpreter, a: Value, b: Value, arg_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
-        // Runtime tag order for [LT, EQ, GT]: EQ=0, GT=1, LT=2.
+        // Runtime tag order for [Before, Same, After]: After=0, Before=1, Same=2.
         const result: u8 = switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
                 8 => cmpOrder(u8, a.read(u8), b.read(u8)),
@@ -8453,6 +8438,123 @@ pub const Interpreter = struct {
         return self.writeLowLevelTryRecord(i128, ret_layout, null);
     }
 
+    fn floatNarrowTry(self: *LirInterpreter, comptime Src: type, comptime Dst: type, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
+        if (Src != f64 or Dst != f32) @compileError("f64 to f32 is the only narrowing that can fail");
+        const sv = arg.read(f64);
+        const narrowed: ?f32 = if (builtins.numeric_conversions.f64FitsF32(sv)) @floatCast(sv) else null;
+        return self.writeLowLevelTryRecord(f32, ret_layout, narrowed);
+    }
+
+    fn decToFloat(self: *LirInterpreter, comptime Dst: type, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
+        const dec = RocDec{ .num = arg.read(i128) };
+        const val = try self.alloc(ret_layout);
+        if (Dst == f32) {
+            val.write(f32, builtins.dec.toF32(dec));
+        } else if (Dst == f64) {
+            val.write(f64, dec.toF64());
+        } else {
+            @compileError("Dec converts only to f32 and f64");
+        }
+        return val;
+    }
+
+    fn decToFloatTry(self: *LirInterpreter, comptime Dst: type, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
+        if (Dst != f32) @compileError("f32 is the only float Dec can fail to reach");
+        const dec = RocDec{ .num = arg.read(i128) };
+        return self.writeLowLevelTryRecord(f32, ret_layout, builtins.dec.toF32Try(dec));
+    }
+
+    /// Perform a conversion. Routes on the source and destination classes;
+    /// each leaf switches on the mode.
+    fn numericConversion(self: *LirInterpreter, comptime spec: numeric_conversion.Conversion, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
+        return switch (comptime spec.src.class()) {
+            .int => self.intToNumeric(spec, arg, ret_layout),
+            .float => self.floatToNumeric(spec, arg, ret_layout),
+            .dec => self.decToNumeric(spec, arg, ret_layout),
+        };
+    }
+
+    fn intToNumeric(self: *LirInterpreter, comptime spec: numeric_conversion.Conversion, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
+        const Src = comptime spec.src.ZigType();
+        return switch (comptime spec.dst.class()) {
+            .int => switch (comptime spec.mode) {
+                .exact => self.numWiden(Src, arg, ret_layout),
+                // A signed source widening to an unsigned destination sign-extends
+                // first, so it reinterprets the full-width value.
+                .wrap => if (comptime spec.src.bits() >= spec.dst.bits())
+                    self.numTruncate(Src, spec.dst.ZigType(), arg, ret_layout)
+                else
+                    self.numTruncateWiden(Src, std.meta.Int(.signed, spec.dst.bits()), spec.dst.ZigType(), arg, ret_layout),
+                .@"try" => self.numTry(Src, spec.dst.ZigType(), arg, ret_layout),
+                .trunc, .try_unsafe => unreachable,
+            },
+            .float => switch (comptime spec.mode) {
+                .exact => self.intToFloat(Src, arg, ret_layout),
+                .wrap, .trunc, .@"try", .try_unsafe => unreachable,
+            },
+            .dec => switch (comptime spec.mode) {
+                .exact => self.intToDec(Src, arg, ret_layout),
+                .try_unsafe => self.intToDecTry(Src, arg, ret_layout),
+                .wrap, .trunc, .@"try" => unreachable,
+            },
+        };
+    }
+
+    fn floatToNumeric(self: *LirInterpreter, comptime spec: numeric_conversion.Conversion, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
+        const Src = comptime spec.src.ZigType();
+        return switch (comptime spec.dst.class()) {
+            .int => switch (comptime spec.mode) {
+                .trunc => self.floatToInt(Src, spec.dst.ZigType(), arg, ret_layout),
+                .try_unsafe => self.floatToIntTry(Src, spec.dst.ZigType(), arg, ret_layout),
+                .exact, .wrap, .@"try" => unreachable,
+            },
+            .float => switch (comptime spec.mode) {
+                .exact => self.floatWiden(Src, spec.dst.ZigType(), arg, ret_layout),
+                .wrap => self.floatNarrow(Src, spec.dst.ZigType(), arg, ret_layout),
+                .try_unsafe => self.floatNarrowTry(Src, spec.dst.ZigType(), arg, ret_layout),
+                .trunc, .@"try" => unreachable,
+            },
+            .dec => unreachable,
+        };
+    }
+
+    fn decToNumeric(self: *LirInterpreter, comptime spec: numeric_conversion.Conversion, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
+        return switch (comptime spec.dst.class()) {
+            .int => switch (comptime spec.mode) {
+                .trunc => self.decToInt(spec.dst.ZigType(), arg, ret_layout),
+                .try_unsafe => self.decToIntTry(spec.dst.ZigType(), arg, ret_layout),
+                .exact, .wrap, .@"try" => unreachable,
+            },
+            .float => switch (comptime spec.mode) {
+                .exact, .wrap => self.decToFloat(spec.dst.ZigType(), arg, ret_layout),
+                .try_unsafe => self.decToFloatTry(spec.dst.ZigType(), arg, ret_layout),
+                .trunc, .@"try" => unreachable,
+            },
+            .dec => unreachable,
+        };
+    }
+
+    /// Render a number as its decimal text.
+    fn numberToString(self: *LirInterpreter, comptime spec: numeric_conversion.StringConversion, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
+        comptime std.debug.assert(spec.direction == .to_str);
+        return switch (comptime spec.num.class()) {
+            .int => self.numToStr(spec.num.ZigType(), arg, ret_layout),
+            .float => blk: {
+                const is_f32 = comptime spec.num == .f32;
+                const bits: u64 = if (is_f32) @as(u32, @bitCast(arg.read(f32))) else @bitCast(arg.read(f64));
+                break :blk self.rocStrToValue(builtins.str.floatToStrFromBits(bits, is_f32, &self.roc_ops), ret_layout);
+            },
+            .dec => blk: {
+                const dec = RocDec{ .num = arg.read(i128) };
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                break :blk self.rocStrToValue(builtins.dec.to_str(dec, &self.roc_ops), ret_layout);
+            },
+        };
+    }
+
     fn numToStr(self: *LirInterpreter, comptime T: type, arg: Value, _: layout_mod.Idx) Error!Value {
         const arena = self.arena.allocator();
         const formatted = std.fmt.allocPrint(arena, "{d}", .{arg.read(T)}) catch return error.OutOfMemory;
@@ -8639,6 +8741,38 @@ pub const Interpreter = struct {
             if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
             update_mode,
             &builtins.list.copy_fallback,
+            &self.roc_ops,
+        );
+        return self.rocListToValue(result, ret_layout);
+    }
+
+    fn evalListSortWith(self: *LirInterpreter, list_arg: Value, callable_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
+        const rl = self.valueToRocListForLayout(list_arg, list_layout);
+        const info = self.listElemInfo(list_layout);
+        if (info.width == 0) return self.rocListToValue(canonicalZstList(rl.len()), ret_layout);
+        const callable = self.readBoxedDataPointer(callable_arg) orelse return self.invariantFailedError(
+            "LIR/interpreter invariant violated: list_sort_with received a null erased callable",
+            .{},
+        );
+        const elems_rc = self.builtinListElemRc(list_layout);
+        var crash_boundary = self.enterCrashBoundary();
+        defer crash_boundary.deinit();
+        const sj = crash_boundary.set();
+        if (sj != 0) return error.Crash;
+        var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
+        const result = builtins.list.listSortWith(
+            rl,
+            callable,
+            info.alignment,
+            info.width,
+            elems_rc,
+            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+            if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+            if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
+            update_mode,
+            false,
+            null,
             &self.roc_ops,
         );
         return self.rocListToValue(result, ret_layout);
@@ -8907,9 +9041,9 @@ pub const Interpreter = struct {
     }
 
     fn cmpOrder(comptime T: type, av: T, bv: T) u8 {
-        if (av == bv) return 0; // EQ
-        if (av > bv) return 1; // GT
-        return 2; // LT
+        if (av == bv) return 2; // Same
+        if (av < bv) return 1; // Before
+        return 0; // After
     }
 
     fn shiftOp(comptime T: type, av: T, amount: u8, op: ShiftOp) T {
@@ -9324,6 +9458,7 @@ pub const Interpreter = struct {
             },
             .scalar,
             .box_of_zst,
+            .erased_box,
             .list,
             .list_of_zst,
             .closure,
@@ -9520,6 +9655,7 @@ pub const Interpreter = struct {
                 return result;
             },
             .scalar,
+            .erased_box,
             .list,
             .list_of_zst,
             .struct_,

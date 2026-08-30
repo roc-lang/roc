@@ -373,7 +373,7 @@ pub fn extractModuleDocsWithOptions(
                 try rebaseEntryForProjection(gpa, module_env, projection, &public_entry);
             }
             // Skip internal Builtin functions
-            if (std.mem.eql(u8, package_name, "Builtin") and isInternalBuiltin(public_entry.name)) {
+            if (entryIsUndocumented(package_name, module_env.module_name, public_entry.name)) {
                 public_entry.deinit(gpa);
                 public_entry_moved = true;
             } else {
@@ -399,7 +399,7 @@ pub fn extractModuleDocsWithOptions(
                 // Skip if already in entries
                 if (findProjectedEntryByName(entries_list.items, module_env, options.public_type, entry_name)) continue;
                 // Skip internal Builtin types
-                if (std.mem.eql(u8, package_name, "Builtin") and isInternalBuiltin(entry_name)) continue;
+                if (entryIsUndocumented(package_name, module_env.module_name, entry_name)) continue;
 
                 const region = module_env.store.getStatementRegion(stmt_idx);
                 const doc_extract = try extractDocComment(gpa, source, region.start.offset, line_index);
@@ -435,7 +435,7 @@ pub fn extractModuleDocsWithOptions(
                 }
                 if (findProjectedEntryByName(entries_list.items, module_env, options.public_type, entry_name)) continue;
                 // Skip internal Builtin types
-                if (std.mem.eql(u8, package_name, "Builtin") and isInternalBuiltin(entry_name)) continue;
+                if (entryIsUndocumented(package_name, module_env.module_name, entry_name)) continue;
 
                 const region = module_env.store.getStatementRegion(stmt_idx);
                 const doc_extract = try extractDocComment(gpa, source, region.start.offset, line_index);
@@ -474,7 +474,7 @@ pub fn extractModuleDocsWithOptions(
                     if (!statementBelongsToProjection(module_env, projection, stmt_idx, entry_name)) continue;
                 }
                 if (findProjectedEntryByName(entries_list.items, module_env, options.public_type, entry_name)) continue;
-                if (std.mem.eql(u8, package_name, "Builtin") and isInternalBuiltin(entry_name)) continue;
+                if (entryIsUndocumented(package_name, module_env.module_name, entry_name)) continue;
 
                 const region = module_env.store.getStatementRegion(stmt_idx);
                 const doc_extract = try extractDocComment(gpa, source, region.start.offset, line_index);
@@ -3165,6 +3165,21 @@ fn isInternalBuiltin(name: []const u8) bool {
     // Filter out unsafe/internal builtin functions
     return std.mem.endsWith(u8, name, "_unsafe") or
         std.mem.endsWith(u8, name, "_lossy");
+}
+
+/// Whether an entry of the module being documented must be left out of the docs.
+///
+/// Internal builtin types are keyed off the module name rather than the package
+/// name because they must stay undocumented however docs were invoked:
+/// publishing a type Roc code cannot name would hand readers a signature they
+/// have no way to write down.
+fn entryIsUndocumented(
+    package_name: []const u8,
+    module_name: []const u8,
+    entry_name: []const u8,
+) bool {
+    if (std.mem.eql(u8, package_name, "Builtin") and isInternalBuiltin(entry_name)) return true;
+    return std.mem.eql(u8, module_name, "Builtin") and CIR.builtinTypeIsInternal(entry_name);
 }
 
 fn findEntryByName(entries: []const DocModel.DocEntry, name: []const u8) bool {

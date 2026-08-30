@@ -90,7 +90,7 @@ pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store) Error!
                         break :blk .{ .stack_memory = tu_layout.size };
                     },
                     .zst => .{ .primitive = .i32 }, // zero-sized, dummy i32
-                    .box, .box_of_zst, .erased_callable, .ptr => .{ .primitive = .i32 }, // pointer
+                    .box, .box_of_zst, .erased_box, .erased_callable, .ptr => .{ .primitive = .i32 }, // pointer
                     .list, .list_of_zst => .{ .stack_memory = ls.sizeAt(l, wasm_target) }, // RocList
                     .closure => unreachable, // handled above
                 };

@@ -752,6 +752,10 @@ const CheckTypeCheckerPatternsStep = struct {
         // inspected_run.zig dispatches on a hosted function's ABI symbol, which is
         // matched by name at the host boundary and has no Ident.Idx.
         .{ .file = "inspected_run.zig", .start = 107, .end = 107 },
+        // report.zig compares already-formatted diagnostic text only to avoid
+        // printing two visually identical types. This is presentation logic,
+        // not a type-checking or identifier comparison.
+        .{ .file = "report.zig", .start = 563, .end = 563 },
     };
 
     fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {
@@ -1932,8 +1936,9 @@ const TestAssetCoverageDir = struct {
     spec_files: []const []const u8,
 };
 
-// Every top-level app .roc file in these directories must be named by at least
-// one of its spec sources; otherwise it is dead test data no runner executes.
+// Every app .roc file in these directories (including nested subdirectories) must
+// be named by at least one of its spec sources; otherwise it is dead test data no
+// runner executes.
 // Module and platform .roc files are dependencies of apps, so only files whose
 // first non-comment line is an `app` header are required to be covered.
 const test_asset_coverage_dirs = [_]TestAssetCoverageDir{
@@ -1949,6 +1954,9 @@ const test_asset_coverage_dirs = [_]TestAssetCoverageDir{
     .{ .dir = "test/cli", .spec_files = &.{
         "src/cli/test/parallel_cli_runner.zig",
         "src/compile/test/embedding_smoke.zig",
+    } },
+    .{ .dir = "test/package-effect-boundary", .spec_files = &.{
+        "src/cli/test/parallel_cli_runner.zig",
     } },
     .{ .dir = "test/str", .spec_files = &.{
         "src/cli/test/platform_config.zig",
@@ -1994,13 +2002,20 @@ fn checkTestAssetCoverage(step: *Step) !void {
             app_files.deinit(allocator);
         }
 
-        var dir_iter = asset_dir.iterate();
-        while (try dir_iter.next(io)) |entry| {
-            if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".roc")) continue;
-            const contents = try asset_dir.readFileAlloc(io, entry.name, allocator, .limited(1024 * 1024));
+        // Fixtures group each case in its own subdirectory, so walk the whole
+        // tree instead of only the top level. Paths stay relative to cfg.dir and
+        // are always '/'-separated so they compare directly against the paths
+        // written in the spec sources.
+        var walker = try asset_dir.walk(allocator);
+        defer walker.deinit();
+        while (try walker.next(io)) |entry| {
+            if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".roc")) continue;
+            const contents = try entry.dir.readFileAlloc(io, entry.basename, allocator, .limited(1024 * 1024));
             defer allocator.free(contents);
             if (!isRocAppFile(contents)) continue;
-            try app_files.append(allocator, try allocator.dupe(u8, entry.name));
+            const rel_path = try allocator.dupe(u8, entry.path);
+            std.mem.replaceScalar(u8, rel_path, std.fs.path.sep, '/');
+            try app_files.append(allocator, rel_path);
         }
 
         std.mem.sort([]const u8, app_files.items, {}, struct {
@@ -2040,15 +2055,13 @@ fn checkTestAssetCoverage(step: *Step) !void {
                     const rest_of_line = line[idx..];
                     if (std.mem.find(u8, rest_of_line, ".roc")) |roc_pos| {
                         const full_path = rest_of_line[0 .. roc_pos + 4];
+                        // Path relative to cfg.dir; may name a file in a subdirectory.
                         const filename = full_path[dir_prefix.len..];
-                        // Only count top-level files, not subdirectory paths.
-                        if (std.mem.find(u8, filename, "/") == null) {
-                            const duped_filename = try allocator.dupe(u8, filename);
-                            if (tested_files.contains(duped_filename)) {
-                                allocator.free(duped_filename);
-                            } else {
-                                try tested_files.put(duped_filename, {});
-                            }
+                        const duped_filename = try allocator.dupe(u8, filename);
+                        if (tested_files.contains(duped_filename)) {
+                            allocator.free(duped_filename);
+                        } else {
+                            try tested_files.put(duped_filename, {});
                         }
                     }
                     search_start = idx + 1;
@@ -4793,6 +4806,17 @@ pub fn build(b: *std.Build) void {
         build_wasm_str_concat_join_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_str_concat_join_app.step);
 
+        const build_wasm_issue_10957_app = b.addRunArtifact(roc_exe);
+        build_wasm_issue_10957_app.addArgs(&.{
+            "build",
+            "test/wasm/issue_10957_json_camel_long_field_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/issue_10957_json_camel_long_field_static_lib_app.wasm",
+        });
+        build_wasm_issue_10957_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_10957_app.step);
+
         const build_wasm_str_interp_leading_literal_app = b.addRunArtifact(roc_exe);
         build_wasm_str_interp_leading_literal_app.addArgs(&.{
             "build",
@@ -5023,6 +5047,16 @@ pub fn build(b: *std.Build) void {
             });
             run_wasm_str_concat_join_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_str_concat_join_test.step);
+
+            const run_wasm_issue_10957_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_issue_10957_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/issue_10957_json_camel_long_field_static_lib_app.wasm",
+                "--expected",
+                "14",
+            });
+            run_wasm_issue_10957_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_10957_test.step);
 
             const run_wasm_str_interp_leading_literal_test = b.addRunArtifact(wasm_test_exe);
             run_wasm_str_interp_leading_literal_test.addArgs(&.{
