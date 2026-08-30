@@ -126,7 +126,13 @@ pub const DEFAULT_FREE_FLOAT_REGS = [_]FloatReg{
 };
 
 /// Bitmask of caller-saved general registers (for fast allocation)
-/// X0-X15, IP0 (X16), IP1 (X17) - excludes X18 (platform register)
+/// X0-X8, X10-X15 - excludes X18 (platform register)
+/// Note: X9 is excluded because it is reserved as SCRATCH_REG for the
+/// calling convention (the code generator addresses through it while
+/// allocated values are live, e.g. when storing a result through a return
+/// pointer). Including it here would allow allocTempGeneral() to assign it,
+/// which gets clobbered whenever the emitter uses X9 as scratch. This
+/// mirrors the R11 exclusion in the x86_64 masks.
 pub const CALLER_SAVED_GENERAL_MASK: u32 =
     (1 << @intFromEnum(GeneralReg.X0)) |
     (1 << @intFromEnum(GeneralReg.X1)) |
@@ -137,7 +143,6 @@ pub const CALLER_SAVED_GENERAL_MASK: u32 =
     (1 << @intFromEnum(GeneralReg.X6)) |
     (1 << @intFromEnum(GeneralReg.X7)) |
     (1 << @intFromEnum(GeneralReg.XR)) |
-    (1 << @intFromEnum(GeneralReg.X9)) |
     (1 << @intFromEnum(GeneralReg.X10)) |
     (1 << @intFromEnum(GeneralReg.X11)) |
     (1 << @intFromEnum(GeneralReg.X12)) |
