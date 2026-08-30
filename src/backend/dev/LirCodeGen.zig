@@ -2560,12 +2560,37 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
 
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
-                    const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
-                    defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
-                    const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
-                    defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
+                    const list_a = GuardedList.at(args, 0);
+                    const list_b = GuardedList.at(args, 1);
+                    if (try self.boxyListElementDescForLocals(list_abi, &.{ list_a, list_b }, ll.target)) |boxy_elem| {
+                        // Descriptor-governed elements cannot use layout-keyed RC
+                        // callbacks: erased storage does not encode their payload
+                        // shape. Preserve concat's update modes while passing the
+                        // exact list descriptor to the Boxy runtime instead.
+                        const base_reg = frame_ptr;
+                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
-                    {
+                        try builder.addLeaArg(base_reg, result_offset);
+                        try builder.addMemArg(base_reg, list_a_off);
+                        try builder.addMemArg(base_reg, list_a_off + 8);
+                        try builder.addMemArg(base_reg, list_a_off + 16);
+                        try builder.addMemArg(base_reg, list_b_off);
+                        try builder.addMemArg(base_reg, list_b_off + 8);
+                        try builder.addMemArg(base_reg, list_b_off + 16);
+                        try builder.addImmArg(@intCast(list_abi.alignment_bytes));
+                        try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
+                        try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
+                        try builder.addMemArg(base_reg, boxy_elem.desc_slot);
+                        try builder.addImmArg(@intCast(ll.unique_args & 0b11));
+                        try builder.addRegArg(roc_ops_reg);
+
+                        try self.callBoxyBuiltin(&builder, .list_concat);
+                    } else {
+                        const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
+                        defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
+                        const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
+                        defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
+
                         // wrapListConcat(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, alignment, element_width, elements_refcounted, element_incref, element_decref, update_modes, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);

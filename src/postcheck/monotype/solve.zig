@@ -262,6 +262,16 @@ pub const GraphDiagnostics = struct {
     generated_private_nodes_visited: u64 = 0,
     finished_mono_scans: u64 = 0,
     finished_mono_nodes_visited: u64 = 0,
+    /// Declaration-backed nominal instantiation cache probes, and the
+    /// candidate instances those probes examined. Scanned candidates must
+    /// stay proportional to lookups rather than to instances created, or
+    /// repeated constructions of one declaration turn quadratic (issue
+    /// 10978 hit exactly that).
+    nominal_backing_lookups: u64 = 0,
+    nominal_backing_instances_scanned: u64 = 0,
+    /// Union-find resolutions across all graph operations: the broadest
+    /// deterministic proxy for total solver work.
+    union_find_resolutions: u64 = 0,
 };
 
 /// Graph-native named-type cells.
@@ -316,27 +326,95 @@ const NominalBackingDeclaration = struct {
     declaration_id: u32,
 };
 
-const NominalBackingCacheContext = struct {
-    pub fn hash(_: NominalBackingCacheContext, key: NominalBackingDeclaration) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        hasher.update(&key.module_bytes);
-        var declaration_id = std.mem.nativeToLittle(u32, key.declaration_id);
-        hasher.update(std.mem.asBytes(&declaration_id));
-        return hasher.final();
+const NominalBackingKey = struct {
+    declaration: NominalBackingDeclaration,
+    args: []const NodeId,
+};
+
+fn hashNominalBackingKey(declaration: NominalBackingDeclaration, args: []const NodeId) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    hasher.update(&declaration.module_bytes);
+    var declaration_id = std.mem.nativeToLittle(u32, declaration.declaration_id);
+    hasher.update(std.mem.asBytes(&declaration_id));
+    var arity = std.mem.nativeToLittle(u64, @intCast(args.len));
+    hasher.update(std.mem.asBytes(&arity));
+    for (args) |arg| {
+        var node_id = std.mem.nativeToLittle(u32, @intFromEnum(arg));
+        hasher.update(std.mem.asBytes(&node_id));
+    }
+    return hasher.final();
+}
+
+fn nominalBackingDeclarationsEqual(left: NominalBackingDeclaration, right: NominalBackingDeclaration) bool {
+    return std.mem.eql(u8, left.module_bytes[0..], right.module_bytes[0..]) and
+        left.declaration_id == right.declaration_id;
+}
+
+const NominalBackingKeyContext = struct {
+    pub fn hash(_: NominalBackingKeyContext, key: NominalBackingKey) u64 {
+        return hashNominalBackingKey(key.declaration, key.args);
     }
 
-    pub fn eql(_: NominalBackingCacheContext, left: NominalBackingDeclaration, right: NominalBackingDeclaration) bool {
-        return std.mem.eql(u8, left.module_bytes[0..], right.module_bytes[0..]) and
-            left.declaration_id == right.declaration_id;
+    pub fn eql(_: NominalBackingKeyContext, left: NominalBackingKey, right: NominalBackingKey) bool {
+        return nominalBackingDeclarationsEqual(left.declaration, right.declaration) and
+            std.mem.eql(NodeId, left.args, right.args);
     }
 };
 
-/// One instantiated backing of a declaration. Argument identity follows the
-/// union-find classes rather than raw node ids, which can redirect as producer
-/// evidence is applied.
+const NominalBackingLookup = struct {
+    declaration: NominalBackingDeclaration,
+    args: []const NodeId,
+};
+
+/// Hash-map adapter that resolves a lookup's permanent argument ids without
+/// allocating a temporary root tuple. Resident keys always contain live roots;
+/// `union_` eagerly rekeys every tuple that mentions its losing root.
+const NominalBackingLookupContext = struct {
+    graph: *InstGraph,
+
+    pub fn hash(self: NominalBackingLookupContext, lookup: NominalBackingLookup) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        hasher.update(&lookup.declaration.module_bytes);
+        var declaration_id = std.mem.nativeToLittle(u32, lookup.declaration.declaration_id);
+        hasher.update(std.mem.asBytes(&declaration_id));
+        var arity = std.mem.nativeToLittle(u64, @intCast(lookup.args.len));
+        hasher.update(std.mem.asBytes(&arity));
+        for (lookup.args) |arg| {
+            var node_id = std.mem.nativeToLittle(u32, @intFromEnum(self.graph.find(arg)));
+            hasher.update(std.mem.asBytes(&node_id));
+        }
+        return hasher.final();
+    }
+
+    pub fn eql(self: NominalBackingLookupContext, lookup: NominalBackingLookup, stored: NominalBackingKey) bool {
+        if (!nominalBackingDeclarationsEqual(lookup.declaration, stored.declaration) or
+            lookup.args.len != stored.args.len)
+        {
+            return false;
+        }
+        for (lookup.args, stored.args) |wanted, existing| {
+            if (self.graph.find(wanted) != existing) return false;
+        }
+        return true;
+    }
+};
+
+const NominalBackingInstanceId = enum(u32) { _ };
+
+/// One indexed instantiation of a declaration backing. Argument ids are stable
+/// arena storage and remain live union-find roots for as long as `active` is
+/// true. A root merge can collapse two keys; the retired entry stays allocated
+/// so reverse-index occurrences and previously returned node ids remain valid.
 const NominalBackingInstance = struct {
+    declaration: NominalBackingDeclaration,
     args: []NodeId,
     node: NodeId,
+    active: bool,
+};
+
+const NominalBackingOccurrence = struct {
+    instance: NominalBackingInstanceId,
+    arg_index: u32,
 };
 
 const ContainmentDependency = struct {
@@ -456,11 +534,23 @@ pub const InstGraph = struct {
     row_exts: std.ArrayList(?NodeId),
     /// Row nodes by the extension node they currently chain through.
     row_parents: collections.DenseMap(NodeId, std.ArrayList(NodeId)),
-    /// Declaration-backed nominal backings already instantiated in this graph,
-    /// bucketed by source declaration. Entries compare argument union-find
-    /// classes, so a backing instance keeps one identity after evidence merges
-    /// or redirects its original argument nodes.
-    nominal_backings: std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingCacheContext, 80),
+    /// Exact declaration-plus-current-argument-roots index for instantiated
+    /// nominal backings. Keys point into the stable argument storage owned by
+    /// `nominal_backing_instances`.
+    nominal_backing_index: std.HashMap(NominalBackingKey, NominalBackingInstanceId, NominalBackingKeyContext, 80),
+    nominal_backing_instances: std.ArrayList(NominalBackingInstance),
+    /// Argument positions by their current root. This is the precise
+    /// invalidation index used to rekey affected instances in `union_`.
+    nominal_backings_by_root: collections.DenseMap(NodeId, std.ArrayList(NominalBackingOccurrence)),
+    /// Reused scratch for de-duplicating instances that mention a losing root
+    /// in more than one argument position.
+    nominal_backing_affected: std.ArrayList(NominalBackingInstanceId),
+    nominal_backing_migration_epochs: std.ArrayList(u64),
+    nominal_backing_migration_epoch: u64,
+    /// Backing pairs whose keys became equal during root migration. Migration
+    /// restores every index invariant before these pairs are unified.
+    nominal_backing_collisions: std.ArrayList(NodePair),
+    processing_nominal_backing_collisions: bool,
     /// Exact source function node from which each generated-private request
     /// function was constructed. A generic source interface may itself carry
     /// upstream generated-private arguments; retaining that producer node is
@@ -522,7 +612,14 @@ pub const InstGraph = struct {
             .imported_monos = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
             .row_exts = .empty,
             .row_parents = collections.DenseMap(NodeId, std.ArrayList(NodeId)).init(allocator),
-            .nominal_backings = std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingCacheContext, 80).init(allocator),
+            .nominal_backing_index = std.HashMap(NominalBackingKey, NominalBackingInstanceId, NominalBackingKeyContext, 80).init(allocator),
+            .nominal_backing_instances = .empty,
+            .nominal_backings_by_root = collections.DenseMap(NodeId, std.ArrayList(NominalBackingOccurrence)).init(allocator),
+            .nominal_backing_affected = .empty,
+            .nominal_backing_migration_epochs = .empty,
+            .nominal_backing_migration_epoch = 0,
+            .nominal_backing_collisions = .empty,
+            .processing_nominal_backing_collisions = false,
             .request_source_interfaces = .empty,
             .forced_dynamic_iterator_roots = .empty,
             .recursive_argument_slots = .empty,
@@ -566,11 +663,16 @@ pub const InstGraph = struct {
         while (parents.next()) |list| {
             list.deinit(allocator);
         }
-        var backing_buckets = self.nominal_backings.valueIterator();
-        while (backing_buckets.next()) |bucket| {
-            bucket.deinit(allocator);
+        var backing_occurrences = self.nominal_backings_by_root.valueIterator();
+        while (backing_occurrences.next()) |occurrences| {
+            occurrences.deinit(allocator);
         }
-        self.nominal_backings.deinit();
+        self.nominal_backings_by_root.deinit();
+        self.nominal_backing_collisions.deinit(allocator);
+        self.nominal_backing_migration_epochs.deinit(allocator);
+        self.nominal_backing_affected.deinit(allocator);
+        self.nominal_backing_instances.deinit(allocator);
+        self.nominal_backing_index.deinit();
         self.request_source_interfaces.deinit(allocator);
         self.forced_dynamic_iterator_roots.deinit(allocator);
         self.recursive_argument_slots.deinit(allocator);
@@ -1629,19 +1731,21 @@ pub const InstGraph = struct {
         declaration_id: u32,
         args: []const NodeId,
     ) ?NodeId {
-        const bucket = self.nominal_backings.getPtr(.{
-            .module_bytes = module_bytes,
-            .declaration_id = declaration_id,
-        }) orelse return null;
-        instances: for (bucket.items) |*instance| {
-            if (instance.args.len != args.len) continue;
-            for (instance.args, args) |*stored, wanted| {
-                stored.* = self.find(stored.*);
-                if (stored.* != self.find(wanted)) continue :instances;
-            }
-            return instance.node;
-        }
-        return null;
+        self.countDiagnostic("nominal_backing_lookups");
+        const instance_id = self.nominal_backing_index.getAdapted(
+            NominalBackingLookup{
+                .declaration = .{
+                    .module_bytes = module_bytes,
+                    .declaration_id = declaration_id,
+                },
+                .args = args,
+            },
+            NominalBackingLookupContext{ .graph = self },
+        ) orelse return null;
+        self.countDiagnostic("nominal_backing_instances_scanned");
+        const instance = self.nominal_backing_instances.items[@intFromEnum(instance_id)];
+        if (!instance.active) Common.invariant("nominal backing index referenced a retired instance");
+        return instance.node;
     }
 
     pub fn putNominalBackingNode(
@@ -1652,16 +1756,160 @@ pub const InstGraph = struct {
         node: NodeId,
     ) Allocator.Error!void {
         self.requireRelationProduction();
+        const declaration = NominalBackingDeclaration{
+            .module_bytes = module_bytes,
+            .declaration_id = declaration_id,
+        };
         const stored_args = try self.arena().alloc(NodeId, args.len);
         for (stored_args, args) |*stored, arg| {
             stored.* = self.find(arg);
         }
-        const bucket = try self.nominal_backings.getOrPut(.{
-            .module_bytes = module_bytes,
-            .declaration_id = declaration_id,
+        const key = NominalBackingKey{ .declaration = declaration, .args = stored_args };
+        if (self.nominal_backing_index.get(key) != null) {
+            Common.invariant("nominal backing insertion duplicated an indexed instantiation");
+        }
+
+        const instance_id: NominalBackingInstanceId = @enumFromInt(@as(u32, @intCast(self.nominal_backing_instances.items.len)));
+        try self.nominal_backing_instances.append(self.allocator, .{
+            .declaration = declaration,
+            .args = stored_args,
+            .node = node,
+            .active = true,
         });
-        if (!bucket.found_existing) bucket.value_ptr.* = .empty;
-        try bucket.value_ptr.append(self.allocator, .{ .args = stored_args, .node = node });
+        try self.nominal_backing_migration_epochs.append(self.allocator, 0);
+        try self.nominal_backing_index.putNoClobber(key, instance_id);
+        for (stored_args, 0..) |root, arg_index| {
+            const occurrences = try self.nominal_backings_by_root.getOrPut(root);
+            if (!occurrences.found_existing) occurrences.value_ptr.* = .empty;
+            try occurrences.value_ptr.append(self.allocator, .{
+                .instance = instance_id,
+                .arg_index = @intCast(arg_index),
+            });
+        }
+    }
+
+    /// Rewrite every indexed nominal-backing key that mentions `loser`.
+    /// Resident hash keys point into mutable instance argument storage, so all
+    /// old keys are removed before any argument is changed and all new keys
+    /// are restored before collision-driven backing unification can reenter.
+    fn migrateNominalBackingRoot(self: *InstGraph, loser: NodeId, winner: NodeId) Allocator.Error!void {
+        const loser_occurrences = self.nominal_backings_by_root.getPtr(loser) orelse return;
+        const occurrence_count = loser_occurrences.items.len;
+
+        const winner_occurrences = try self.nominal_backings_by_root.getOrPut(winner);
+        if (!winner_occurrences.found_existing) winner_occurrences.value_ptr.* = .empty;
+        try winner_occurrences.value_ptr.ensureUnusedCapacity(self.allocator, occurrence_count);
+        try self.nominal_backing_affected.ensureUnusedCapacity(self.allocator, occurrence_count);
+        try self.nominal_backing_collisions.ensureUnusedCapacity(self.allocator, occurrence_count);
+        try self.nominal_backing_index.ensureTotalCapacity(self.nominal_backing_index.count());
+
+        var removed_occurrences = self.nominal_backings_by_root.fetchRemove(loser).?;
+        defer removed_occurrences.value.deinit(self.allocator);
+        const moved = removed_occurrences.value.items;
+
+        self.nominal_backing_affected.clearRetainingCapacity();
+        self.nominal_backing_migration_epoch +%= 1;
+        if (self.nominal_backing_migration_epoch == 0) {
+            @memset(self.nominal_backing_migration_epochs.items, 0);
+            self.nominal_backing_migration_epoch = 1;
+        }
+        const epoch = self.nominal_backing_migration_epoch;
+        for (moved) |occurrence| {
+            const instance_index = @intFromEnum(occurrence.instance);
+            const instance = &self.nominal_backing_instances.items[instance_index];
+            if (!instance.active) continue;
+            const arg_index = occurrence.arg_index;
+            if (arg_index >= instance.args.len) {
+                Common.invariant("nominal backing reverse index had an invalid argument position");
+            }
+            // Retired collisions and root coalescing can leave stale or
+            // duplicate occurrences. Only current references move to the
+            // winner; every stale occurrence is discarded the first time its
+            // recorded root loses, keeping cleanup amortized linear.
+            if (instance.args[arg_index] != loser) continue;
+            if (self.nominal_backing_migration_epochs.items[instance_index] != epoch) {
+                self.nominal_backing_migration_epochs.items[instance_index] = epoch;
+                self.nominal_backing_affected.appendAssumeCapacity(occurrence.instance);
+            }
+        }
+
+        // Removing every old key first prevents one affected instance from
+        // colliding with another instance's stale pre-migration key.
+        for (self.nominal_backing_affected.items) |instance_id| {
+            const instance = &self.nominal_backing_instances.items[@intFromEnum(instance_id)];
+            const old_key = NominalBackingKey{
+                .declaration = instance.declaration,
+                .args = instance.args,
+            };
+            const removed = self.nominal_backing_index.fetchRemove(old_key) orelse
+                Common.invariant("active nominal backing instance was absent from its index");
+            if (removed.value != instance_id) {
+                Common.invariant("nominal backing key referenced the wrong instance");
+            }
+        }
+
+        const current_winner_occurrences = self.nominal_backings_by_root.getPtr(winner).?;
+        for (moved) |occurrence| {
+            const instance = &self.nominal_backing_instances.items[@intFromEnum(occurrence.instance)];
+            if (!instance.active) continue;
+            const arg_index = occurrence.arg_index;
+            if (instance.args[arg_index] != loser) continue;
+            instance.args[arg_index] = winner;
+            current_winner_occurrences.appendAssumeCapacity(occurrence);
+        }
+
+        for (self.nominal_backing_affected.items) |instance_id| {
+            const instance = &self.nominal_backing_instances.items[@intFromEnum(instance_id)];
+            if (!instance.active) continue;
+            const new_key = NominalBackingKey{
+                .declaration = instance.declaration,
+                .args = instance.args,
+            };
+            if (self.nominal_backing_index.get(new_key)) |existing_id| {
+                if (existing_id == instance_id) {
+                    Common.invariant("nominal backing migration encountered its own indexed key");
+                }
+                const existing_index = @intFromEnum(existing_id);
+                const existing = &self.nominal_backing_instances.items[existing_index];
+                if (!existing.active) {
+                    Common.invariant("nominal backing index referenced a retired collision");
+                }
+
+                const retained_id, const retired_id = if (@intFromEnum(instance_id) < existing_index)
+                    .{ instance_id, existing_id }
+                else
+                    .{ existing_id, instance_id };
+                const retained = &self.nominal_backing_instances.items[@intFromEnum(retained_id)];
+                const retired = &self.nominal_backing_instances.items[@intFromEnum(retired_id)];
+                if (retained_id == instance_id) {
+                    const removed = self.nominal_backing_index.fetchRemove(new_key) orelse
+                        Common.invariant("colliding nominal backing key disappeared during migration");
+                    if (removed.value != existing_id) {
+                        Common.invariant("colliding nominal backing key referenced the wrong instance");
+                    }
+                    self.nominal_backing_index.putAssumeCapacityNoClobber(new_key, instance_id);
+                }
+                retired.active = false;
+                self.nominal_backing_collisions.appendAssumeCapacity(.{
+                    .left = retained.node,
+                    .right = retired.node,
+                });
+            } else {
+                self.nominal_backing_index.putAssumeCapacityNoClobber(new_key, instance_id);
+            }
+        }
+    }
+
+    /// Process cache-key collapses only after migration has restored the
+    /// primary and reverse indexes. Nested unions enqueue more pairs for this
+    /// same drain instead of reentering it.
+    fn drainNominalBackingCollisions(self: *InstGraph) Allocator.Error!void {
+        if (self.processing_nominal_backing_collisions) return;
+        self.processing_nominal_backing_collisions = true;
+        defer self.processing_nominal_backing_collisions = false;
+        while (self.nominal_backing_collisions.pop()) |collision| {
+            try self.unify(collision.left, collision.right);
+        }
     }
 
     fn registerRowParent(self: *InstGraph, row: NodeId, node_content: InstNode) Allocator.Error!void {
@@ -1773,6 +2021,7 @@ pub const InstGraph = struct {
     }
 
     fn find(self: *InstGraph, id: NodeId) NodeId {
+        self.countDiagnostic("union_find_resolutions");
         var current = id;
         while (true) {
             const node = self.nodes.items[@intFromEnum(current)];
@@ -3412,6 +3661,10 @@ pub const InstGraph = struct {
         const winner = self.find(raw_winner);
         const loser = self.find(raw_loser);
         if (winner == loser) return;
+        // Rekey before changing row or union state. Its allocation preflight
+        // can still fail without staling a resident key or unregistering the
+        // loser's row-parent edge.
+        try self.migrateNominalBackingRoot(loser, winner);
         try self.unregisterRowParent(loser);
         const winner_tail = self.class_member_tail.items[@intFromEnum(winner)];
         const loser_head = self.class_member_head.items[@intFromEnum(loser)];
@@ -3430,6 +3683,7 @@ pub const InstGraph = struct {
         }
         self.countDiagnostic("class_unions");
         self.invalidateActiveSnapshots(winner);
+        try self.drainNominalBackingCollisions();
     }
 
     /// Replace a root's content with an observationally equivalent compressed
@@ -8349,6 +8603,125 @@ test "issue 9647: unresolved tag row extension absorbs rest without allocating a
     try std.testing.expectEqual(@as(usize, 1), rest.tags.len);
     try std.testing.expectEqual(extra_name, rest.tags[0].name);
     try std.testing.expectEqual(graph.find(right_ext), graph.find(rest.ext));
+}
+
+fn expectNominalBackingIndexConsistent(graph: *InstGraph) error{ TestExpectedEqual, TestUnexpectedResult }!void {
+    var active_count: u32 = 0;
+    for (graph.nominal_backing_instances.items, 0..) |instance, instance_index| {
+        if (!instance.active) continue;
+        active_count += 1;
+        const instance_id: NominalBackingInstanceId = @enumFromInt(@as(u32, @intCast(instance_index)));
+        const key = NominalBackingKey{
+            .declaration = instance.declaration,
+            .args = instance.args,
+        };
+        try std.testing.expectEqual(instance_id, graph.nominal_backing_index.get(key).?);
+        for (instance.args, 0..) |root, arg_index| {
+            const occurrences = graph.nominal_backings_by_root.getPtr(root) orelse return error.TestUnexpectedResult;
+            var matching_occurrences: usize = 0;
+            for (occurrences.items) |occurrence| {
+                if (occurrence.instance == instance_id and occurrence.arg_index == arg_index) {
+                    matching_occurrences += 1;
+                }
+            }
+            try std.testing.expectEqual(@as(usize, 1), matching_occurrences);
+        }
+    }
+    try std.testing.expectEqual(active_count, graph.nominal_backing_index.count());
+
+    var roots = graph.nominal_backings_by_root.iterator();
+    while (roots.next()) |entry| {
+        for (entry.value_ptr.items) |occurrence| {
+            const instance = graph.nominal_backing_instances.items[@intFromEnum(occurrence.instance)];
+            if (!instance.active) continue;
+            try std.testing.expect(occurrence.arg_index < instance.args.len);
+            try std.testing.expectEqual(entry.key_ptr.*, instance.args[occurrence.arg_index]);
+        }
+    }
+}
+
+test "nominal backing index rekeys root tuples and merges collisions" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_bytes = [_]u8{0xAB} ** 32;
+    const other_module_bytes = [_]u8{0xCD} ** 32;
+    const a = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const b = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const c = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const d = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+
+    // Repeated argument positions must both migrate. Once a and b merge, the
+    // two exact keys collapse and their already-published backing nodes become
+    // one solver class.
+    const repeated_left = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const repeated_right = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    try graph.putNominalBackingNode(module_bytes, 1, &.{ a, a }, repeated_left);
+    try graph.putNominalBackingNode(module_bytes, 1, &.{ b, b }, repeated_right);
+    try std.testing.expectEqual(repeated_left, graph.nominalBackingNode(module_bytes, 1, &.{ a, a }).?);
+    try std.testing.expectEqual(repeated_right, graph.nominalBackingNode(module_bytes, 1, &.{ b, b }).?);
+    try std.testing.expect(graph.nominalBackingNode(other_module_bytes, 1, &.{ a, a }) == null);
+    try std.testing.expect(graph.nominalBackingNode(module_bytes, 2, &.{ a, a }) == null);
+
+    // A partial tuple match stays distinct until every argument class agrees.
+    const pair_left = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const pair_right = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    try graph.putNominalBackingNode(module_bytes, 2, &.{ a, c }, pair_left);
+    try graph.putNominalBackingNode(module_bytes, 2, &.{ b, d }, pair_right);
+    try expectNominalBackingIndexConsistent(graph);
+
+    try graph.unify(a, b);
+
+    try expectNominalBackingIndexConsistent(graph);
+    try std.testing.expect(graph.sameClass(repeated_left, repeated_right));
+    try std.testing.expectEqual(
+        graph.find(repeated_left),
+        graph.find(graph.nominalBackingNode(module_bytes, 1, &.{ b, a }).?),
+    );
+    try std.testing.expectEqual(pair_left, graph.nominalBackingNode(module_bytes, 2, &.{ a, c }).?);
+    try std.testing.expectEqual(pair_right, graph.nominalBackingNode(module_bytes, 2, &.{ b, d }).?);
+    try std.testing.expect(!graph.sameClass(pair_left, pair_right));
+
+    try graph.unify(c, d);
+
+    try expectNominalBackingIndexConsistent(graph);
+    try std.testing.expect(graph.sameClass(pair_left, pair_right));
+    try std.testing.expectEqual(
+        graph.find(pair_left),
+        graph.find(graph.nominalBackingNode(module_bytes, 2, &.{ b, c }).?),
+    );
+
+    // Make the already-migrated a/b root lose once more. This also consumes
+    // stale occurrences left by the first collision instead of forwarding
+    // them into the new winner's list.
+    const e = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    try graph.unify(a, e);
+    try expectNominalBackingIndexConsistent(graph);
+    try std.testing.expectEqual(
+        graph.find(repeated_left),
+        graph.find(graph.nominalBackingNode(module_bytes, 1, &.{ e, b }).?),
+    );
+
+    // Empty argument tuples need no reverse-root entries and remain exact.
+    const empty_backing = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    try graph.putNominalBackingNode(module_bytes, 3, &.{}, empty_backing);
+    try std.testing.expectEqual(empty_backing, graph.nominalBackingNode(module_bytes, 3, &.{}).?);
+    try expectNominalBackingIndexConsistent(graph);
+
+    var active_instances: usize = 0;
+    for (graph.nominal_backing_instances.items) |instance| {
+        if (instance.active) active_instances += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 3), active_instances);
+    try std.testing.expectEqual(@as(u32, 3), graph.nominal_backing_index.count());
 }
 
 test "issue 9647: same nominal backing wrapper resolves to structural backing once" {
