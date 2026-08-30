@@ -9134,7 +9134,8 @@ const EmptyTagCheckedOutputTestError = @import("test/TestEnv.zig").TestEnvError 
 test "checked row defaults apply only to unconstrained type variables" {
     const no_constraints = types.StaticDispatchConstraint.SafeList.Range.empty();
     const one_constraint = types.StaticDispatchConstraint.SafeList.Range{
-        .start = @enumFromInt(0),
+        // The helper inspects only the range count, so no backing-list index is read.
+        .start = undefined,
         .count = 1,
     };
 
