@@ -22165,13 +22165,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Copy a result value to the hidden return pointer buffer.
-        /// Used when the return type exceeds the register limit and the caller
-        /// has passed a pointer to a pre-allocated buffer as a hidden first argument.
+        /// Used whenever the selected calling convention passes a pointer to a
+        /// pre-allocated buffer as a hidden argument.
         fn copyResultToReturnPointer(self: *Self, result_loc: ValueLocation, ret_layout: layout.Idx, ret_ptr_stack_slot: i32) Allocator.Error!void {
             const ls = self.layout_store;
             const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
             const layout_val = ls.getLayout(runtime_ret_layout);
             const ret_size = ls.layoutSizeAlign(layout_val).size;
+
+            if (ret_size == 0) return;
 
             // Ensure result is on stack
             const result_offset: i32 = switch (result_loc) {
@@ -22194,14 +22196,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ptr_reg: GeneralReg = scratch_reg;
             try self.emitLoad(.w64, ptr_reg, frame_ptr, ret_ptr_stack_slot);
 
-            // Copy data in 8-byte chunks from local stack to return buffer
+            // Copy exactly the return layout's bytes to the caller-owned buffer.
             const temp_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
-            const num_words = (ret_size + 7) / 8;
-            for (0..num_words) |w| {
-                const off: i32 = @intCast(w * 8);
-                try self.emitLoad(.w64, temp_reg, frame_ptr, result_offset + off);
-                try self.emitStore(.w64, ptr_reg, off, temp_reg);
-            }
+            try self.copyChunked(temp_reg, frame_ptr, result_offset, ptr_reg, 0, ret_size);
         }
 
         fn copyValueToPointer(self: *Self, value_loc: ValueLocation, value_layout: layout.Idx, ptr_local: LocalId) Allocator.Error!void {
