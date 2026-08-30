@@ -1832,9 +1832,9 @@ project child slots by relating an aggregate skeleton to a rigids-flexed orphan
 copy of the expected type. Nominal constructors explicitly open their declared
 backing before checking the backing expression, and record updates project each
 supplied field from the base row before checking that field's value. A stored
-child is checked and instantiated first; a successful projected slot relation
+child is checked and instantiated first; a successful projected-child relation
 is then committed so sibling checking and dispatch can consume it. A rejected
-slot projection records no standalone mismatch: the enclosing aggregate's
+projected-child relation records no standalone mismatch: the enclosing aggregate's
 ordinary full-shape relation owns the diagnostic. This preserves the explicit
 stored-value scheme-use edge, gives nested constructions their declared field
 kinds before siblings meet, and keeps the shared expected graph pristine for
