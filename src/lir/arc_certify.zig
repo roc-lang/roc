@@ -3810,7 +3810,7 @@ const Certifier = struct {
         return null;
     }
 
-    /// Adds every local carrier needed to reconstruct one dependency. The
+    /// Adds every local carrier needed to restore one dependency. The
     /// direct value is preferred because its own sparse provenance preserves
     /// the exact liveness alternatives; unnamed intermediates are reduced to
     /// the live anchors that can actually cross the join.
