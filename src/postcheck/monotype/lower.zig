@@ -493,7 +493,7 @@ pub const Diagnostics = struct {
 };
 
 /// Workload diagnostics produced by one ordinary specialization shard. These
-/// remain result-owned until ordered coordinator commit merges them.
+/// remain shard-owned until ordered coordinator commit records them.
 const SpecJobDiagnostics = struct {
     graph: solve.GraphDiagnostics = .{},
     body: BodyDiagnostics = .{},
@@ -2065,7 +2065,7 @@ const SpecJobEpoch = enum(u64) { _ };
 
 /// Persistent private type/name domain for serialized ordinary specialization jobs.
 /// Exactly one graph/draft epoch may borrow it at a time; cumulative relocation
-/// keeps repeated crossings proportional to newly reached semantic closures.
+/// keeps repeated crossings proportional to newly reached type and name closures.
 const SpecJobWorkspace = struct {
     allocator: Allocator,
     types: Type.Store,
@@ -2426,7 +2426,7 @@ fn nestedSpecIdentity(
     };
 }
 
-/// A nominal identity paired with the canonical-name domain that owns it.
+/// A nominal identity paired with the name domain that owns it.
 const QualifiedTypeDef = struct {
     name_store: *const names.NameStore,
     def: Type.TypeDef,
@@ -4361,7 +4361,7 @@ const Builder = struct {
         if (shard.graph.types != &shard.workspace.types or
             shard.graph.name_store != &shard.workspace.name_store)
         {
-            Common.compilerBug("Monotype specialization shard graph escaped its workspace semantic stores");
+            Common.compilerBug("Monotype specialization shard graph escaped its workspace type and name stores");
         }
         const committed_type_relocation = shard.body_draft.ensureCommittedTypeRelocation(
             shard.graph,
@@ -6123,22 +6123,6 @@ const Builder = struct {
             if (self.methodTargetInViewFromStore(candidate, owner_names, owner, method_name, false)) |target| return target;
         }
         return null;
-    }
-
-    fn methodTargetInView(
-        self: *Builder,
-        view: ModuleView,
-        owner: static_dispatch.MethodOwner,
-        method_name: []const u8,
-        allow_local_proc: bool,
-    ) ?MethodLookup {
-        return self.methodTargetInViewFromStore(
-            view,
-            &self.program.names,
-            owner,
-            method_name,
-            allow_local_proc,
-        );
     }
 
     fn methodTargetInViewFromStore(
@@ -13760,7 +13744,7 @@ const BodyContext = struct {
         return self.graph.types;
     }
 
-    /// Every canonical id read while lowering belongs to the graph's paired
+    /// Every name id read while lowering belongs to the graph's paired
     /// name store, independently of the coordinator program's name domain.
     fn nameStore(self: *const BodyContext) *const names.NameStore {
         return self.graph.name_store;
@@ -13803,7 +13787,7 @@ const BodyContext = struct {
 
     /// Method owners derived from graph types remain qualified by the graph's
     /// name store. Private owners bypass the coordinator cache because its raw
-    /// canonical-id keys belong exclusively to the program name domain.
+    /// name-id keys belong exclusively to the program name domain.
     fn lookupMethodTargetByName(
         self: *BodyContext,
         owner: static_dispatch.MethodOwner,
@@ -53507,7 +53491,7 @@ test "checked type instantiation scopes have exact isolated identities" {
     try std.testing.expectEqual(@as(u64, 2), diagnostics.body.instantiation_scopes_created);
 }
 
-test "specialization shard diagnostics remain private until coordinator commit" {
+test "specialization shard diagnostics remain private until coordinator publication" {
     const allocator = std.testing.allocator;
     var program = Ast.Program.init(allocator);
     defer program.deinit();
