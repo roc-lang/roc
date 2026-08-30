@@ -3999,15 +3999,16 @@ then occupy its source position in an enclosing chain. The continuation's
 symbolic value pairs that exact runtime local with finite known structure.
 Opaque consumers always reuse the runtime local; structural consumers inspect
 the paired structure, whose accessible record and tuple children are exact
-projections from that local. Initializer-private leaves that have no such
-projection make only that substructure opaque. Materializing the pair therefore
-never reconstructs or copies the recursive value. Materializing a chain with a
-recursive anchor emits an ordinary block in source order; an acyclic chain
-retains the ordinary nested-let representation. This finite structure ending
-in an explicit local back-edge permits the same call-pattern and
-callable-worker specialization as an acyclic value without unrolling
-recursion, moving runtime work out of recursive scope, or reconstructing a
-vanished source binding.
+projections from that local. A leaf that would duplicate runtime work through
+structural reuse, or that references an initializer-private binding, becomes
+such a projection. If no projection exists, only that substructure becomes
+opaque. Materializing the pair therefore never reconstructs or copies the
+recursive value. Materializing a chain with a recursive anchor emits an
+ordinary block in source order; an acyclic chain retains the ordinary
+nested-let representation. This finite structure ending in an explicit local
+back-edge permits the same call-pattern and callable-worker specialization as
+an acyclic value without unrolling recursion, moving runtime work out of
+recursive scope, or reconstructing a vanished source binding.
 
 This follows the useful ownership discipline of GHC's simplifier floats: an
 expression transformation produces an ordered binding collection together with

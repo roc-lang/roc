@@ -526,7 +526,7 @@ const PatternLocalUseProbe = struct {
     found: *bool,
 
     pub fn bindLocal(self: PatternLocalUseProbe, local: Ast.LocalId) Allocator.Error!void {
-        if (!self.found.* and localUseCountInExpr(self.program, local, self.expr) != 0) {
+        if (!self.found.* and exprReferencesLocal(self.program, self.expr, local)) {
             self.found.* = true;
         }
     }
@@ -633,7 +633,7 @@ const BindingChain = struct {
         var current = self.first;
         while (current) |node| : (current = node.next) {
             switch (node.binding) {
-                .strict => |binding| if (localUseCountInExpr(program, binding.local, expr) != 0) return true,
+                .strict => |binding| if (exprReferencesLocal(program, expr, binding.local)) return true,
                 .recursive_anchor => |stmt_id| {
                     const stmt = program.getStmt(stmt_id);
                     if (stmt != .let_ or !stmt.let_.recursive) {
@@ -4663,10 +4663,11 @@ const Cloner = struct {
     inline_scope_origins: collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId),
     /// Depth of the wrapper-strip recursion in the static value matchers
     /// (`bindPatToValue`/`bindPatToMatchValue`/`bindPatToFlowValue`), counting
-    /// each `nominal.backing`/`static_data_candidate.runtime` pointer edge
-    /// followed. A loop-carried value can reference itself through those edges,
-    /// so an unbounded strip would hang; reaching `value_wrapper_strip_cap`
-    /// declines the static decision toward a residual runtime match.
+    /// each `runtime_anchor.structure`/`nominal.backing`/
+    /// `static_data_candidate.runtime` pointer edge followed. A loop-carried
+    /// value can reference itself through those edges, so an unbounded strip
+    /// would hang; reaching `value_wrapper_strip_cap` declines the static
+    /// decision toward a residual runtime match.
     wrapper_strip_depth: usize,
     /// Depth of the wrapper-strip recursion in `materialize`, counting each
     /// `nominal.backing`/`static_data_candidate.runtime`/callable-capture edge
@@ -9927,7 +9928,12 @@ const Cloner = struct {
     /// post-check walks.
     const recursive_anchor_scope_work_budget: u32 = 4096;
 
-    fn valueReferencesBindings(
+    /// Whether a structural sub-value cannot safely flow beyond an
+    /// initializer chain. A non-reusable expression could duplicate runtime
+    /// work through later structural use; an expression referencing a chain
+    /// local would escape its lexical scope. Either case must use the retained
+    /// recursive value's exact runtime position instead.
+    fn valueNeedsRuntimeProjection(
         self: *Cloner,
         bindings: BindingChain,
         value: Value,
@@ -9936,32 +9942,34 @@ const Cloner = struct {
         if (budget.* == 0) return true;
         budget.* -= 1;
         return switch (value) {
-            .expr => |expr| try bindings.referencedByExpr(self.pass.program, expr),
-            .runtime_anchor => |anchor| try bindings.referencedByExpr(self.pass.program, anchor.runtime) or
-                try self.valueReferencesBindings(bindings, anchor.structure.*, budget),
-            .static_data_candidate => |candidate| try self.valueReferencesBindings(bindings, candidate.runtime.*, budget),
+            .expr => |expr| !self.exprCanSubstitute(expr) or
+                try bindings.referencedByExpr(self.pass.program, expr),
+            .runtime_anchor => |anchor| !self.exprCanSubstitute(anchor.runtime) or
+                try bindings.referencedByExpr(self.pass.program, anchor.runtime) or
+                try self.valueNeedsRuntimeProjection(bindings, anchor.structure.*, budget),
+            .static_data_candidate => |candidate| try self.valueNeedsRuntimeProjection(bindings, candidate.runtime.*, budget),
             .tag => |tag| blk: {
                 for (tag.payloads) |payload| {
-                    if (try self.valueReferencesBindings(bindings, payload, budget)) break :blk true;
+                    if (try self.valueNeedsRuntimeProjection(bindings, payload, budget)) break :blk true;
                 }
                 break :blk false;
             },
             .record => |record| blk: {
                 for (record.fields) |field| {
-                    if (try self.valueReferencesBindings(bindings, field.value, budget)) break :blk true;
+                    if (try self.valueNeedsRuntimeProjection(bindings, field.value, budget)) break :blk true;
                 }
                 break :blk false;
             },
             .tuple => |tuple| blk: {
                 for (tuple.items) |item| {
-                    if (try self.valueReferencesBindings(bindings, item, budget)) break :blk true;
+                    if (try self.valueNeedsRuntimeProjection(bindings, item, budget)) break :blk true;
                 }
                 break :blk false;
             },
-            .nominal => |nominal| try self.valueReferencesBindings(bindings, nominal.backing.*, budget),
+            .nominal => |nominal| try self.valueNeedsRuntimeProjection(bindings, nominal.backing.*, budget),
             .callable => |callable| blk: {
                 for (callable.captures) |capture| {
-                    if (try self.valueReferencesBindings(bindings, capture.value, budget)) break :blk true;
+                    if (try self.valueNeedsRuntimeProjection(bindings, capture.value, budget)) break :blk true;
                 }
                 break :blk false;
             },
@@ -9969,8 +9977,17 @@ const Cloner = struct {
     }
 
     fn runtimeAnchoredValue(self: *Cloner, structure: Value, runtime: Ast.ExprId) Allocator.Error!Value {
-        if (!self.exprCanSubstitute(runtime)) {
+        if (std.debug.runtime_safety and !self.exprCanSubstitute(runtime)) {
             Common.invariant("runtime-anchored structure had a non-reusable runtime expression");
+        }
+        if (std.debug.runtime_safety and
+            !try self.pass.program.types.typeEql(
+                &self.pass.program.names,
+                valueType(self.pass.program, structure),
+                self.pass.program.getExpr(runtime).ty,
+            ))
+        {
+            Common.invariant("runtime anchor and its symbolic structure had different types");
         }
         const stored_structure = try self.arena.allocator().create(Value);
         stored_structure.* = structure;
@@ -10000,7 +10017,8 @@ const Cloner = struct {
 
         switch (value) {
             .expr => |expr| {
-                if (!try initializer_bindings.referencedByExpr(self.pass.program, expr)) return value;
+                if (self.exprCanSubstitute(expr) and
+                    !try initializer_bindings.referencedByExpr(self.pass.program, expr)) return value;
                 return if (runtime_has_value_type) Value{ .expr = runtime } else null;
             },
             .runtime_anchor => |anchor| return try self.reanchorRecursiveValue(
@@ -10066,7 +10084,7 @@ const Cloner = struct {
                 return if (runtime_has_value_type) try self.runtimeAnchoredValue(structure, runtime) else structure;
             },
             .static_data_candidate, .tag, .callable => {
-                if (try self.valueReferencesBindings(initializer_bindings, value, budget)) {
+                if (try self.valueNeedsRuntimeProjection(initializer_bindings, value, budget)) {
                     return if (runtime_has_value_type) Value{ .expr = runtime } else null;
                 }
                 return if (runtime_has_value_type) try self.runtimeAnchoredValue(value, runtime) else value;
@@ -12744,9 +12762,10 @@ fn callableTargetMatches(program: *const Ast.Program, expected: Ast.FnId, actual
 // already proven to be a record, tuple, or tag under some wrapper chain, so
 // following that chain to the read field, item, or tag terminates by
 // construction. A value that references itself through the
-// `nominal.backing`/`static_data_candidate.runtime` pointer edges would loop,
-// so each reader counts the edges it follows and treats reaching
-// `value_wrapper_strip_cap` as a compiler bug.
+// `runtime_anchor.structure`/`nominal.backing`/
+// `static_data_candidate.runtime` pointer edges would loop, so each reader
+// counts the edges it follows and treats reaching `value_wrapper_strip_cap` as
+// a compiler bug.
 fn fieldFromValue(program: *const Ast.Program, value: Value, name: names.RecordFieldNameId) ?Value {
     const field = fieldFromValueStripping(program, value, name, 0) orelse return null;
     if (!isGeneratedIteratorStepField(program, valueType(program, value), name)) return field;
@@ -13046,6 +13065,38 @@ test "SpecConstr keeps a transparent recursive anchor and its initializer bindin
     if (anchored_field != .expr) return error.TestUnexpectedResult;
     const field_access = program.getExpr(anchored_field.expr).data.field_access;
     try std.testing.expectEqual(anchor_local, program.getExpr(field_access.receiver).data.local);
+
+    // A structurally visible leaf must also be reusable, not merely in scope.
+    // Otherwise inspecting the anchor's structure could duplicate strict work
+    // from its initializer. Model such a leaf with an opaque block and verify
+    // that reanchoring replaces it with a projection from the exact runtime
+    // record instead.
+    const zero = try program.addExpr(.{ .ty = u8_ty, .data = .{ .int_lit = .{
+        .bytes = @bitCast(@as(i128, 0)),
+        .kind = .i128,
+    } } });
+    const opaque_field = try program.addExpr(.{ .ty = u8_ty, .data = .{ .block = .{
+        .statements = Ast.Span(Ast.StmtId).empty(),
+        .final_expr = zero,
+    } } });
+    const synthetic_fields = [_]FieldValue{.{
+        .name = field,
+        .value = .{ .expr = opaque_field },
+    }};
+    const no_bindings: BindingChain = .{};
+    var reanchor_budget: u32 = Cloner.recursive_anchor_scope_work_budget;
+    const reanchored = (try cloner.reanchorRecursiveValue(
+        .{ .record = .{ .ty = record_ty, .fields = &synthetic_fields } },
+        runtime_anchor.runtime,
+        no_bindings,
+        &reanchor_budget,
+        true,
+    )) orelse return error.TestUnexpectedResult;
+    if (reanchored != .runtime_anchor) return error.TestUnexpectedResult;
+    const projected_field = reanchored.runtime_anchor.structure.record.fields[0].value;
+    if (projected_field != .expr or projected_field.expr == opaque_field) return error.TestUnexpectedResult;
+    const projected_access = program.getExpr(projected_field.expr).data.field_access;
+    try std.testing.expectEqual(anchor_local, program.getExpr(projected_access.receiver).data.local);
 
     // The record-update base is strict work created from the recursive
     // reference. It must remain in the initializer, where the anchor local is
