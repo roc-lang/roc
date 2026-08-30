@@ -942,13 +942,11 @@ ist
         Ok(123) => 121000
     }
 
-In the second pattern, lue is:
+The type involved is:
 
     [Red, ..]
 
-But in the first pattern, lue is:
-
-    [Red, ..]
+The difference is inside this type, but it is not visible in this display.
 
 A name shared across | patterns in the same match branch must have one
 compatible type.

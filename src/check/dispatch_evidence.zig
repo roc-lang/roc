@@ -12,9 +12,9 @@
 //! Order contract: depth-first over the resolved type structure—function
 //! args then return, ordinary alias/nominal args then backing, and logical row
 //! fields/tags across the complete extension chain, all in store order—
-//! emitting each constrained var's constraints in range order at its first
-//! occurrence; then the collected
-//! constraints' fn types are walked the same way in emission order (they can
+//! emitting one target parameter per dispatcher/method at the constrained
+//! var's first occurrence; then every independent constraint fn type is walked
+//! the same way in source order (they can
 //! bind further constrained vars, e.g. `where [a.iter : a -> i, i.next : ..]`).
 //!
 //! Each param also carries the semantic PATH from the scheme root to its
@@ -27,6 +27,7 @@
 //! paths over the concrete monomorphic callable instead.
 
 const std = @import("std");
+const Ident = @import("base").Ident;
 const types_mod = @import("types");
 
 const Allocator = std.mem.Allocator;
@@ -103,6 +104,11 @@ pub const Scratch = struct {
     visited: std.AutoHashMapUnmanaged(Var, void) = .{},
     stack: std.ArrayListUnmanaged(StackEntry) = .empty,
     fn_var_queue: std.ArrayListUnmanaged(Var) = .empty,
+    /// Runtime evidence selects a method target, not one particular
+    /// instantiation of that target's callable scheme. Independent same-name
+    /// calls therefore share this receiver-local slot while retaining their
+    /// own callable relations in the checked plans.
+    emitted_methods: std.AutoHashMapUnmanaged(Ident.Idx, void) = .{},
     /// Flat pool backing every stack entry's (and emitted param's) path.
     path_pool: std.ArrayListUnmanaged(PathStep) = .empty,
     /// Child collection buffer for one node's children, in declared order.
@@ -119,6 +125,7 @@ pub const Scratch = struct {
         self.visited.deinit(gpa);
         self.stack.deinit(gpa);
         self.fn_var_queue.deinit(gpa);
+        self.emitted_methods.deinit(gpa);
         self.path_pool.deinit(gpa);
         self.children.deinit(gpa);
         self.* = .{};
@@ -128,6 +135,7 @@ pub const Scratch = struct {
         self.visited.clearRetainingCapacity();
         self.stack.clearRetainingCapacity();
         self.fn_var_queue.clearRetainingCapacity();
+        self.emitted_methods.clearRetainingCapacity();
         self.path_pool.clearRetainingCapacity();
         self.children.clearRetainingCapacity();
     }
@@ -437,13 +445,19 @@ fn emitConstraints(
     scratch: *Scratch,
     out: *std.ArrayListUnmanaged(EvidenceParam),
 ) Allocator.Error!void {
+    scratch.emitted_methods.clearRetainingCapacity();
     for (store.sliceStaticDispatchConstraints(constraints)) |constraint| {
-        try out.append(gpa, .{
-            .dispatcher_var = dispatcher_root,
-            .constraint = constraint,
-            .path_start = if (with_paths) entry.path_start else 0,
-            .path_len = if (with_paths) entry.path_len else 0,
-        });
+        const emitted = try scratch.emitted_methods.getOrPut(gpa, constraint.fn_name);
+        if (!emitted.found_existing) {
+            try out.append(gpa, .{
+                .dispatcher_var = dispatcher_root,
+                .constraint = constraint,
+                .path_start = if (with_paths) entry.path_start else 0,
+                .path_len = if (with_paths) entry.path_len else 0,
+            });
+        }
+        // A shared target does not make the callables interchangeable: each
+        // one can expose further independently constrained variables.
         try scratch.fn_var_queue.append(gpa, constraint.fn_var);
     }
 }
