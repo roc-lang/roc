@@ -2589,6 +2589,19 @@ const Pass = struct {
                 }
                 try self.bindFresh(s.target);
             },
+            .u8_to_u16, .u8_to_u32, .u8_to_u64, .u16_to_u32, .u16_to_u64, .u32_to_u64 => {
+                // A widening whose target represents every value of its source
+                // leaves the number alone, so the result is the argument: it
+                // keeps the argument's bounds and its offsets to other values
+                // rather than falling back to the wider type's whole range.
+                if (arg_count == 1) {
+                    if (try self.valueOf(GuardedList.at(args, 0))) |node| {
+                        try self.bind(s.target, .{ .node = node });
+                        return;
+                    }
+                }
+                try self.bindFresh(s.target);
+            },
             .num_is_lt, .num_is_lte, .num_is_gt, .num_is_gte => {
                 try self.modelCompare(stmt, s, args, arg_count);
             },
@@ -2885,20 +2898,23 @@ const Pass = struct {
             .f64_from_str,
             .u8_to_i8_wrap,
             .u8_to_i8_try,
+            .u8_to_i128,
+            .u8_to_u128,
             .u8_to_i16,
             .u8_to_i32,
             .u8_to_i64,
-            .u8_to_i128,
-            .u8_to_u16,
-            .u8_to_u32,
-            .u8_to_u64,
-            .u8_to_u128,
-            .u8_to_f32,
-            .u8_to_f64,
-            .u8_to_dec,
+            .u16_to_i32,
+            .u16_to_i64,
+            .u32_to_i64,
             .i8_to_i16,
             .i8_to_i32,
             .i8_to_i64,
+            .i16_to_i32,
+            .i16_to_i64,
+            .i32_to_i64,
+            .u8_to_f32,
+            .u8_to_f64,
+            .u8_to_dec,
             .i8_to_i128,
             .i8_to_u8_wrap,
             .i8_to_u8_try,
@@ -2917,21 +2933,15 @@ const Pass = struct {
             .u16_to_i8_try,
             .u16_to_i16_wrap,
             .u16_to_i16_try,
-            .u16_to_i32,
-            .u16_to_i64,
             .u16_to_i128,
             .u16_to_u8_wrap,
             .u16_to_u8_try,
-            .u16_to_u32,
-            .u16_to_u64,
             .u16_to_u128,
             .u16_to_f32,
             .u16_to_f64,
             .u16_to_dec,
             .i16_to_i8_wrap,
             .i16_to_i8_try,
-            .i16_to_i32,
-            .i16_to_i64,
             .i16_to_i128,
             .i16_to_u8_wrap,
             .i16_to_u8_try,
@@ -2952,13 +2962,11 @@ const Pass = struct {
             .u32_to_i16_try,
             .u32_to_i32_wrap,
             .u32_to_i32_try,
-            .u32_to_i64,
             .u32_to_i128,
             .u32_to_u8_wrap,
             .u32_to_u8_try,
             .u32_to_u16_wrap,
             .u32_to_u16_try,
-            .u32_to_u64,
             .u32_to_u128,
             .u32_to_f32,
             .u32_to_f64,
@@ -2967,7 +2975,6 @@ const Pass = struct {
             .i32_to_i8_try,
             .i32_to_i16_wrap,
             .i32_to_i16_try,
-            .i32_to_i64,
             .i32_to_i128,
             .i32_to_u8_wrap,
             .i32_to_u8_try,
