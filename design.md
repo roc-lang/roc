@@ -1827,6 +1827,28 @@ to choose separate `a`s, but one stored result of `mk({})` cannot subsequently
 be called at two different types. Roc has no rank-2 or rank-n interpretation
 under which that returned function could itself retain `forall a`.
 
+Call checking exposes the instantiated callee's formal parameter slots BEFORE
+checking argument expressions. A known function already supplies that arity
+shape; an unresolved callable is related once to a fresh arity-shaped function.
+Arguments are checked with those formal shapes, then the ordinary formal/actual
+relations are committed in one linear fold. Shared formal variables therefore
+flow through one graph relation; the checker never performs a pairwise
+argument scan.
+
+Expected aggregate structure is recursive checking context, not a second owner
+of the expression's root relation. Lists, tuples, records, and tag payloads
+project child slots by relating an aggregate skeleton to a rigids-flexed orphan
+copy of the expected type. Nominal constructors explicitly open their declared
+backing before checking the backing expression, and record updates project each
+supplied field from the base row before checking that field's value. A stored
+child is checked and instantiated first; a successful projected-child relation
+is then committed so sibling checking and dispatch can consume it. A rejected
+projected-child relation records no standalone mismatch: the enclosing aggregate's
+ordinary full-shape relation owns the diagnostic. This preserves the explicit
+stored-value scheme-use edge, gives nested constructions their declared field
+kinds before siblings meet, and keeps the shared expected graph pristine for
+the owning relation and its error report.
+
 The checker records scheme-ness as explicit binding metadata at each
 generalization boundary. After rank adjustment, it walks the binding's type
 interface once and classifies the binding as a scheme exactly when a reachable
@@ -4046,8 +4068,9 @@ representation.
 
 SpecConstr separates symbolic structure from strict work. A cloned value is a
 pair of an owned `BindingChain` and a symbolic `Value`. The chain contains the
-strict computations which produce the value's opaque leaves, in source
-evaluation order. Before a value may be reused through substitution, every
+strict computations which produce the value's opaque leaves, plus any exact
+recursive statement which owns a symbolic back-edge, in source evaluation
+order. Before a value may be reused through substitution, every
 non-work-free leaf is named in that chain and replaced by the resulting local;
 budget exhaustion names the entire remaining sub-value as one strict binding.
 Cloning a constructor concatenates its children's chains in field or item order.
@@ -4058,6 +4081,29 @@ bindings before the case outside the join, keeps arm bindings around the
 corresponding arm jump, and keeps continuation bindings in the join body. No
 binding chain is stored in ambient cloner state, and a nested clone cannot
 observe, capture, flush, or move a chain owned by its caller.
+
+A recursive binding is an explicit finite-graph anchor, not a reason to make
+the whole enclosing value opaque. The clone reserves a fresh runtime binder
+before cloning the initializer, so every recursive occurrence becomes an exact
+local back-edge and the initializer's outer constructor and callable structure
+can still flow symbolically into the continuation. Every binding chain produced
+while cloning that initializer remains inside the recursive statement's value,
+where the fresh binder is in scope. The retained recursive statement itself may
+then occupy its source position in an enclosing chain. The continuation's
+symbolic value pairs that exact runtime local with finite known structure.
+Opaque consumers always reuse the runtime local; structural consumers inspect
+the paired structure, whose accessible record and tuple children are exact
+field and tuple-item reads from that local. A leaf that would duplicate runtime
+work through structural reuse, or that references an initializer-private
+binding, becomes such a read. If no field or tuple-item read exists, only that
+substructure becomes opaque. Materializing the pair therefore never
+reconstructs or copies the recursive value. Materializing a chain with a
+recursive anchor emits an ordinary block in source order; an acyclic chain
+retains the ordinary nested-let representation. This finite structure ending
+in an explicit local back-edge permits the same call-pattern and
+callable-worker specialization as an acyclic value without unrolling
+recursion, moving runtime work out of recursive scope, or reconstructing a
+vanished source binding.
 
 This follows the useful ownership discipline of GHC's simplifier floats: an
 expression transformation produces an ordered binding collection together with
@@ -7183,8 +7229,19 @@ occurrence, then constraint fn types walked the same way). Index `k` in this
 list is the shared identity between a plan's `constraint(k)` resolution and
 the k-th evidence entry a call edge supplies. The definition's module and any
 importing module enumerate identical lists from their structural copies of the
-scheme. A dispatcher's requirements are a set keyed by method identity: repeated
-source constraints share one callable type and contribute one evidence param.
+scheme. Repeated declarative constraints share one callable type, while
+independently inferred dot-method calls retain separate callable relations so a
+rank-1 method scheme can be instantiated independently at each use. Operators
+and literal conversions retain one numeric/defaulting relation per method
+identity. Same-name relations must agree on fixed outer function properties:
+rank-1 instantiation can vary types but cannot vary a declaration's argument
+count or known effect mode. Once a scheme's public type is fixed, equivalent
+requirements whose only differences are private generalized variables collapse;
+public type variables remain identity anchors, so requirements a caller can
+specialize differently stay separate. Independent same-name callable relations
+share one evidence parameter: the runtime target is selected by dispatcher and
+method, while each dispatch plan checks and instantiates that target against its
+own callable relation.
 
 **Edges supply evidence.** Checking persists every constrained-scheme edge.
 An ordinary instantiation records the (pristine var, fresh var) pairs of its
@@ -9512,11 +9569,22 @@ emitting any release for the group.
 Tail calls need one rule so that borrow inference never blocks backend
 tail-call lowering. LIR has no tail-call statement; a call is in tail
 position when the next statement returns the call result. Call-graph SCCs
-(computed once, iteratively) feed exactly this rule: a tail-position call to
-a proc in the same SCC demands ownership of its refcounted arguments, so
-emission never places a release after the call on that path. Calls that
-leave the SCC keep borrowed positions, since the caller's drops precede the
-tail call there only when the values genuinely die earlier.
+(computed once, iteratively) feed exactly this rule: every refcounted argument
+of a tail-position call within the same SCC has to outlive replacement of the
+caller frame. This is an exact lifetime constraint, not an ownership demand.
+After parameter modes and borrowed-return lenders settle, the solver records
+the caller entry parameter that anchors each such argument. The argument stays
+borrowed exactly when that parameter is borrowed in the current emission; its
+entry lifetime then contains every recursive frame in the SCC. With no such
+borrowed entry anchor, emission materializes the argument's exact ownership
+carrier, selects a mandatory owned callee variant, and moves any remaining
+caller releases before the call. Normal callee-parameter mode dependencies are
+recorded for tail calls just as for every other direct call. The callee return
+mode must also match the caller return mode; emission selects a mandatory
+owned-return variant when forwarding a borrowed result would otherwise require
+a retain after the call. Calls that leave the SCC keep their ordinary lifetime
+and mode constraints because they cannot participate in unbounded recursive
+frame growth.
 
 ### RC Planning and Materialization
 
@@ -9659,9 +9727,14 @@ the proc body; it is not recollected from the finished graph.
 
 The debug borrow certifier deliberately spends more: it re-certifies join
 bodies per distinct entry state and summarizes per statement for walk
-deduplication. Release builds compile the certifier away entirely, so only
-debug compiler builds pay, and any certifier slowness is fixed inside the
-certifier, never by weakening what it checks.
+deduplication. A summary keeps ownership balance separate from sparse lifetime
+provenance, because a currently owned value's lender or aggregate holder
+becomes observable again after the explicit unit is spent. Provenance is
+recorded only when a live lender, live holder, or deferred payload source
+exists, hash-consed within the procedure, and shared by every alias of the
+summary representative. Release builds compile the certifier away entirely,
+so only debug compiler builds pay, and any certifier slowness is fixed inside
+the certifier, never by weakening what it checks.
 
 ### Mode Specialization
 
@@ -10084,14 +10157,17 @@ complete claim set marks that unit spent: a terminal treats it as balanced and
 a jump's carry check exempts it, while anything less fails as an unspent stored
 unit. A claimed container can be neither consumed, moved into an aggregate, nor
 released whole. Claims and complete read chains cross join quotients on the
-summary: owned entries carry their container's claim set, and borrowed field or
-payload entries carry their immediate container's representative and encoded
-read operation. When such a read value is relevant after the join but its
-nearest unit-holding container is not independently relevant, quotienting
-claims the stored unit and makes the join value its carrier; when that
-container is independently relevant, the read stays borrowed. Restoration of
-the remaining read chains happens only after all representatives exist, so
-correctness is independent of local numbering.
+summary: owned entries carry their container's claim set, and every live entry
+carries sparse lender, aggregate-holder, and immediate payload-source
+provenance independently of its current balance. This preserves the
+alternatives that become active when a later statement spends an explicit
+unit; currently dead alternatives are omitted because they cannot make the
+value live. When such a read value is relevant after the join but its nearest
+unit-holding container is not independently relevant, quotienting claims the
+stored unit and makes the join value its carrier; when that container is
+independently relevant, the read stays borrowed. Restoration of the remaining
+provenance happens only after all representatives exist, so correctness is
+independent of local numbering.
 
 #### Per-edge aggregate residuals
 
@@ -10229,15 +10305,16 @@ resolves against the emitting variant's demand vector), and the certifier
 consumes the stamp instead of re-deriving take-ness from refcount shapes.
 Only a stamped read carries a claim target, so a borrowed payload read can
 never be mistaken for a take however it crosses the control-flow graph—
-which is also what keeps certification affordable: claim targets and view
-provenance never enter join summaries, stamped takers settle their claims
-at the first quotient they cross and continue as ordinary owned values, and
-a fully claimed container hashes as unbound in walk digests so the two
-sides of a death point re-converge instead of forking. The union encoding
-is shared: a stamped read through a payload view claims the union container
-under the view's variant, claims must stay within one variant, and a fully
-dismantled union's unit is spent when its claims cover exactly the claimed
-variant's mask—sound because control reaches that spend only when the
+which is also what keeps certification affordable: a stamped taker settles
+its claim at the first quotient where the transfer is fixed and continues as
+an ordinary owned value. A claim target or view that can still be observed
+after the quotient remains only in the sparse, hash-consed lifetime
+provenance. A fully claimed container hashes as unbound in walk digests so
+the two sides of a death point re-converge instead of forking. The union
+encoding is shared: a stamped read through a payload view claims the union
+container under the view's variant, claims must stay within one variant, and
+a fully dismantled union's unit is spent when its claims cover exactly the
+claimed variant's mask—sound because control reaches that spend only when the
 container holds that variant. What makes the emitted dispatch certifiable
 is variant knowledge per path: reading a variant's payload proves the
 container holds it (anything else is already undefined), switch arms on a
@@ -10261,8 +10338,8 @@ against the borrow typing rules:
   borrow's lifetime is contained in the lender's
 - every join body holds under the entry state of each jump that reaches it:
   jump states are summarized over the names the body relies on (liveness,
-  unit counts, alias partition, and borrow anchors) and joined into a
-  forward dataflow fixpoint—summaries agreeing on every name's ownership
+  unit counts, alias partition, and sparse dormant provenance) and joined into
+  a forward dataflow fixpoint—summaries agreeing on every name's ownership
   mode share one abstraction whose must-alias partition is the meet of
   theirs (with per-fine-class balances re-attributed by constraint
   propagation), and the body is re-certified only when a jump strictly
@@ -11980,8 +12057,10 @@ Minimum boundary checks:
 - Monotype Lifted IR contains no reachable closure expressions, local function
   definitions in expression position, definition references in expression
   position, or direct calls whose callee is still a Monotype function template.
-- SpecConstr binding chains are well-linked, source-ordered, type-correct, and
-  placed by their owning expression, statement, branch, or jump site.
+- SpecConstr binding chains are well-linked, source-ordered, type-correct,
+  contain only exact retained recursive anchors, and are placed by their owning
+  expression, statement, branch, or jump site. Initializer-owned chains remain
+  inside their recursive anchor's value.
 - Rewritten Monotype Lifted bodies have only lexically scoped local references
   and jumps whose target is in scope and whose argument count matches its join.
 - Lambda Solved IR has every function type in `args/callable/ret` form.

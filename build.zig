@@ -752,6 +752,10 @@ const CheckTypeCheckerPatternsStep = struct {
         // inspected_run.zig dispatches on a hosted function's ABI symbol, which is
         // matched by name at the host boundary and has no Ident.Idx.
         .{ .file = "inspected_run.zig", .start = 107, .end = 107 },
+        // report.zig compares already-formatted diagnostic text only to avoid
+        // printing two visually identical types. This is presentation logic,
+        // not a type-checking or identifier comparison.
+        .{ .file = "report.zig", .start = 563, .end = 563 },
     };
 
     fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {
