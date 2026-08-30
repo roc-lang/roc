@@ -26,12 +26,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
+const backend = @import("backend");
 const layout_mod = @import("layout");
 const lir = @import("lir");
 const builtins = @import("builtins");
 const lir_value = @import("value.zig");
 const boxy_runtime = @import("boxy_runtime.zig");
-const BoxyBuiltinFn = @import("backend").LirCodeGenMod.BoxyBuiltinFn;
+const BoxyBuiltinFn = backend.LirCodeGenMod.BoxyBuiltinFn;
 
 const LIR = lir.LIR;
 const LirStore = lir.LirStore;
@@ -51,13 +52,13 @@ const NativeRcIncFn = *const fn (?[*]u8, isize, *RocOps) callconv(.c) void;
 const NativeRcDropFn = *const fn (?[*]u8, *RocOps) callconv(.c) void;
 
 /// Native addresses of all Boxy C-ABI wrappers, indexed by `BoxyBuiltinFn`.
-pub const BoxyNativeFnTable = @import("backend").LirCodeGenMod.BoxyNativeFnTable;
+pub const BoxyNativeFnTable = backend.LirCodeGenMod.BoxyNativeFnTable;
 
 /// Explicit state shared by all generated calls in one in-process invocation.
 ///
 /// The function table is immutable input. The observation fields are mutable
 /// output used by test roots; non-test entrypoints initialize them to zero.
-pub const InProcessContext = @import("backend").in_process_abi.Context;
+pub const InProcessContext = backend.in_process_abi.Context(BoxyNativeFnTable);
 
 /// Build the explicit function table consumed by in-process machine code.
 pub fn nativeFnTable() BoxyNativeFnTable {

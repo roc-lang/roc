@@ -1,8 +1,9 @@
 //! Statement-LIR to LLVM code generator.
 //!
-//! This backend intentionally uses a small internal ABI:
+//! This backend intentionally uses small internal ABIs:
 //!
-//!     void roc_proc_N(*RocOps, ret_ptr, args_ptr)
+//!     vtable: void roc_proc_N(*RocOps, *InProcessContext, ret_ptr, args_ptr)
+//!     symbol: void roc_proc_N(ret_ptr, args_ptr)
 //!
 //! Direct Roc calls pack argument bytes into `args_ptr` using Roc's canonical
 //! alignment order, and callees write results into caller-owned storage. This
@@ -359,7 +360,6 @@ pub const MonoLlvmCodeGen = struct {
     debug_inline_callsites: std.AutoHashMap(u32, LlvmBuilder.Metadata),
     /// Debug type metadata per layout index, memoized per module build.
     debug_types: std.AutoHashMap(u32, LlvmBuilder.Metadata),
-    expect_err_region_global: ?LlvmBuilder.Value = null,
     /// Set as soon as this module lowers a Boxy operation. Linked entrypoints
     /// use it to initialize the sidecar runtime and register dispatch thunks.
     boxy_runtime_used: bool = false,
@@ -591,7 +591,6 @@ pub const MonoLlvmCodeGen = struct {
         self.debug_inline_subprograms.clearRetainingCapacity();
         self.debug_inline_callsites.clearRetainingCapacity();
         self.debug_types.clearRetainingCapacity();
-        self.expect_err_region_global = null;
         self.boxy_runtime_used = false;
     }
 
@@ -1590,11 +1589,11 @@ pub const MonoLlvmCodeGen = struct {
     fn declareProcSpec(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, proc: LirProcSpec) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const ptr_ty = builder.ptrType(.default) catch return error.OutOfMemory;
-        // In-process evaluation threads its explicit test invocation context
+        // In-process evaluation threads its explicit invocation context
         // through erased callables as well as ordinary procedures. The symbol
         // ABI has no such context, so its callable convention remains
         // (ops, ret, args, capture, reuse, out_desc). The vtable convention
-        // inserts test_context after ops.
+        // inserts in_process_context after ops.
         const params: []const LlvmBuilder.Type = if (proc.abi == .erased_callable and self.host_call_mode == .vtable)
             &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }
         else if (proc.abi == .erased_callable)
@@ -2089,7 +2088,7 @@ pub const MonoLlvmCodeGen = struct {
                 const context = try self.allocEntryBlockSlot(
                     .i8,
                     self.inProcessContextSize(),
-                    self.targetPointerAlignment(),
+                    LlvmBuilder.Alignment.fromByteUnits(in_process_abi.contextAlignment(self.targetWordSize())),
                     "in_process_context",
                 );
                 try self.zeroBytes(context, self.inProcessContextSize());
