@@ -517,6 +517,10 @@ pub const Tag = enum {
     /// * lhs - node index for loop initializing expression
     /// * rhs - node index for loop body expression
     for_expr,
+    /// A table literal: `table name, age { "Ada", 36 }`
+    /// * lhs - extra_data index of [columns.span.start, columns.span.len, rows.span.start, rows.span.len]
+    /// * rhs - ignored
+    table,
     /// A break expression.
     /// * lhs - ignored
     /// * rhs - ignored
@@ -536,6 +540,15 @@ pub const Tag = enum {
     /// * lhs - Pattern index
     /// * rhs - Body index
     branch,
+    /// A table column header: `name` or `name : Type`
+    /// * main_token - column name token
+    /// * lhs - packed optional TypeAnno index (0 = untyped)
+    /// * rhs - ignored
+    table_column,
+    /// A table row of comma-separated expressions
+    /// * lhs - items.span.start
+    /// * rhs - items.span.len
+    table_row,
 
     /// Collections
     /// Collection of exposed items

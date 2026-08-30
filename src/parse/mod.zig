@@ -1053,3 +1053,49 @@ test "parser does not create a type path for malformed associated type headers" 
         }
     }
 }
+
+test "table cell newline before comma is a row end, not a same-row separator" {
+    const gpa = std.testing.allocator;
+    const source =
+        \\table name, age {
+        \\    "Bob"
+        \\    , 12,
+        \\    "Alice", 17,
+        \\}
+    ;
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try expr(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 1), ast.parse_diagnostics.items.len);
+    try std.testing.expectEqual(
+        AST.Diagnostic.Tag.table_row_width_mismatch,
+        ast.parse_diagnostics.items[0].tag,
+    );
+
+    const expr_idx: AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+    try std.testing.expectEqual(.malformed, std.meta.activeTag(ast.store.getExpr(expr_idx)));
+}
+
+test "bare table ident is not a table literal when the next line starts with a lowercase name" {
+    const gpa = std.testing.allocator;
+    const source =
+        \\table_for_host = table
+        \\
+        \\names_for_host : List(Str)
+        \\names_for_host = names
+    ;
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try file(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+}
