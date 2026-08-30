@@ -9271,11 +9271,22 @@ emitting any release for the group.
 Tail calls need one rule so that borrow inference never blocks backend
 tail-call lowering. LIR has no tail-call statement; a call is in tail
 position when the next statement returns the call result. Call-graph SCCs
-(computed once, iteratively) feed exactly this rule: a tail-position call to
-a proc in the same SCC demands ownership of its refcounted arguments, so
-emission never places a release after the call on that path. Calls that
-leave the SCC keep borrowed positions, since the caller's drops precede the
-tail call there only when the values genuinely die earlier.
+(computed once, iteratively) feed exactly this rule: every refcounted argument
+of a tail-position call within the same SCC has to outlive replacement of the
+caller frame. This is an exact lifetime constraint, not an ownership demand.
+After parameter modes and borrowed-return lenders settle, the solver records
+the caller entry parameter that anchors each such argument. The argument stays
+borrowed exactly when that parameter is borrowed in the current emission; its
+entry lifetime then contains every recursive frame in the SCC. With no such
+borrowed entry anchor, emission materializes the argument's exact ownership
+carrier, selects a mandatory owned callee variant, and moves any remaining
+caller releases before the call. Normal callee-parameter mode dependencies are
+recorded for tail calls just as for every other direct call. The callee return
+mode must also match the caller return mode; emission selects a mandatory
+owned-return variant when forwarding a borrowed result would otherwise require
+a retain after the call. Calls that leave the SCC keep their ordinary lifetime
+and mode constraints because they cannot participate in unbounded recursive
+frame growth.
 
 ### RC Planning and Materialization
 
