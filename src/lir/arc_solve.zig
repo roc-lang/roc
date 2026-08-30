@@ -87,11 +87,11 @@ pub const JoinBody = struct {
 
 const no_param_anchor: u8 = std.math.maxInt(u8);
 
-/// Exact lifetime fact for one direct call whose result is immediately
-/// returned to a callee in the same call-graph SCC. Each represented argument
-/// either names the caller parameter whose borrowed entry lifetime contains
-/// the recursive call, or has no such anchor and must transfer an ownership
-/// unit before the caller frame can be replaced.
+/// Exact lifetime fact for one direct call to a callee in the same call-graph
+/// SCC whose result is immediately returned by the caller. Each represented
+/// argument either names the caller parameter whose borrowed entry lifetime
+/// contains the recursive call, or has no such anchor and must transfer an
+/// ownership unit before the caller frame can be replaced.
 pub const TailCallLifetime = struct {
     stmt: LIR.CFStmtId,
     anchor_params: [arc_sig.tracked_param_count]u8,
@@ -1782,8 +1782,8 @@ fn buildTailCallTable(
         const args = solver.store.getLocalSpan(call.args);
         for (0..@min(GuardedList.borrowLen(args), arc_sig.tracked_param_count)) |position| {
             const argument = solver.domain.indexOf(GuardedList.at(args, position)) orelse continue;
-            fact.carriers[position] = tailArgumentCarrier(solver, binding, argument);
             if (!binding.borrowed.isSet(argument)) continue;
+            fact.carriers[position] = tailArgumentCarrier(solver, argument);
             const leader = binding.leader[argument];
             if (!paramIsBorrowed(solver, leader)) continue;
             if (solver.param_proc[leader] != call.caller) continue;
@@ -1812,8 +1812,7 @@ fn tailCallLifetimeLessThan(_: void, left: TailCallLifetime, right: TailCallLife
 /// Mirrors `Solution.unitLocalOf` in the dense solver domain. Borrowed pure
 /// aliases transfer their source's unit; other borrowed definitions need an
 /// owned override on their own binding when a tail-call lifetime escapes.
-fn tailArgumentCarrier(solver: *const Solver, binding: *const BindingResult, argument: u32) u32 {
-    if (!binding.borrowed.isSet(argument)) return solver.domain.localAt(argument);
+fn tailArgumentCarrier(solver: *const Solver, argument: u32) u32 {
     var cursor = argument;
     var steps: usize = 0;
     while (solver.alias_source[cursor] != no_local) {

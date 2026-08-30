@@ -2985,14 +2985,17 @@ const Inserter = struct {
         result: LIR.LocalId,
         releases: *std.ArrayList(ReleaseDecision),
     ) ResourceError!void {
-        var index = owned.domain.resource_locals.len;
-        while (index > 0) {
-            index -= 1;
-            const local = owned.domain.resourceLocalAt(index);
-            if (local == result or !owned.contains(local)) continue;
+        const result_bit = owned.domain.resourceBitOf(result);
+        const keep_result = if (result_bit) |bit| owned.bits.isSet(bit) else false;
+        var iter = owned.bits.iterator(.{ .direction = .reverse });
+        while (iter.next()) |bit| {
+            if (result_bit != null and bit == result_bit.?) continue;
+            const local = owned.domain.resourceLocalAt(bit);
             try releases.append(self.emission_allocator, self.releaseDecisionFrom(owned, local));
-            owned.unset(local);
+            owned.residual_masks[bit] = 0;
         }
+        owned.bits.unsetAll();
+        if (keep_result) owned.bits.set(result_bit.?);
     }
 
     fn addRestitutionKeep(
@@ -13074,9 +13077,14 @@ test "RC interprocedural: tail self-call transfers an SCC-local argument" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
 
+    const id_param = try f.local(.str);
+    const id_ret = try f.ret(id_param);
+    const identity = try f.addProc(&.{id_param}, id_ret, .str);
+
     const text = try f.local(.str);
     const counter = try f.local(.i64);
     const base_result = try f.local(.i64);
+    const local_lender = try f.local(.str);
     const next_text = try f.local(.str);
     const next_counter = try f.local(.i64);
     const tail_result = try f.local(.i64);
@@ -13092,8 +13100,14 @@ test "RC interprocedural: tail self-call transfers an SCC-local argument" {
         .args = try f.span(&.{ next_text, next_counter }),
         .next = tail_ret,
     } });
-    const make_next_text = try f.assignStr(next_text, "inside-the-scc", tail_call);
-    const recursive_body = try f.assignI64(next_counter, 0, make_next_text);
+    const borrow_local = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = next_text,
+        .proc = identity,
+        .args = try f.span(&.{local_lender}),
+        .next = tail_call,
+    } });
+    const make_local_lender = try f.assignStr(local_lender, "inside-the-scc", borrow_local);
+    const recursive_body = try f.assignI64(next_counter, 0, make_local_lender);
     f.store.setProcSpecBody(recurse, try f.switchStmt(counter, base_body, recursive_body, null));
 
     const value = try f.local(.str);
@@ -13115,15 +13129,20 @@ test "RC interprocedural: tail self-call transfers an SCC-local argument" {
     try f.run();
 
     // The public recursive entry still borrows its external argument. The
-    // locally created value instead moves into one mandatory owned variant,
-    // whose recursive edge targets itself with no cleanup after the call.
+    // borrowed result backed by a locally created lender instead materializes
+    // a unit and moves it into one mandatory owned variant, whose recursive
+    // edge targets itself with no cleanup after the call.
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const owned_variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
     const base_switch = f.walkToSwitch(f.store.getProcSpec(recurse).body.?);
-    const base_call = f.walkToDirectCall(base_switch.default_branch);
+    const base_borrow_call = f.walkToDirectCall(base_switch.default_branch);
+    try testing.expectEqual(identity, base_borrow_call.proc);
+    const base_call = f.walkToDirectCall(base_borrow_call.next);
     try testing.expectEqual(owned_variant, base_call.proc);
     const variant_switch = f.walkToSwitch(f.store.getProcSpec(owned_variant).body.?);
-    const variant_call = f.walkToDirectCall(variant_switch.default_branch);
+    const variant_borrow_call = f.walkToDirectCall(variant_switch.default_branch);
+    try testing.expectEqual(identity, variant_borrow_call.proc);
+    const variant_call = f.walkToDirectCall(variant_borrow_call.next);
     try testing.expectEqual(owned_variant, variant_call.proc);
     const after_variant_call = f.store.getCFStmt(variant_call.next);
     try testing.expect(after_variant_call == .ret and after_variant_call.ret.value == variant_call.target);
@@ -13131,7 +13150,10 @@ test "RC interprocedural: tail self-call transfers an SCC-local argument" {
     // The owned variant releases its entry value on either branch: at the
     // base return, or before the recursive tail edge replaces its frame.
     try f.expectRc(text, 0, 2, 0);
-    try f.expectRc(next_text, 0, 0, 0);
+    // Both emitted recursive bodies retain the borrowed identity result into
+    // its tail-call unit and release the SCC-local lender before the edge.
+    try f.expectRc(next_text, 2, 0, 0);
+    try f.expectRc(local_lender, 0, 2, 0);
     try f.expectRc(value, 0, 1, 0);
 }
 
