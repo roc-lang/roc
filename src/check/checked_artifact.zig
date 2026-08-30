@@ -7953,10 +7953,11 @@ fn appendCheckedTypeRootWithRowDefault(
     store: *CheckedTypeStore,
     active: *CheckedSourceTypeRoots,
     var_: Var,
-    row_default: ?RowDefault,
+    row_default_candidate: ?RowDefault,
 ) Allocator.Error!CheckedTypeId {
     const resolved = module.typeStoreConst().resolveVar(var_);
     const resolved_var = resolved.var_;
+    const row_default = checkedTypeVariableRowDefault(resolved.desc.content, row_default_candidate);
 
     // The checker explicitly marks an otherwise-unresolved identity when it
     // closes that identity to `[]`. Preserve the surviving root as a checked
@@ -8104,6 +8105,22 @@ fn appendCheckedTypeRootWithRowDefault(
     store.payloads.items[@intFromEnum(id)] = stored;
     applyCheckedTypeRowDefault(store, id, row_default);
     return id;
+}
+
+/// A row-tail occurrence supplies a close-to-empty default only when its
+/// variable has no static-dispatch requirements. A constrained row must stay
+/// open so each use can instantiate both the row and its evidence together.
+fn checkedTypeVariableRowDefault(
+    content: types.Content,
+    candidate: ?RowDefault,
+) ?RowDefault {
+    const default = candidate orelse return null;
+    const constraints = switch (content) {
+        .flex => |flex| flex.constraints,
+        .rigid => |rigid| rigid.constraints,
+        .err, .alias, .field_presence, .structure => return null,
+    };
+    return if (constraints.len() == 0) default else null;
 }
 
 fn applyCheckedTypeRowDefault(
@@ -9113,6 +9130,31 @@ const EmptyTagCheckedOutputTestError = @import("test/TestEnv.zig").TestEnvError 
     ExpectedFlexIdentity,
     ExpectedFunctionPayload,
 };
+
+test "checked row defaults apply only to unconstrained type variables" {
+    const no_constraints = types.StaticDispatchConstraint.SafeList.Range.empty();
+    const one_constraint = types.StaticDispatchConstraint.SafeList.Range{
+        .start = @enumFromInt(0),
+        .count = 1,
+    };
+
+    try std.testing.expectEqual(
+        RowDefault.empty_record,
+        checkedTypeVariableRowDefault(.{ .flex = .{ .name = null, .constraints = no_constraints } }, .empty_record).?,
+    );
+    try std.testing.expectEqual(
+        RowDefault.empty_tag_union,
+        checkedTypeVariableRowDefault(.{ .rigid = .{ .name = Ident.Idx.NONE, .constraints = no_constraints } }, .empty_tag_union).?,
+    );
+    try std.testing.expectEqual(
+        null,
+        checkedTypeVariableRowDefault(.{ .flex = .{ .name = null, .constraints = one_constraint } }, .empty_record),
+    );
+    try std.testing.expectEqual(
+        null,
+        checkedTypeVariableRowDefault(.{ .rigid = .{ .name = Ident.Idx.NONE, .constraints = one_constraint } }, .empty_tag_union),
+    );
+}
 
 fn withEmptyTagCheckedOutputForTest(
     allocator: Allocator,

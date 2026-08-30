@@ -1090,6 +1090,11 @@ const subcommand_cases = [_]CliCase{
     // Repro for https://github.com/roc-lang/roc/issues/10824: rank-1 platform
     // inference must retain the complete generated encoder contract after its row closes.
     .{ .id = 0, .suite = .subcommands, .name = "issue 10824: inferred platform model with custom codec checks cleanly", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10824_generated_codec_contract/app.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "checked generated codec contract was missing its subject method call" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    // Repro for https://github.com/roc-lang/roc/issues/10956: the extension
+    // variable of an open record annotation can also carry a where-clause
+    // method requirement, so publishing that function type must keep the
+    // constrained row open instead of assigning its contextual row default.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10956: constrained open record row publishes without a default", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10956_open_record_ext_where_clause.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "checked row default was assigned to a constrained type variable" }, .{ .stream = .stderr, .text = "checked artifact invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
     // Repro for https://github.com/roc-lang/roc/issues/10832: the list element
     // contains an erased Box allocation even though its unresolved closure
     // layout is otherwise non-refcounted, so list allocation and drop must use
