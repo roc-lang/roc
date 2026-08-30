@@ -856,6 +856,32 @@ test "parse diagnostic report handles invalid mutable identifier spelling" {
     }
 }
 
+test "parse diagnostic report handles mutable type annotation without panicking" {
+    const gpa = std.testing.allocator;
+    const source =
+        \\$count : U64
+    ;
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try file(gpa, &env);
+    defer ast.deinit();
+
+    var found_mutable_annotation_diagnostic = false;
+    for (ast.parse_diagnostics.items) |diagnostic| {
+        var report = try ast.parseDiagnosticToReport(&env, diagnostic, gpa, "test");
+        defer report.deinit();
+
+        if (diagnostic.tag == .var_type_anno_needs_var_keyword) {
+            found_mutable_annotation_diagnostic = true;
+            try std.testing.expectEqualStrings("Expected Var Keyword", report.title);
+        }
+    }
+
+    try std.testing.expect(found_mutable_annotation_diagnostic);
+}
+
 test "regression B212: parameterized type arguments accept bare function types" {
     const gpa = std.testing.allocator;
     const source =
