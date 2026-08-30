@@ -447,6 +447,18 @@ pub const Diagnostics = struct {
     }
 };
 
+/// Workload diagnostics produced by one ordinary specialization shard. These
+/// remain result-owned until ordered coordinator commit merges them.
+const SpecJobDiagnostics = struct {
+    graph: solve.GraphDiagnostics = .{},
+    body: BodyDiagnostics = .{},
+
+    fn addTo(self: SpecJobDiagnostics, destination: *Diagnostics) void {
+        addFlatCounters(solve.GraphDiagnostics, &destination.graph, self.graph);
+        addFlatCounters(BodyDiagnostics, &destination.body, self.body);
+    }
+};
+
 fn addFlatCounters(comptime T: type, destination: *T, source: T) void {
     inline for (std.meta.fields(T)) |field| {
         @field(destination, field.name) = @field(destination, field.name) +| @field(source, field.name);
@@ -2115,10 +2127,15 @@ const CompletedSpecJobShard = struct {
     graph: *InstGraph,
     body_draft: BodyDraftStore,
     pending: PendingTemplateBody,
+    diagnostics: ?*SpecJobDiagnostics,
+    diagnostics_committed: bool = false,
 
     fn deinit(self: *CompletedSpecJobShard) void {
         self.body_draft.deinit();
         self.graph.destroy();
+        if (self.diagnostics) |diagnostics| {
+            self.workspace.allocator.destroy(diagnostics);
+        }
         self.workspace.finishEpoch(self.epoch);
         self.* = undefined;
     }
@@ -2371,6 +2388,9 @@ const Builder = struct {
     loaded_specialization_shards: []const LoadedSpecializationShard,
     counters: ?*SpecializationCounters,
     diagnostics: ?*Diagnostics,
+    /// Result-owned sink while one ordinary specialization shard is lowering or
+    /// committing. Scheduler diagnostics continue to target `diagnostics`.
+    active_spec_job_diagnostics: ?*SpecJobDiagnostics = null,
     inline_expects: InlineExpectMode,
     static_data_literals: bool,
     target_usize: base.target.TargetUsize,
@@ -2483,6 +2503,7 @@ const Builder = struct {
             .loaded_specialization_shards = options.loaded_specialization_shards,
             .counters = counters,
             .diagnostics = options.diagnostics,
+            .active_spec_job_diagnostics = null,
             .inline_expects = options.inline_expects,
             .static_data_literals = options.static_data_literals,
             .target_usize = options.target_usize,
@@ -2604,15 +2625,33 @@ const Builder = struct {
     }
 
     fn countBodyDiagnostic(self: *Builder, comptime field: []const u8) void {
+        if (self.bodyDiagnosticSink()) |body| {
+            @field(body, field) += 1;
+        }
+    }
+
+    fn countBodyDiagnosticBy(self: *Builder, comptime field: []const u8, amount: usize) void {
+        if (self.bodyDiagnosticSink()) |body| {
+            @field(body, field) += @intCast(amount);
+        }
+    }
+
+    fn countCoordinatorBodyDiagnostic(self: *Builder, comptime field: []const u8) void {
         if (self.diagnostics) |diagnostics| {
             @field(diagnostics.body, field) += 1;
         }
     }
 
-    fn countBodyDiagnosticBy(self: *Builder, comptime field: []const u8, amount: usize) void {
-        if (self.diagnostics) |diagnostics| {
-            @field(diagnostics.body, field) += @intCast(amount);
-        }
+    fn bodyDiagnosticSink(self: *Builder) ?*BodyDiagnostics {
+        if (self.active_spec_job_diagnostics) |diagnostics| return &diagnostics.body;
+        if (self.diagnostics) |diagnostics| return &diagnostics.body;
+        return null;
+    }
+
+    fn graphDiagnosticSink(self: *Builder) ?*solve.GraphDiagnostics {
+        if (self.active_spec_job_diagnostics) |diagnostics| return &diagnostics.graph;
+        if (self.diagnostics) |diagnostics| return &diagnostics.graph;
+        return null;
     }
 
     fn allocateInstantiationScope(self: *Builder) InstantiationScopeId {
@@ -2631,9 +2670,11 @@ const Builder = struct {
 
     fn createGraphForStore(self: *Builder, types_: *Type.Store) Allocator.Error!*InstGraph {
         const graph = try InstGraph.create(self.allocator, types_, &self.program.names);
-        if (self.diagnostics) |diagnostics| {
-            diagnostics.body.graphs_created += 1;
-            graph.setDiagnostics(&diagnostics.graph);
+        if (self.bodyDiagnosticSink()) |body| {
+            body.graphs_created += 1;
+        }
+        if (self.graphDiagnosticSink()) |graph_diagnostics| {
+            graph.setDiagnostics(graph_diagnostics);
         }
         return graph;
     }
@@ -3852,7 +3893,7 @@ const Builder = struct {
                     .signature_relation = signature_relation,
                 });
                 self.next_spec_dispatch_index += 1;
-                self.countBodyDiagnostic("spec_jobs_enqueued");
+                self.countCoordinatorBodyDiagnostic("spec_jobs_enqueued");
                 return reservation.def;
             },
         }
@@ -4098,7 +4139,7 @@ const Builder = struct {
             // An immediate caller claimed and completed this reservation after
             // it was queued; the queued duplicate is skipped, not re-lowered.
             .ready => {
-                self.countBodyDiagnostic("spec_jobs_skipped_ready");
+                self.countCoordinatorBodyDiagnostic("spec_jobs_skipped_ready");
                 if (std.debug.runtime_safety) {
                     const existing = self.lowered_templates.get(job.reservation.fn_id) orelse
                         Common.invariant("completed Monotype specialization lost its lowering state");
@@ -4110,7 +4151,7 @@ const Builder = struct {
             .reserved => {},
             .lowering => Common.invariant("queued Monotype specialization was already lowering at dispatch"),
         }
-        self.countBodyDiagnostic("spec_jobs_executed");
+        self.countCoordinatorBodyDiagnostic("spec_jobs_executed");
         self.spec_store.markLowering(job.spec);
         const view = self.moduleForDigest(names.procTemplateModuleDigest(job.template_ref));
         const template = view.templates.get(job.template_ref.template);
@@ -4191,6 +4232,17 @@ const Builder = struct {
         const workspace = self.ensureSpecJobWorkspace();
         const epoch = workspace.beginEpoch(self.program);
         errdefer workspace.finishEpoch(epoch);
+        if (self.active_spec_job_diagnostics != null) {
+            Common.compilerBug("Monotype specialization shard began with another shard diagnostic sink active");
+        }
+        const shard_diagnostics: ?*SpecJobDiagnostics = if (self.diagnostics != null) blk: {
+            const diagnostics = try self.allocator.create(SpecJobDiagnostics);
+            diagnostics.* = .{};
+            break :blk diagnostics;
+        } else null;
+        errdefer if (shard_diagnostics) |diagnostics| self.allocator.destroy(diagnostics);
+        self.active_spec_job_diagnostics = shard_diagnostics;
+        defer self.active_spec_job_diagnostics = null;
         const graph = try self.createGraphForStore(&workspace.types);
         errdefer graph.destroy();
         var body_draft = BodyDraftStore.init(self.allocator);
@@ -4222,6 +4274,7 @@ const Builder = struct {
             .graph = graph,
             .body_draft = body_draft,
             .pending = pending,
+            .diagnostics = shard_diagnostics,
         };
     }
 
@@ -4233,6 +4286,14 @@ const Builder = struct {
     ) Allocator.Error!void {
         self.requireNextSpecAcceptance(shard.dispatch_index);
         shard.workspace.requireEpoch(shard.epoch);
+        if (shard.diagnostics_committed) {
+            Common.compilerBug("Monotype specialization shard diagnostics were committed more than once");
+        }
+        if (self.active_spec_job_diagnostics != null) {
+            Common.compilerBug("Monotype specialization shard committed with another shard diagnostic sink active");
+        }
+        self.active_spec_job_diagnostics = shard.diagnostics;
+        defer self.active_spec_job_diagnostics = null;
         if (shard.graph.types != &shard.workspace.types) {
             Common.compilerBug("Monotype specialization shard graph escaped its workspace type store");
         }
@@ -4254,7 +4315,13 @@ const Builder = struct {
         var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
         defer completion_timing_scope.end();
         try self.finishReservedTemplateBody(shard.pending, sealed.ids, sealed.root_ty.?);
-        self.countBodyDiagnostic("spec_job_shards_committed");
+        if (shard.diagnostics) |diagnostics| {
+            const destination = self.diagnostics orelse
+                Common.compilerBug("Monotype specialization shard lost its coordinator diagnostic sink");
+            diagnostics.addTo(destination);
+        }
+        shard.diagnostics_committed = true;
+        self.countCoordinatorBodyDiagnostic("spec_job_shards_committed");
         self.acceptSpecDispatch(shard.dispatch_index);
     }
 
@@ -13241,7 +13308,10 @@ const InterfaceReplayEntry = struct {
     evidence: StoredConstFnEvidence,
     provisional_ty: Type.TypeId,
     representative: NodeId,
-    duplicates: std.ArrayList(NodeId) = .empty,
+    /// Immutable result of expanding the representative. Instantiating this
+    /// snapshot gives each independent request fresh variables while replaying
+    /// the complete transitive interface constraints.
+    summary_ty: ?Type.TypeId = null,
     status: InterfaceReplayStatus = .expanding,
 };
 
@@ -13257,7 +13327,6 @@ const InterfaceReplayState = struct {
     }
 
     fn deinit(self: *InterfaceReplayState, allocator: Allocator) void {
-        for (self.entries.items) |*entry| entry.duplicates.deinit(allocator);
         self.entries.deinit(allocator);
         var buckets = self.buckets.valueIterator();
         while (buckets.next()) |bucket| bucket.deinit(allocator);
@@ -17362,7 +17431,6 @@ const BodyContext = struct {
             &active_local_scopes,
             &replay_state,
         );
-        try self.finishCheckedTemplateInterfaceReplay(&replay_state);
     }
 
     fn applyCheckedTemplateInterfaceScopeRelations(
@@ -17584,7 +17652,18 @@ const BodyContext = struct {
                     entry.representative,
                     request_fn_node,
                 ),
-                .ready => try entry.duplicates.append(self.allocator, request_fn_node),
+                .ready => {
+                    // Never join an independent request to the completed live
+                    // graph. Its variables may subsequently be refined by its
+                    // caller. Instantiating the immutable summary preserves its
+                    // internal sharing while allocating fresh request variables.
+                    try relateFunctionRequestInterface(
+                        self.graph,
+                        try self.graph.instantiateProvisionalTypeView(entry.summary_ty orelse
+                            Common.invariant("ready interface replay had no summary")),
+                        request_fn_node,
+                    );
+                },
             }
             return;
         };
@@ -17634,30 +17713,9 @@ const BodyContext = struct {
             &active_local_scopes,
             replay_state,
         );
-        replay_state.entries.items[replay_index].status = .ready;
-    }
-
-    fn finishCheckedTemplateInterfaceReplay(
-        self: *BodyContext,
-        replay_state: *InterfaceReplayState,
-    ) Allocator.Error!void {
-        const final_types = try self.allocator.alloc(Type.TypeId, replay_state.entries.items.len);
-        defer self.allocator.free(final_types);
-        for (replay_state.entries.items, final_types) |entry, *final_ty| {
-            if (entry.status != .ready) {
-                Common.invariant("checked specialization interface replay did not finish");
-            }
-            final_ty.* = try self.graph.provisionalTypeViewForNode(entry.representative);
-        }
-        for (replay_state.entries.items, final_types) |entry, final_ty| {
-            for (entry.duplicates.items) |duplicate| {
-                try relateFunctionRequestInterface(
-                    self.graph,
-                    try self.graph.instantiateProvisionalTypeView(final_ty),
-                    duplicate,
-                );
-            }
-        }
+        const entry = &replay_state.entries.items[replay_index];
+        entry.summary_ty = try self.graph.provisionalTypeViewForNode(entry.representative);
+        entry.status = .ready;
     }
 
     fn lowerEntryWrapperAtCell(
@@ -36102,9 +36160,24 @@ const BodyContext = struct {
                 return .{ .target = try self.materializeEvidenceTarget(node, purpose) };
             },
             .constraint => |constraint_ref| {
-                const entry = self.evidence.at(constraint_ref) orelse
+                const entry = self.evidence.at(constraint_ref.index) orelse
                     Common.invariant("checked evidence reference was absent from its lexical chain");
-                return entry;
+                if (!constraint_ref.independent_callable) return entry;
+                return switch (entry) {
+                    .target => |target| blk: {
+                        const arena = self.builder.evidence_arena.allocator();
+                        const independent = try arena.create(SpecEvidenceTarget);
+                        independent.* = .{
+                            .view = target.view,
+                            .target = target.target,
+                            .instantiation = null,
+                            .local_proc_context = target.local_proc_context,
+                            .nested = .synthesize,
+                        };
+                        break :blk .{ .target = independent };
+                    },
+                    .structural, .unreachable_value, .checked_error => entry,
+                };
             },
             .structural => |evidence| return .{ .structural = .{
                 .derivation = evidence.derivation,
@@ -36310,11 +36383,13 @@ const BodyContext = struct {
                     .from_callable => .synthesize,
                 };
             },
-            .evidence_dependent => |constraint_ref| {
-                const entry = self.evidence.at(constraint_ref) orelse
+            .evidence_dependent => |dependent| {
+                const entry = self.evidence.at(dependent.index) orelse
                     Common.invariant("method target evidence was absent from its lexical chain");
                 return switch (entry) {
-                    .target => |target| switch (target.nested) {
+                    .target => |target| if (dependent.independent_callable)
+                        .synthesize
+                    else switch (target.nested) {
                         .resolved => |nested| .{ .resolved = nested },
                         .synthesize => .synthesize,
                     },
@@ -36337,11 +36412,13 @@ const BodyContext = struct {
                     .from_callable => .synthesize,
                 };
             },
-            .evidence_dependent => |constraint_ref| {
-                const entry = self.evidence.at(constraint_ref) orelse
+            .evidence_dependent => |dependent| {
+                const entry = self.evidence.at(dependent.index) orelse
                     Common.invariant("iterator target evidence was absent from its lexical chain");
                 return switch (entry) {
-                    .target => |target| switch (target.nested) {
+                    .target => |target| if (dependent.independent_callable)
+                        .synthesize
+                    else switch (target.nested) {
                         .resolved => |nested| .{ .resolved = nested },
                         .synthesize => .synthesize,
                     },
@@ -36373,16 +36450,21 @@ const BodyContext = struct {
                 };
                 return .{ .target = lookup };
             },
-            .evidence_dependent => |constraint_ref| {
-                const entry = self.evidence.at(constraint_ref) orelse
+            .evidence_dependent => |dependent| {
+                const entry = self.evidence.at(dependent.index) orelse
                     Common.invariant("dispatch resolution evidence was absent from its lexical chain");
                 return switch (entry) {
-                    .target => |target| .{ .target = .{
-                        .view = target.view,
-                        .target = target.target,
-                        .instantiation = target.instantiation,
-                        .local_proc_context = target.local_proc_context,
-                    } },
+                    .target => |target| .{
+                        .target = .{
+                            .view = target.view,
+                            .target = target.target,
+                            .instantiation = if (dependent.independent_callable)
+                                null
+                            else
+                                target.instantiation,
+                            .local_proc_context = target.local_proc_context,
+                        },
+                    },
                     .structural => |derivation| .{ .structural = derivation },
                     // Unreachable and checked-error dispatches crash before
                     // target resolution.
@@ -36461,7 +36543,7 @@ const BodyContext = struct {
         return switch (resolution) {
             .@"unreachable" => .unreachable_value,
             .checked_error => .checked_error,
-            .evidence_dependent => |constraint_ref| if (self.evidence.at(constraint_ref)) |entry| switch (entry) {
+            .evidence_dependent => |dependent| if (self.evidence.at(dependent.index)) |entry| switch (entry) {
                 .unreachable_value => .unreachable_value,
                 .checked_error => .checked_error,
                 .target, .structural => null,
@@ -47496,11 +47578,18 @@ const BodyContext = struct {
                 };
                 break :blk lookup;
             },
-            .evidence_dependent => |constraint_ref| if (self.evidence.at(constraint_ref)) |entry| switch (entry) {
+            .evidence_dependent => |dependent| if (self.evidence.at(dependent.index)) |entry| switch (entry) {
                 .target => |target| .{
                     .view = target.view,
                     .target = target.target,
-                    .instantiation = target.instantiation,
+                    // Shared evidence carries the callable instantiation of
+                    // whichever same-name relation the caller materialized.
+                    // An independent relation supplies only the target
+                    // identity and instantiates against its own plan.
+                    .instantiation = if (dependent.independent_callable)
+                        null
+                    else
+                        target.instantiation,
                     .local_proc_context = target.local_proc_context,
                 },
                 .structural, .unreachable_value, .checked_error => Common.invariant("iterator dispatch evidence was not a callable target"),
@@ -49845,6 +49934,7 @@ test "queued specialization skips a body claimed immediately before dispatch" {
     builder.next_spec_accept_index = 0;
     builder.counters = null;
     builder.diagnostics = &diagnostics;
+    builder.active_spec_job_diagnostics = null;
     builder.spec_store = specialize.SpecBuilder.init(
         allocator,
         &program.names,
@@ -53097,6 +53187,7 @@ test "checked type instantiation scopes have exact isolated identities" {
     var builder: Builder = undefined;
     builder.next_instantiation_scope = 0;
     builder.diagnostics = &diagnostics;
+    builder.active_spec_job_diagnostics = null;
 
     const module_bytes = [_]u8{7} ** 32;
     var first = TypeInstantiationContext.init(std.testing.allocator, builder.allocateInstantiationScope(), module_bytes);
@@ -53111,6 +53202,46 @@ test "checked type instantiation scopes have exact isolated identities" {
     try std.testing.expectEqual(@as(?NodeId, node), first.node_map.get(checked_ty));
     try std.testing.expectEqual(@as(?NodeId, null), second.node_map.get(checked_ty));
     try std.testing.expectEqual(@as(u64, 2), diagnostics.body.instantiation_scopes_created);
+}
+
+test "specialization shard diagnostics remain private until coordinator commit" {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator);
+    defer program.deinit();
+
+    var coordinator: Diagnostics = .{};
+    var shard: SpecJobDiagnostics = .{};
+    var builder: Builder = undefined;
+    builder.allocator = allocator;
+    builder.program = &program;
+    builder.diagnostics = &coordinator;
+    builder.active_spec_job_diagnostics = &shard;
+
+    builder.countBodyDiagnostic("body_contexts_created");
+    builder.countBodyDiagnosticBy("arguments_prepared", 3);
+    builder.countCoordinatorBodyDiagnostic("spec_jobs_enqueued");
+
+    const graph = try builder.createGraphForStore(&program.types);
+    defer graph.destroy();
+    _ = try graph.newNode(.zst);
+
+    try std.testing.expectEqual(@as(u64, 0), coordinator.body.body_contexts_created);
+    try std.testing.expectEqual(@as(u64, 0), coordinator.body.arguments_prepared);
+    try std.testing.expectEqual(@as(u64, 0), coordinator.body.graphs_created);
+    try std.testing.expectEqual(@as(u64, 0), coordinator.graph.nodes_created);
+    try std.testing.expectEqual(@as(u64, 1), coordinator.body.spec_jobs_enqueued);
+    try std.testing.expectEqual(@as(u64, 1), shard.body.body_contexts_created);
+    try std.testing.expectEqual(@as(u64, 3), shard.body.arguments_prepared);
+    try std.testing.expectEqual(@as(u64, 1), shard.body.graphs_created);
+    try std.testing.expectEqual(@as(u64, 1), shard.graph.nodes_created);
+
+    shard.addTo(&coordinator);
+
+    try std.testing.expectEqual(@as(u64, 1), coordinator.body.body_contexts_created);
+    try std.testing.expectEqual(@as(u64, 3), coordinator.body.arguments_prepared);
+    try std.testing.expectEqual(@as(u64, 1), coordinator.body.graphs_created);
+    try std.testing.expectEqual(@as(u64, 1), coordinator.graph.nodes_created);
+    try std.testing.expectEqual(@as(u64, 1), coordinator.body.spec_jobs_enqueued);
 }
 
 test "function context identity excludes draft local allocation ids" {

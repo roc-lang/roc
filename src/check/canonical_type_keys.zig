@@ -52,6 +52,26 @@ pub fn fromVarInfo(
     };
 }
 
+/// Build a checker-local shape key while preserving the identity of variables
+/// exposed by the enclosing scheme. Variables absent from `anchors` are
+/// alpha-normalized, so equivalent private requirement details compare equal;
+/// anchored variables include their resolved store identity. This key must
+/// never cross a checked-module boundary.
+pub fn fromVarWithAnchoredIdentities(
+    allocator: Allocator,
+    store: *const TypeStore,
+    env: *const ModuleEnv,
+    var_: Var,
+    anchors: *const std.AutoHashMap(Var, void),
+) Allocator.Error!canonical.CanonicalTypeKey {
+    var builder = Builder.init(allocator, store, env);
+    defer builder.deinit();
+    builder.identity_anchors = anchors;
+    builder.write_identity_names = false;
+    try builder.writeVar(var_);
+    return .{ .bytes = builder.hasher.finalResult() };
+}
+
 /// Public `identityVarsFromVar` function.
 ///
 /// The identity variables (flex/rigid) reachable from `var_`, in the exact
@@ -68,6 +88,21 @@ pub fn identityVarsFromVar(
 ) Allocator.Error![]types.Var {
     var builder = Builder.init(allocator, store, env);
     defer builder.deinit();
+    try builder.writeVar(var_);
+    return try allocator.dupe(types.Var, builder.identity_variables.items);
+}
+
+/// Return the identity variables exposed by a type's ordinary structure,
+/// without following method requirements attached to those identities.
+pub fn identityVarsFromVarIgnoringConstraints(
+    allocator: Allocator,
+    store: *const TypeStore,
+    env: *const ModuleEnv,
+    var_: Var,
+) Allocator.Error![]types.Var {
+    var builder = Builder.init(allocator, store, env);
+    defer builder.deinit();
+    builder.walk_identity_constraints = false;
     try builder.writeVar(var_);
     return try allocator.dupe(types.Var, builder.identity_variables.items);
 }
@@ -261,6 +296,16 @@ const Builder = struct {
     /// Digest erroneous content as its resolved root var instead of one
     /// universal token, so unrelated poisoned positions never key equal.
     err_by_var: bool = false,
+    /// Checker-local identities that must not be alpha-renamed while comparing
+    /// private requirement shapes.
+    identity_anchors: ?*const std.AutoHashMap(Var, void) = null,
+    /// Durable canonical keys preserve source-level variable names. Ephemeral
+    /// requirement-shape keys ignore them because names do not affect type
+    /// compatibility.
+    write_identity_names: bool = true,
+    /// Structural scheme-interface walks stop at an identity so attached
+    /// requirements do not become externally visible anchors.
+    walk_identity_constraints: bool = true,
 
     fn init(allocator: Allocator, store: *const TypeStore, env: *const ModuleEnv) Builder {
         return .{
@@ -395,6 +440,13 @@ const Builder = struct {
         constraints: types.StaticDispatchConstraint.SafeList.Range,
     ) Allocator.Error!bool {
         self.contains_identity_variables = true;
+        if (self.identity_anchors) |anchors| {
+            if (anchors.contains(root)) {
+                self.writeTag("identity_var_anchor");
+                self.writeU32(@intFromEnum(root));
+                return true;
+            }
+        }
         if (varSlot(self.identity_variables.items, root)) |slot| {
             self.writeTag("identity_var_ref");
             self.writeU32(slot);
@@ -405,8 +457,11 @@ const Builder = struct {
         try self.identity_variables.append(self.allocator, root);
         self.writeTag(tag);
         self.writeU32(slot);
-        try self.writeOptionalIdent(name);
+        if (self.write_identity_names) {
+            try self.writeOptionalIdent(name);
+        }
 
+        if (!self.walk_identity_constraints) return true;
         const items = self.store.sliceStaticDispatchConstraints(constraints);
         self.writeU32(@intCast(items.len));
         if (items.len == 0) return true;

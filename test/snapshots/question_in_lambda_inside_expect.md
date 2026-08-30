@@ -197,7 +197,7 @@ expect {
 																	(p-assign (ident "#err")))))))))))))
 						(e-tag (name "Ok")
 							(args
-								(e-dispatch-call (method "times") (constraint-fn-var 349)
+								(e-dispatch-call (method "times") (constraint-fn-var 357)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "value"))))
@@ -205,7 +205,7 @@ expect {
 										(e-num (value "2")))))))))
 			(e-method-eq (negated "false")
 				(lhs
-					(e-call (constraint-fn-var 366)
+					(e-call (constraint-fn-var 374)
 						(e-lookup-local
 							(p-assign (ident "double")))
 						(e-num (value "3"))))

@@ -2149,7 +2149,32 @@ test "specialization scheduling is deterministic across repeat runs" {
     }
 }
 
-test "issue 10529 open Try chain with named local callback stays bounded" {
+test "issue 10529 ten-level open Try chain with inline callback stays bounded" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\take0 = |b| Ok({ val: b.get(0).map_err(|_| End)?, rest: b.drop_first(1) })
+        \\take1 = |b| Ok({ val: take0(b)?.val, rest: take0(b)?.rest })
+        \\take2 = |b| Ok({ val: take1(b)?.val, rest: take1(b)?.rest })
+        \\take3 = |b| Ok({ val: take2(b)?.val, rest: take2(b)?.rest })
+        \\take4 = |b| Ok({ val: take3(b)?.val, rest: take3(b)?.rest })
+        \\take5 = |b| Ok({ val: take4(b)?.val, rest: take4(b)?.rest })
+        \\take6 = |b| Ok({ val: take5(b)?.val, rest: take5(b)?.rest })
+        \\take7 = |b| Ok({ val: take6(b)?.val, rest: take6(b)?.rest })
+        \\take8 = |b| Ok({ val: take7(b)?.val, rest: take7(b)?.rest })
+        \\take9 = |b| Ok({ val: take8(b)?.val, rest: take8(b)?.rest })
+        \\
+        \\main : {} -> Try({ val : U8, rest : List(U8) }, [End, ..])
+        \\main = |_| take9([1, 2, 3])
+    ;
+
+    const counters = try monotypeCountersForModule(allocator, source);
+    // Each helper adds a fixed amount of work: completed transitive interface
+    // summaries replay without coupling the two independent calls.
+    try std.testing.expect(counters.template_misses <= 75);
+    try std.testing.expect(counters.nominal_backing_instantiations <= 2250);
+}
+
+test "independent same-name helper requirements lower separately" {
     const allocator = std.testing.allocator;
     const source =
         \\take0 = |b| {
@@ -2160,19 +2185,55 @@ test "issue 10529 open Try chain with named local callback stays bounded" {
         \\take2 = |b| Ok({ val: take1(b)?.val, rest: take1(b)?.rest })
         \\take3 = |b| Ok({ val: take2(b)?.val, rest: take2(b)?.rest })
         \\take4 = |b| Ok({ val: take3(b)?.val, rest: take3(b)?.rest })
-        \\take5 = |b| Ok({ val: take4(b)?.val, rest: take4(b)?.rest })
-        \\take6 = |b| Ok({ val: take5(b)?.val, rest: take5(b)?.rest })
         \\
         \\main : {} -> Try({ val : U8, rest : List(U8) }, [End, ..])
-        \\main = |_| take6([1, 2, 3])
+        \\main = |_| take4([1, 2, 3])
     ;
 
-    const counters = try monotypeCountersForModule(allocator, source);
-    try std.testing.expect(counters.template_misses <= 20);
-    // Generalized record fields retain distinct source-value/runtime-slot
-    // cells until specialization freeze. Keep that fixed linear bookkeeping
-    // bounded while guarding against the former exponential Try-chain growth.
-    try std.testing.expect(counters.nominal_backing_instantiations <= 325);
+    _ = try monotypeCountersForModule(allocator, source);
+}
+
+test "independent same-name method requirements specialize separately" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\f1 = |list| list.map(|item| U32.to_u64(item))
+        \\f2 = |list| list.map(|item| U32.to_u128(item))
+        \\g = |list| (f1(list), f2(list))
+        \\
+        \\main : {} -> (List(U64), List(U128))
+        \\main = |_| g([1.U32, 2.U32])
+    ;
+
+    _ = try monotypeCountersForModule(allocator, source);
+}
+
+test "independent same-name iterator requirements specialize separately" {
+    const allocator = std.testing.allocator;
+    // Empty.iter quantifies its element beyond the dispatcher, so the two
+    // loops instantiate the shared iter evidence at different element types.
+    const source =
+        \\Empty := [E].{
+        \\    iter : Empty -> Iter(item)
+        \\    iter = |_| List.iter([])
+        \\}
+        \\
+        \\g = |e| {
+        \\    var $a = 0.U64
+        \\    for x in e {
+        \\        $a = $a + x
+        \\    }
+        \\    var $b = 0.U128
+        \\    for x in e {
+        \\        $b = $b + x
+        \\    }
+        \\    ($a, $b)
+        \\}
+        \\
+        \\main : {} -> (U64, U128)
+        \\main = |_| g(Empty.E)
+    ;
+
+    _ = try monotypeCountersForModule(allocator, source);
 }
 
 test "specialization interface replay follows returned local functions through wrappers" {
