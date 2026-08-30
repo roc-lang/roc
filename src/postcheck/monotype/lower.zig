@@ -34246,7 +34246,7 @@ const BodyContext = struct {
             // an Optional Field"). The backend keeps copying unlisted slots
             // and writing listed ones.
             for (record.unsets, 0..) |label, unset_index| {
-                const name = try self.builder.recordFieldName(self.view, label);
+                const name = try self.recordFieldName(self.view, label);
                 const target_field = self.recordField(ty, name);
                 if (self.monotypeFieldKindTag(target_field) != .optional) {
                     Common.invariant("record update unset field was not optional after checking");
@@ -34270,7 +34270,7 @@ const BodyContext = struct {
         // defaulted arm and materialize the default, diverging from boxy
         // lowering (which panics on the same input).
         for (record.unsets) |label| {
-            const name = try self.builder.recordFieldName(self.view, label);
+            const name = try self.recordFieldName(self.view, label);
             if (self.monotypeFieldKindTag(self.recordField(ty, name)) != .optional) {
                 Common.invariant("record constructor unset field was not optional after checking");
             }
@@ -34417,7 +34417,7 @@ const BodyContext = struct {
             // slot's own graph node, so unset fields keep the checked
             // representation and take no part in witness selection below.
             for (record.unsets, 0..) |label, unset_index| {
-                const name = try self.builder.recordFieldName(self.view, label);
+                const name = try self.recordFieldName(self.view, label);
                 const field_kind = try self.graph.recordConstructionFieldKind(record_node, name);
                 if (field_kind != .optional) {
                     Common.invariant("record graph update unset field was not optional after checking");
@@ -34483,7 +34483,7 @@ const BodyContext = struct {
         // below then constructs its Missing slot. Without this, an unset of
         // a defaulted field would silently materialize the default.
         for (record.unsets) |label| {
-            const name = try self.builder.recordFieldName(self.view, label);
+            const name = try self.recordFieldName(self.view, label);
             if ((try self.graph.recordConstructionFieldKind(record_node, name)) != .optional) {
                 Common.invariant("record graph constructor unset field was not optional after checking");
             }
@@ -41127,7 +41127,7 @@ const BodyContext = struct {
             if (self.graph.sameClass(prepared.field_node, field_node)) return false;
         }
         const value = (try self.defaultedFieldValueAtCell(
-            self.builder.program.names.moduleIdentityBytes(default.module),
+            self.nameStore().moduleIdentityBytes(default.module),
             default.expr_node,
             DraftTypeCell.fromGraphNode(field_node),
         )) orelse Common.invariant("structural parser field default had no archived expression");
