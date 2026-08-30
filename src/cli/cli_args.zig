@@ -398,7 +398,7 @@ const main_help =
     \\  build            Build a binary from the given .roc file, but don't run it
     \\  bundle           Bundle .roc files into a compressed archive
     \\  unbundle         Extract files from compressed .tar.zst archives
-    \\  test             Run all top-level `expect`s in a main module and any modules it imports
+    \\  test             Run all top-level `expect`s in a module, and in the modules and path dependencies it imports
     \\  repl             Launch the interactive Read Eval Print Loop (REPL)
     \\  fmt              Format a .roc file or the .roc files contained in a directory using standard Roc formatting
     \\  glue             Generate native glue code from a Roc platform using a language-specific glue spec
@@ -875,6 +875,10 @@ fn parseTest(args: []const []const u8) CliArgs {
         if (isHelpFlag(arg)) {
             return CliArgs{ .help =
             \\Run all top-level `expect`s in a main module and any modules it imports
+            \\
+            \\Dependencies reached through a filesystem path are tested too, because
+            \\they are yours to edit. Dependencies downloaded from a URL are not: their
+            \\`expect`s belong to whoever published them.
             \\
             \\Usage: roc test [OPTIONS] [ROC_FILE]
             \\

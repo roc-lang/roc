@@ -1188,6 +1188,50 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "([1.0, 2.0], [2.0, 3.0])" },
     },
 
+    // List.update moves ownership of the selected element out of a unique
+    // outer list before calling the updater. That lets the nested List.set
+    // reuse the inner allocation instead of copying it.
+    .{
+        .name = "allocation - List.update repeatedly moves unique nested list into updater",
+        .source =
+        \\{
+        \\    update_many = |len, count| {
+        \\        var $outer = [List.repeat(0.U64, len)]
+        \\        var $i = 0.U64
+        \\        while $i < count {
+        \\            $outer = $outer.update(0, |inner| inner.set(0, $i) ?? inner)?
+        \\            $i = $i + 1
+        \\        }
+        \\        inner = $outer.get(0)?
+        \\        Ok((inner.get(0)?).to_str())
+        \\    }
+        \\    update_many(4.U64, 3.U64) ?? ""
+        \\}
+        ,
+        // List.repeat and the outer list literal allocate once each; the outer
+        // update and inner set allocate zero times across all loop iterations.
+        .expected = .{ .allocations_at_most = .{
+            .output = "2",
+            .max_allocations = 2,
+            .optimized = true,
+        } },
+    },
+
+    // When the outer list remains live, List.update must take the checked
+    // copy path and leave the original list and its inner element unchanged.
+    .{
+        .name = "inspect: List.update leaves shared nested list unchanged",
+        .source =
+        \\{
+        \\    inner = List.concat([1], [2])
+        \\    outer = [inner]
+        \\    updated = outer.update(0, |items| items.set(0, 9) ?? items) ?? []
+        \\    (outer, updated)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([[1.0, 2.0]], [[9.0, 2.0]])" },
+    },
+
     // The transform captures the list it is mapping, which holds the
     // refcount above 1; in-place mutation here would make later elements
     // observe already-written outputs through the capture.

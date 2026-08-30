@@ -7454,7 +7454,53 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     try self.finalizeBindingSchemeNodes();
 
+    try self.finalizePlatformRequirementSolutions();
+
     self.debugAssertNominalDeclTableComplete();
+}
+
+/// Turn every provisional platform-requirement row into the explicit
+/// successful-binding or checked-error outcome consumed by artifact
+/// publication. This runs after all checker error poisoning, while the checker
+/// still owns the exact source def and solved vars.
+fn finalizePlatformRequirementSolutions(self: *Self) Allocator.Error!void {
+    for (self.platform_requirement_solutions.items) |*solution| {
+        const def = self.cir.store.getDef(solution.def);
+        var checked_error = self.erroneous_value_exprs.contains(def.expr) or
+            self.erroneous_value_patterns.contains(def.pattern);
+
+        if (!checked_error) {
+            checked_error = try canonical_type_keys.containsError(
+                self.gpa,
+                self.types,
+                self.cir,
+                ModuleEnv.varFrom(def.expr),
+            );
+        }
+        if (!checked_error) {
+            checked_error = try canonical_type_keys.containsError(
+                self.gpa,
+                self.types,
+                self.cir,
+                solution.solved_var,
+            );
+        }
+        if (!checked_error) {
+            for (solution.identity_vars) |identity_var| {
+                if (try canonical_type_keys.containsError(
+                    self.gpa,
+                    self.types,
+                    self.cir,
+                    identity_var,
+                )) {
+                    checked_error = true;
+                    break;
+                }
+            }
+        }
+
+        solution.outcome = if (checked_error) .checked_error else .success;
+    }
 }
 
 /// Finish canonicalization's strict-demand relation with the exact local
@@ -24499,7 +24545,8 @@ fn structureHasPendingOpenLiteralForDerivedParse(
 ) Allocator.Error!bool {
     return switch (structure) {
         .nominal_type => |nominal| try self.nominalHasPendingOpenLiteralForDerivedParse(nominal, env, visited),
-        .record => |record| try self.recordHasPendingOpenLiteralForDerivedParse(record.fields, env, visited),
+        .record => |record| try self.recordHasPendingOpenLiteralForDerivedParse(record.fields, env, visited) or
+            try self.varHasPendingOpenLiteralForDerivedParse(record.ext, env, visited),
         .record_unbound => |fields| try self.recordHasPendingOpenLiteralForDerivedParse(fields, env, visited),
         .tag_union => |tag_union| try self.tagUnionHasPendingOpenLiteralForDerivedParse(tag_union, env, visited),
         .tuple => |tuple| blk: {
@@ -24616,7 +24663,8 @@ fn structureHasPendingOpenLiteralForDerivedEncode(
 ) Allocator.Error!bool {
     return switch (structure) {
         .nominal_type => |nominal| try self.nominalHasPendingOpenLiteralForDerivedEncode(nominal, env, visited),
-        .record => |record| try self.recordHasPendingOpenLiteralForDerivedEncode(record.fields, env, visited),
+        .record => |record| try self.recordHasPendingOpenLiteralForDerivedEncode(record.fields, env, visited) or
+            try self.varHasPendingOpenLiteralForDerivedEncode(record.ext, env, visited),
         .record_unbound => |fields| try self.recordHasPendingOpenLiteralForDerivedEncode(fields, env, visited),
         .tag_union => |tag_union| try self.tagUnionHasPendingOpenLiteralForDerivedEncode(tag_union, env, visited),
         .tuple => |tuple| blk: {
@@ -27406,6 +27454,18 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
                                 }
+                                // Nothing further will arrive to close the row,
+                                // so the fields it has are the fields it gets.
+                                if (try self.closeRecordRowForDerivedEncode(deferred_constraint.var_, encoding_var, env, region)) {
+                                    try self.satisfyImplicitEncoderForConstraint(
+                                        deferred_constraint.var_,
+                                        constraint,
+                                        constraint.fn_var,
+                                        env,
+                                        region,
+                                    );
+                                    continue;
+                                }
                                 try self.reportConstraintError(
                                     deferred_constraint.var_,
                                     constraint,
@@ -28664,7 +28724,8 @@ fn typeSupportsDerivedEncode(
                     if (support == .unsupported) break;
                 }
             }
-            break :blk support;
+            if (support == .unsupported) break :blk support;
+            break :blk combineDerivedSupport(support, try self.varSupportsDerivedEncodeRecordExt(record.ext, encoding_var, env, region));
         },
         .record_unbound => |fields| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(fields);
@@ -28750,6 +28811,63 @@ fn varSupportsDerivedEncodeShape(
         .flex => .unresolved,
         .rigid, .field_presence => .unsupported,
     };
+}
+
+/// Whether a record row is settled enough to derive an encoder for it. A row
+/// still open on a flex var can gain fields, and the encoder derivation needs
+/// the exact field set, so report it unresolved and let the dispatch defer
+/// until the row closes—or until `closeRecordRowForDerivedEncode` closes it.
+fn varSupportsDerivedEncodeRecordExt(
+    self: *Self,
+    var_: Var,
+    encoding_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!DerivedSupport {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| switch (structure) {
+            .empty_record => .supported,
+            .record => |record| try self.typeSupportsDerivedEncode(.{ .record = record }, encoding_var, env, region),
+            .record_unbound => |fields| try self.typeSupportsDerivedEncode(.{ .record_unbound = fields }, encoding_var, env, region),
+            .tag_union,
+            .empty_tag_union,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            => .unsupported,
+        },
+        .alias => |alias| try self.varSupportsDerivedEncodeRecordExt(self.types.getAliasBackingVar(alias), encoding_var, env, region),
+        .flex => .unresolved,
+        .err => .supported,
+        .rigid, .field_presence => .unsupported,
+    };
+}
+
+/// Close an inferred record row so an encoder can be derived for it.
+///
+/// A record whose shape comes only from use sites keeps an open row: every
+/// field access adds a field and leaves the rest of the row a flex var that
+/// another access could still extend. Deriving an encoder needs the exact field
+/// set, so once the dispatch has been deferred as far as it can go and nothing
+/// further is coming, take the fields the row has as the fields it gets and
+/// close it. Reports whether the row closed and now supports derivation, which
+/// it does not when a field's own type never resolved.
+fn closeRecordRowForDerivedEncode(
+    self: *Self,
+    var_: Var,
+    encoding_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!bool {
+    const resolved = self.types.resolveVar(var_).desc.content;
+    if (resolved != .structure or resolved.structure != .record) return false;
+    const record = resolved.structure.record;
+    if (self.types.resolveVar(record.ext).desc.content != .flex) return false;
+
+    try self.unifyWith(record.ext, .{ .structure = .empty_record }, env);
+    return (try self.varSupportsDerivedEncodeShape(var_, encoding_var, env, region)) == .supported;
 }
 
 fn varSupportsDerivedEncodeTagExt(
@@ -32887,15 +33005,15 @@ fn validateDerivedEncodeVar(
     return switch (resolved.desc.content) {
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| try self.validateDerivedEncodeNominal(var_, nominal, encoding_var, state_var, err_var, constraint, env, region, walk),
-            .record => |record| blk: {
+            .record => blk: {
                 if (walk.visited.contains(resolved.var_)) break :blk .ok;
                 try walk.visited.put(resolved.var_, {});
-                break :blk try self.validateDerivedEncodeRecord(record.fields, encoding_var, state_var, err_var, constraint, env, region, walk);
+                break :blk try self.validateDerivedEncodeRecord(resolved.var_, encoding_var, state_var, err_var, constraint, env, region, walk);
             },
-            .record_unbound => |fields| blk: {
+            .record_unbound => blk: {
                 if (walk.visited.contains(resolved.var_)) break :blk .ok;
                 try walk.visited.put(resolved.var_, {});
-                break :blk try self.validateDerivedEncodeRecord(fields, encoding_var, state_var, err_var, constraint, env, region, walk);
+                break :blk try self.validateDerivedEncodeRecord(resolved.var_, encoding_var, state_var, err_var, constraint, env, region, walk);
             },
             .tag_union => |tag_union| blk: {
                 if (walk.visited.contains(resolved.var_)) break :blk .ok;
@@ -32923,7 +33041,7 @@ fn validateDerivedEncodeVar(
 
 fn validateDerivedEncodeRecord(
     self: *Self,
-    fields_range: types_mod.RecordField.SafeMultiList.Range,
+    record_var: Var,
     encoding_var: Var,
     state_var: Var,
     err_var: Var,
@@ -32932,14 +33050,20 @@ fn validateDerivedEncodeRecord(
     region: Region,
     walk: *DerivedCodecWalk,
 ) Allocator.Error!DerivedParseValidation {
-    const has_fields = self.types.getRecordFieldsSlice(fields_range).len > 0;
+    var field_presences = std.ArrayList(types_mod.RecordField.Presence).empty;
+    defer field_presences.deinit(self.gpa);
+    switch (try self.collectDerivedRecordFields(record_var, &field_presences)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
+    }
+
+    const has_fields = field_presences.items.len > 0;
     switch (try self.validateDerivedEncodeRecordMethods(encoding_var, state_var, err_var, constraint, env, region, has_fields)) {
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }
 
-    const fields = self.types.getRecordFieldsSlice(fields_range);
-    const vars_top = try self.dupeRecordFieldTypeVars(fields.items(.presence));
+    const vars_top = try self.dupeRecordFieldTypeVars(field_presences.items);
     defer self.scratch_record_field_vars.clearFrom(vars_top);
     const vars_end = self.scratch_record_field_vars.top();
 

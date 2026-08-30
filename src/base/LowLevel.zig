@@ -895,10 +895,12 @@ pub const LowLevel = enum(u16) {
 
             // Moves the list's ownership unit into a new local before the
             // reuse query, forcing ARC to preserve every later use first.
+            // List.map and List.update both use this ownership transfer.
             .list_map_prepare_reuse => RcEffect.consumesArgsReturningConsumedArgs(argMask(&.{0})),
 
             // Reads the prepared list's refcount (and slice bit) without
-            // changing it.
+            // changing it. List.map additionally gates this result on item
+            // representation compatibility during lowering.
             .list_map_can_reuse => RcEffect.none(),
 
             // Retypes a unique non-slice list to the output element type,

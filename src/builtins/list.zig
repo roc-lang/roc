@@ -1063,7 +1063,7 @@ pub fn listAppendLeBytes(
     // appended data and the rest of the word lands in capacity slack, which
     // nothing can observe. Bit-writer flushes hit this path on every call.
     if (!list.isSeamlessSlice() and list.getCapacity() >= original_len + 8 and
-        (update_mode == .InPlace or list.isUnique(roc_ops)))
+        list.isExclusive(update_mode, roc_ops))
     {
         if (list.bytes) |bytes| {
             std.mem.writeInt(u64, bytes[original_len..][0..8], value, .little);

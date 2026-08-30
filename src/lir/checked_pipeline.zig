@@ -75,10 +75,11 @@ pub const TargetConfig = struct {
     inline_expects: InlineExpectMode = .run,
     /// Whether ARC may consume a dead Box lender while unboxing.
     consume_dead_boxes: bool = false,
-    /// Allow `List.map` to reuse a unique input list's allocation when the
-    /// input and output element layouts are interchangeable. Optimized builds
-    /// enable this; dev builds and compile-time evaluation leave it off so
-    /// the in-place branch is dropped during lowering.
+    /// Allow `List.map` and `List.update` to reuse a unique input list's
+    /// allocation. Map additionally requires interchangeable input and output
+    /// element layouts. Optimized builds enable this; dev builds and
+    /// compile-time evaluation leave it off so the in-place branches are
+    /// dropped during lowering.
     list_in_place_map: bool = false,
     /// Preserve source-level procedure names in LIR for runtime diagnostics.
     proc_debug_names: bool = false,
@@ -557,11 +558,13 @@ pub fn lowerCheckedModulesToLir(
     errdefer if (lifted_owned) lifted.deinit();
     if (target.timing) |timing| timing.finish(lift_started_ns, .lift);
 
-    if (target.inline_mode != .none) {
+    var procedure_usage = if (target.inline_mode != .none) blk: {
         const spec_constr_started_ns = if (target.timing) |timing| timing.start() else 0;
-        try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
+        const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted);
         if (target.timing) |timing| timing.finish(spec_constr_started_ns, .spec_constr);
-    }
+        break :blk usage;
+    } else postcheck.MonotypeLifted.SpecConstr.OwnedProcedureUsage.empty(allocator);
+    defer procedure_usage.deinit();
 
     if (target.lifted_expr_count_out) |slot| slot.* = lifted.exprCount();
 
@@ -578,7 +581,7 @@ pub fn lowerCheckedModulesToLir(
         if (target.timing) |timing| timing.start() else 0
     else
         0;
-    var inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, &solved);
+    var inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved);
     defer inline_plan.deinit();
     if (target.inline_mode != .none) {
         if (target.timing) |timing| timing.finish(inline_plan_started_ns, .inline_plan);
@@ -645,7 +648,7 @@ fn finishLoweredOutput(
     });
     if (target.timing) |timing| timing.finish(arc_started_ns, .arc);
 
-    LirDump.run(&lowered.lir_result);
+    try LirDump.run(&lowered.lir_result);
 
     if (roots.requests.len != 0 and lowered.lir_result.root_procs.items.len == 0) {
         checkedPipelineInvariant("explicit root set produced no LIR roots");
@@ -929,24 +932,26 @@ const LirDump = if (builtin.os.tag == .freestanding) struct {
         return null;
     }
 
-    fn run(_: *const LirProgram.Result) void {}
+    fn run(_: *const LirProgram.Result) Allocator.Error!void {}
 } else struct {
     fn filter() ?[]const u8 {
         const raw = std.c.getenv("ROC_LIR_DUMP") orelse return null;
         return std.mem.span(raw);
     }
 
-    fn run(result: *const LirProgram.Result) void {
+    fn run(result: *const LirProgram.Result) Allocator.Error!void {
         const name_filter = filter() orelse return;
         const store = &result.store;
         const layouts = &result.layouts;
         for (0..store.procSpecCount()) |index| {
             const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
             const name = store.procDebugName(proc_id) orelse continue;
-            if (name_filter.len != 0 and std.mem.indexOf(u8, name, name_filter) == null) continue;
+            if (name_filter.len != 0 and std.mem.find(u8, name, name_filter) == null) continue;
             var buffer: std.Io.Writer.Allocating = .init(store.allocator);
             defer buffer.deinit();
-            DebugPrint.writeProc(store.allocator, store, layouts, proc_id, &buffer.writer) catch continue;
+            DebugPrint.writeProc(store.allocator, store, layouts, proc_id, &buffer.writer) catch |err| switch (err) {
+                error.OutOfMemory, error.WriteFailed => return error.OutOfMemory,
+            };
             std.debug.print("=== LIR {s} (p{d}) ===\n{s}\n", .{ name, index, buffer.written() });
         }
     }

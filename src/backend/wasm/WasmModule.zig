@@ -3450,8 +3450,6 @@ pub fn preload(allocator: Allocator, bytes: []const u8, mode: PreloadMode) Parse
     if (mode != .executable) {
         if (module.linking.symbol_table.items.len == 0)
             return error.MissingLinkingSection;
-        if (module.reloc_code.entries.items.len == 0)
-            return error.MissingRelocCode;
         if (mode == .relocatable_for_merge and module.preloaded_defined_global_count != 0)
             return error.HasInternalGlobals;
     }
@@ -4510,7 +4508,6 @@ pub const ParseError = error{
     InvalidVersion,
     InvalidSection,
     MissingLinkingSection,
-    MissingRelocCode,
     InvalidLinkingVersion,
     HasInternalGlobals,
     OutOfMemory,
@@ -5115,6 +5112,28 @@ test "preload—require_relocatable rejects module without linking section" {
     // A minimal valid module with no custom sections
     const bytes = [_]u8{ 0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00 };
     try std.testing.expectError(error.MissingLinkingSection, preload(std.testing.allocator, &bytes, .relocatable_for_merge));
+}
+
+test "preload—accepts relocatable module without code relocations" {
+    const allocator = std.testing.allocator;
+    var source = Self.init(allocator);
+    defer source.deinit();
+
+    const type_idx = try source.addFuncType(&.{}, &.{});
+    const function = try source.addDefinedFunction(type_idx);
+    _ = try source.addDefinedFunctionSymbol(function.local, "roc_main", 0);
+    try source.function_offsets.append(allocator, 0);
+    try leb128WriteU32(allocator, &source.code_bytes, 2);
+    try source.code_bytes.appendSlice(allocator, &.{ 0, Op.end });
+
+    const encoded = try source.encodeRelocatable(allocator);
+    defer allocator.free(encoded);
+
+    var parsed = try preload(allocator, encoded, .relocatable_for_merge);
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(usize, 0), parsed.reloc_code.entries.items.len);
+    try std.testing.expectEqual(@as(usize, 1), parsed.function_offsets.items.len);
+    try std.testing.expectEqual(@as(usize, 1), parsed.linking.symbol_table.items.len);
 }
 
 test "preload—parsed module has correct function count" {

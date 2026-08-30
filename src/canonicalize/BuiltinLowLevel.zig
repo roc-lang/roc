@@ -295,6 +295,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
         try low_level_map.put(list_len_ident, .list_len);
     }
+    if (env.common.findIdent("Builtin.List.capacity")) |list_cap_ident| {
+        try low_level_map.put(list_cap_ident, .list_capacity);
+    }
     if (env.common.findIdent("u8_list_len")) |ident| {
         try low_level_map.put(ident, .list_len);
     }

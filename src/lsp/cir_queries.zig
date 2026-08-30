@@ -594,6 +594,450 @@ pub fn findLookupAtOffset(module_env: *ModuleEnv, offset: u32) ?LookupResult {
     return ctx.result;
 }
 
+/// External nominal reference information for a tag.
+pub const TagNominalExternal = struct {
+    module_idx: CIR.Import.Idx,
+    target_node_idx: u32,
+};
+
+/// A tag reference found at a source offset, pairing the tag name with its type variable and declaration context.
+pub const TagRef = struct {
+    name: []const u8,
+    type_var: types.Var,
+    match_cond_type_var: ?types.Var = null,
+    nominal_decl: ?CIR.Statement.Idx = null,
+    nominal_external: ?TagNominalExternal = null,
+};
+
+const FindTagAtOffsetContext = struct {
+    store: *const NodeStore,
+    common: *const base.CommonEnv,
+    target_offset: u32,
+    result: ?TagRef = null,
+
+    fn walkExpr(
+        ctx: *FindTagAtOffsetContext,
+        expr_idx: CIR.Expr.Idx,
+        nominal_decl: ?CIR.Statement.Idx,
+        nominal_ext: ?TagNominalExternal,
+    ) void {
+        if (ctx.result != null) return;
+        const region = ctx.store.getExprRegion(expr_idx);
+        if (!regionContainsOffset(region, ctx.target_offset)) return;
+
+        const expr = ctx.store.getExpr(expr_idx);
+        switch (expr) {
+            .e_tag => |tag| {
+                ctx.result = .{
+                    .name = ctx.common.idents.getText(tag.name),
+                    .type_var = ModuleEnv.varFrom(expr_idx),
+                    .match_cond_type_var = null,
+                    .nominal_decl = nominal_decl,
+                    .nominal_external = nominal_ext,
+                };
+            },
+            .e_nominal => |nom| {
+                ctx.walkExpr(nom.backing_expr, nom.nominal_type_decl, null);
+            },
+            .e_nominal_external => |nom| {
+                ctx.walkExpr(nom.backing_expr, null, .{
+                    .module_idx = nom.module_idx,
+                    .target_node_idx = nom.target_node_idx,
+                });
+            },
+            .e_match => |match_expr| {
+                ctx.walkExpr(match_expr.cond, null, null);
+                if (ctx.result != null) return;
+                const cond_var = ModuleEnv.varFrom(match_expr.cond);
+                for (ctx.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                    const branch = ctx.store.getMatchBranch(branch_idx);
+                    for (ctx.store.sliceMatchBranchPatterns(branch.patterns)) |bp_idx| {
+                        const bp = ctx.store.getMatchBranchPattern(bp_idx);
+                        ctx.walkPattern(bp.pattern, cond_var, null, null);
+                        if (ctx.result != null) return;
+                    }
+                    ctx.walkExpr(branch.value, null, null);
+                    if (ctx.result != null) return;
+                    if (branch.guard) |guard| {
+                        ctx.walkExpr(guard, null, null);
+                        if (ctx.result != null) return;
+                    }
+                }
+            },
+            .e_block => |block| {
+                for (ctx.store.sliceStatements(block.stmts)) |stmt_idx| {
+                    ctx.walkStatement(stmt_idx);
+                    if (ctx.result != null) return;
+                }
+                ctx.walkExpr(block.final_expr, null, null);
+            },
+            .e_if => |if_expr| {
+                for (ctx.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                    const branch = ctx.store.getIfBranch(branch_idx);
+                    ctx.walkExpr(branch.cond, null, null);
+                    if (ctx.result != null) return;
+                    ctx.walkExpr(branch.body, null, null);
+                    if (ctx.result != null) return;
+                }
+                ctx.walkExpr(if_expr.final_else, null, null);
+            },
+            .e_closure => |closure| {
+                ctx.walkExpr(closure.lambda_idx, null, null);
+            },
+            .e_lambda => |lambda| {
+                for (ctx.store.slicePatterns(lambda.args)) |arg_idx| {
+                    ctx.walkPattern(arg_idx, null, null, null);
+                    if (ctx.result != null) return;
+                }
+                ctx.walkExpr(lambda.body, null, null);
+            },
+            .e_run_low_level => |rll| {
+                for (ctx.store.sliceExpr(rll.args)) |arg| {
+                    ctx.walkExpr(arg, null, null);
+                    if (ctx.result != null) return;
+                }
+            },
+            .e_hosted_lambda => |hosted| {
+                for (ctx.store.slicePatterns(hosted.args)) |arg_idx| {
+                    ctx.walkPattern(arg_idx, null, null, null);
+                    if (ctx.result != null) return;
+                }
+            },
+            .e_call => |call| {
+                ctx.walkExpr(call.func, null, null);
+                if (ctx.result != null) return;
+                for (ctx.store.sliceExpr(call.args)) |arg| {
+                    ctx.walkExpr(arg, null, null);
+                    if (ctx.result != null) return;
+                }
+            },
+            .e_binop => |binop| {
+                ctx.walkExpr(binop.lhs, null, null);
+                if (ctx.result != null) return;
+                ctx.walkExpr(binop.rhs, null, null);
+            },
+            .e_unary_minus => |u| {
+                ctx.walkExpr(u.expr, null, null);
+            },
+            .e_unary_not => |u| {
+                ctx.walkExpr(u.expr, null, null);
+            },
+            .e_field_access => |fa| {
+                ctx.walkExpr(fa.receiver, null, null);
+            },
+            .e_method_call => |mc| {
+                ctx.walkExpr(mc.receiver, null, null);
+                if (ctx.result != null) return;
+                for (ctx.store.sliceExpr(mc.args)) |arg| {
+                    ctx.walkExpr(arg, null, null);
+                    if (ctx.result != null) return;
+                }
+            },
+            .e_dispatch_call => |dc| {
+                ctx.walkExpr(dc.receiver, null, null);
+                if (ctx.result != null) return;
+                for (ctx.store.sliceExpr(dc.args)) |arg| {
+                    ctx.walkExpr(arg, null, null);
+                    if (ctx.result != null) return;
+                }
+            },
+            .e_interpolation => |interp| {
+                ctx.walkExpr(interp.first, null, null);
+                if (ctx.result != null) return;
+                for (ctx.store.sliceExpr(interp.parts)) |part| {
+                    ctx.walkExpr(part, null, null);
+                    if (ctx.result != null) return;
+                }
+            },
+            .e_structural_eq => |eq| {
+                ctx.walkExpr(eq.lhs, null, null);
+                if (ctx.result != null) return;
+                ctx.walkExpr(eq.rhs, null, null);
+            },
+            .e_structural_hash => |h| {
+                ctx.walkExpr(h.value, null, null);
+                if (ctx.result != null) return;
+                ctx.walkExpr(h.hasher, null, null);
+            },
+            .e_method_eq => |eq| {
+                ctx.walkExpr(eq.lhs, null, null);
+                if (ctx.result != null) return;
+                ctx.walkExpr(eq.rhs, null, null);
+            },
+            .e_type_method_call => |tmc| {
+                for (ctx.store.sliceExpr(tmc.args)) |arg| {
+                    ctx.walkExpr(arg, null, null);
+                    if (ctx.result != null) return;
+                }
+            },
+            .e_type_dispatch_call => |tdc| {
+                for (ctx.store.sliceExpr(tdc.args)) |arg| {
+                    ctx.walkExpr(arg, null, null);
+                    if (ctx.result != null) return;
+                }
+            },
+            .e_tuple_access => |ta| {
+                ctx.walkExpr(ta.tuple, null, null);
+            },
+            .e_list => |list| {
+                for (ctx.store.sliceExpr(list.elems)) |elem| {
+                    ctx.walkExpr(elem, null, null);
+                    if (ctx.result != null) return;
+                }
+            },
+            .e_tuple => |tuple| {
+                for (ctx.store.sliceExpr(tuple.elems)) |elem| {
+                    ctx.walkExpr(elem, null, null);
+                    if (ctx.result != null) return;
+                }
+            },
+            .e_record => |rec| {
+                for (ctx.store.sliceRecordFields(rec.fields)) |field_idx| {
+                    const field = ctx.store.getRecordField(field_idx);
+                    ctx.walkExpr(field.value, null, null);
+                    if (ctx.result != null) return;
+                }
+                if (rec.ext) |ext| {
+                    ctx.walkExpr(ext, null, null);
+                }
+            },
+            .e_str => |str| {
+                for (ctx.store.sliceExpr(str.span)) |seg| {
+                    ctx.walkExpr(seg, null, null);
+                    if (ctx.result != null) return;
+                }
+            },
+            .e_dbg => |dbg| {
+                ctx.walkExpr(dbg.expr, null, null);
+            },
+            .e_expect_err => |expect_err| {
+                ctx.walkExpr(expect_err.expr, null, null);
+            },
+            .e_expect => |exp| {
+                ctx.walkExpr(exp.body, null, null);
+            },
+            .e_return => |ret| {
+                ctx.walkExpr(ret.expr, null, null);
+            },
+            .e_for => |for_expr| {
+                ctx.walkPattern(for_expr.patt, null, null, null);
+                if (ctx.result != null) return;
+                ctx.walkExpr(for_expr.expr, null, null);
+                if (ctx.result != null) return;
+                ctx.walkExpr(for_expr.body, null, null);
+            },
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            .e_str_segment,
+            .e_empty_list,
+            .e_empty_record,
+            .e_lookup_local,
+            .e_lookup_external,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
+            .e_lookup_required,
+            .e_zero_argument_tag,
+            .e_runtime_error,
+            .e_crash,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_derived_method,
+            .e_break,
+            .e_bytes_literal,
+            => {},
+        }
+    }
+
+    fn walkPattern(
+        ctx: *FindTagAtOffsetContext,
+        pattern_idx: CIR.Pattern.Idx,
+        match_cond_type_var: ?types.Var,
+        nominal_decl: ?CIR.Statement.Idx,
+        nominal_ext: ?TagNominalExternal,
+    ) void {
+        if (ctx.result != null) return;
+        const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+        const region = ctx.store.getRegionAt(node_idx);
+        if (!regionContainsOffset(region, ctx.target_offset)) return;
+
+        const pattern = ctx.store.getPattern(pattern_idx);
+        switch (pattern) {
+            .applied_tag => |tag| {
+                ctx.result = .{
+                    .name = ctx.common.idents.getText(tag.name),
+                    .type_var = ModuleEnv.varFrom(pattern_idx),
+                    .match_cond_type_var = match_cond_type_var,
+                    .nominal_decl = nominal_decl,
+                    .nominal_external = nominal_ext,
+                };
+            },
+            .nominal => |nom| {
+                ctx.walkPattern(nom.backing_pattern, match_cond_type_var, nom.nominal_type_decl, null);
+            },
+            .nominal_external => |nom| {
+                ctx.walkPattern(nom.backing_pattern, match_cond_type_var, null, .{
+                    .module_idx = nom.module_idx,
+                    .target_node_idx = nom.target_node_idx,
+                });
+            },
+            .record_destructure => |r| {
+                for (ctx.store.sliceRecordDestructs(r.destructs)) |d_idx| {
+                    const destruct = ctx.store.getRecordDestruct(d_idx);
+                    ctx.walkPattern(destruct.kind.toPatternIdx(), null, null, null);
+                    if (ctx.result != null) return;
+                }
+            },
+            .tuple => |t| {
+                for (ctx.store.slicePatterns(t.patterns)) |p| {
+                    ctx.walkPattern(p, null, null, null);
+                    if (ctx.result != null) return;
+                }
+            },
+            .list => |l| {
+                for (ctx.store.slicePatterns(l.patterns)) |elem_pat| {
+                    ctx.walkPattern(elem_pat, null, null, null);
+                    if (ctx.result != null) return;
+                }
+                if (l.rest_info) |rest| {
+                    if (rest.pattern) |rest_pat| {
+                        ctx.walkPattern(rest_pat, null, null, null);
+                    }
+                }
+            },
+            .as => |as_pat| {
+                ctx.walkPattern(as_pat.pattern, match_cond_type_var, nominal_decl, nominal_ext);
+            },
+            .str_interpolation => |str| {
+                var i: u32 = 0;
+                while (i < str.steps.span.len) : (i += 1) {
+                    const step = ctx.store.getStrPatternStep(str.steps, i);
+                    if (step.capture) |capture| {
+                        ctx.walkPattern(capture, null, null, null);
+                        if (ctx.result != null) return;
+                    }
+                }
+            },
+            .assign,
+            .num_literal,
+            .num_from_numeral_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .underscore,
+            .runtime_error,
+            => {},
+        }
+    }
+
+    fn walkStatement(ctx: *FindTagAtOffsetContext, stmt_idx: CIR.Statement.Idx) void {
+        if (ctx.result != null) return;
+        const region = ctx.store.getStatementRegion(stmt_idx);
+        if (!regionContainsOffset(region, ctx.target_offset)) return;
+
+        const stmt = ctx.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_decl => |decl| {
+                ctx.walkPattern(decl.pattern, null, null, null);
+                if (ctx.result != null) return;
+                ctx.walkExpr(decl.expr, null, null);
+            },
+            .s_var => |v| {
+                ctx.walkPattern(v.pattern_idx, null, null, null);
+                if (ctx.result != null) return;
+                ctx.walkExpr(v.expr, null, null);
+            },
+            .s_var_uninitialized => |v| {
+                ctx.walkPattern(v.pattern_idx, null, null, null);
+            },
+            .s_reassign => |r| {
+                ctx.walkPattern(r.pattern_idx, null, null, null);
+                if (ctx.result != null) return;
+                ctx.walkExpr(r.expr, null, null);
+            },
+            .s_expr => |e| {
+                ctx.walkExpr(e.expr, null, null);
+            },
+            .s_dbg => |dbg| {
+                ctx.walkExpr(dbg.expr, null, null);
+            },
+            .s_expect => |exp| {
+                ctx.walkExpr(exp.body, null, null);
+            },
+            .s_return => |ret| {
+                ctx.walkExpr(ret.expr, null, null);
+            },
+            .s_for => |for_stmt| {
+                ctx.walkPattern(for_stmt.patt, null, null, null);
+                if (ctx.result != null) return;
+                ctx.walkExpr(for_stmt.expr, null, null);
+                if (ctx.result != null) return;
+                ctx.walkExpr(for_stmt.body, null, null);
+            },
+            .s_while => |w| {
+                ctx.walkExpr(w.cond, null, null);
+                if (ctx.result != null) return;
+                ctx.walkExpr(w.body, null, null);
+            },
+            .s_infinite_loop => |loop| {
+                ctx.walkExpr(loop.cond, null, null);
+                if (ctx.result != null) return;
+                ctx.walkExpr(loop.body, null, null);
+            },
+            .s_breakable_loop => |loop| {
+                ctx.walkExpr(loop.cond, null, null);
+                if (ctx.result != null) return;
+                ctx.walkExpr(loop.body, null, null);
+            },
+            .s_crash,
+            .s_break,
+            .s_import,
+            .s_alias_decl,
+            .s_nominal_decl,
+            .s_where_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => {},
+        }
+    }
+};
+
+/// Find a tag reference (name and type var) in an expression or pattern at the given offset.
+pub fn findTagAtOffset(module_env: *ModuleEnv, offset: u32) ?TagRef {
+    var ctx = FindTagAtOffsetContext{
+        .store = &module_env.store,
+        .common = &module_env.common,
+        .target_offset = offset,
+    };
+
+    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        ctx.walkExpr(def.expr, null, null);
+        if (ctx.result != null) return ctx.result;
+        ctx.walkPattern(def.pattern, null, null, null);
+        if (ctx.result != null) return ctx.result;
+    }
+
+    const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+    for (statements_slice) |stmt_idx| {
+        ctx.walkStatement(stmt_idx);
+        if (ctx.result != null) return ctx.result;
+    }
+
+    return ctx.result;
+}
+
 /// Collect all references to a specific pattern (variable binding).
 ///
 /// This finds all e_lookup_local expressions that reference the target pattern,

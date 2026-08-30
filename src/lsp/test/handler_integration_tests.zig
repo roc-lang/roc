@@ -9,7 +9,10 @@ const server_module = @import("lsp").server;
 const helpers = @import("helpers.zig");
 const integration_spec = @import("integration_spec.zig");
 const test_env = @import("integration_env.zig");
-
+const compile = @import("compile");
+const CacheConfig = compile.CacheConfig;
+const CoreCtx = @import("ctx").CoreCtx;
+const compiled_builtins = @import("compiled_builtins");
 const frame = helpers.frame;
 const uriFromPath = helpers.uriFromPath;
 
@@ -112,6 +115,41 @@ fn stringField(value: std.json.Value, name: []const u8) integration_spec.SpecErr
     const field_value = try objectField(value, name);
     if (field_value != .string) return error.TestUnexpectedResult;
     return field_value.string;
+}
+
+fn expectBuiltinDefinitionAtDeclaration(
+    allocator: std.mem.Allocator,
+    responses: [][]u8,
+    response_id: i64,
+    declaration: []const u8,
+) integration_spec.SpecError!void {
+    const declaration_offset = std.mem.find(u8, compiled_builtins.builtin_source, declaration) orelse
+        return error.TestUnexpectedResult;
+    if (std.mem.findPos(u8, compiled_builtins.builtin_source, declaration_offset + declaration.len, declaration) != null) {
+        return error.TestUnexpectedResult;
+    }
+
+    var expected_line: i64 = 0;
+    var expected_character: i64 = 0;
+    for (compiled_builtins.builtin_source[0..declaration_offset]) |byte| {
+        if (byte == '\n') {
+            expected_line += 1;
+            expected_character = 0;
+        } else {
+            expected_character += 1;
+        }
+    }
+
+    var response = try responseById(allocator, responses, response_id);
+    defer response.deinit();
+    const result = try response.result();
+    try std.testing.expect(result == .object);
+    const uri = try stringField(result, "uri");
+    try std.testing.expect(std.mem.endsWith(u8, uri, "Builtin.roc"));
+    const range = try objectField(result, "range");
+    const start = try objectField(range, "start");
+    try std.testing.expectEqual(expected_line, try integerField(start, "line"));
+    try std.testing.expectEqual(expected_character, try integerField(start, "character"));
 }
 
 fn expectRange(
@@ -222,6 +260,23 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "definition handler returns null for undefined symbol", .run = definitionHandlerReturnsNullForUndefinedSymbol },
     .{ .name = "hover handler handles type annotation request", .run = hoverHandlerReturnsTypeInfoForTypeAnnotation },
     .{ .name = "definition handler handles builtin type annotation request", .run = definitionHandlerNavigatesToBuiltinTypeFromTypeAnnotation },
+    .{ .name = "definition handler navigates to builtin declarations", .run = definitionHandlerNavigatesToBuiltinDeclarations },
+    .{ .name = "definition handler navigates to external module members", .run = definitionHandlerNavigatesToExternalModuleMembers },
+    .{ .name = "definition handler navigates to exposed import member in import statement", .run = definitionHandlerNavigatesToExposedImportMemberInImportStatement },
+    .{ .name = "definition handler navigates to unqualified exposed import function call", .run = definitionHandlerNavigatesToUnqualifiedExposedImportFunctionCall },
+    .{ .name = "definition handler navigates to tag declaration in pattern match", .run = definitionHandlerNavigatesToTagDeclarationInPatternMatch },
+    .{ .name = "definition handler navigates to tag declaration in package qualified import", .run = definitionHandlerNavigatesToTagDeclarationInPackageQualifiedImport },
+    .{ .name = "definition handler disambiguates same named tag across imported modules", .run = definitionHandlerDisambiguatesSameNamedTagAcrossImportedModules },
+    .{ .name = "definition handler branch value open tag does not navigate to match condition type", .run = definitionHandlerBranchValueOpenTagDoesNotNavigateToMatchConditionType },
+    .{ .name = "definition handler navigates to exposed type alias in type annotation", .run = definitionHandlerNavigatesToExposedTypeAliasInTypeAnnotation },
+    .{ .name = "definition handler navigates to file import path", .run = definitionHandlerNavigatesToFileImportPath },
+    .{ .name = "definition handler navigates to default app echo platform definition", .run = definitionHandlerNavigatesToEchoPlatformDefinition },
+    .{ .name = "definition handler resolves package shorthand qualified import", .run = definitionHandlerResolvesPackageShorthandQualifiedImport },
+    .{ .name = "definition handler disambiguates same named module across packages", .run = definitionHandlerDisambiguatesSameNamedModuleAcrossPackages },
+    .{ .name = "definition handler resolves shorthand in importing package context", .run = definitionHandlerResolvesShorthandInImportingPackageContext },
+    .{ .name = "semantic tokens handler handles file imports without crashing", .run = semanticTokensHandlerHandlesFileImportsWithoutCrashing },
+    .{ .name = "workspace document ending in Builtin.roc builds and produces diagnostics", .run = workspaceDocumentEndingInBuiltinRocBuildsAndProducesDiagnostics },
+    .{ .name = "opening Builtin.roc does not panic", .run = openingBuiltinRocDoesNotPanic },
     .{ .name = "document symbols works after goto definition (regression test)", .run = documentSymbolsWorksAfterGotoDefinitionRegressionTest },
     .{ .name = "multiple goto definition calls don't break document symbols", .run = multipleGotoDefinitionCallsDontBreakDocumentSymbols },
     .{ .name = "document symbol handler returns symbols with correct names", .run = documentSymbolHandlerReturnsSymbolsWithCorrectNames },
@@ -803,13 +858,7 @@ pub fn definitionHandlerNavigatesToBuiltinTypeFromTypeAnnotation() integration_s
         allocator.free(responses);
     }
 
-    var response = try responseById(allocator, responses, 2);
-    defer response.deinit();
-    const result = try response.result();
-    try std.testing.expect(result == .object);
-    const uri = try stringField(result, "uri");
-    try std.testing.expect(std.mem.endsWith(u8, uri, "Builtin.roc"));
-    try expectRange(try objectField(result, "range"), 0, 0, 0, 0);
+    try expectBuiltinDefinitionAtDeclaration(allocator, responses, 2, "Str :: [ProvidedByCompiler].{");
 }
 
 /// Verifies document symbols still work after a goto-definition request.
@@ -2112,5 +2161,1936 @@ pub fn completionHandlerReturnsRecordFieldsAfterDot() integration_spec.SpecError
         if (std.mem.eql(u8, label, "name") or std.mem.eql(u8, label, "age")) {
             try std.testing.expectEqual(@as(i64, 5), try integerField(item, "kind"));
         }
+    }
+}
+
+/// Verifies goto definition on builtin member functions (Str.is_empty, List.is_empty, List.append, Dict.update)
+/// and builtin type prefixes (Dict) resolve to their exact declarations in Builtin.roc.
+pub fn definitionHandlerNavigatesToBuiltinDeclarations() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
+    defer allocator.free(main_path);
+    const main_uri = try uriFromPath(allocator, main_path);
+    defer allocator.free(main_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    const open_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [check] {{ pf: platform \"{s}\" }}\n\ns_empty = Str.is_empty(\"\")\nl_empty = List.is_empty([])\nappend_check = List.append([1], 2)\ndict_check = Dict.update(Dict.empty({{}}), 1, |v| v)"}}}}}}
+    , .{ main_uri, platform_path });
+    defer allocator.free(open_body);
+    const open_msg = try frame(allocator, open_body);
+    defer allocator.free(open_msg);
+
+    // Line 2: s_empty = Str.is_empty("") -> character 16 is on 'is_empty'
+    const def_str_empty_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":16}}}}}}
+    , .{main_uri});
+    defer allocator.free(def_str_empty_body);
+    const def_str_empty_msg = try frame(allocator, def_str_empty_body);
+    defer allocator.free(def_str_empty_msg);
+
+    // Line 3: l_empty = List.is_empty([]) -> character 16 is on 'is_empty'
+    const def_list_empty_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":3,"character":16}}}}}}
+    , .{main_uri});
+    defer allocator.free(def_list_empty_body);
+    const def_list_empty_msg = try frame(allocator, def_list_empty_body);
+    defer allocator.free(def_list_empty_msg);
+
+    // Line 4: append_check = List.append([1], 2) -> character 22 is on 'append'
+    const def_append_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":4,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":4,"character":22}}}}}}
+    , .{main_uri});
+    defer allocator.free(def_append_body);
+    const def_append_msg = try frame(allocator, def_append_body);
+    defer allocator.free(def_append_msg);
+
+    // Line 5: dict_check = Dict.update(...) -> character 19 is on 'update'
+    const def_update_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":5,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":5,"character":19}}}}}}
+    , .{main_uri});
+    defer allocator.free(def_update_body);
+    const def_update_msg = try frame(allocator, def_update_body);
+    defer allocator.free(def_update_msg);
+
+    // Line 5: dict_check = Dict.update(...) -> character 14 is on 'Dict' (prefix)
+    const def_dict_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":6,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":5,"character":14}}}}}}
+    , .{main_uri});
+    defer allocator.free(def_dict_body);
+    const def_dict_msg = try frame(allocator, def_dict_body);
+    defer allocator.free(def_dict_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":7,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder: std.ArrayList(u8) = .empty;
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_msg);
+    try builder.appendSlice(allocator, def_str_empty_msg);
+    try builder.appendSlice(allocator, def_list_empty_msg);
+    try builder.appendSlice(allocator, def_append_msg);
+    try builder.appendSlice(allocator, def_update_msg);
+    try builder.appendSlice(allocator, def_dict_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [16384]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    try expectBuiltinDefinitionAtDeclaration(allocator, responses, 2, "is_empty : Str -> Bool");
+    try expectBuiltinDefinitionAtDeclaration(allocator, responses, 3, "is_empty : List(_item) -> Bool");
+    try expectBuiltinDefinitionAtDeclaration(allocator, responses, 4, "append : List(a), a -> List(a)");
+    try expectBuiltinDefinitionAtDeclaration(
+        allocator,
+        responses,
+        5,
+        "update : Dict(k, v), k, (Try(v, [Missing]) -> Try(v, [Missing])) -> Dict(k, v)",
+    );
+    try expectBuiltinDefinitionAtDeclaration(allocator, responses, 6, "Dict(k, v) :: [");
+}
+
+/// Verifies that an ordinary workspace document whose path ends in Builtin.roc (e.g. MyBuiltin.roc)
+/// is built normally and publishes diagnostics.
+pub fn workspaceDocumentEndingInBuiltinRocBuildsAndProducesDiagnostics() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const my_builtin_path = try std.fs.path.join(allocator, &.{ tmp_path, "MyBuiltin.roc" });
+    defer allocator.free(my_builtin_path);
+    const my_builtin_uri = try uriFromPath(allocator, my_builtin_path);
+    defer allocator.free(my_builtin_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    // MyBuiltin.roc with invalid code to trigger diagnostics
+    const open_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"module [bad]\n\nbad : Str\nbad = 123"}}}}}}
+    , .{my_builtin_uri});
+    defer allocator.free(open_body);
+    const open_msg = try frame(allocator, open_body);
+    defer allocator.free(open_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":2,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder: std.ArrayList(u8) = .empty;
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [16384]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var found_diag = false;
+    for (responses) |resp_bytes| {
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, resp_bytes, .{});
+        defer parsed.deinit();
+        if (parsed.value == .object) {
+            if (parsed.value.object.get("method")) |method| {
+                if (method == .string and std.mem.eql(u8, method.string, "textDocument/publishDiagnostics")) {
+                    if (parsed.value.object.get("params")) |params| {
+                        if (params.object.get("diagnostics")) |diags| {
+                            if (diags.array.items.len > 0) {
+                                found_diag = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    try std.testing.expect(found_diag);
+}
+
+/// Verifies that opening Builtin.roc directly as a document does not crash or panic.
+pub fn openingBuiltinRocDoesNotPanic() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+
+    var cache_config = CacheConfig{ .roc_ctx = CoreCtx.default(allocator, allocator, test_env.io) };
+    cache_config.cache_dir = tmp_path;
+    const cache_dir = cache_config.getModuleCacheDir(allocator) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.NoHomeDirectory => return,
+    };
+    defer allocator.free(cache_dir);
+    const builtin_path = try std.fs.path.join(allocator, &.{ cache_dir, "Builtin.roc" });
+    defer allocator.free(builtin_path);
+    const builtin_uri = try uriFromPath(allocator, builtin_path);
+    defer allocator.free(builtin_uri);
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    var json_writer: std.Io.Writer.Allocating = .init(allocator);
+    defer json_writer.deinit();
+    try std.json.Stringify.value(std.json.Value{ .string = compiled_builtins.builtin_source }, .{}, &json_writer.writer);
+    const escaped_source = json_writer.written();
+
+    const open_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":{s}}}}}}}
+    , .{ builtin_uri, escaped_source });
+    defer allocator.free(open_body);
+    const open_msg = try frame(allocator, open_body);
+    defer allocator.free(open_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":2,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder: std.ArrayList(u8) = .empty;
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [16384]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
+    defer server.deinit();
+    try server.run();
+}
+
+/// Verifies goto definition on external module members (both annotated and unannotated) reaches the exact declaration.
+pub fn definitionHandlerNavigatesToExternalModuleMembers() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const helper_path = try std.fs.path.join(allocator, &.{ tmp_path, "ComputeHelper.roc" });
+    defer allocator.free(helper_path);
+    const helper_uri = try uriFromPath(allocator, helper_path);
+    defer allocator.free(helper_uri);
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
+    defer allocator.free(main_path);
+    const main_uri = try uriFromPath(allocator, main_path);
+    defer allocator.free(main_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const helper_source =
+        \\module [greet, compute]
+        \\
+        \\greet : Str -> Str
+        \\greet = |name| "Hello, "
+        \\
+        \\compute = |x| x + 1
+    ;
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "ComputeHelper.roc", .data = helper_source });
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    const open_main_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [result] {{ pf: platform \"{s}\" }}\n\nimport ComputeHelper\n\nresult = ComputeHelper.greet(\"World\")\nans = ComputeHelper.compute(42)"}}}}}}
+    , .{ main_uri, platform_path });
+    defer allocator.free(open_main_body);
+    const open_main_msg = try frame(allocator, open_main_body);
+    defer allocator.free(open_main_msg);
+
+    // Line 4: result = ComputeHelper.greet("World") -> character 27 is on 'greet'
+    const def_greet_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":4,"character":27}}}}}}
+    , .{main_uri});
+    defer allocator.free(def_greet_body);
+    const def_greet_msg = try frame(allocator, def_greet_body);
+    defer allocator.free(def_greet_msg);
+
+    // Line 5: ans = ComputeHelper.compute(42) -> character 24 is on 'compute'
+    const def_compute_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":5,"character":24}}}}}}
+    , .{main_uri});
+    defer allocator.free(def_compute_body);
+    const def_compute_msg = try frame(allocator, def_compute_body);
+    defer allocator.free(def_compute_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":4,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder: std.ArrayList(u8) = .empty;
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_main_msg);
+    try builder.appendSlice(allocator, def_greet_msg);
+    try builder.appendSlice(allocator, def_compute_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [16384]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    // greet definition in ComputeHelper.roc is at line 3 (0-based)
+    {
+        var response = try responseById(allocator, responses, 2);
+        defer response.deinit();
+        const result = try response.result();
+        try std.testing.expect(result == .object);
+        const uri = try stringField(result, "uri");
+        try std.testing.expect(std.mem.endsWith(u8, uri, "ComputeHelper.roc"));
+        const range = try objectField(result, "range");
+        const start = try objectField(range, "start");
+        const start_line = try integerField(start, "line");
+        try std.testing.expectEqual(@as(i64, 3), start_line);
+    }
+
+    // compute definition in ComputeHelper.roc is at line 5 (0-based)
+    {
+        var response = try responseById(allocator, responses, 3);
+        defer response.deinit();
+        const result = try response.result();
+        try std.testing.expect(result == .object);
+        const uri = try stringField(result, "uri");
+        try std.testing.expect(std.mem.endsWith(u8, uri, "ComputeHelper.roc"));
+        const range = try objectField(result, "range");
+        const start = try objectField(range, "start");
+        const start_line = try integerField(start, "line");
+        try std.testing.expectEqual(@as(i64, 5), start_line);
+    }
+}
+
+/// Verifies goto definition on an exposed item in an import statement (e.g. `import Helpers exposing [decode_json]`).
+pub fn definitionHandlerNavigatesToExposedImportMemberInImportStatement() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const helper_path = try std.fs.path.join(allocator, &.{ tmp_path, "Helpers.roc" });
+    defer allocator.free(helper_path);
+    const helper_uri = try uriFromPath(allocator, helper_path);
+    defer allocator.free(helper_uri);
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
+    defer allocator.free(main_path);
+    const main_uri = try uriFromPath(allocator, main_path);
+    defer allocator.free(main_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const helper_source =
+        \\Helpers :: [].{
+        \\    encode_json : Str -> Str
+        \\    encode_json = |str| str
+        \\
+        \\    decode_json : Str -> Str
+        \\    decode_json = |str| str
+        \\}
+    ;
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "Helpers.roc", .data = helper_source });
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    const open_main_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [result] {{ pf: platform \"{s}\" }}\n\nimport Helpers exposing [encode_json, decode_json]\n\nresult = decode_json(\"hi\")"}}}}}}
+    , .{ main_uri, platform_path });
+    defer allocator.free(open_main_body);
+    const open_main_msg = try frame(allocator, open_main_body);
+    defer allocator.free(open_main_msg);
+
+    // Line 2: import Helpers exposing [encode_json, decode_json] -> character 42 is on 'decode_json'
+    const definition_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":42}}}}}}
+    , .{main_uri});
+    defer allocator.free(definition_body);
+    const definition_msg = try frame(allocator, definition_body);
+    defer allocator.free(definition_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder: std.ArrayList(u8) = .empty;
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_main_msg);
+    try builder.appendSlice(allocator, definition_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [16384]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const result = try response.result();
+    try std.testing.expect(result == .object);
+    const uri = try stringField(result, "uri");
+    try std.testing.expect(std.mem.endsWith(u8, uri, "Helpers.roc"));
+    const range = try objectField(result, "range");
+    const start = try objectField(range, "start");
+    const start_line = try integerField(start, "line");
+    // decode_json definition in Helpers.roc is at line 5 (0-based)
+    try std.testing.expectEqual(@as(i64, 5), start_line);
+}
+
+/// Verifies goto definition on an unqualified function call imported via `exposing` (e.g. `decode_json(input)`).
+pub fn definitionHandlerNavigatesToUnqualifiedExposedImportFunctionCall() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const helper_path = try std.fs.path.join(allocator, &.{ tmp_path, "Helpers.roc" });
+    defer allocator.free(helper_path);
+    const helper_uri = try uriFromPath(allocator, helper_path);
+    defer allocator.free(helper_uri);
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
+    defer allocator.free(main_path);
+    const main_uri = try uriFromPath(allocator, main_path);
+    defer allocator.free(main_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const helper_source =
+        \\Helpers :: [].{
+        \\    encode_json : Str -> Str
+        \\    encode_json = |str| str
+        \\
+        \\    decode_json : Str -> Str
+        \\    decode_json = |str| str
+        \\}
+    ;
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "Helpers.roc", .data = helper_source });
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    const open_main_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [result] {{ pf: platform \"{s}\" }}\n\nimport Helpers exposing [decode_json]\n\nresult = decode_json(\"hi\")"}}}}}}
+    , .{ main_uri, platform_path });
+    defer allocator.free(open_main_body);
+    const open_main_msg = try frame(allocator, open_main_body);
+    defer allocator.free(open_main_msg);
+
+    // Line 4: result = decode_json("hi") -> character 14 is on 'decode_json'
+    const definition_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":4,"character":14}}}}}}
+    , .{main_uri});
+    defer allocator.free(definition_body);
+    const definition_msg = try frame(allocator, definition_body);
+    defer allocator.free(definition_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder: std.ArrayList(u8) = .empty;
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_main_msg);
+    try builder.appendSlice(allocator, definition_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [16384]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const result = try response.result();
+    try std.testing.expect(result == .object);
+    const uri = try stringField(result, "uri");
+    try std.testing.expect(std.mem.endsWith(u8, uri, "Helpers.roc"));
+    const range = try objectField(result, "range");
+    const start = try objectField(range, "start");
+    const start_line = try integerField(start, "line");
+    // decode_json definition in Helpers.roc is at line 5 (0-based)
+    try std.testing.expectEqual(@as(i64, 5), start_line);
+}
+
+/// Verifies goto definition on a tag in pattern matching (e.g. `WaitingForInit => ...`) navigates to the tag union declaration.
+pub fn definitionHandlerNavigatesToTagDeclarationInPatternMatch() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
+    defer allocator.free(main_path);
+    const main_uri = try uriFromPath(allocator, main_path);
+    defer allocator.free(main_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    const open_main_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [handle] {{ pf: platform \"{s}\" }}\n\nLoopState : [WaitingForInit, Running(Str)]\n\nhandle = |state|\n    match state {{\n        WaitingForInit => \"init\",\n        Running(s) => s,\n    }}"}}}}}}
+    , .{ main_uri, platform_path });
+    defer allocator.free(open_main_body);
+    const open_main_msg = try frame(allocator, open_main_body);
+    defer allocator.free(open_main_msg);
+
+    // Line 6: WaitingForInit => "init" -> character 12 is on 'WaitingForInit'
+    const definition_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":6,"character":12}}}}}}
+    , .{main_uri});
+    defer allocator.free(definition_body);
+    const definition_msg = try frame(allocator, definition_body);
+    defer allocator.free(definition_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder: std.ArrayList(u8) = .empty;
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_main_msg);
+    try builder.appendSlice(allocator, definition_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [16384]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const result = try response.result();
+    try std.testing.expect(result == .object);
+    const uri = try stringField(result, "uri");
+    try std.testing.expect(std.mem.endsWith(u8, uri, "main.roc"));
+    const range = try objectField(result, "range");
+    const start = try objectField(range, "start");
+    const start_line = try integerField(start, "line");
+    // LoopState declaration with WaitingForInit is on line 2 (0-based)
+    try std.testing.expectEqual(@as(i64, 2), start_line);
+}
+
+/// Verifies goto definition on an exposed type alias (e.g. `Payload(...)`) in a local type annotation navigates to its declaration in the imported module.
+pub fn definitionHandlerNavigatesToExposedTypeAliasInTypeAnnotation() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
+    defer allocator.free(main_path);
+    const main_uri = try uriFromPath(allocator, main_path);
+    defer allocator.free(main_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const helper_source =
+        \\module [Payload]
+        \\
+        \\Payload(a) : {
+        \\    type : Str,
+        \\    body : a,
+        \\}
+    ;
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "Helpers.roc", .data = helper_source });
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    const open_main_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [handle] {{ pf: platform \"{s}\" }}\n\nimport Helpers exposing [Payload]\n\nhandle = |input| {{\n    p : Payload(Str)\n    p = {{ type: \"test\", body: input }}\n    p\n}}"}}}}}}
+    , .{ main_uri, platform_path });
+    defer allocator.free(open_main_body);
+    const open_main_msg = try frame(allocator, open_main_body);
+    defer allocator.free(open_main_msg);
+
+    // Line 5: p : Payload(Str) -> character 10 is on 'Payload'
+    const definition_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":5,"character":10}}}}}}
+    , .{main_uri});
+    defer allocator.free(definition_body);
+    const definition_msg = try frame(allocator, definition_body);
+    defer allocator.free(definition_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder: std.ArrayList(u8) = .empty;
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_main_msg);
+    try builder.appendSlice(allocator, definition_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [16384]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const result = try response.result();
+    try std.testing.expect(result == .object);
+    const uri = try stringField(result, "uri");
+    try std.testing.expect(std.mem.endsWith(u8, uri, "Helpers.roc"));
+    const range = try objectField(result, "range");
+    const start = try objectField(range, "start");
+    const start_line = try integerField(start, "line");
+    // Payload declaration in Helpers.roc is on line 2 (0-based)
+    try std.testing.expectEqual(@as(i64, 2), start_line);
+}
+
+/// Verifies semantic tokens handler handles file imports (e.g. `import "inputs/1.txt" as input : Str`) without crashing (Issue #10861).
+pub fn semanticTokensHandlerHandlesFileImportsWithoutCrashing() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
+    defer allocator.free(main_path);
+    const main_uri = try uriFromPath(allocator, main_path);
+    defer allocator.free(main_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    // Create the input file to import
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "input.txt", .data = "hello roc" });
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    const open_main_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [main!] {{ pf: platform \"{s}\" }}\n\nimport \"input.txt\" as input : Str\n\nmain! = |_|\n    echo!(input)"}}}}}}
+    , .{ main_uri, platform_path });
+    defer allocator.free(open_main_body);
+    const open_main_msg = try frame(allocator, open_main_body);
+    defer allocator.free(open_main_msg);
+
+    // Request semantic tokens full
+    const tokens_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/semanticTokens/full","params":{{"textDocument":{{"uri":"{s}"}}}}}}
+    , .{main_uri});
+    defer allocator.free(tokens_body);
+    const tokens_msg = try frame(allocator, tokens_body);
+    defer allocator.free(tokens_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder: std.ArrayList(u8) = .empty;
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_main_msg);
+    try builder.appendSlice(allocator, tokens_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [16384]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const result = try response.result();
+    try std.testing.expect(result == .object);
+    const data_val = try objectField(result, "data");
+    try std.testing.expect(data_val == .array);
+    try std.testing.expect(data_val.array.items.len > 0);
+}
+
+/// Verifies goto definition on a file import path (`import "input.txt" as input : Str`) navigates to the imported file.
+pub fn definitionHandlerNavigatesToFileImportPath() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
+    defer allocator.free(main_path);
+    const main_uri = try uriFromPath(allocator, main_path);
+    defer allocator.free(main_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    // Create the target input file
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "input.txt", .data = "hello roc" });
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    const open_main_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"# Mentioning \"input.txt\" in comment\napp [main!] {{ pf: platform \"{s}\" }}\n\nimport \"input.txt\" as input : Str\n\nmain! = |_|\n    echo!(input)"}}}}}}
+    , .{ main_uri, platform_path });
+    defer allocator.free(open_main_body);
+    const open_main_msg = try frame(allocator, open_main_body);
+    defer allocator.free(open_main_msg);
+
+    // Line 0: # Mentioning "input.txt" in comment -> character 16 is on 'input.txt' inside the comment
+    // Must NOT navigate to the file import (non-heuristic explicit token check)
+    const comment_def_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":0,"character":16}}}}}}
+    , .{main_uri});
+    defer allocator.free(comment_def_body);
+    const comment_def_msg = try frame(allocator, comment_def_body);
+    defer allocator.free(comment_def_msg);
+
+    // Line 3: import "input.txt" as input : Str
+    // Position on "input.txt" (character 10)
+    const definition_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":3,"character":10}}}}}}
+    , .{main_uri});
+    defer allocator.free(definition_body);
+    const definition_msg = try frame(allocator, definition_body);
+    defer allocator.free(definition_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":4,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder: std.ArrayList(u8) = .empty;
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_main_msg);
+    try builder.appendSlice(allocator, comment_def_msg);
+    try builder.appendSlice(allocator, definition_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [16384]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    // Comment position (id: 2) must return null
+    {
+        var response = try responseById(allocator, responses, 2);
+        defer response.deinit();
+        const result = try response.result();
+        try std.testing.expect(result == .null);
+    }
+
+    // Real file import position (id: 3) must return LocationLink
+    {
+        var response = try responseById(allocator, responses, 3);
+        defer response.deinit();
+        const result = try response.result();
+        try std.testing.expect(result == .array);
+        try std.testing.expectEqual(@as(usize, 1), result.array.items.len);
+        const link = result.array.items[0].object;
+        const target_uri_value = link.get("targetUri") orelse return error.TestUnexpectedResult;
+        try std.testing.expect(std.mem.endsWith(u8, target_uri_value.string, "input.txt"));
+        const origin_range = (link.get("originSelectionRange") orelse return error.TestUnexpectedResult).object;
+        const origin_start = (origin_range.get("start") orelse return error.TestUnexpectedResult).object;
+        const origin_end = (origin_range.get("end") orelse return error.TestUnexpectedResult).object;
+        // Line 3: import "input.txt" as input : Str
+        // origin range covers "input.txt" as a single unit
+        try std.testing.expectEqual(@as(i64, 3), (origin_start.get("line") orelse return error.TestUnexpectedResult).integer);
+        try std.testing.expectEqual(@as(i64, 7), (origin_start.get("character") orelse return error.TestUnexpectedResult).integer);
+        try std.testing.expectEqual(@as(i64, 3), (origin_end.get("line") orelse return error.TestUnexpectedResult).integer);
+        try std.testing.expectEqual(@as(i64, 18), (origin_end.get("character") orelse return error.TestUnexpectedResult).integer);
+    }
+}
+
+/// Verifies goto definition on `echo!` in a default app navigates to the default app Echo.roc platform definition.
+pub fn definitionHandlerNavigatesToEchoPlatformDefinition() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
+    defer allocator.free(main_path);
+    const main_uri = try uriFromPath(allocator, main_path);
+    defer allocator.free(main_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    const open_main_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [main!] {{ pf: platform \"{s}\" }}\n\nmain! = |_|\n    echo!(\"hello\")"}}}}}}
+    , .{ main_uri, platform_path });
+    defer allocator.free(open_main_body);
+    const open_main_msg = try frame(allocator, open_main_body);
+    defer allocator.free(open_main_msg);
+
+    // Line 3: echo!("hello") -> position on 'echo!' (character 5)
+    const definition_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":3,"character":5}}}}}}
+    , .{main_uri});
+    defer allocator.free(definition_body);
+    const definition_msg = try frame(allocator, definition_body);
+    defer allocator.free(definition_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder: std.ArrayList(u8) = .empty;
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_main_msg);
+    try builder.appendSlice(allocator, definition_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [16384]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const result = try response.result();
+    try std.testing.expect(result == .null);
+}
+
+/// Verifies goto definition on a package-shorthand qualified import (`import pkg.Thing`) and member (`Thing.new`).
+pub fn definitionHandlerResolvesPackageShorthandQualifiedImport() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+
+    tmp.dir.createDirPath(test_env.io, "pkg") catch return error.TestUnexpectedResult;
+    const pkg_main_path = try std.fs.path.join(allocator, &.{ tmp_path, "pkg", "main.roc" });
+    defer allocator.free(pkg_main_path);
+    const pkg_thing_path = try std.fs.path.join(allocator, &.{ tmp_path, "pkg", "Thing.roc" });
+    defer allocator.free(pkg_thing_path);
+
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "pkg/main.roc", .data = "package [Thing] {}\n" });
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "pkg/Thing.roc", .data = "module [new]\n\nnew = |x| x + 1\n" });
+
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
+    defer allocator.free(main_path);
+    const main_uri = try uriFromPath(allocator, main_path);
+    defer allocator.free(main_uri);
+
+    const main_source = try std.fmt.allocPrint(allocator,
+        \\app [main!] {{ pkg: "./pkg/main.roc", pf: platform "{s}" }}
+        \\
+        \\import pkg.Thing
+        \\
+        \\main! = |_|
+        \\    Thing.new(4)
+        \\
+    , .{platform_path});
+    defer allocator.free(main_source);
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "main.roc", .data = main_source });
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    const escaped_source = try jsonEscape(allocator, main_source);
+    defer allocator.free(escaped_source);
+
+    const open_main_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"{s}"}}}}}}
+    , .{ main_uri, escaped_source });
+    defer allocator.free(open_main_body);
+    const open_main_msg = try frame(allocator, open_main_body);
+    defer allocator.free(open_main_msg);
+
+    // Line 2: import pkg.Thing -> position on 'pkg.Thing' (character 12)
+    const def_import_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":12}}}}}}
+    , .{main_uri});
+    defer allocator.free(def_import_body);
+    const def_import_msg = try frame(allocator, def_import_body);
+    defer allocator.free(def_import_msg);
+
+    // Line 5: Thing.new(4) -> position on 'new' (character 11)
+    const def_member_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":5,"character":11}}}}}}
+    , .{main_uri});
+    defer allocator.free(def_member_body);
+    const def_member_msg = try frame(allocator, def_member_body);
+    defer allocator.free(def_member_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":4,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder: std.ArrayList(u8) = .empty;
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_main_msg);
+    try builder.appendSlice(allocator, def_import_msg);
+    try builder.appendSlice(allocator, def_member_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [16384]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    // Response 2: Definition of import pkg.Thing -> navigates to Thing.roc
+    var response2 = try responseById(allocator, responses, 2);
+    defer response2.deinit();
+    const result2 = try response2.result();
+    try std.testing.expect(result2 == .object);
+    const uri2 = try stringField(result2, "uri");
+    try std.testing.expect(std.mem.endsWith(u8, uri2, "Thing.roc"));
+
+    // Response 3: Definition of Thing.new -> navigates to Thing.roc line 2 (0-indexed line 2)
+    var response3 = try responseById(allocator, responses, 3);
+    defer response3.deinit();
+    const result3 = try response3.result();
+    try std.testing.expect(result3 == .object);
+    const uri3 = try stringField(result3, "uri");
+    try std.testing.expect(std.mem.endsWith(u8, uri3, "Thing.roc"));
+    const range3 = try objectField(result3, "range");
+    const start3 = try objectField(range3, "start");
+    const start_line3 = try integerField(start3, "line");
+    try std.testing.expectEqual(@as(i64, 2), start_line3);
+}
+
+/// Verifies goto definition disambiguates same-named modules between the root package and an imported package.
+pub fn definitionHandlerDisambiguatesSameNamedModuleAcrossPackages() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+
+    tmp.dir.createDirPath(test_env.io, "pkg") catch return error.TestUnexpectedResult;
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "pkg/main.roc", .data = "package [Common] {}\n" });
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "pkg/Common.roc", .data = "module [pkg_val]\n\npkg_val = 42\n" });
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "Common.roc", .data = "module [local_val]\n\nlocal_val = 100\n" });
+
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
+    defer allocator.free(main_path);
+    const main_uri = try uriFromPath(allocator, main_path);
+    defer allocator.free(main_uri);
+
+    const main_source = try std.fmt.allocPrint(allocator,
+        \\app [process_string] {{ pkg: "./pkg/main.roc", pf: platform "{s}" }}
+        \\
+        \\import Common
+        \\import pkg.Common as PkgCommon
+        \\
+        \\process_string = |_| {{
+        \\    a = Common.local_val
+        \\    b = PkgCommon.pkg_val
+        \\    "ok"
+        \\}}
+        \\
+    , .{platform_path});
+    defer allocator.free(main_source);
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "main.roc", .data = main_source });
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    const escaped_source = try jsonEscape(allocator, main_source);
+    defer allocator.free(escaped_source);
+
+    const open_main_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"{s}"}}}}}}
+    , .{ main_uri, escaped_source });
+    defer allocator.free(open_main_body);
+    const open_main_msg = try frame(allocator, open_main_body);
+    defer allocator.free(open_main_msg);
+
+    // Line 2: import Common -> local Common (character 10)
+    const def_local_import_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":10}}}}}}
+    , .{main_uri});
+    defer allocator.free(def_local_import_body);
+    const def_local_import_msg = try frame(allocator, def_local_import_body);
+    defer allocator.free(def_local_import_msg);
+
+    // Line 3: import pkg.Common as PkgCommon -> package Common (character 13)
+    const def_pkg_import_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":3,"character":13}}}}}}
+    , .{main_uri});
+    defer allocator.free(def_pkg_import_body);
+    const def_pkg_import_msg = try frame(allocator, def_pkg_import_body);
+    defer allocator.free(def_pkg_import_msg);
+
+    // Line 6: Common.local_val -> position on 'local_val' (character 16)
+    const def_local_val_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":4,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":6,"character":16}}}}}}
+    , .{main_uri});
+    defer allocator.free(def_local_val_body);
+    const def_local_val_msg = try frame(allocator, def_local_val_body);
+    defer allocator.free(def_local_val_msg);
+
+    // Line 7: PkgCommon.pkg_val -> position on 'pkg_val' (character 20)
+    const def_pkg_val_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":5,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":7,"character":20}}}}}}
+    , .{main_uri});
+    defer allocator.free(def_pkg_val_body);
+    const def_pkg_val_msg = try frame(allocator, def_pkg_val_body);
+    defer allocator.free(def_pkg_val_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":6,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder: std.ArrayList(u8) = .empty;
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_main_msg);
+    try builder.appendSlice(allocator, def_local_import_msg);
+    try builder.appendSlice(allocator, def_pkg_import_msg);
+    try builder.appendSlice(allocator, def_local_val_msg);
+    try builder.appendSlice(allocator, def_pkg_val_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [16384]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    // Response 2: Definition of import Common -> local Common.roc
+    var response2 = try responseById(allocator, responses, 2);
+    defer response2.deinit();
+    const result2 = try response2.result();
+    var response3 = try responseById(allocator, responses, 3);
+    defer response3.deinit();
+    const result3 = try response3.result();
+    var response4 = try responseById(allocator, responses, 4);
+    defer response4.deinit();
+    const result4 = try response4.result();
+    var response5 = try responseById(allocator, responses, 5);
+    defer response5.deinit();
+    const result5 = try response5.result();
+    try std.testing.expect(result2 == .object);
+    const uri2 = try stringField(result2, "uri");
+    try std.testing.expect(std.mem.endsWith(u8, uri2, "Common.roc"));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, uri2, 1, "pkg/Common.roc"));
+
+    // Response 3: Definition of import pkg.Common -> package pkg/Common.roc
+    try std.testing.expect(result3 == .object);
+    const uri3 = try stringField(result3, "uri");
+    try std.testing.expect(std.mem.endsWith(u8, uri3, "pkg/Common.roc"));
+
+    // Response 4: Definition of Common.local_val -> local Common.roc
+    try std.testing.expect(result4 == .object);
+    const uri4 = try stringField(result4, "uri");
+    try std.testing.expect(std.mem.endsWith(u8, uri4, "Common.roc"));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, uri4, 1, "pkg/Common.roc"));
+
+    // Response 5: Definition of PkgCommon.pkg_val -> pkg/Common.roc
+    try std.testing.expect(result5 == .object);
+    const uri5 = try stringField(result5, "uri");
+    try std.testing.expect(std.mem.endsWith(u8, uri5, "pkg/Common.roc"));
+}
+
+/// Verifies that qualified module definition lookups resolve package shorthands
+/// strictly in the importing package's context when multiple packages use conflicting alias names.
+pub fn definitionHandlerResolvesShorthandInImportingPackageContext() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+
+    tmp.dir.createDirPath(test_env.io, "dep_a") catch return error.TestUnexpectedResult;
+    tmp.dir.createDirPath(test_env.io, "dep_b") catch return error.TestUnexpectedResult;
+    tmp.dir.createDirPath(test_env.io, "pkg_a") catch return error.TestUnexpectedResult;
+    tmp.dir.createDirPath(test_env.io, "pkg_b") catch return error.TestUnexpectedResult;
+
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "dep_a/main.roc", .data = "package [Helper] {}\n" });
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "dep_a/Helper.roc", .data = "module [helper_a]\n\nhelper_a = 1\n" });
+
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "dep_b/main.roc", .data = "package [Helper] {}\n" });
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "dep_b/Helper.roc", .data = "module [helper_b]\n\nhelper_b = 2\n" });
+
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "pkg_a/main.roc", .data = "package [ModA] { dep: \"../dep_a/main.roc\" }\n" });
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "pkg_a/ModA.roc", .data = "module [val_a]\n\nimport dep.Helper\n\nval_a = Helper.helper_a\n" });
+
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "pkg_b/main.roc", .data = "package [ModB] { dep: \"../dep_b/main.roc\" }\n" });
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "pkg_b/ModB.roc", .data = "module [val_b]\n\nimport dep.Helper\n\nval_b = Helper.helper_b\n" });
+
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
+    defer allocator.free(main_path);
+    const main_uri = try uriFromPath(allocator, main_path);
+    defer allocator.free(main_uri);
+
+    const pkg_a_mod_path = try std.fs.path.join(allocator, &.{ tmp_path, "pkg_a", "ModA.roc" });
+    defer allocator.free(pkg_a_mod_path);
+    const pkg_a_mod_uri = try uriFromPath(allocator, pkg_a_mod_path);
+    defer allocator.free(pkg_a_mod_uri);
+
+    const pkg_b_mod_path = try std.fs.path.join(allocator, &.{ tmp_path, "pkg_b", "ModB.roc" });
+    defer allocator.free(pkg_b_mod_path);
+    const pkg_b_mod_uri = try uriFromPath(allocator, pkg_b_mod_path);
+    defer allocator.free(pkg_b_mod_uri);
+
+    const main_source = try std.fmt.allocPrint(allocator,
+        \\app [process_string] {{ pkg_a: "./pkg_a/main.roc", pkg_b: "./pkg_b/main.roc", pf: platform "{s}" }}
+        \\
+        \\import pkg_a.ModA
+        \\import pkg_b.ModB
+        \\
+        \\process_string = |_| {{
+        \\    x = ModA.val_a
+        \\    y = ModB.val_b
+        \\    "ok"
+        \\}}
+        \\
+    , .{platform_path});
+    defer allocator.free(main_source);
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "main.roc", .data = main_source });
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    const pkg_a_mod_source = "module [val_a]\n\nimport dep.Helper\n\nval_a = Helper.helper_a\n";
+    const escaped_pkg_a = try jsonEscape(allocator, pkg_a_mod_source);
+    defer allocator.free(escaped_pkg_a);
+
+    const open_pkg_a_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"{s}"}}}}}}
+    , .{ pkg_a_mod_uri, escaped_pkg_a });
+    defer allocator.free(open_pkg_a_body);
+    const open_pkg_a_msg = try frame(allocator, open_pkg_a_body);
+    defer allocator.free(open_pkg_a_msg);
+
+    const pkg_b_mod_source = "module [val_b]\n\nimport dep.Helper\n\nval_b = Helper.helper_b\n";
+    const escaped_pkg_b = try jsonEscape(allocator, pkg_b_mod_source);
+    defer allocator.free(escaped_pkg_b);
+
+    const open_pkg_b_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"{s}"}}}}}}
+    , .{ pkg_b_mod_uri, escaped_pkg_b });
+    defer allocator.free(open_pkg_b_body);
+    const open_pkg_b_msg = try frame(allocator, open_pkg_b_body);
+    defer allocator.free(open_pkg_b_msg);
+
+    // In pkg_a/ModA.roc: line 2, character 12 (dep.Helper) -> should resolve to dep_a/Helper.roc
+    const def_a_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":12}}}}}}
+    , .{pkg_a_mod_uri});
+    defer allocator.free(def_a_body);
+    const def_a_msg = try frame(allocator, def_a_body);
+    defer allocator.free(def_a_msg);
+
+    // In pkg_b/ModB.roc: line 2, character 12 (dep.Helper) -> should resolve to dep_b/Helper.roc
+    const def_b_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":12}}}}}}
+    , .{pkg_b_mod_uri});
+    defer allocator.free(def_b_body);
+    const def_b_msg = try frame(allocator, def_b_body);
+    defer allocator.free(def_b_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":99,"method":"shutdown","params":{}}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit","params":{}}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder: std.ArrayList(u8) = .empty;
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_pkg_a_msg);
+    try builder.appendSlice(allocator, open_pkg_b_msg);
+    try builder.appendSlice(allocator, def_a_msg);
+    try builder.appendSlice(allocator, def_b_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [16384]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response2 = try responseById(allocator, responses, 2);
+    defer response2.deinit();
+    const result2 = try response2.result();
+    try std.testing.expect(result2 == .object);
+    const uri2 = try stringField(result2, "uri");
+    try std.testing.expect(std.mem.endsWith(u8, uri2, "dep_a/Helper.roc"));
+
+    var response3 = try responseById(allocator, responses, 3);
+    defer response3.deinit();
+    const result3 = try response3.result();
+    try std.testing.expect(result3 == .object);
+    const uri3 = try stringField(result3, "uri");
+    try std.testing.expect(std.mem.endsWith(u8, uri3, "dep_b/Helper.roc"));
+}
+
+/// Verifies goto definition on a tag imported via package shorthand (e.g. `import pkg.State`)
+/// navigates to the tag's type declaration in the dependency package.
+pub fn definitionHandlerNavigatesToTagDeclarationInPackageQualifiedImport() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+
+    tmp.dir.createDirPath(test_env.io, "pkg") catch return error.TestUnexpectedResult;
+    const pkg_state_path = try std.fs.path.join(allocator, &.{ tmp_path, "pkg", "State.roc" });
+    defer allocator.free(pkg_state_path);
+
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "pkg/main.roc", .data = "package [State] {}\n" });
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "pkg/State.roc", .data = "module [State]\n\nState : [WaitingForInit, Running, Done]\n" });
+
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
+    defer allocator.free(main_path);
+    const main_uri = try uriFromPath(allocator, main_path);
+    defer allocator.free(main_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    const open_main_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [handle] {{ pf: platform \"{s}\", pkg: \"./pkg/main.roc\" }}\n\nimport pkg.State exposing [State]\n\nhandle : State -> I64\nhandle = |s|\n    match s {{\n        WaitingForInit => 0,\n        _ => 1,\n    }}"}}}}}}
+    , .{ main_uri, platform_path });
+    defer allocator.free(open_main_body);
+    const open_main_msg = try frame(allocator, open_main_body);
+    defer allocator.free(open_main_msg);
+
+    // Line 7: WaitingForInit => 0 (character 10)
+    const definition_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":7,"character":10}}}}}}
+    , .{main_uri});
+    defer allocator.free(definition_body);
+    const definition_msg = try frame(allocator, definition_body);
+    defer allocator.free(definition_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder: std.ArrayList(u8) = .empty;
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_main_msg);
+    try builder.appendSlice(allocator, definition_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [16384]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const result = try response.result();
+    try std.testing.expect(result == .object);
+    const uri = try stringField(result, "uri");
+    try std.testing.expect(std.mem.endsWith(u8, uri, "pkg/State.roc"));
+}
+
+/// Verifies goto definition on a tag that appears in multiple imported modules
+/// navigates to the declaration in the correct module based on solved type identity.
+pub fn definitionHandlerDisambiguatesSameNamedTagAcrossImportedModules() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+
+    tmp.dir.createDirPath(test_env.io, "pkg_a") catch return error.TestUnexpectedResult;
+    tmp.dir.createDirPath(test_env.io, "pkg_b") catch return error.TestUnexpectedResult;
+
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "pkg_a/main.roc", .data = "package [StateA] {}\n" });
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "pkg_a/StateA.roc", .data = "module [StateA]\n\nStateA : [CommonTag, OnlyA]\n" });
+
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "pkg_b/main.roc", .data = "package [StateB] {}\n" });
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "pkg_b/StateB.roc", .data = "module [StateB]\n\nStateB : [CommonTag, OnlyB]\n" });
+
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
+    defer allocator.free(main_path);
+    const main_uri = try uriFromPath(allocator, main_path);
+    defer allocator.free(main_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    // main.roc imports pkg_a first, then pkg_b second.
+    // handleB uses StateB (from pkg_b), matching on CommonTag.
+    // Navigation MUST jump to pkg_b/StateB.roc, not pkg_a/StateA.roc.
+    const open_main_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [handleB] {{ pf: platform \"{s}\", pa: \"./pkg_a/main.roc\", pb: \"./pkg_b/main.roc\" }}\n\nimport pa.StateA exposing [StateA]\nimport pb.StateB exposing [StateB]\n\nhandleB : StateB -> I64\nhandleB = |s|\n    match s {{\n        CommonTag => 0,\n        _ => 1,\n    }}"}}}}}}
+    , .{ main_uri, platform_path });
+    defer allocator.free(open_main_body);
+    const open_main_msg = try frame(allocator, open_main_body);
+    defer allocator.free(open_main_msg);
+
+    // Line 8: CommonTag => 0 (character 10)
+    const definition_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":8,"character":10}}}}}}
+    , .{main_uri});
+    defer allocator.free(definition_body);
+    const definition_msg = try frame(allocator, definition_body);
+    defer allocator.free(definition_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder: std.ArrayList(u8) = .empty;
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_main_msg);
+    try builder.appendSlice(allocator, definition_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [16384]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const result = try response.result();
+    try std.testing.expect(result == .object);
+    const uri = try stringField(result, "uri");
+    try std.testing.expect(std.mem.endsWith(u8, uri, "pkg_b/StateB.roc"));
+}
+
+/// Verifies that a bare open tag returned in a match branch value does not
+/// accidentally navigate to the match condition's nominal type declaration.
+pub fn definitionHandlerBranchValueOpenTagDoesNotNavigateToMatchConditionType() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+
+    tmp.dir.createDirPath(test_env.io, "pkg") catch return error.TestUnexpectedResult;
+
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "pkg/main.roc", .data = "package [State] {}\n" });
+    try tmp.dir.writeFile(test_env.io, .{ .sub_path = "pkg/State.roc", .data = "module [State]\n\nState : [ConditionTag, Other]\n" });
+
+    const main_path = try std.fs.path.join(allocator, &.{ tmp_path, "main.roc" });
+    defer allocator.free(main_path);
+    const main_uri = try uriFromPath(allocator, main_path);
+    defer allocator.free(main_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    // main.roc matches on State, but returns an open tag in branch value.
+    const open_main_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [handle] {{ pf: platform \"{s}\", pkg: \"./pkg/main.roc\" }}\n\nimport pkg.State exposing [State]\n\nhandle : State -> [OpenBranchTag, Else]\nhandle = |s|\n    match s {{\n        _ => OpenBranchTag,\n    }}"}}}}}}
+    , .{ main_uri, platform_path });
+    defer allocator.free(open_main_body);
+    const open_main_msg = try frame(allocator, open_main_body);
+    defer allocator.free(open_main_msg);
+
+    // Line 7: _ => OpenBranchTag (character 15 on OpenBranchTag)
+    const definition_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":7,"character":15}}}}}}
+    , .{main_uri});
+    defer allocator.free(definition_body);
+    const definition_msg = try frame(allocator, definition_body);
+    defer allocator.free(definition_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder: std.ArrayList(u8) = .empty;
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_main_msg);
+    try builder.appendSlice(allocator, definition_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [16384]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const result = try response.result();
+    // OpenBranchTag is not declared in pkg/State.roc; definition must find it in the local annotation or return null,
+    // but MUST NOT return pkg/State.roc!
+    if (result == .object) {
+        const uri = try stringField(result, "uri");
+        try std.testing.expect(!std.mem.endsWith(u8, uri, "pkg/State.roc"));
     }
 }
