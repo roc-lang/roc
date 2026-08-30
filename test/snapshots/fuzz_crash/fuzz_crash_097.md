@@ -22,8 +22,7 @@ a=(0(0->X)
 
 The value's type, which does not have a method named from_numeral, is:
 
-    [X(b), ..] -> _ret
-      where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]
+    _arg -> _ret
 
 ── ✗ type mismatch ─────────────────────────────────────── fuzz_crash_097.md:1:4
 
