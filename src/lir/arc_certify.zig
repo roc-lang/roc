@@ -3971,7 +3971,21 @@ const Certifier = struct {
         }
 
         try work.append(self.allocator, .{ .segment = .{ .cursor = body, .state = state } });
+        // Companion to the bound inside `runSegment`: that one catches a single
+        // walk that never ends, this one catches a worklist that keeps growing.
+        // The busiest procedure in a 117k-statement module queues 1572 segments
+        // against a limit of 29k, so a procedure that passes this is not
+        // converging.
+        const item_limit = @max(@as(usize, 1) << 14, self.store.cfStmtCount() / 4);
+        var items: usize = 0;
         while (work.pop()) |item| {
+            items += 1;
+            if (items > item_limit) {
+                return self.fail(
+                    "certifying this procedure queued more than {d} segments without settling",
+                    .{item_limit},
+                );
+            }
             if (self.work_stats) |stats| stats.work_items += 1;
             switch (item) {
                 .segment => |segment| try self.runSegment(&work, segment),
@@ -4007,8 +4021,24 @@ const Certifier = struct {
         defer state.deinit();
         var cursor = segment.cursor;
         self.current_origin_join = segment.origin_join;
+        // A segment walk ends by reaching a terminator or by meeting a state it
+        // has already memoized. Nothing else bounds it, so a walk whose state
+        // never repeats runs forever, and the only symptom is a build that
+        // never finishes. Bound it instead: the limit is far above any real
+        // walk (the largest segment in a 117k-statement module takes 154
+        // steps), so crossing it means the memo is not converging, and saying
+        // so with the proc and statement is worth more than hanging.
+        const step_limit = @max(@as(usize, 1) << 14, self.store.cfStmtCount() * 2);
+        var walk_steps: usize = 0;
 
         while (true) {
+            walk_steps += 1;
+            if (walk_steps > step_limit) {
+                return self.fail(
+                    "segment walk passed {d} statements without reaching a terminator or a repeated state",
+                    .{step_limit},
+                );
+            }
             self.current_stmt = cursor;
 
             if (self.memo_points.isSet(@intFromEnum(cursor))) {
