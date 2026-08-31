@@ -684,6 +684,15 @@ pub const Interpreter = struct {
         }
 
         pub fn enter(self: *Retained) void {
+            // Freestanding targets have no OS threads, and std.Thread cannot
+            // produce an identity for them. Their only possible nesting is
+            // same-thread reentrancy, so depth alone is the execution gate.
+            if (comptime is_freestanding) {
+                if (self.execution_depth == 0) self.interpreter.resetRetainedExecution();
+                self.execution_depth += 1;
+                return;
+            }
+
             const thread_id = std.Thread.getCurrentId();
             if (self.execution_owner.load(.acquire) == thread_id) {
                 self.execution_depth += 1;
@@ -698,6 +707,12 @@ pub const Interpreter = struct {
         }
 
         pub fn leave(self: *Retained) void {
+            if (comptime is_freestanding) {
+                if (builtin.mode == .Debug) std.debug.assert(self.execution_depth > 0);
+                self.execution_depth -= 1;
+                return;
+            }
+
             const thread_id = std.Thread.getCurrentId();
             if (builtin.mode == .Debug) {
                 std.debug.assert(self.execution_owner.load(.acquire) == thread_id);
