@@ -131,7 +131,7 @@ test "issue 10295: dev backend preserves deep structural equality under register
     var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, &.{}, .preserve, roc_target.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
-    const generated = try codegen.generateCode(root, .bool, 1);
+    const generated = try codegen.generateCode(root, .bool);
     defer allocator.free(generated.code);
 
     var executable = try dev.ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
@@ -202,7 +202,7 @@ test "issue 10295: nested list equality has bounded register pressure" {
     var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, &.{}, .preserve, roc_target.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
-    const generated = try codegen.generateCode(root, .bool, 1);
+    const generated = try codegen.generateCode(root, .bool);
     defer allocator.free(generated.code);
 
     var executable = try dev.ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
@@ -217,6 +217,193 @@ test "issue 10295: nested list equality has bounded register pressure" {
     const entry: *const fn (*anyopaque, *anyopaque) callconv(.c) void = @ptrCast(@alignCast(executable.entryPtr()));
     entry(@ptrCast(&actual), @ptrCast(&dummy_roc_ops));
     try std.testing.expectEqual(@as(u8, 1), actual);
+}
+
+test "issue 10993: erased callable ABI writes exactly ret_size bytes through the return pointer" {
+    if (comptime !dev.host_lir_codegen_available) return error.SkipZigTest;
+
+    // https://github.com/roc-lang/roc/issues/10993
+    //
+    // The uniform erased-callable ABI hands the callee a pointer to
+    // caller-owned result storage of exactly the return layout's size (see
+    // builtins/erased_callable.zig). A callee that stores past that size
+    // corrupts whatever the caller keeps next to the result slot:
+    // `listSortWith` comparators return a 1-byte ordering into a
+    // `var ordering: u8` stack slot, so any wider store smashes the caller's
+    // frame and segfaults `List.sort` under the machine-code shim.
+    //
+    // The four return layouts cover every copy shape: a register-sized
+    // scalar (1 byte), sub-word aggregates with and without an overlapping
+    // tail chunk (3 and 7 bytes), and a non-word-multiple aggregate above
+    // 8 bytes (12 bytes: one whole word plus an overlapping 8-byte tail).
+    const std = @import("std");
+    const layout = @import("layout");
+    const lir = @import("lir");
+    const builtins = @import("builtins");
+
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layout_store = try layout.Store.init(allocator, .u64);
+    defer layout_store.deinit();
+
+    const helpers = struct {
+        fn addErasedProc(
+            s: *lir.LirStore,
+            ls: *layout.Store,
+            body: lir.CFStmtId,
+            ret_layout: layout.Idx,
+        ) std.mem.Allocator.Error!lir.LIR.LirProcSpecId {
+            const capture_arg = try s.addLocal(.{ .layout_idx = .opaque_ptr });
+            const reuse_arg = try s.addLocal(.{ .layout_idx = .opaque_ptr });
+            const args = try s.addLocalSpan(&.{ capture_arg, reuse_arg });
+            const arg_plan = try s.internErasedCallArgsPlan(ls, &.{});
+            return s.addProcSpec(.{
+                .name = s.freshSyntheticSymbol(),
+                .args = args,
+                .body = body,
+                .ret_layout = ret_layout,
+                .abi = .erased_callable,
+                .erased_capture_arg = capture_arg,
+                .erased_reuse_arg = reuse_arg,
+                .erased_call_args = arg_plan,
+            });
+        }
+
+        fn addStructBody(
+            s: *lir.LirStore,
+            struct_layout: layout.Idx,
+            field_layout: layout.Idx,
+            field_values: []const i64,
+        ) std.mem.Allocator.Error!lir.CFStmtId {
+            var field_locals: [7]lir.LIR.LocalId = undefined;
+            for (field_values, 0..) |_, i| {
+                field_locals[i] = try s.addLocal(.{ .layout_idx = field_layout });
+            }
+            const result = try s.addLocal(.{ .layout_idx = struct_layout });
+            const ret = try s.addCFStmt(.{ .ret = .{ .value = result } });
+            const fields = try s.addLocalSpan(field_locals[0..field_values.len]);
+            var body = try s.addCFStmt(.{ .assign_struct = .{
+                .target = result,
+                .fields = fields,
+                .next = ret,
+            } });
+            for (field_values, 0..) |value, i| {
+                body = try s.addCFStmt(.{ .assign_literal = .{
+                    .target = field_locals[i],
+                    .value = .{ .i64_literal = .{ .value = value, .layout_idx = field_layout } },
+                    .next = body,
+                } });
+            }
+            return body;
+        }
+
+        fn abort(_: *builtins.host_abi.RocOps, _: [*]const u8, _: usize) callconv(.c) void {
+            @panic("erased callable ret-size test must not reach RocOps");
+        }
+        fn abortAlloc(_: *builtins.host_abi.RocOps, _: usize, _: usize) callconv(.c) ?*anyopaque {
+            @panic("erased callable ret-size test must not allocate");
+        }
+        fn abortDealloc(_: *builtins.host_abi.RocOps, _: *anyopaque, _: usize) callconv(.c) void {
+            @panic("erased callable ret-size test must not deallocate");
+        }
+        fn abortRealloc(_: *builtins.host_abi.RocOps, _: *anyopaque, _: usize, _: usize) callconv(.c) ?*anyopaque {
+            @panic("erased callable ret-size test must not reallocate");
+        }
+    };
+
+    // u8 scalar returning 2 (an Ordering-sized result, the List.sort shape).
+    const scalar_result = try store.addLocal(.{ .layout_idx = .u8 });
+    const scalar_ret = try store.addCFStmt(.{ .ret = .{ .value = scalar_result } });
+    const scalar_body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = scalar_result,
+        .value = .{ .i64_literal = .{ .value = 2, .layout_idx = .u8 } },
+        .next = scalar_ret,
+    } });
+    const scalar_proc = try helpers.addErasedProc(&store, &layout_store, scalar_body, .u8);
+
+    const u8x3_layout = try layout_store.putStructFields(&.{
+        .{ .index = 0, .layout = .u8 },
+        .{ .index = 1, .layout = .u8 },
+        .{ .index = 2, .layout = .u8 },
+    });
+    const u8x3_body = try helpers.addStructBody(&store, u8x3_layout, .u8, &.{ 0x11, 0x22, 0x33 });
+    const u8x3_proc = try helpers.addErasedProc(&store, &layout_store, u8x3_body, u8x3_layout);
+
+    const u8x7_layout = try layout_store.putStructFields(&.{
+        .{ .index = 0, .layout = .u8 },
+        .{ .index = 1, .layout = .u8 },
+        .{ .index = 2, .layout = .u8 },
+        .{ .index = 3, .layout = .u8 },
+        .{ .index = 4, .layout = .u8 },
+        .{ .index = 5, .layout = .u8 },
+        .{ .index = 6, .layout = .u8 },
+    });
+    const u8x7_body = try helpers.addStructBody(&store, u8x7_layout, .u8, &.{ 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47 });
+    const u8x7_proc = try helpers.addErasedProc(&store, &layout_store, u8x7_body, u8x7_layout);
+
+    const u32x3_layout = try layout_store.putStructFields(&.{
+        .{ .index = 0, .layout = .u32 },
+        .{ .index = 1, .layout = .u32 },
+        .{ .index = 2, .layout = .u32 },
+    });
+    const u32x3_body = try helpers.addStructBody(&store, u32x3_layout, .u32, &.{ 0x01020304, 0x05060708, 0x090A0B0C });
+    const u32x3_proc = try helpers.addErasedProc(&store, &layout_store, u32x3_body, u32x3_layout);
+
+    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, &.{}, .preserve, roc_target.host_cpu.level());
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+
+    // This test jumps straight into the shared code buffer, so it can only
+    // execute code with no unapplied relocations. If the erased-callable
+    // prologue ever grows a relocation-backed call, resolve the relocations
+    // here instead of deleting this check.
+    try std.testing.expectEqual(@as(usize, 0), codegen.codegen.relocations.items.len);
+
+    var executable = try dev.ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
+        codegen.codegen.getCode(),
+        0,
+        codegen.getUnwindFunctions(),
+    );
+    defer executable.deinit();
+
+    var roc_ops = builtins.host_abi.RocOps{
+        .env = undefined,
+        .roc_alloc = &helpers.abortAlloc,
+        .roc_dealloc = &helpers.abortDealloc,
+        .roc_realloc = &helpers.abortRealloc,
+        .roc_dbg = &helpers.abort,
+        .roc_expect_failed = &helpers.abort,
+        .roc_crashed = &helpers.abort,
+        .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
+    };
+
+    const cases = [_]struct {
+        proc_id: lir.LIR.LirProcSpecId,
+        expected: []const u8,
+    }{
+        .{ .proc_id = scalar_proc, .expected = &.{2} },
+        .{ .proc_id = u8x3_proc, .expected = &.{ 0x11, 0x22, 0x33 } },
+        .{ .proc_id = u8x7_proc, .expected = &.{ 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47 } },
+        .{ .proc_id = u32x3_proc, .expected = &.{ 0x04, 0x03, 0x02, 0x01, 0x08, 0x07, 0x06, 0x05, 0x0C, 0x0B, 0x0A, 0x09 } },
+    };
+
+    for (cases) |case| {
+        const compiled = codegen.proc_registry.get(@intFromEnum(case.proc_id)) orelse return error.TestUnexpectedResult;
+        const callable: builtins.erased_callable.ErasedCallableFn = @ptrCast(@alignCast(executable.codePtr() + compiled.code_start));
+
+        // Sentinel bytes on both sides of the result slot; the callee owns
+        // only ret_buf[8 .. 8 + expected.len].
+        var ret_buf align(16) = [_]u8{0xAA} ** 32;
+        var out_desc: ?*const anyopaque = null;
+        callable(&roc_ops, ret_buf[8..].ptr, null, null, null, &out_desc);
+
+        try std.testing.expectEqualSlices(u8, case.expected, ret_buf[8 .. 8 + case.expected.len]);
+        for (ret_buf, 0..) |byte, i| {
+            if (i >= 8 and i < 8 + case.expected.len) continue;
+            try std.testing.expectEqual(@as(u8, 0xAA), byte);
+        }
+    }
 }
 
 test "x86_64 Windows hosted U128 return stores all 16 bytes from XMM0" {

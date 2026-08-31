@@ -2500,6 +2500,99 @@ test "imported and local generic specialization counters reuse closed types" {
     try std.testing.expect(counters.template_lookup_candidates <= counters.template_requests);
 }
 
+/// Repro source for https://github.com/roc-lang/roc/issues/10978: one
+/// function body constructing a parameterized recursive nominal type
+/// `construction_count` times (three constructions per generated line).
+fn issue10978NodeTreeSource(allocator: Allocator, construction_count: usize) Allocator.Error![]u8 {
+    var source = std.ArrayList(u8).empty;
+    errdefer source.deinit(allocator);
+
+    try source.appendSlice(allocator,
+        \\Node(msg) := [Text(Str), Element(Str, List(Node(msg)))].{
+        \\    text : Str -> Node(msg)
+        \\    text = |s| Text(s)
+        \\
+        \\    el : Str, List(Node(msg)) -> Node(msg)
+        \\    el = |tag, kids| Element(tag, kids)
+        \\}
+        \\
+        \\view : Str -> List(Node(Str))
+        \\view = |title| [
+        \\
+    );
+    for (0..construction_count) |_| {
+        try source.appendSlice(allocator, "    Node.el(\"p\", [Node.el(\"span\", [Node.text(title)])]),\n");
+    }
+    try source.appendSlice(allocator,
+        \\]
+        \\
+        \\main : U64
+        \\main = view("hi").len()
+        \\
+    );
+
+    return try source.toOwnedSlice(allocator);
+}
+
+test "issue 10978 repeated recursive nominal constructions scan bounded backing instances" {
+    // Repro for https://github.com/roc-lang/roc/issues/10978: check time is
+    // quadratic in the number of constructions of a parameterized recursive
+    // nominal type in one function body. Every construction probes the
+    // per-graph nominal-backing instance cache; the candidates each probe
+    // scans must stay proportional to the probe count, not to the number of
+    // instances already recorded. All counts here are deterministic: when
+    // the construction count doubles, linear work at most doubles them,
+    // while the quadratic rescan quadruples them.
+    const allocator = std.testing.allocator;
+
+    const Counts = struct { scanned: u64, finds: u64 };
+    var counts: [3]Counts = undefined;
+    const sizes = [_]usize{ 8, 16, 32 };
+    for (sizes, &counts) |n, *out| {
+        const source = try issue10978NodeTreeSource(allocator, n);
+        defer allocator.free(source);
+
+        var diagnostics = MonoLower.Diagnostics{};
+        var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
+            .diagnostics = &diagnostics,
+        });
+        defer lowered.deinit(allocator);
+
+        out.* = .{
+            .scanned = diagnostics.graph.nominal_backing_instances_scanned,
+            .finds = diagnostics.graph.union_find_resolutions,
+        };
+    }
+
+    const scan_growth_linear = counts[1].scanned <= counts[0].scanned *| 2 and
+        counts[2].scanned <= counts[1].scanned *| 2;
+    // Union-find pressure is the broad guard: compare growth between size
+    // doublings so fixed per-module work cancels. Linear lowering doubles
+    // the delta; the quadratic scan approaches quadrupling it.
+    const find_growth_linear = if (counts[0].finds <= counts[1].finds and counts[1].finds <= counts[2].finds) linear: {
+        const delta_small = counts[1].finds - counts[0].finds;
+        const delta_large = counts[2].finds - counts[1].finds;
+        break :linear delta_large <= (delta_small *| 5) / 2;
+    } else false;
+    if (!scan_growth_linear or !find_growth_linear) {
+        std.debug.print(
+            "recursive nominal construction work grew nonlinearly: " ++
+                "backing instances scanned {d}->{d}->{d}, " ++
+                "union-find resolutions {d}->{d}->{d}\n",
+            .{
+                counts[0].scanned,
+                counts[1].scanned,
+                counts[2].scanned,
+                counts[0].finds,
+                counts[1].finds,
+                counts[2].finds,
+            },
+        );
+    }
+    try std.testing.expect(scan_growth_linear);
+    try std.testing.expect(find_growth_linear);
+}
+
 test "closed direct method calls reuse specialization before durable key construction" {
     const allocator = std.testing.allocator;
     const one_call =
@@ -7575,7 +7668,7 @@ test "dispatch evidence boundary validator accepts a published artifact" {
     try std.testing.expect(resources.checked_artifact.validateDispatchEvidence() == null);
 }
 
-test "custom literal field default owns its conversion root" {
+test "custom literal field default gets an ordinary conversion root" {
     const allocator = std.testing.allocator;
     const source =
         \\MyNum := [Value(U64)].{
@@ -7588,10 +7681,10 @@ test "custom literal field default owns its conversion root" {
         \\    from_quote = |str| Ok(Label(str))
         \\}
         \\
-        \\Config : { size : MyNum ?? 5, label : Label ?? "hi" }
+        \\Config := { size : MyNum ?? 5, label : Label ?? "hi" }
         \\
         \\config : Config
-        \\config = {}
+        \\config = Config.{}
         \\
         \\main = config.size
     ;
@@ -7605,16 +7698,23 @@ test "custom literal field default owns its conversion root" {
     );
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
-    var default_count: usize = 0;
-    for (resources.checked_artifact.compile_time_roots.roots) |root| {
-        if (root.kind != .field_default) continue;
-        default_count += 1;
-        try std.testing.expect(root.literalConversionKind() != null);
-        const conversion = resources.checked_artifact.compile_time_roots.lookupNumeralRootByExpr(root.expr) orelse
+    // Per-specialization defaults have no root of their own; each default's
+    // custom literal conversion is an ORDINARY conversion root in the
+    // declaring module, so compile-time `Err` reporting is unchanged
+    // (design.md "Defaulted Fields").
+    var numeral_roots: usize = 0;
+    var quote_roots: usize = 0;
+    for (resources.checked_artifact.checked_bodies.default_exprs.items) |entry| {
+        const conversion = resources.checked_artifact.compile_time_roots.lookupNumeralRootByExpr(entry.checked_expr) orelse
             return error.TestUnexpectedResult;
-        try std.testing.expectEqual(root.id, conversion.id);
+        switch (conversion.kind) {
+            .numeral_conversion => numeral_roots += 1,
+            .quote_conversion => quote_roots += 1,
+            .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect => return error.TestUnexpectedResult,
+        }
     }
-    try std.testing.expectEqual(@as(usize, 2), default_count);
+    try std.testing.expectEqual(@as(usize, 1), numeral_roots);
+    try std.testing.expectEqual(@as(usize, 1), quote_roots);
 }
 
 test "dispatch evidence boundary validator rejects malformed specialization interface metadata" {
