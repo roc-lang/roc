@@ -197,7 +197,9 @@ pub const STACK_OVERFLOW_MESSAGE = "This Roc program overflowed its stack memory
 /// so the finalizer reports it as this root's compile-time crash.
 pub fn noteStackOverflow(self: *CompileTimeHost) void {
     if (self.failed_region == null and self.call_regions.items.len > 0) {
-        self.failed_region = self.call_regions.items[self.call_regions.items.len - 1];
+        const frame = self.call_regions.items[self.call_regions.items.len - 1];
+        self.failed_region = frame.region;
+        self.failed_loc = frame.loc;
     }
     self.appendEvent(.crashed, STACK_OVERFLOW_MESSAGE);
     self.termination = .crashed;
