@@ -745,7 +745,7 @@ const CheckTypeCheckerPatternsStep = struct {
         .{ .file = "inspected.zig", .start = 226, .end = 232 },
         // inspected.zig trims the trailing newline off a rendered report. This is
         // presentation text on its way out, not a type-checker comparison.
-        .{ .file = "inspected.zig", .start = 2211, .end = 2211 },
+        .{ .file = "inspected.zig", .start = 2207, .end = 2207 },
         // inspected.zig converts a NUL-terminated dylib path from the linker into a
         // slice. Path bytes, not identifiers.
         .{ .file = "inspected.zig", .start = 3000, .end = 3004 },
