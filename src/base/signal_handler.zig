@@ -118,6 +118,62 @@ var stack_overflow_callback: ?StackOverflowCallback = null;
 var access_violation_callback: ?AccessViolationCallback = null;
 var arithmetic_error_callback: ?ArithmeticErrorCallback = null;
 
+/// The longjmp value a stack-overflow escape delivers to a crash boundary's
+/// setjmp, distinguishing a caught overflow from an ordinary Roc `crash`
+/// (which longjmps with 1).
+pub const stack_overflow_longjmp_value: c_int = 2;
+
+/// A registered escape route out of a stack overflow on the current thread.
+/// The fault handler unblocks the fault signals and then calls `escape`,
+/// which must transfer control away (longjmp to a crash boundary) and never
+/// return.
+pub const StackOverflowRecovery = struct {
+    context: *anyopaque,
+    escape: *const fn (*anyopaque) noreturn,
+};
+
+threadlocal var stack_overflow_recovery: ?*const StackOverflowRecovery = null;
+
+/// Install `recovery` as the current thread's stack-overflow escape route and
+/// return the previously installed one so nested boundaries can restore it.
+/// While no recovery is installed, a stack overflow terminates the process
+/// through the installed stack-overflow callback.
+pub fn setStackOverflowRecovery(recovery: ?*const StackOverflowRecovery) ?*const StackOverflowRecovery {
+    const previous = stack_overflow_recovery;
+    stack_overflow_recovery = recovery;
+    return previous;
+}
+
+/// Return control flow to normal after a caught stack overflow, on the thread
+/// that overflowed. On Windows the spent guard page must be re-armed or the
+/// next overflow on this thread would be an unrecoverable access violation;
+/// POSIX guard pages are permanent PROT_NONE mappings and need no re-arming.
+pub fn restoreStackGuardAfterOverflow() void {
+    if (comptime supports_windows_exceptions) {
+        const crt = struct {
+            extern "c" fn _resetstkoflw() c_int;
+        };
+        _ = crt._resetstkoflw();
+    }
+}
+
+fn takeStackOverflowRecovery() ?*const StackOverflowRecovery {
+    const recovery = stack_overflow_recovery orelse return null;
+    // One-shot: the boundary that registered this route restores the previous
+    // route in its deinit; clearing here keeps a fault inside the escape path
+    // itself from looping back into the handler forever.
+    stack_overflow_recovery = null;
+    return recovery;
+}
+
+fn unblockFaultSignals() void {
+    if (comptime !supports_posix_signals) return;
+    var set = posix.sigemptyset();
+    posix.sigaddset(&set, posix.SIG.SEGV);
+    posix.sigaddset(&set, posix.SIG.BUS);
+    posix.sigprocmask(posix.SIG.UNBLOCK, &set, null);
+}
+
 /// Called when the handler identifies a stack overflow.
 pub const StackOverflowCallback = *const fn () noreturn;
 /// Called when the handler identifies a non-stack memory access violation.
@@ -443,6 +499,9 @@ fn handleExceptionWindows(exception_info: *EXCEPTION_POINTERS) callconv(.winapi)
     }
 
     if (is_stack_overflow) {
+        if (takeStackOverflowRecovery()) |recovery| {
+            recovery.escape(recovery.context);
+        }
         if (stack_overflow_callback) |callback| callback();
         _ = TerminateProcess(GetCurrentProcess(), 134);
         @trap();
@@ -470,6 +529,14 @@ fn handleSegvSignal(_: posix.SIG, info: *const posix.siginfo_t, context: ?*anyop
 
     switch (classifyFault(fault_addr, stack_pointer, thread_stack_bounds)) {
         .stack_overflow => {
+            if (takeStackOverflowRecovery()) |recovery| {
+                // The kernel blocked SIGSEGV/SIGBUS for the duration of this
+                // handler; the escape longjmps out instead of returning, so
+                // unblock them here or the next fault on this thread would
+                // kill the process outright.
+                unblockFaultSignals();
+                recovery.escape(recovery.context);
+            }
             if (stack_overflow_callback) |callback| callback();
             std.process.exit(134);
         },

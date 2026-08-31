@@ -2451,77 +2451,9 @@ fn copyRuntimeHostEvents(allocator: Allocator, runtime_env: *const RuntimeHostEn
     return events;
 }
 
-fn runExecutableBoolRoot(
-    allocator: Allocator,
-    layouts: *const LayoutStore,
-    executable: *const ExecutableMemory,
-    root: BoolRoot,
-    runtime_env: *RuntimeHostEnv,
-) Error!BoolRootEvalResult {
-    runtime_env.resetObservation();
-    runtime_env.resetAllocationTracker();
-    // Dev-JIT code calls the host's own expect_err wrapper, which records the
-    // `?` region in this thread-local slot; clear any stale value first.
-    _ = builtins.dev_wrappers.takeExpectErrRegion();
-
-    const arg_buffer = try zeroedEntrypointArgBufferForLayouts(allocator, layouts, root.arg_layouts);
-    defer if (arg_buffer) |buf| allocator.free(buf);
-
-    const ret_buf = try boolRootRetBuffer(allocator, layouts, root.ret_layout);
-    defer allocator.free(ret_buf);
-
-    var crash_boundary = runtime_env.enterCrashBoundary();
-    defer crash_boundary.deinit();
-    const sj = crash_boundary.set();
-    if (sj == 0) {
-        executable.callRocABI(
-            @ptrCast(runtime_env.get_ops()),
-            @ptrCast(ret_buf.ptr),
-            if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
-        );
-    }
-
-    const outcome: BoolRootEvalOutcome = switch (runtime_env.crashState()) {
-        .did_not_crash => .{ .passed = ret_buf[0] != 0 },
-        .crashed => if (builtins.dev_wrappers.takeExpectErrRegion()) |region| .{ .expect_err = .{
-            .message = try copyRuntimeCrashMessage(allocator, runtime_env),
-            .region_start = region.start,
-            .region_end = region.end,
-        } } else .{ .crashed = try copyRuntimeCrashMessage(allocator, runtime_env) },
-    };
-    errdefer deinitBoolRootEvalOutcome(allocator, outcome);
-    const events = try copyRuntimeHostEvents(allocator, runtime_env);
-    runtime_env.resetAllocationTracker();
-    return .{
-        .outcome = outcome,
-        .events = events,
-    };
-}
-
 /// Native addresses of the Boxy runtime wrappers consumed by generated code.
 fn boxyNativeFnTable() BoxyNativeFnTable {
     return boxy_abi.nativeFnTable();
-}
-
-/// Install the process-global boxy runtime from live stores so in-process dev
-/// code can call the boxy wrappers. A no-op when the program has no boxy tables.
-/// Returns whether the global was installed and must be torn down.
-fn installBoxyGlobal(
-    allocator: Allocator,
-    store: *const lir.LirStore,
-    layouts: *const LayoutStore,
-    tables: boxy_runtime.BoxyTables,
-    roc_ops: *builtins.host_abi.RocOps,
-) Allocator.Error!bool {
-    if (!tables.needsRuntimeForStore(store)) return false;
-    // Clear any runtime an earlier program left installed after longjmping past
-    // its teardown on a crash.
-    boxy_abi.deinitGlobal();
-    boxy_abi.initGlobal(allocator, store, layouts, tables, roc_ops) catch |err| switch (err) {
-        error.AlreadyInitialized => return false,
-        error.OutOfMemory => return error.OutOfMemory,
-    };
-    return true;
 }
 
 /// JIT-compile and run bool-returning test roots via the dev backend.
@@ -2532,7 +2464,7 @@ pub fn devEvalBoolRoots(
     tables: boxy_runtime.BoxyTables,
     roots: []const BoolRoot,
 ) Error![]BoolRootEvalResult {
-    return devEvalBoolRootsWithTiming(allocator, store, layouts, tables, roots, null);
+    return devEvalBoolRootsWithTimingAndMaxWorkers(allocator, store, layouts, tables, roots, null, null);
 }
 
 /// JIT-compile and run boolean roots while accumulating detailed dev-backend timings.
@@ -2544,9 +2476,28 @@ pub fn devEvalBoolRootsWithTiming(
     roots: []const BoolRoot,
     timing: ?*DevBoolRootTiming,
 ) Error![]BoolRootEvalResult {
+    return devEvalBoolRootsWithTimingAndMaxWorkers(allocator, store, layouts, tables, roots, timing, null);
+}
+
+/// JIT-compile bool-returning test roots via the dev backend into one
+/// executable mapping, then run them on parallel worker threads, exactly like
+/// the LLVM test path: every root gets its own entrypoint wrapper and its own
+/// per-call host environment, and workers claim roots through a shared atomic
+/// cursor.
+pub fn devEvalBoolRootsWithTimingAndMaxWorkers(
+    allocator: Allocator,
+    store: *const lir.LirStore,
+    layouts: *const LayoutStore,
+    tables: boxy_runtime.BoxyTables,
+    roots: []const BoolRoot,
+    timing: ?*DevBoolRootTiming,
+    max_workers: ?usize,
+) Error![]BoolRootEvalResult {
     if (comptime !backend.host_lir_codegen_available) {
         return error.DevBackendUnavailable;
     } else {
+        if (roots.len == 0) return try allocator.alloc(BoolRootEvalResult, 0);
+
         const static_strings_started_ns = if (timing) |timings| timings.start() else 0;
         var static_strings = try backend.StaticStringData.build(
             allocator,
@@ -2568,6 +2519,9 @@ pub fn devEvalBoolRootsWithTiming(
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
+        // Worker threads read this table through the codegen'd code while the
+        // parallel run below is still in flight, so it must stay alive until
+        // this function returns.
         var native_fns = boxyNativeFnTable();
         codegen.boxy_native_fns = &native_fns;
         if (timing) |timings| timings.finish(codegen_setup_started_ns, .codegen_setup);
@@ -2576,45 +2530,49 @@ pub fn devEvalBoolRootsWithTiming(
         try codegen.compileAllProcSpecs(store.getProcSpecs());
         if (timing) |timings| timings.finish(procedure_codegen_started_ns, .procedure_codegen);
 
-        var runtime_env = RuntimeHostEnv.init(allocator);
-        defer runtime_env.deinit();
+        const entry_offsets = try allocator.alloc(usize, roots.len);
+        defer allocator.free(entry_offsets);
 
-        const boxy_installed = try installBoxyGlobal(allocator, store, layouts, tables, runtime_env.get_ops());
-        defer if (boxy_installed) boxy_abi.deinitGlobal();
-
-        const results = try allocator.alloc(BoolRootEvalResult, roots.len);
-        var result_len: usize = 0;
-        errdefer deinitPartialBoolRootEvalResults(allocator, results, result_len);
-
+        const entrypoint_codegen_started_ns = if (timing) |timings| timings.start() else 0;
         for (roots, 0..) |root, i| {
-            const entrypoint_codegen_started_ns = if (timing) |timings| timings.start() else 0;
             const entrypoint = try codegen.generateEntrypointWrapper(
                 root.symbol_name,
                 root.proc,
                 root.arg_layouts,
                 root.ret_layout,
             );
-            if (timing) |timings| timings.finish(entrypoint_codegen_started_ns, .entrypoint_codegen);
+            entry_offsets[i] = entrypoint.offset;
+        }
+        if (timing) |timings| timings.finish(entrypoint_codegen_started_ns, .entrypoint_codegen);
 
-            const executable_memory_started_ns = if (timing) |timings| timings.start() else 0;
-            var executable = try ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
-                codegen.getGeneratedCode(),
-                entrypoint.offset,
-                codegen.getUnwindFunctions(),
-            );
-            if (timing) |timings| timings.finish(executable_memory_started_ns, .executable_memory);
-            defer {
-                const executable_deinit_started_ns = if (timing) |timings| timings.start() else 0;
-                executable.deinit();
-                if (timing) |timings| timings.finish(executable_deinit_started_ns, .executable_memory);
-            }
-
-            const root_execution_started_ns = if (timing) |timings| timings.start() else 0;
-            results[i] = try runExecutableBoolRoot(allocator, layouts, &executable, root, &runtime_env);
-            if (timing) |timings| timings.finish(root_execution_started_ns, .root_execution);
-            result_len += 1;
+        const executable_memory_started_ns = if (timing) |timings| timings.start() else 0;
+        var executable = try ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
+            codegen.getGeneratedCode(),
+            0,
+            codegen.getUnwindFunctions(),
+        );
+        if (timing) |timings| timings.finish(executable_memory_started_ns, .executable_memory);
+        defer {
+            const executable_deinit_started_ns = if (timing) |timings| timings.start() else 0;
+            executable.deinit();
+            if (timing) |timings| timings.finish(executable_deinit_started_ns, .executable_memory);
         }
 
+        const calls = try allocator.alloc(BoolRootCall, roots.len);
+        defer allocator.free(calls);
+        for (roots, 0..) |root, i| {
+            calls[i] = .{
+                .store = store,
+                .layouts = layouts,
+                .tables = tables,
+                .target = .{ .dev = .{ .executable = &executable, .entry_offset = entry_offsets[i] } },
+                .root = root,
+            };
+        }
+
+        const root_execution_started_ns = if (timing) |timings| timings.start() else 0;
+        const results = runBoolRootCalls(allocator, calls, true, max_workers, null, null);
+        if (timing) |timings| timings.finish(root_execution_started_ns, .root_execution);
         return results;
     }
 }
@@ -2667,12 +2625,12 @@ fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.TargetUsiz
     return .{ .options = options, .cpu = cpu, .features = features };
 }
 
-fn callLlvmBoolRoot(
+fn callBoolRoot(
     allocator: Allocator,
     layouts: *const LayoutStore,
     store: *const lir.LirStore,
     tables: boxy_runtime.BoxyTables,
-    entry: LlvmBoolRootEntryFn,
+    target: BoolRootCallTarget,
     root: BoolRoot,
     longjmp_on_crash: bool,
     call_index: usize,
@@ -2718,24 +2676,50 @@ fn callLlvmBoolRoot(
     defer crash_boundary.deinit();
     const sj = crash_boundary.set();
     if (sj == 0) {
-        const boxy_fns = boxyNativeFnTable();
-        entry(
-            runtime_env.get_ops(),
-            &test_context,
-            ret_buf.ptr,
-            if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
-            &boxy_fns,
-        );
+        switch (target) {
+            .llvm => |entry| {
+                const boxy_fns = boxyNativeFnTable();
+                entry(
+                    runtime_env.get_ops(),
+                    &test_context,
+                    ret_buf.ptr,
+                    if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
+                    &boxy_fns,
+                );
+            },
+            .dev => |entry| {
+                // Dev-JIT code calls the host's own expect_err wrapper, which
+                // records the `?` region in this thread-local slot; clear any
+                // stale value first.
+                _ = builtins.dev_wrappers.takeExpectErrRegion();
+                entry.executable.callRocABIAt(
+                    entry.entry_offset,
+                    @ptrCast(runtime_env.get_ops()),
+                    @ptrCast(ret_buf.ptr),
+                    if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
+                );
+            },
+        }
     }
 
     const outcome: BoolRootEvalOutcome = switch (runtime_env.crashState()) {
         .did_not_crash => .{ .passed = ret_buf[0] != 0 },
         .crashed => blk: {
-            if (test_context.expect_err_set != 0) {
+            const expect_err_region: ?struct { start: u32, end: u32 } = switch (target) {
+                .llvm => if (test_context.expect_err_set != 0)
+                    .{ .start = test_context.expect_err_start, .end = test_context.expect_err_end }
+                else
+                    null,
+                .dev => if (builtins.dev_wrappers.takeExpectErrRegion()) |region|
+                    .{ .start = region.start, .end = region.end }
+                else
+                    null,
+            };
+            if (expect_err_region) |region| {
                 break :blk .{ .expect_err = .{
                     .message = try copyRuntimeCrashMessage(allocator, &runtime_env),
-                    .region_start = test_context.expect_err_start,
-                    .region_end = test_context.expect_err_end,
+                    .region_start = region.start,
+                    .region_end = region.end,
                 } };
             }
             break :blk .{ .crashed = try copyRuntimeCrashMessage(allocator, &runtime_env) };
@@ -2751,17 +2735,30 @@ fn callLlvmBoolRoot(
 
 const LlvmBoolRootEntryFn = *const fn (*builtins.host_abi.RocOps, *TestInvocationContext, [*]u8, ?*anyopaque, *const BoxyNativeFnTable) callconv(.c) void;
 
-const LlvmBoolRootCall = struct {
+/// An entrypoint wrapper inside a dev-backend executable mapping.
+const DevBoolRootEntry = struct {
+    executable: *const ExecutableMemory,
+    entry_offset: usize,
+};
+
+/// How the generated machine code for one bool-returning test root is invoked.
+const BoolRootCallTarget = union(enum) {
+    /// A symbol in a dlopen'd shared library produced by the LLVM backend.
+    llvm: LlvmBoolRootEntryFn,
+    dev: DevBoolRootEntry,
+};
+
+const BoolRootCall = struct {
     store: *const lir.LirStore,
     layouts: *const LayoutStore,
     tables: boxy_runtime.BoxyTables,
-    entry: LlvmBoolRootEntryFn,
+    target: BoolRootCallTarget,
     root: BoolRoot,
 };
 
-const LlvmBoolRootWorkerState = struct {
+const BoolRootWorkerState = struct {
     allocator: Allocator,
-    calls: []const LlvmBoolRootCall,
+    calls: []const BoolRootCall,
     longjmp_on_crash: bool,
     next_call: std.atomic.Value(usize),
     results: []?BoolRootEvalResult,
@@ -2770,18 +2767,23 @@ const LlvmBoolRootWorkerState = struct {
     event_callback: ?BoolRootEventCallback,
 };
 
-fn llvmBoolRootWorker(state: *LlvmBoolRootWorkerState) void {
+fn boolRootWorker(state: *BoolRootWorkerState) void {
+    // This thread runs compiled Roc code: give it the per-thread alternate
+    // signal stack and stack bounds the fault handler needs to classify (and
+    // recover from) a stack overflow in a test. Without this, the handler
+    // would run on the just-overflowed stack.
+    _ = base.stack_overflow.installForCurrentThread();
     while (true) {
         const index = state.next_call.fetchAdd(1, .monotonic);
         if (index >= state.calls.len) break;
 
         const call = state.calls[index];
-        state.results[index] = callLlvmBoolRoot(
+        state.results[index] = callBoolRoot(
             state.allocator,
             call.layouts,
             call.store,
             call.tables,
-            call.entry,
+            call.target,
             call.root,
             state.longjmp_on_crash,
             index,
@@ -2811,9 +2813,9 @@ fn optimizedTestWorkerCount(root_count: usize, max_workers: ?usize) usize {
     return @min(@max(requested, 1), root_count);
 }
 
-fn runLlvmBoolRootCalls(
+fn runBoolRootCalls(
     allocator: Allocator,
-    calls: []const LlvmBoolRootCall,
+    calls: []const BoolRootCall,
     longjmp_on_crash: bool,
     max_workers: ?usize,
     completion_callback: ?BoolRootCompletionCallback,
@@ -2828,7 +2830,7 @@ fn runLlvmBoolRootCalls(
     defer allocator.free(errors);
     for (errors) |*slot| slot.* = null;
 
-    var state = LlvmBoolRootWorkerState{
+    var state = BoolRootWorkerState{
         .allocator = allocator,
         .calls = calls,
         .longjmp_on_crash = longjmp_on_crash,
@@ -2841,7 +2843,7 @@ fn runLlvmBoolRootCalls(
 
     const worker_count = optimizedTestWorkerCount(calls.len, max_workers);
     if (worker_count == 1) {
-        llvmBoolRootWorker(&state);
+        boolRootWorker(&state);
     } else {
         const threads = try allocator.alloc(std.Thread, worker_count);
         defer allocator.free(threads);
@@ -2849,7 +2851,7 @@ fn runLlvmBoolRootCalls(
         var spawned: usize = 0;
         var spawn_error: ?std.Thread.SpawnError = null;
         while (spawned < worker_count) : (spawned += 1) {
-            threads[spawned] = std.Thread.spawn(.{}, llvmBoolRootWorker, .{&state}) catch |err| {
+            threads[spawned] = std.Thread.spawn(.{ .stack_size = base.stack_budget.roc_stack_size }, boolRootWorker, .{&state}) catch |err| {
                 spawn_error = err;
                 break;
             };
@@ -3009,7 +3011,7 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
         longjmp_on_crash = false;
     }
 
-    const calls = try allocator.alloc(LlvmBoolRootCall, total_roots);
+    const calls = try allocator.alloc(BoolRootCall, total_roots);
     defer allocator.free(calls);
     var call_index: usize = 0;
     for (modules) |module| {
@@ -3018,14 +3020,14 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
                 .store = module.store,
                 .layouts = module.layouts,
                 .tables = module.tables,
-                .entry = lib.lookup(LlvmBoolRootEntryFn, root.symbol_name) orelse return error.LlvmBackendUnavailable,
+                .target = .{ .llvm = lib.lookup(LlvmBoolRootEntryFn, root.symbol_name) orelse return error.LlvmBackendUnavailable },
                 .root = root,
             };
             call_index += 1;
         }
     }
 
-    return runLlvmBoolRootCalls(allocator, calls, longjmp_on_crash, max_workers, completion_callback, event_callback);
+    return runBoolRootCalls(allocator, calls, longjmp_on_crash, max_workers, completion_callback, event_callback);
 }
 
 fn legacyInspectedRun(allocator: Allocator, comptime backend_kind: InspectedRun.Backend, lowered: *const LoweredProgram) Error!EvalRunResult {

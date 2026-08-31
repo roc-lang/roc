@@ -1,4 +1,5 @@
 const std = @import("std");
+const stack_budget = @import("src/base/stack_budget.zig");
 const builtin = @import("builtin");
 const modules = @import("src/build/modules.zig");
 const glibc_stub_build = @import("src/build/glibc_stub.zig");
@@ -4108,7 +4109,7 @@ pub fn build(b: *std.Build) void {
     // The deepest eval test recurses ~1000 frames; Zig 0.16 codegen pushes that past
     // the 1 MiB Windows default. Reserve a generous stack so recursive eval tests
     // don't trip our SetUnhandledExceptionFilter stack-overflow handler.
-    eval_test_exe.stack_size = 64 * 1024 * 1024;
+    eval_test_exe.stack_size = stack_budget.roc_stack_size;
     configureBackend(eval_test_exe, target);
     roc_modules.addAll(eval_test_exe);
     eval_test_exe.root_module.addOptions("coverage_options", blk: {
@@ -4237,7 +4238,7 @@ pub fn build(b: *std.Build) void {
     });
     // The tree evaluator and the deepest eval corpus programs both recurse;
     // match the eval runner's generous stack.
-    lambda_mono_differential_exe.stack_size = 64 * 1024 * 1024;
+    lambda_mono_differential_exe.stack_size = stack_budget.roc_stack_size;
     configureBackend(lambda_mono_differential_exe, target);
     roc_modules.addAll(lambda_mono_differential_exe);
     lambda_mono_differential_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
@@ -5375,6 +5376,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     stack_overflow_test_helper_exe.root_module.addImport("base", roc_modules.base);
+    stack_overflow_test_helper_exe.root_module.addImport("sljmp", roc_modules.sljmp);
     roc_modules.addModuleDependencies(stack_overflow_test_helper_exe, .base);
     const install_stack_overflow_test_helper = b.addInstallArtifact(stack_overflow_test_helper_exe, .{});
     const stack_overflow_test_helper_path = b.getInstallPath(.bin, stack_overflow_test_helper_exe.out_filename);
@@ -5949,7 +5951,7 @@ pub fn build(b: *std.Build) void {
     // call-depth guard fires first, which needs the same native stack the other
     // interpreter-driving binaries get; otherwise the stack runs out before the
     // guard does and the fault replaces the deterministic crash under test.
-    trmc_lir_test.stack_size = 64 * 1024 * 1024;
+    trmc_lir_test.stack_size = stack_budget.roc_stack_size;
     roc_modules.addAll(trmc_lir_test);
     trmc_lir_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
     trmc_lir_test.step.dependOn(&write_compiled_builtins.step);
@@ -7141,7 +7143,7 @@ fn addMainExe(
     // default reserve isn't enough—recursion-heavy Roc programs trip our
     // SetUnhandledExceptionFilter stack-overflow handler before the interpreter
     // can catch the overflow itself. Reserve 64 MiB to match eval-test-runner.
-    exe.stack_size = 64 * 1024 * 1024;
+    exe.stack_size = stack_budget.roc_stack_size;
     splitCompilerSections(exe);
     configureBackend(exe, target);
     exe.root_module.addImport("llvm_codegen", llvm_codegen_module);
