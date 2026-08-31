@@ -1455,6 +1455,31 @@ const Formatter = struct {
         return formatted;
     }
 
+    fn formatPipeTargetParens(fmt: *Formatter, expr_idx: AST.Expr.Idx, expand: bool) FormatAstError!void {
+        const pipe_indent = fmt.curr_indent;
+        defer fmt.curr_indent = pipe_indent;
+
+        // Multiline strings consume their whole physical line. Expand direct
+        // targets up front; the output state below catches nested terminal
+        // strings without a recursive layout prepass.
+        try fmt.push('(');
+        if (expand) {
+            fmt.curr_indent += 1;
+            try fmt.ensureNewline();
+            try fmt.pushIndent();
+        }
+
+        const formatted = try fmt.formatExprInner(expr_idx, .{ .behavior = .no_indent_on_access });
+        Formatter.discardRegion(formatted.region);
+
+        fmt.curr_indent = pipe_indent;
+        if (formatted.ends_with_multiline_string_line or fmt.has_multiline_string) {
+            try fmt.ensureNewline();
+            try fmt.pushIndent();
+        }
+        try fmt.push(')');
+    }
+
     fn formatExprInner(fmt: *Formatter, ei: AST.Expr.Idx, format_context: ExprFormatContext) FormatAstError!FormattedExpr {
         const expr = fmt.ast.store.getExpr(ei);
         const region = fmt.nodeRegion(@intFromEnum(ei));
@@ -1693,17 +1718,17 @@ const Formatter = struct {
                                 try fmt.pushIndent();
                             }
                             const target_needs_parens = !fmt.exprCanStartPipeTargetUnparenthesized(apply_fn_idx);
-                            if (target_needs_parens) try fmt.push('(');
-                            try fmt.formatExprInnerDiscard(apply_fn_idx, .no_indent_on_access);
-                            if (target_needs_parens) try fmt.push(')');
+                            if (target_needs_parens) {
+                                try fmt.formatPipeTargetParens(apply_fn_idx, apply_fn == .multiline_string or apply_fn == .typed_multiline_string);
+                            } else {
+                                try fmt.formatExprInnerDiscard(apply_fn_idx, .no_indent_on_access);
+                            }
                         } else {
                             // Parenthesize a non-atomic callee before printing its
                             // argument list, preserving chains such as `fn()()`.
                             const fn_needs_parens = !fmt.exprCanStartPipeTargetUnparenthesized(apply_fn_idx);
                             if (fn_needs_parens) {
-                                try fmt.push('(');
-                                try fmt.formatExprInnerDiscard(apply_fn_idx, .no_indent_on_access);
-                                try fmt.push(')');
+                                try fmt.formatPipeTargetParens(apply_fn_idx, apply_fn == .multiline_string or apply_fn == .typed_multiline_string);
                                 const right_region = fmt.nodeRegion(@intFromEnum(ld.right));
                                 const fn_region = fmt.nodeRegion(@intFromEnum(apply_fn_idx));
                                 const args_region = AST.TokenizedRegion{ .start = fn_region.end, .end = right_region.end };
@@ -1755,9 +1780,11 @@ const Formatter = struct {
                         // therefore safe without grouping; all other ASTs need
                         // parentheses so migrating `->` preserves valid syntax.
                         const needs_parens = !fmt.exprCanStartPipeTargetUnparenthesized(ld.right);
-                        if (needs_parens) try fmt.push('(');
-                        try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
-                        if (needs_parens) try fmt.push(')');
+                        if (needs_parens) {
+                            try fmt.formatPipeTargetParens(ld.right, right_expr == .multiline_string or right_expr == .typed_multiline_string);
+                        } else {
+                            try fmt.formatExprInnerDiscard(ld.right, .no_indent_on_access);
+                        }
                     },
                 }
             },
@@ -5111,6 +5138,16 @@ test "issue 9785: multiline string followed by tuple access formats to valid sou
     , false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("n = \\\\\n\t.0 - ||\n\t0\n", result);
+}
+
+test "issue 10817: parenthesized multiline string pipe target stays expanded" {
+    // https://github.com/roc-lang/roc/issues/10817
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\a=()->(\\
+        \\)
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = ()\n\t|> (\n\t\t\\\\\n\t)\n", result);
 }
 
 test "parenthesized type application with leading newline is idempotent" {
