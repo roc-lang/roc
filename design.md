@@ -4294,46 +4294,91 @@ adding or citing a member, which is greppable and reviewable. A new
 probe-then-mutate rewrite requires a declared rule in this document first;
 "it makes a test pass" is not a rule.
 
-### Hosted Try Question Widening
+### Try Question Row Widening
 
 `?` unwraps a `Try` condition and re-raises its error row into the enclosing
-function's return row. When the callee's error row is closed and the
-enclosing annotated return's row is open (a rigid extension), ordinary
-unification rejects the pair, and that mismatch is a type error by design: a
-closed error row is not widened into an open annotated row at use sites
-(issue #9798's program is rejected).
+function's return row. The ok halves of that relation unify as usual
+(`checkTryReturnRelation`). The error rows do not meet by plain unification:
+each `?` site *joins* its row into the function's one return row
+(`joinTryReturnErrRow`), so a body chaining several `?` sites accumulates
+the union of their error tags.
 
-The one declared exception is a direct call of a hosted function. A hosted
-function's boundary type is an ABI contract keyed by its declared closed row
-(see Host Symbol ABI), so the hosted callee cannot adopt the caller's wider
-row, and requiring callers to re-tag hosted errors by hand would make hosted
-functions unusable with `?`. When the `?` condition is a direct call of a
-hosted function—the call's function expression resolves statically to an
-`e_hosted_lambda` def; dispatch calls and value-carried functions never
-qualify—and every visible error in the callee's row is included in the
-expected row (same tag names, mutually usable payloads), the checker widens
-the condition at the use site: the condition's root is redirected to a fresh
-`Try` at the expected row (`widenTryConditionForExpectedReturn`, cited as
-`RedirectRule.hosted_try_question_widening`), leaving the hosted callee's own
-declared type untouched. Monotype lowering gives a widened hosted
-specialization request a generated Roc adapter at the requested type that
-calls the declared-type boundary and re-tags the error into the wider row,
-so the extern boundary itself is always emitted at the declared row.
+An open or non-row source row keeps the pre-existing relation—plain
+unification with the return row, which lets the rows grow together and stay
+shared. A closed source row (a callee annotated with a closed error union,
+or a checker-minted row such as `[InvalidNumeral(Str)]`) is instead
+re-raised through a fresh open-tailed union holding the row's visible tags,
+and that union is unified with the return row. That single unification grows
+an inferred (flex-tailed) return row and inclusion-checks an annotated
+(closed- or rigid-tailed) one—an annotation omitting a re-raised tag is
+still a type error. What it never does is seal the return row's tail, which
+is what previously let one `?` site's closed row reject the next site's
+errors and rejected issue #9798's program (a closed callee row into an open
+annotated row); both now typecheck. The closed source row itself is NEVER
+unified into or redirected at the return row: instantiation shares
+fully-concrete structure with the callee's generalized scheme, so mutating
+the call-site row would widen the callee's own generalized scheme and
+cross-contaminate its other callers (a snapshot pins the two-callee case).
 
-This rule decides which programs typecheck, and that is all it decides. It is
-not what keeps the host ABI intact: the extern boundary is pinned by the
-producer-side check in Monotype lowering (see Host Symbol ABI), which admits
-only the declared type no matter what a use site's type turned out to be. So
-the rule can be tightened, loosened, or replaced on typing grounds alone.
+A `?` on an UNRESOLVED dispatch call is the fully deferred case: the
+condition's error row is the eventual method's own row, and coupling it to
+the return row would freeze the caller's whole row into the recorded method
+requirement (rejecting the method at use sites once builtin rows are
+closed). The dispatch site therefore attaches a `try_row_join`
+static-dispatch constraint to the still-flex row (origin
+`Origin.try_row_join`; `fn_var` is the JOIN TARGET, a fresh placeholder the
+`?` join later unifies with the return row—a constraint rides the var
+through class merges, where a root-keyed side table would not). Riding the
+ordinary constraint rails makes the join fully general: it survives
+generalization, instantiates per use with both vars mapped, merges through
+flex unification, crosses modules with the scheme, and
+`checkStaticDispatchConstraints` fires it whenever and wherever the row
+resolves—one join per `?` site, any number of sites per function,
+transitively through nested generic layers. The fired join runs the same
+width rules as above: a resolved closed row grows the target; a row still
+flex at firing is genuine inference and couples. A bare flex source row
+WITHOUT the marker (e.g. a function-typed parameter's result row) couples
+by unification directly, which keeps higher-order `?` passthrough
+row-polymorphic. `try_row_join` constraints are checker-internal: they are
+not method requirements, produce no dispatch evidence
+(dispatch_evidence.zig skips them), and never render in `where` clauses.
+
+Monotype lowering completes the story at runtime. The joined return row is
+wider than the re-raised value's checked row, and the isolated-root
+invariant forbids widening the (possibly scheme-shared) narrow row node in
+place, so `lowerReturn` gives a `try_suffix` return whose checked error row
+is a strict closed subset of the demanded return row a generated
+conversion (`trySuffixReturnConversion`): the value lowers at its OWN
+narrow type, and a synthesized match re-tags it at the wide row's layout—
+the general-caller counterpart of the hosted adapter's
+`errorRowInjectionExpr`, sharing its payload-representation contract (equal
+payload monotypes; only the discriminant and union size change). The
+conversion is fresh IR and mutates nothing shared; it runs only on the `?`
+error path, so the Ok path pays nothing.
+
+Only `?` re-raises take this path. An explicit `return Err(...)` and every
+other expression relation still meet the return type by plain unification,
+and statement-form returns never carry the `try_suffix` context.
+
+Hosted functions need no special case under this rule: a hosted callee's
+declared closed row (an ABI contract keyed by its declared type—see Host
+Symbol ABI) is widened at the use site like any other closed row, and the
+callee's own declared type stays untouched because the call site holds an
+instantiated copy of it. This rule decides which programs typecheck, and
+that is all it decides. It is not what keeps the host ABI intact: the extern
+boundary is pinned by the producer-side check in Monotype lowering (see Host
+Symbol ABI), which admits only the declared type no matter what a use site's
+type turned out to be; a use site whose type legitimately differs gets a
+generated adapter that calls the declared-type boundary and converts around
+it.
 
 Both sides are pinned by tests: accepted—
 test/fx-open/issue_9963_hosted_try_question_mark.roc (a direct hosted `?`
 inside an open-row platform function builds and the host's Ok is observed as
-Ok); rejected—test/fx-open/hosted_try_question_not_included.roc (a direct
-hosted `?` whose enclosing annotation omits the hosted error is a type
-error), and the issue #9798 regression test in
-src/check/test/type_checking_integration.zig (a non-hosted `?` into an open
-annotated row is a type error even when the visible errors are included).
+Ok) and the issue #9798 test in src/check/test/type_checking_integration.zig
+(a non-hosted `?` re-raising a closed row into an open annotated row);
+rejected—test/fx-open/hosted_try_question_not_included.roc (a hosted `?`
+whose enclosing annotation omits the re-raised error is a type error).
 
 ### Derived Parser Tag-Row Closure
 
@@ -5704,8 +5749,6 @@ site to any family below must classify it here.
 `dangerousSetVarRedirect` call sites (all in src/check/Check.zig; the
 `RedirectRule` member at each site is the citation):
 
-- `widenTryConditionForExpectedReturn`—policy: Hosted Try Question
-  Widening (above).
 - `markErroneousBranchWithExpected`—mechanism: diagnostic recovery. The
   expression already has a reported error; its var is redirected to a fresh
   var unified with the expected return so checking can continue past it.
@@ -5824,9 +5867,7 @@ at their definitions): `staticDispatchConstraintAcceptsCandidate` states the
 method-acceptance rule of static dispatch, with accepted/missing-method/
 signature-mismatch branches each pinned by tests;
 `numeralCandidateStructurallyRefuted` implements no rule of its own and is
-witness-asserted against the probe it pre-filters in safety builds;
-`probeCanUseAs`/`tryErrorRowNeedsUseSiteWidening` are the gating probes for
-Hosted Try Question Widening.
+witness-asserted against the probe it pre-filters in safety builds.
 
 ## Runtime Lowering Strategy
 
@@ -12096,7 +12137,7 @@ at a caller's widened error row, not at a narrowed one, and not at a
 producer-selected representation that differs from the declared one. A use site
 whose own type legitimately differs gets a generated Roc adapter at the
 requested type that calls the declared-type boundary and converts around it, so
-the boundary itself stays declared-typed; the Hosted Try Question Widening
+the boundary itself stays declared-typed; the Try Question Row Widening
 rule's adapter is one such generated caller.
 
 Every type reachable from a hosted or provided signature must have closed

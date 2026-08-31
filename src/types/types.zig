@@ -1199,6 +1199,13 @@ pub const StaticDispatchConstraint = struct {
         /// `intro_expr` cannot substitute for it.
         where_clause: struct { body_required: bool = false },
         from_literal: LiteralInfo, // From a literal conversion (from_numeral, from_quote, or from_interpolation)
+        /// A `?` re-raise row join whose source row was an unresolved
+        /// dispatch call's error row (design.md "Try Question Row
+        /// Widening"). NOT a method obligation: `fn_var` is the JOIN TARGET
+        /// (the enclosing function's return error row), and `fn_name` is a
+        /// synthetic ident that is never dispatched. When the constrained
+        /// row resolves, checking joins its tags into the target by width.
+        try_row_join,
 
         /// The numeral payload, if this origin is a numeric literal conversion;
         /// null otherwise.
@@ -1209,7 +1216,7 @@ pub const StaticDispatchConstraint = struct {
                     .quote => null,
                     .interpolation => null,
                 },
-                .desugared_binop, .desugared_unaryop, .method_call, .where_clause => null,
+                .desugared_binop, .desugared_unaryop, .method_call, .where_clause, .try_row_join => null,
             };
         }
 
@@ -1217,7 +1224,7 @@ pub const StaticDispatchConstraint = struct {
         pub fn literalKind(self: Origin) ?LiteralKind {
             return switch (self) {
                 .from_literal => |lit| lit,
-                .desugared_binop, .desugared_unaryop, .method_call, .where_clause => null,
+                .desugared_binop, .desugared_unaryop, .method_call, .where_clause, .try_row_join => null,
             };
         }
 
@@ -1226,7 +1233,7 @@ pub const StaticDispatchConstraint = struct {
         pub fn binopNegated(self: Origin) bool {
             return switch (self) {
                 .desugared_binop => |binop| binop.negated,
-                .desugared_unaryop, .method_call, .where_clause, .from_literal => false,
+                .desugared_unaryop, .method_call, .where_clause, .from_literal, .try_row_join => false,
             };
         }
     };

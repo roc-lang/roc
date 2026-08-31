@@ -6700,12 +6700,11 @@ test "check type - try operator on method call should apply to whole expression 
     try checkTypesModule(source, .{ .pass = .last_def }, "List(Str) -> Try(Str, [ListWasEmpty, ..])");
 }
 
-test "check type - try does not widen closed error row into open return error row" {
-    // Verifies intended behavior for https://github.com/roc-lang/roc/issues/9798:
-    // `?` does not widen a callee's closed error tag union into the enclosing
-    // annotation's open error row, so this program is a type error. The sole
-    // exception is a direct call of a hosted function (design.md "Hosted Try
-    // Question Widening"); `inner` is not hosted, so no widening applies.
+test "check type - try widens closed error row into open return error row (#9798)" {
+    // Verifies intended behavior for https://github.com/roc-lang/roc/issues/9798
+    // under design.md "Try Question Row Widening": `?` re-raises a callee's
+    // closed error tag union into the enclosing annotation's open error row by
+    // joining the row's tags, so this program typechecks.
     const source =
         \\inner : {} -> Try({}, [InnerErr])
         \\inner = |{}| Err(InnerErr)
@@ -6716,7 +6715,110 @@ test "check type - try does not widen closed error row into open return error ro
         \\    Ok({})
         \\}
     ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Try({}, [InnerErr, ..])");
+}
+
+test "check type - try joins two different closed error rows into inferred return row" {
+    // design.md "Try Question Row Widening": each `?` site joins its closed
+    // error row into the function's one inferred return row, so chained `?`
+    // sites with different closed rows accumulate the union of their tags.
+    const source =
+        \\parse_a : Str -> Try(I64, [BadA])
+        \\parse_a = |_| Err(BadA)
+        \\
+        \\parse_b : Str -> Try(I64, [BadB(Str)])
+        \\parse_b = |_| Err(BadB("oops"))
+        \\
+        \\combined = |s| {
+        \\    a = parse_a(s)?
+        \\    b = parse_b(s)?
+        \\    Ok(a + b)
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try(I64, [BadA, BadB(Str), ..])");
+}
+
+test "check type - try joins closed error rows into closed superset annotation" {
+    // design.md "Try Question Row Widening": a closed annotated return row
+    // that includes every re-raised tag absorbs the joined rows.
+    const source =
+        \\parse_a : Str -> Try(I64, [BadA])
+        \\parse_a = |_| Err(BadA)
+        \\
+        \\parse_b : Str -> Try(I64, [BadB(Str)])
+        \\parse_b = |_| Err(BadB("oops"))
+        \\
+        \\combined : Str -> Try(I64, [BadA, BadB(Str), Extra])
+        \\combined = |s| {
+        \\    a = parse_a(s)?
+        \\    b = parse_b(s)?
+        \\    Ok(a + b)
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try(I64, [BadA, BadB(Str), Extra])");
+}
+
+test "check type - try re-raised tag missing from closed annotation is a type error" {
+    // design.md "Try Question Row Widening" rejected side: an annotation
+    // omitting a re-raised tag is still a type error.
+    const source =
+        \\parse_a : Str -> Try(I64, [BadA])
+        \\parse_a = |_| Err(BadA)
+        \\
+        \\bad : Str -> Try(I64, [OnlyThis])
+        \\bad = |s| {
+        \\    a = parse_a(s)?
+        \\    Ok(a)
+        \\}
+    ;
     try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - try joins closed error row inside recursive function" {
+    // design.md "Try Question Row Widening": the join also applies while the
+    // enclosing function is still being inferred recursively.
+    const source =
+        \\parse_a : Str -> Try(I64, [BadA])
+        \\parse_a = |_| Err(BadA)
+        \\
+        \\walk = |s, acc| {
+        \\    n = parse_a(s)?
+        \\    if n == 0 Ok(acc) else walk(s, acc + n)
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str, ok -> Try(ok, [BadA, ..]) where [ok.plus : ok, I64 -> ok]");
+}
+
+test "check type - single question binop joins mapped error into return row" {
+    // The binary `lhs ? handler` form re-raises the mapped error through the
+    // same try-suffix return channel, so it joins with other `?` sites' rows.
+    const source =
+        \\parse_a : Str -> Try(I64, [BadA])
+        \\parse_a = |_| Err(BadA)
+        \\
+        \\parse_b : Str -> Try(I64, [BadB])
+        \\parse_b = |_| Err(BadB)
+        \\
+        \\with_handler = |s| {
+        \\    a = parse_a(s)?
+        \\    b = parse_b(s) ? Wrapped
+        \\    Ok(a + b)
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try(I64, [BadA, Wrapped([BadB]), ..])");
+}
+
+test "check type - try passthrough keeps higher-order error row polymorphic" {
+    // design.md "Try Question Row Widening": an unresolved (flex) source row
+    // keeps the plain unification relation, so `?` on a function-typed
+    // parameter's result stays row-polymorphic instead of being widened.
+    const source =
+        \\run = |f| {
+        \\    x = f({})?
+        \\    Ok(x)
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "({} -> Try(ok, err)) -> Try(ok, err)");
 }
 
 // record extension in type annotations //

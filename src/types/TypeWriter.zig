@@ -1381,6 +1381,10 @@ pub fn writeTagGet(self: *TypeWriter, tag: Tag, root_var: Var) error{ OutOfMemor
 
 /// Append a constraint with its dispatcher var to the list, if it doesn't already exist
 fn appendStaticDispatchConstraint(self: *TypeWriter, dispatcher_var: Var, constraint_to_add: types_mod.StaticDispatchConstraint) error{ OutOfMemory, WriteFailed }!void {
+    // `try_row_join` markers are checker-internal row bookkeeping, not
+    // method obligations; they never render in `where` clauses (design.md
+    // "Try Question Row Widening").
+    if (constraint_to_add.origin == .try_row_join) return;
     for (self.static_dispatch_constraints.items) |item| {
         if (item.constraint.fn_name == constraint_to_add.fn_name and item.constraint.fn_var == constraint_to_add.fn_var) {
             return;

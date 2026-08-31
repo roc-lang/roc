@@ -3660,6 +3660,7 @@ fn sameDeclarativeOriginClass(
 ) bool {
     return switch (a) {
         .method_call => false,
+        .try_row_join => false,
         .where_clause => b == .where_clause,
         .desugared_unaryop => b == .desugared_unaryop,
         .desugared_binop => |a_binop| b == .desugared_binop and

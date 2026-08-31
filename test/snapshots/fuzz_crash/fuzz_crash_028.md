@@ -1626,7 +1626,7 @@ le =(arg1)?.od()?.ned()?.recd?
 
 On error, this would return:
 
-    Try(ok, err)
+    Try(ok, _d)
 
 But the function body evaluates to:
 

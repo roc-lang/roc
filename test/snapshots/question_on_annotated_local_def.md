@@ -143,8 +143,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Str -> Try(U64, [BadInput])"))
-		(patt (type "Str -> Try(U64, [BadInput])")))
+		(patt (type "Str -> Try(U64, [BadInput, ..])")))
 	(expressions
 		(expr (type "Str -> Try(U64, [BadInput])"))
-		(expr (type "Str -> Try(U64, [BadInput])"))))
+		(expr (type "Str -> Try(U64, [BadInput, ..])"))))
 ~~~

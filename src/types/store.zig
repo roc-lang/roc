@@ -786,11 +786,6 @@ pub const Store = struct {
         /// whose error has already been reported, and the redirect only lets
         /// checking continue past it.
         diagnostic_recovery_reported_error,
-        /// (ii) design.md "Hosted Try Question Widening": `?` on a direct call
-        /// of a hosted function widens the condition's closed error row to the
-        /// enclosing annotated return's error row when every visible error is
-        /// included, keeping the hosted callee's declared closed row intact.
-        hosted_try_question_widening,
     };
 
     /// Set a type variable to redirect to the provided variables.

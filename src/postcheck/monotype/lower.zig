@@ -21055,6 +21055,18 @@ const BodyContext = struct {
         if (ret.lambda != target.lambda) {
             Common.invariant("checked return target disagreed with the active lambda specialization");
         }
+        // A `?` re-raise may carry an error row narrower than the return row
+        // (design.md "Try Question Row Widening"); it lowers through a
+        // generated re-tag conversion instead of demand-driven lowering. Only
+        // the expression form carries a context—statement returns are always
+        // explicit `return`s, which stay on exact-width lowering.
+        if (comptime @hasField(@TypeOf(ret), "context")) {
+            if (ret.context == .try_suffix) {
+                if (try self.trySuffixReturnConversion(ret.expr, target.cell)) |converted| {
+                    return .{ .value = converted, .target = target.cell };
+                }
+            }
+        }
         return .{
             .value = try self.lowerExprAtTypeCell(ret.expr, target.cell),
             .target = target.cell,
@@ -42902,6 +42914,174 @@ const BodyContext = struct {
             .ty = try_ty,
             .data = .{ .nominal = backing_expr },
         });
+    }
+
+    /// The runtime completion of design.md "Try Question Row Widening": a
+    /// `?` re-raise (a `try_suffix` return) whose checked error row is a
+    /// strict subset of the enclosing function's return row lowers at its
+    /// OWN narrow type and is re-tagged into the return row here. The value
+    /// was constructed at the callee's closed row—possibly shared with the
+    /// callee's generalized scheme—so exact row unification would reject the
+    /// widening the checker sanctioned (and the isolated-root invariant
+    /// forbids widening the shared row node in place). The conversion
+    /// instead rebuilds the same tag at the wide row's layout, in fresh IR,
+    /// mutating nothing shared. Returns null when the return is not that
+    /// shape, which falls back to ordinary demand-driven lowering.
+    fn trySuffixReturnConversion(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        target_cell: DraftTypeCell,
+    ) Allocator.Error!?DraftExprId {
+        // A return node still unresolved at this point (a row-polymorphic or
+        // capture-shaped return being solved by this very lowering) cannot
+        // have committed to a wider row than the re-raise carries; ordinary
+        // demand-driven lowering relates and seeds it as before.
+        switch (target_cell) {
+            .graph_node => |node| if (!try self.graph.typeIsResolved(node)) return null,
+            .sealed => {},
+        }
+        const wide_ty = try self.activeTypeFromCell(target_cell);
+        const wide_info = self.tryInfoOptional(wide_ty) orelse return null;
+        // The re-raise's own checked type may still reference unresolved
+        // graph nodes during a template walk (e.g. an inline callback's
+        // generic snapshot); such a return cannot carry a narrower row than
+        // its demand yet, so ordinary demand-driven lowering applies.
+        const narrow_cell = try self.lowerTypeCell(self.view.bodies.expr(expr_id).ty);
+        switch (narrow_cell) {
+            .graph_node => |node| if (!try self.graph.typeIsResolved(node)) return null,
+            .sealed => {},
+        }
+        const narrow_ty = try self.activeTypeFromCell(narrow_cell);
+        if (self.sameType(narrow_ty, wide_ty)) return null;
+        const narrow_info = self.tryInfoOptional(narrow_ty) orelse return null;
+        if (!self.sameType(narrow_info.ok_ty, wide_info.ok_ty)) return null;
+        if (!try self.errRowConvertsInto(narrow_info.err_ty, wide_info.err_ty)) return null;
+
+        const narrow_value = try self.lowerExprWithType(expr_id, narrow_ty);
+
+        const ok_local = try self.addLocal(self.builder.symbols.fresh(), narrow_info.ok_ty);
+        const ok_pat = try self.addPat(.{ .ty = narrow_ty, .data = .{
+            .nominal = try self.addPat(.{ .ty = narrow_info.backing_ty, .data = .{ .tag = .{
+                .name = narrow_info.ok_tag.name,
+                .payloads = try self.addPatSpan(&[_]DraftPatId{try self.bindPat(ok_local, narrow_info.ok_ty)}),
+            } } }),
+        } });
+        const ok_body = try self.tryOk(wide_ty, try self.localExpr(ok_local, narrow_info.ok_ty));
+
+        const err_local = try self.addLocal(self.builder.symbols.fresh(), narrow_info.err_ty);
+        const err_pat = try self.addPat(.{ .ty = narrow_ty, .data = .{
+            .nominal = try self.addPat(.{ .ty = narrow_info.backing_ty, .data = .{ .tag = .{
+                .name = narrow_info.err_tag.name,
+                .payloads = try self.addPatSpan(&[_]DraftPatId{try self.bindPat(err_local, narrow_info.err_ty)}),
+            } } }),
+        } });
+        const injected = try self.errRowInjectionExpr(
+            try self.localExpr(err_local, narrow_info.err_ty),
+            narrow_info.err_ty,
+            wide_info.err_ty,
+        );
+        const err_body = try self.tryErr(wide_ty, injected);
+
+        return try self.addExpr(.{ .ty = wide_ty, .data = .{ .match_ = .{
+            .scrutinee = narrow_value,
+            .branches = try self.addBranchSpan(&[_]DraftBranch{
+                .{ .pat = ok_pat, .body = ok_body },
+                .{ .pat = err_pat, .body = err_body },
+            }),
+        } } });
+    }
+
+    /// Whether the narrow error row is a strict subset of the wide row with
+    /// identical payload representations—the only shape the checker's `?`
+    /// row join produces, and the only one the re-tag conversion supports.
+    fn errRowConvertsInto(
+        self: *BodyContext,
+        narrow_err_ty: Type.TypeId,
+        wide_err_ty: Type.TypeId,
+    ) Allocator.Error!bool {
+        if (self.sameType(narrow_err_ty, wide_err_ty)) return false;
+        const narrow_tags = switch (self.shapeContent(narrow_err_ty)) {
+            .tag_union => |tags| self.typeStore().tagSpan(tags),
+            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => return false,
+        };
+        switch (self.shapeContent(wide_err_ty)) {
+            .tag_union => {},
+            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => return false,
+        }
+        for (0..narrow_tags.len) |index| {
+            const narrow_tag = GuardedList.at(narrow_tags, index);
+            const wide_tag = self.tagByNameOrNull(wide_err_ty, narrow_tag.name) orelse return false;
+            const narrow_payloads = self.typeStore().span(narrow_tag.payloads);
+            const wide_payloads = self.typeStore().span(wide_tag.payloads);
+            if (narrow_payloads.len != wide_payloads.len) return false;
+            for (0..narrow_payloads.len) |payload_index| {
+                if (!self.sameType(
+                    GuardedList.at(narrow_payloads, payload_index),
+                    GuardedList.at(wide_payloads, payload_index),
+                )) return false;
+            }
+        }
+        return true;
+    }
+
+    /// Re-tag an error value from a narrow row into a wide row that carries
+    /// every narrow tag at the same payload representations: one branch per
+    /// narrow tag, rebinding its payloads and rebuilding the same tag at the
+    /// wide row's layout. The BodyContext counterpart of the hosted
+    /// adapter's `errorRowInjectionExpr` (design.md "Hosted functions need
+    /// no special case" under "Try Question Row Widening").
+    fn errRowInjectionExpr(
+        self: *BodyContext,
+        source_expr: DraftExprId,
+        source_err_ty: Type.TypeId,
+        target_err_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        if (self.sameType(source_err_ty, target_err_ty)) return source_expr;
+
+        const source_tags = switch (self.shapeContent(source_err_ty)) {
+            .tag_union => |tags| self.typeStore().tagSpan(tags),
+            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("Try row conversion expected a tag-union error row"),
+        };
+        if (source_tags.len == 0) {
+            return try self.addExpr(.{ .ty = target_err_ty, .data = .{ .match_ = .{
+                .scrutinee = source_expr,
+                .branches = try self.addBranchSpan(&.{}),
+            } } });
+        }
+
+        const branches = try self.allocator.alloc(DraftBranch, source_tags.len);
+        defer self.allocator.free(branches);
+        for (0..source_tags.len) |index| {
+            const source_tag = GuardedList.at(source_tags, index);
+            const target_tag = self.tagByName(target_err_ty, source_tag.name);
+            const source_payload_tys = self.typeStore().span(source_tag.payloads);
+
+            const payload_pats = try self.allocator.alloc(DraftPatId, source_payload_tys.len);
+            defer self.allocator.free(payload_pats);
+            const payload_exprs = try self.allocator.alloc(DraftExprId, source_payload_tys.len);
+            defer self.allocator.free(payload_exprs);
+            for (0..source_payload_tys.len) |payload_index| {
+                const payload_ty = GuardedList.at(source_payload_tys, payload_index);
+                const local = try self.addLocal(self.builder.symbols.fresh(), payload_ty);
+                payload_pats[payload_index] = try self.bindPat(local, payload_ty);
+                payload_exprs[payload_index] = try self.localExpr(local, payload_ty);
+            }
+
+            const pat = try self.addPat(.{ .ty = source_err_ty, .data = .{ .tag = .{
+                .name = source_tag.name,
+                .payloads = try self.addPatSpan(payload_pats),
+            } } });
+            const body = try self.addExpr(.{ .ty = target_err_ty, .data = .{ .tag = .{
+                .name = target_tag.name,
+                .payloads = try self.addExprSpan(payload_exprs),
+            } } });
+            branches[index] = .{ .pat = pat, .body = body };
+        }
+
+        return try self.addExpr(.{ .ty = target_err_ty, .data = .{ .match_ = .{
+            .scrutinee = source_expr,
+            .branches = try self.addBranchSpan(branches),
+        } } });
     }
 
     fn sequenceTry(

@@ -481,6 +481,11 @@ fn emitConstraints(
 ) Allocator.Error!void {
     scratch.emitted_methods.clearRetainingCapacity();
     for (store.sliceStaticDispatchConstraints(constraints)) |constraint| {
+        // `try_row_join` markers are checker-internal row-join bookkeeping,
+        // not method obligations: they produce no evidence, and their
+        // `fn_var` is a row target, not a callable (design.md "Try Question
+        // Row Widening").
+        if (constraint.origin == .try_row_join) continue;
         const emitted = try scratch.emitted_methods.getOrPut(gpa, constraint.fn_name);
         if (!emitted.found_existing) {
             try out.append(gpa, .{

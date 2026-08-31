@@ -60,6 +60,7 @@ pub fn constraintLiteralKind(
         .desugared_binop,
         .desugared_unaryop,
         .method_call,
+        .try_row_join,
         => null,
     };
 }
@@ -170,6 +171,7 @@ pub fn isDefaultableArithmeticConstraint(
         .from_literal,
         .method_call,
         .where_clause,
+        .try_row_join,
         => false,
     };
 }

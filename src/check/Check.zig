@@ -6589,7 +6589,7 @@ fn recordOpenLiteralVar(
                 }),
                 .quote, .interpolation => {},
             },
-            .desugared_binop, .desugared_unaryop, .method_call, .where_clause => {},
+            .desugared_binop, .desugared_unaryop, .method_call, .where_clause, .try_row_join => {},
         }
     }
 
@@ -9365,6 +9365,9 @@ fn selectAmbiguityConstraint(
                     },
                     .method_call, .desugared_binop, .desugared_unaryop => {
                         if (first_constraint == null) first_constraint = c;
+                    },
+                    .try_row_join => {
+                        has_excluded_origin = true;
                     },
                 }
             }
@@ -18323,7 +18326,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             };
 
             if (expected_return) |annotated_return| {
-                try self.checkReturnRelation(annotated_return, ret.expr, return_kind.problemContext(), env);
+                switch (return_kind) {
+                    .return_expr => try self.checkReturnRelation(annotated_return, ret.expr, return_kind.problemContext(), env),
+                    .try_suffix => try self.checkTryReturnRelation(annotated_return, ret.expr, return_kind.problemContext(), env),
+                }
             } else {
                 // Validate the lambda body type against the return value after the
                 // body is fully checked, but before the lambda generalizes.
@@ -20025,179 +20031,202 @@ fn tryArgsFromVar(self: *Self, try_var: Var) ?TryArgs {
     }
 }
 
-/// Whether a `?` condition is a direct call of a hosted function—the only
-/// shape the hosted-try-question-widening rule (design.md "Hosted Try Question
-/// Widening") applies to. The callee is statically resolved from the call's
-/// function expression (the local or external lookup canonicalization
-/// produced); dispatch calls and value-carried functions are never direct
-/// hosted calls, so `?` on them gets no widening.
-fn tryConditionIsDirectHostedCall(self: *Self, cond_idx: CIR.Expr.Idx) bool {
-    const expr = self.cir.store.getExpr(cond_idx);
-    if (expr != .e_call) return false;
-    const call = expr.e_call;
-    const callable_def = self.hoistedCallableDefForExpr(self.cir, call.func) orelse return false;
-    const def = callable_def.module.store.getDef(callable_def.def);
-    return callable_def.module.store.getExpr(def.expr) == .e_hosted_lambda;
-}
-
-/// The hosted-try-question-widening rule (design.md "Hosted Try Question
-/// Widening"): `?` on a direct call of a hosted function widens the condition
-/// to a fresh `Try` at the enclosing annotated return's error row when every
-/// visible error in the callee's row is included in it. The redirect targets
-/// the fresh `Try`, so the hosted callee's declared closed row—the host
-/// ABI's shape—is what checking outputs for the callee itself. For every
-/// other callee, a closed error row meeting an open annotated row stays a
-/// type error (issue #9798's program is rejected by design); the caller gates
-/// on `tryConditionIsDirectHostedCall`.
-///
-/// This is a typing mechanism, not the host ABI's protection. What a hosted
-/// extern is emitted at is decided at the producer: Monotype lowering admits
-/// only the hosted declaration's own type at an extern boundary and stops the
-/// build otherwise (`requireHostedExternAtDeclaredAbi`,
-/// src/postcheck/monotype/lower.zig, and design.md "Host Symbol ABI"). Widening
-/// the condition here therefore changes which programs typecheck and which
-/// caller-side adapter lowering generates; it cannot change the boundary. Judge
-/// changes to this rewrite as type-semantics choices on that basis.
-fn widenTryConditionForExpectedReturn(
+/// How a `?` re-raise relates to the enclosing function's result (design.md
+/// "Try Question Row Widening"). The ok halves unify as usual, but the error
+/// row is not coupled by plain unification: the re-raised row joins the
+/// return row via `joinTryReturnErrRow`, so every `?` site in a body
+/// contributes its errors to one accumulated row instead of each site's row
+/// having to equal it. When either side is not a resolved `Try`, the whole
+/// relation falls back to ordinary return unification.
+fn checkTryReturnRelation(
     self: *Self,
-    cond_var: Var,
-    expected_return: Var,
+    expected: Var,
+    actual_expr: CIR.Expr.Idx,
+    ctx: problem.Context,
     env: *Env,
-    region: Region,
 ) std.mem.Allocator.Error!void {
-    const actual_try = self.tryArgsFromVar(cond_var) orelse return;
-    const expected_try = self.tryArgsFromVar(expected_return) orelse return;
+    const actual_try = self.tryArgsFromVar(ModuleEnv.varFrom(actual_expr)) orelse
+        return self.checkReturnRelation(expected, actual_expr, ctx, env);
 
-    if (!try self.tryErrorRowNeedsUseSiteWidening(actual_try.err, expected_try.err)) {
+    if (self.tryArgsFromVar(expected)) |expected_try| {
+        const ok_result = try self.unifyInContext(expected_try.ok, actual_try.ok, env, ctx);
+        if (ok_result.isProblem()) {
+            try self.erroneous_value_exprs.put(self.gpa, actual_expr, {});
+        }
+        try self.joinTryReturnErrRow(expected_try.err, actual_try.err, actual_expr, ctx, env);
         return;
     }
 
-    // Ordinary tag-union unification rejects closed-vs-open rigid rows; this
-    // use-site rewrite runs only after proving the callee's visible errors are
-    // included in the expected row.
-    const widened_try_var = try self.freshFromContent(
-        try self.mkTryContent(actual_try.ok, expected_try.err),
+    // The expected side is not a resolved `Try` yet (a still-flex body result,
+    // or an anonymous `[Ok(..), ..]` union the body evaluates to). Pin the
+    // `Try` shape on it with a fresh open error row—NOT the re-raise's own
+    // row, which would seal an inferred return row to this one site's closed
+    // row—then join the rows through the pinned shape.
+    const region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(actual_expr));
+    const fresh_err = try self.fresh(env, region);
+    const shape_var = try self.freshFromContent(
+        try self.mkTryContent(actual_try.ok, fresh_err),
         env,
         region,
     );
-    const cond_root = self.types.resolveVar(cond_var).var_;
-    if (cond_root != widened_try_var) {
-        try self.types.dangerousSetVarRedirect(.hosted_try_question_widening, cond_root, widened_try_var);
+    const shape_result = try self.unifyInContext(expected, shape_var, env, ctx);
+    if (shape_result.isProblem()) {
+        try self.erroneous_value_exprs.put(self.gpa, actual_expr, {});
+        return;
     }
+    const expected_err = if (self.tryArgsFromVar(expected)) |expected_try| expected_try.err else fresh_err;
+    try self.joinTryReturnErrRow(expected_err, actual_try.err, actual_expr, ctx, env);
 }
 
-fn tryErrorRowNeedsUseSiteWidening(self: *Self, actual_err: Var, expected_err: Var) std.mem.Allocator.Error!bool {
-    if (try self.probeCanUseAs(expected_err, actual_err)) {
-        return false;
-    }
-
-    var visited_actual = std.AutoHashMap(Var, void).init(self.gpa);
-    defer visited_actual.deinit();
-    return try self.actualTagRowIsIncludedInExpected(actual_err, expected_err, &visited_actual);
-}
-
-fn probeCanUseAs(self: *Self, expected_var: Var, actual_var: Var) std.mem.Allocator.Error!bool {
-    var probe = try self.beginProbe(null);
-    defer probe.rollback();
-    return try self.probeUnifyWithoutRecordingProblems(expected_var, actual_var);
-}
-
-fn actualTagRowIsIncludedInExpected(
+/// Join a `?` re-raise's error row into the enclosing function's return row
+/// (design.md "Try Question Row Widening"). An open, unresolved, or non-row
+/// source keeps today's relation—plain unification, which lets the rows grow
+/// together and stay shared. A closed source row instead re-raises its tags
+/// through a fresh open-tailed union unified with the return row: that one
+/// unification grows an inferred (flex-tailed) return row and
+/// inclusion-checks an annotated (closed- or rigid-tailed) one, without
+/// sealing the return row's tail the way unifying the closed row directly
+/// would—which is what let one `?` site's closed row reject the next site's
+/// errors. The closed source row is then redirected to the joined return row
+/// so the condition, the bound error payload, and the re-raise all share the
+/// function's single error row after checking—the same solved shape open
+/// rows reach through unification.
+fn joinTryReturnErrRow(
     self: *Self,
-    actual_var: Var,
-    expected_var: Var,
-    visited_actual: *std.AutoHashMap(Var, void),
-) std.mem.Allocator.Error!bool {
-    const actual_resolved = self.types.resolveVar(actual_var);
-    if (visited_actual.contains(actual_resolved.var_)) return true;
-    try visited_actual.put(actual_resolved.var_, {});
+    expected_err: Var,
+    actual_err: Var,
+    actual_expr: CIR.Expr.Idx,
+    ctx: problem.Context,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    var scratch_tags: std.ArrayList(types_mod.Tag) = .empty;
+    defer scratch_tags.deinit(self.gpa);
 
-    switch (actual_resolved.desc.content) {
-        .alias => |alias| return try self.actualTagRowIsIncludedInExpected(
-            self.types.getAliasBackingVar(alias),
-            expected_var,
-            visited_actual,
-        ),
-        .structure => |flat| switch (flat) {
-            .empty_tag_union => return true,
-            .tag_union => |tag_union| {
-                const tags = self.types.getTagsSlice(tag_union.tags);
-                const names = tags.items(.name);
-                const args_ranges = tags.items(.args);
-                for (names, args_ranges) |name, args| {
-                    const actual_tag = types_mod.Tag{ .name = name, .args = args };
-                    if (!try self.expectedTagRowContainsTag(expected_var, actual_tag)) {
-                        return false;
+    var tail = actual_err;
+    var guard = types_mod.debug.IterationGuard.init("joinTryReturnErrRow");
+    const TailKind = enum { closed, flex, other };
+    const tail_kind: TailKind = walk: while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(tail);
+        switch (resolved.desc.content) {
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| {
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    const names = tags.items(.name);
+                    const args_ranges = tags.items(.args);
+                    for (names, args_ranges) |name, args| {
+                        try scratch_tags.append(self.gpa, .{ .name = name, .args = args });
                     }
-                }
-                return try self.actualTagRowIsIncludedInExpected(tag_union.ext, expected_var, visited_actual);
+                    tail = tag_union.ext;
+                },
+                .empty_tag_union => break :walk .closed,
+                .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => break :walk .other,
             },
-            .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return false,
-        },
-        .err => return true,
-        .flex, .rigid, .field_presence => return false,
-    }
-}
+            .alias => |alias| tail = self.types.getAliasBackingVar(alias),
+            .flex => break :walk .flex,
+            .rigid, .field_presence, .err => break :walk .other,
+        }
+    };
 
-fn expectedTagRowContainsTag(
-    self: *Self,
-    expected_var: Var,
-    actual_tag: types_mod.Tag,
-) std.mem.Allocator.Error!bool {
-    var visited_expected = std.AutoHashMap(Var, void).init(self.gpa);
-    defer visited_expected.deinit();
-
-    const expected_tag = try self.findVisibleTagInRow(expected_var, actual_tag.name, &visited_expected) orelse return false;
-    return try self.tagsCanUseSamePayloads(expected_tag, actual_tag);
-}
-
-fn findVisibleTagInRow(
-    self: *Self,
-    row_var: Var,
-    tag_name: Ident.Idx,
-    visited: *std.AutoHashMap(Var, void),
-) std.mem.Allocator.Error!?types_mod.Tag {
-    const row_resolved = self.types.resolveVar(row_var);
-    if (visited.contains(row_resolved.var_)) return null;
-    try visited.put(row_resolved.var_, {});
-
-    switch (row_resolved.desc.content) {
-        .alias => |alias| return try self.findVisibleTagInRow(
-            self.types.getAliasBackingVar(alias),
-            tag_name,
-            visited,
-        ),
-        .structure => |flat| switch (flat) {
-            .tag_union => |tag_union| {
-                const tags = self.types.getTagsSlice(tag_union.tags);
-                const names = tags.items(.name);
-                const args_ranges = tags.items(.args);
-                for (names, args_ranges) |name, args| {
-                    if (name.eql(tag_name)) {
-                        return types_mod.Tag{ .name = name, .args = args };
-                    }
+    // The source row of a `?` on an UNRESOLVED dispatch call is the eventual
+    // method's own error row, and carries the `try_row_join` marker the
+    // dispatch site attached. Coupling it to the return row would freeze the
+    // caller's whole row into the recorded method obligation; instead the
+    // marker's placeholder target links to the return row, so the join runs
+    // by width whenever and wherever the row resolves—at this def's
+    // boundary, at a use site that pins the receiver, or transitively
+    // through further generic layers (design.md "Try Question Row
+    // Widening"). A bare flex row WITHOUT the marker is genuine inference
+    // (e.g. a function-typed parameter's row) and couples by unification
+    // below.
+    if (tail_kind == .flex and scratch_tags.items.len == 0) {
+        const resolved = self.types.resolveVar(actual_err);
+        if (resolved.desc.content == .flex) {
+            var constraints_iter = self.types.iterStaticDispatchConstraints(resolved.desc.content.flex.constraints);
+            while (constraints_iter.next()) |constraint| {
+                if (constraint.origin != .try_row_join) continue;
+                // The row carries a dispatch-site join marker: link its
+                // placeholder target to this function's return row and leave
+                // the method's row uncoupled.
+                const link_result = try self.unifyInContext(constraint.fn_var, expected_err, env, ctx);
+                if (link_result.isProblem()) {
+                    try self.erroneous_value_exprs.put(self.gpa, actual_expr, {});
                 }
-                return try self.findVisibleTagInRow(tag_union.ext, tag_name, visited);
-            },
-            .empty_tag_union => return null,
-            .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return null,
-        },
-        .err, .flex, .rigid, .field_presence => return null,
-    }
-}
-
-fn tagsCanUseSamePayloads(self: *Self, expected_tag: types_mod.Tag, actual_tag: types_mod.Tag) std.mem.Allocator.Error!bool {
-    if (expected_tag.args.len() != actual_tag.args.len()) return false;
-
-    var expected_args = self.types.iterVars(expected_tag.args);
-    var actual_args = self.types.iterVars(actual_tag.args);
-    while (expected_args.next()) |expected_arg| {
-        const actual_arg = actual_args.next().?;
-        if (!try self.probeCanUseAs(expected_arg, actual_arg)) {
-            return false;
+                return;
+            }
         }
     }
-    return true;
+
+    if (tail_kind != .closed or scratch_tags.items.len == 0) {
+        const result = try self.unifyInContext(expected_err, actual_err, env, ctx);
+        if (result.isProblem()) {
+            try self.erroneous_value_exprs.put(self.gpa, actual_expr, {});
+        }
+        return;
+    }
+
+    // Tag payload arg ranges are shared with the source row, so payload types
+    // stay related across the copy.
+    const region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(actual_expr));
+    const grown_ext = try self.fresh(env, region);
+    const grown_content = try self.types.mkTagUnion(scratch_tags.items, grown_ext);
+    const grown_var = try self.freshFromContent(grown_content, env, region);
+    const grow_result = try self.unifyInContext(expected_err, grown_var, env, ctx);
+    if (grow_result.isProblem()) {
+        try self.erroneous_value_exprs.put(self.gpa, actual_expr, {});
+    }
+    // The closed source row itself stays untouched: it may be (or share
+    // structure with) the callee's generalized scheme row—instantiation
+    // shares fully-concrete structure—so unifying or redirecting it into the
+    // joined return row would widen the callee's own published type and
+    // cross-contaminate its other callers. The re-raised value's row being a
+    // subset of the function's return row is the width-absorption shape
+    // lowering already supports (design.md "Width Absorption").
+}
+
+/// Attach a `try_row_join` constraint to a still-flex `?` source row: when
+/// the row resolves, `checkStaticDispatchConstraints` joins its tags into
+/// `target_row` by width (design.md "Try Question Row Widening"). Riding the
+/// ordinary static-dispatch constraint rails means it survives
+/// generalization, instantiates per use with both vars mapped, merges
+/// through flex unification, and crosses modules with the scheme.
+fn attachTryRowJoinConstraint(
+    self: *Self,
+    row_var: Var,
+    target_row: Var,
+    actual_expr: CIR.Expr.Idx,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const join_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("#try_row_join"));
+    const constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = join_ident,
+        .fn_var = target_row,
+        .origin = .try_row_join,
+        .provenance = .{ .intro_expr = types_mod.StaticDispatchConstraint.Provenance.OptExprIdx.from(@intFromEnum(actual_expr)) },
+    };
+    const range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+    try self.unifyWith(row_var, .{ .flex = types_mod.Flex{ .name = null, .constraints = range } }, env);
+}
+
+/// Fire a `try_row_join` constraint whose row var has resolved: join the
+/// row's tags into the constraint's target (design.md "Try Question Row
+/// Widening").
+fn fireTryRowJoinConstraint(
+    self: *Self,
+    constraint: types_mod.StaticDispatchConstraint,
+    row_var: Var,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const intro = constraint.provenance.intro_expr;
+    const expr: CIR.Expr.Idx = if (intro == .none)
+        deferredConstraintFallbackExpr()
+    else
+        @enumFromInt(@intFromEnum(intro));
+    try self.joinTryReturnErrRow(constraint.fn_var, row_var, expr, .try_operator, env);
+}
+
+fn deferredConstraintFallbackExpr() CIR.Expr.Idx {
+    return @enumFromInt(0);
 }
 
 // if-else //
@@ -20471,9 +20500,21 @@ fn checkMatchExpr(
         if (!try_result.isEstablished()) {
             has_invalid_try = true;
             had_type_error = true;
-        } else if (self.currentExpectedReturnResult()) |expected_return| {
-            if (self.tryConditionIsDirectHostedCall(match.cond)) {
-                try self.widenTryConditionForExpectedReturn(cond_var, expected_return, env, expr_region);
+        } else if (self.cir.store.getExpr(match.cond) == .e_dispatch_call) {
+            // A dispatch call's still-flex error row is the eventual method's
+            // own row. Attach a `try_row_join` constraint to it NOW, with a
+            // fresh placeholder target: the constraint rides the var through
+            // every later unification (a root-keyed side table would not
+            // survive class merges), and the `?` row join recognizes it and
+            // unifies the placeholder with the enclosing return row instead
+            // of coupling the method's row to the caller's whole row
+            // (design.md "Try Question Row Widening").
+            if (self.tryArgsFromVar(cond_var)) |try_args| {
+                const err_resolved = self.types.resolveVar(try_args.err);
+                if (err_resolved.desc.content == .flex) {
+                    const placeholder = try self.fresh(env, expr_region);
+                    try self.attachTryRowJoinConstraint(try_args.err, placeholder, match.cond, env);
+                }
             }
         }
     }
@@ -25111,7 +25152,7 @@ fn dispatchConstraintOriginFlag(origin: StaticDispatchConstraint.Origin) bool {
     return switch (origin) {
         .desugared_binop => |binop| binop.negated,
         .where_clause => |where_clause| where_clause.body_required,
-        .desugared_unaryop, .method_call, .from_literal => false,
+        .desugared_unaryop, .method_call, .from_literal, .try_row_join => false,
     };
 }
 
@@ -26562,7 +26603,7 @@ fn rangeNumeralDigitsFit(
             .from_literal => |lit| {
                 if (!literalInfoAcceptsBuiltinNumKind(lit, candidate_kind)) return false;
             },
-            .desugared_binop, .desugared_unaryop, .method_call, .where_clause => {},
+            .desugared_binop, .desugared_unaryop, .method_call, .where_clause, .try_row_join => {},
         }
     }
     return true;
@@ -26583,7 +26624,7 @@ fn candidateSatisfiesRangeConstraints(
     var constraints_iter = self.types.iterStaticDispatchConstraints(range);
     while (constraints_iter.next()) |constraint| {
         switch (constraint.origin) {
-            .from_literal => {},
+            .from_literal, .try_row_join => {},
             .desugared_binop, .desugared_unaryop, .method_call, .where_clause => {
                 if (!try self.staticDispatchConstraintAcceptsCandidate(probe, constraint, candidate_var, env)) {
                     return false;
@@ -26637,11 +26678,6 @@ fn pushReturnConstraintFrame(
         .body_result = body_result,
         .expected_result = expected_result,
     });
-}
-
-fn currentExpectedReturnResult(self: *const Self) ?Var {
-    if (self.return_constraint_frames.items.len == 0) return null;
-    return self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1].expected_result;
 }
 
 fn expectedReturnResultFor(self: *const Self, lambda_idx: CIR.Expr.Idx) ?Var {
@@ -26698,12 +26734,20 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx) st
     std.debug.assert(frame.lambda == lambda_idx);
 
     for (self.return_constraints.items[frame.start..]) |constraint| {
-        try self.checkReturnRelation(
-            frame.body_result,
-            constraint.actual_expr,
-            constraint.kind.problemContext(),
-            env,
-        );
+        switch (constraint.kind) {
+            .return_expr => try self.checkReturnRelation(
+                frame.body_result,
+                constraint.actual_expr,
+                constraint.kind.problemContext(),
+                env,
+            ),
+            .try_suffix => try self.checkTryReturnRelation(
+                frame.body_result,
+                constraint.actual_expr,
+                constraint.kind.problemContext(),
+                env,
+            ),
+        }
     }
 
     self.return_constraints.shrinkRetainingCapacity(frame.start);
@@ -27838,6 +27882,26 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
         const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
         const dispatcher_content = dispatcher_resolved.desc.content;
+
+        // `try_row_join` constraints fire on ANY resolved content and never
+        // participate in method dispatch (design.md "Try Question Row
+        // Widening"). Fire them here; a still-flex row re-parks with the
+        // whole entry below, and the remaining constraints (if any) proceed
+        // through ordinary resolution, which skips this origin.
+        var entry_has_dispatch_constraints = false;
+        {
+            var join_iter = self.types.static_dispatch_constraints.iterRange(deferred_constraint.constraints);
+            while (join_iter.next()) |constraint| {
+                if (constraint.origin != .try_row_join) {
+                    entry_has_dispatch_constraints = true;
+                    continue;
+                }
+                if (dispatcher_content == .flex) continue;
+                try self.fireTryRowJoinConstraint(constraint, deferred_constraint.var_, env);
+            }
+        }
+        if (!entry_has_dispatch_constraints and dispatcher_content != .flex) continue;
+
         dispatch_resolution: while (true) {
             if (dispatcher_content == .err) {
                 // If the root type is an error, then skip constraint checking
@@ -28932,6 +28996,7 @@ fn interpolationPartConstraintsAcceptBuiltinStr(
                 .quote, .interpolation => continue,
                 .numeral => return false,
             },
+            .try_row_join => continue,
             .desugared_binop,
             .desugared_unaryop,
             .method_call,
@@ -34966,6 +35031,7 @@ fn checkFlexVarConstraintCompatibility(
                 .numeral => if (default_target == .dec) continue,
                 .quote, .interpolation => if (default_target == .str) continue,
             },
+            .try_row_join => continue,
             .desugared_binop,
             .desugared_unaryop,
             .method_call,
