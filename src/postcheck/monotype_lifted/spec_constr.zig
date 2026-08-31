@@ -992,7 +992,11 @@ const Pass = struct {
             .whole_body_cloned = whole_body_cloned,
             .callable_workers = std.AutoHashMap(CallableWorkerIdentity, Ast.FnId).init(allocator),
             .callable_sources = collections.DenseMap(Ast.FnId, Ast.FnId).init(allocator),
-            .next_join_point = 0,
+            // Monotype-generated joins use the raw id of their owning
+            // expression. New SpecConstr joins begin beyond the complete
+            // existing expression arena, so the two producer namespaces
+            // cannot collide.
+            .next_join_point = @intCast(program.exprCount()),
         };
     }
 
@@ -1705,10 +1709,16 @@ const Pass = struct {
                 for (0..values.len) |index| try self.markArgUsesInExpr(fn_id, GuardedList.at(values, index), changed);
             },
             .join_point => |join_point| {
+                const retained = self.program.typedLocalSpan(join_point.retained);
+                for (0..retained.len) |index| {
+                    self.markArgUseIfLocalId(fn_id, GuardedList.at(retained, index).local, changed);
+                }
                 try self.markArgUsesInExpr(fn_id, join_point.body, changed);
                 try self.markArgUsesInExpr(fn_id, join_point.remainder, changed);
             },
             .jump => |jump| {
+                const loop_values = self.program.exprSpan(jump.loop_values);
+                for (0..loop_values.len) |index| try self.markArgUsesInExpr(fn_id, GuardedList.at(loop_values, index), changed);
                 const args = self.program.exprSpan(jump.args);
                 for (0..args.len) |index| try self.markArgUsesInExpr(fn_id, GuardedList.at(args, index), changed);
             },
@@ -1742,6 +1752,10 @@ const Pass = struct {
 
     fn markArgUseIfLocal(self: *Pass, fn_id: Ast.FnId, expr_id: Ast.ExprId, changed: *bool) void {
         const local = localExpr(self.program, expr_id) orelse return;
+        self.markArgUseIfLocalId(fn_id, local, changed);
+    }
+
+    fn markArgUseIfLocalId(self: *Pass, fn_id: Ast.FnId, local: Ast.LocalId, changed: *bool) void {
         const args = self.program.typedLocalSpan(self.program.getFn(fn_id).args);
         for (0..args.len) |index| {
             const arg = GuardedList.at(args, index);
@@ -1844,7 +1858,10 @@ const Pass = struct {
                 try self.collectCallPatternsInExpr(owner, join_point.body);
                 try self.collectCallPatternsInExpr(owner, join_point.remainder);
             },
-            .jump => |jump| try self.collectCallPatternsInExprSpan(owner, jump.args),
+            .jump => |jump| {
+                try self.collectCallPatternsInExprSpan(owner, jump.loop_values);
+                try self.collectCallPatternsInExprSpan(owner, jump.args);
+            },
             .if_initialized_payload => |payload_switch| {
                 try self.collectCallPatternsInExpr(owner, payload_switch.cond);
                 try self.collectCallPatternsInExpr(owner, payload_switch.initialized);
@@ -3964,7 +3981,10 @@ const Pass = struct {
                 try self.rewriteCallsInExpr(join_point.body, done);
                 try self.rewriteCallsInExpr(join_point.remainder, done);
             },
-            .jump => |jump| try self.rewriteCallsInExprSpan(jump.args, done),
+            .jump => |jump| {
+                try self.rewriteCallsInExprSpan(jump.loop_values, done);
+                try self.rewriteCallsInExprSpan(jump.args, done);
+            },
             .if_initialized_payload => |payload_switch| {
                 try self.rewriteCallsInExpr(payload_switch.cond, done);
                 try self.rewriteCallsInExpr(payload_switch.initialized, done);
@@ -5005,7 +5025,10 @@ const Cloner = struct {
                 self.subst.restore(change_start);
                 try self.collectCallPatternsInExpr(owner, join_point.remainder);
             },
-            .jump => |jump| try self.collectCallPatternsInExprSpan(owner, jump.args),
+            .jump => |jump| {
+                try self.collectCallPatternsInExprSpan(owner, jump.loop_values);
+                try self.collectCallPatternsInExprSpan(owner, jump.args);
+            },
             .if_initialized_payload => |payload_switch| {
                 try self.collectCallPatternsInExpr(owner, payload_switch.cond);
                 try self.collectCallPatternsInExpr(owner, payload_switch.initialized);
@@ -6024,6 +6047,8 @@ const Cloner = struct {
                     const duplicated = try self.addExpr(.{ .ty = expr.ty, .data = .{ .jump = .{
                         .target = jump.target,
                         .args = try self.cloneExprSpan(jump.args),
+                        .loop_params = try self.cloneLoopUpdateParams(jump.loop_params),
+                        .loop_values = try self.cloneExprSpan(jump.loop_values),
                     } } });
                     try sites.append(self.pass.allocator, duplicated);
                     return duplicated;
@@ -6031,6 +6056,8 @@ const Cloner = struct {
                 break :blk .{ .jump = .{
                     .target = self.clonedJoinTarget(jump.target),
                     .args = try self.cloneExprSpan(jump.args),
+                    .loop_params = try self.cloneLoopUpdateParams(jump.loop_params),
+                    .loop_values = try self.cloneExprSpan(jump.loop_values),
                 } };
             },
             .if_initialized_payload => |payload_switch| .{ .if_initialized_payload = .{
@@ -6052,6 +6079,7 @@ const Cloner = struct {
                     .try_expr = try_expr,
                     .ok_local = ok_local,
                     .err_is_cold = sequence.err_is_cold,
+                    .err_target = if (sequence.err_target) |target| self.clonedJoinTarget(target) else null,
                     .ok_body = ok_body,
                 } };
             },
@@ -6071,6 +6099,7 @@ const Cloner = struct {
                     .rest_local = rest_local,
                     .rest_field = sequence.rest_field,
                     .err_is_cold = sequence.err_is_cold,
+                    .err_target = if (sequence.err_target) |target| self.clonedJoinTarget(target) else null,
                     .ok_body = ok_body,
                 } };
             },
@@ -6096,6 +6125,7 @@ const Cloner = struct {
     }
 
     fn cloneJoinPoint(self: *Cloner, ty: Type.TypeId, join_point: Ast.JoinPointExpr) Common.LowerError!Ast.ExprId {
+        const retained = try self.cloneRetainedLocals(join_point.retained);
         const source_params = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(join_point.params));
         defer self.pass.allocator.free(source_params);
         const params = try self.pass.allocator.alloc(Ast.TypedLocal, source_params.len);
@@ -6125,6 +6155,7 @@ const Cloner = struct {
         return try self.addExpr(.{ .ty = ty, .data = .{ .join_point = .{
             .id = target,
             .params = try self.pass.program.addTypedLocalSpan(params),
+            .retained = retained,
             .body = body,
             .remainder = remainder,
         } } });
@@ -9943,6 +9974,95 @@ const Cloner = struct {
             Common.invariant("SpecConstr local-id field referenced a non-local expression");
     }
 
+    fn cloneLoopUpdateParams(self: *Cloner, span: Ast.Span(Ast.TypedLocal)) Common.LowerError!Ast.Span(Ast.TypedLocal) {
+        const source = self.pass.program.typedLocalSpan(span);
+        const params = try self.pass.allocator.alloc(Ast.TypedLocal, source.len);
+        defer self.pass.allocator.free(params);
+        for (0..source.len) |index| {
+            const param = GuardedList.at(source, index);
+            params[index] = .{ .local = self.cloneLocalRef(param.local), .ty = param.ty };
+        }
+        return try self.pass.program.addTypedLocalSpan(params);
+    }
+
+    /// Retained ownership follows SpecConstr's exact value substitution. A
+    /// scalarized aggregate has no runtime aggregate local to retain, so keep
+    /// its runtime leaf locals instead of rematerializing the aggregate.
+    fn cloneRetainedLocals(self: *Cloner, span: Ast.Span(Ast.TypedLocal)) Common.LowerError!Ast.Span(Ast.TypedLocal) {
+        const source = self.pass.program.typedLocalSpan(span);
+        var retained: std.ArrayList(Ast.TypedLocal) = .empty;
+        defer retained.deinit(self.pass.allocator);
+        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(self.pass.allocator, self.pass.program.localCount());
+        defer seen.deinit(self.pass.allocator);
+        for (0..source.len) |index| {
+            const typed = GuardedList.at(source, index);
+            if (self.subst.getForClone(self.pass.program, typed.local)) |value| {
+                try self.appendRetainedValueLocals(value, &retained, &seen, 0);
+            } else {
+                try self.appendRetainedLocal(&retained, &seen, typed.local, typed.ty);
+            }
+        }
+        return try self.pass.program.addTypedLocalSpan(retained.items);
+    }
+
+    fn appendRetainedLocal(
+        self: *Cloner,
+        retained: *std.ArrayList(Ast.TypedLocal),
+        seen: *std.bit_set.DynamicBitSetUnmanaged,
+        local: Ast.LocalId,
+        ty: Type.TypeId,
+    ) Allocator.Error!void {
+        const index = @intFromEnum(local);
+        if (seen.isSet(index)) return;
+        seen.set(index);
+        try retained.append(self.pass.allocator, .{ .local = local, .ty = ty });
+    }
+
+    fn appendRetainedExprLocal(
+        self: *Cloner,
+        expr: Ast.ExprId,
+        retained: *std.ArrayList(Ast.TypedLocal),
+        seen: *std.bit_set.DynamicBitSetUnmanaged,
+    ) Common.LowerError!void {
+        const value = self.pass.program.getExpr(expr);
+        if (value.data == .local) {
+            return try self.appendRetainedLocal(retained, seen, value.data.local, value.ty);
+        }
+        if (value.data == .unit or
+            value.data == .@"unreachable" or
+            value.data == .int_lit or
+            value.data == .frac_f32_lit or
+            value.data == .frac_f64_lit or
+            value.data == .dec_lit or
+            value.data == .str_lit or
+            value.data == .bytes_lit or
+            value.data == .uninitialized or
+            value.data == .uninitialized_payload) return;
+        Common.invariant("SpecConstr retained ownership leaf was neither a runtime local nor a static value");
+    }
+
+    fn appendRetainedValueLocals(
+        self: *Cloner,
+        value: Value,
+        retained: *std.ArrayList(Ast.TypedLocal),
+        seen: *std.bit_set.DynamicBitSetUnmanaged,
+        depth: usize,
+    ) Common.LowerError!void {
+        if (depth >= value_wrapper_strip_cap) {
+            Common.invariant("SpecConstr retained ownership followed a cyclic value");
+        }
+        switch (value) {
+            .expr => |expr| try self.appendRetainedExprLocal(expr, retained, seen),
+            .runtime_anchor => |anchor| try self.appendRetainedExprLocal(anchor.runtime, retained, seen),
+            .static_data_candidate => |candidate| try self.appendRetainedValueLocals(candidate.runtime.*, retained, seen, depth + 1),
+            .tag => |tag| for (tag.payloads) |payload| try self.appendRetainedValueLocals(payload, retained, seen, depth),
+            .record => |record| for (record.fields) |field| try self.appendRetainedValueLocals(field.value, retained, seen, depth),
+            .tuple => |tuple| for (tuple.items) |item| try self.appendRetainedValueLocals(item, retained, seen, depth),
+            .nominal => |nominal| try self.appendRetainedValueLocals(nominal.backing.*, retained, seen, depth + 1),
+            .callable => |callable| for (callable.captures) |capture| try self.appendRetainedValueLocals(capture.value, retained, seen, depth),
+        }
+    }
+
     fn clonePat(self: *Cloner, pat_id: Ast.PatId, mode: BinderCloneMode) Common.LowerError!Ast.PatId {
         const pat = self.pass.program.getPat(pat_id);
         const data: Ast.PatData = switch (pat.data) {
@@ -11108,12 +11228,22 @@ const BodyLocalScope = struct {
             },
             .try_sequence => |sequence| {
                 try self.walkExpr(sequence.try_expr);
+                if (sequence.err_target) |target| {
+                    const arity = self.joins.get(target) orelse
+                        Common.invariant("rewritten Try sequence targeted a join point outside lexical scope");
+                    if (arity != 1) Common.invariant("rewritten Try sequence error target did not have one parameter");
+                }
                 try self.bind(sequence.ok_local);
                 try self.walkExpr(sequence.ok_body);
                 self.unbind(sequence.ok_local);
             },
             .try_record_sequence => |sequence| {
                 try self.walkExpr(sequence.try_expr);
+                if (sequence.err_target) |target| {
+                    const arity = self.joins.get(target) orelse
+                        Common.invariant("rewritten Try record sequence targeted a join point outside lexical scope");
+                    if (arity != 1) Common.invariant("rewritten Try record sequence error target did not have one parameter");
+                }
                 try self.bind(sequence.value_local);
                 try self.bind(sequence.rest_local);
                 try self.walkExpr(sequence.ok_body);
@@ -11144,6 +11274,8 @@ const BodyLocalScope = struct {
                     Common.invariant("rewritten body redeclared an active join point id");
                 }
                 join_entry.value_ptr.* = join_point.params.len;
+                const retained = self.program.typedLocalSpan(join_point.retained);
+                for (0..retained.len) |index| self.checkUse(GuardedList.at(retained, index).local);
                 var added: std.ArrayList(Ast.LocalId) = .empty;
                 defer added.deinit(self.allocator);
                 try self.bindTypedLocals(join_point.params, &added);
@@ -11160,6 +11292,12 @@ const BodyLocalScope = struct {
                 if (arity != jump.args.len) {
                     Common.invariant("rewritten body jump arity differed from its join point parameters");
                 }
+                const update_params = self.program.typedLocalSpan(jump.loop_params);
+                if (update_params.len != jump.loop_values.len) {
+                    Common.invariant("rewritten body jump loop-update arity differed");
+                }
+                for (0..update_params.len) |index| self.checkUse(GuardedList.at(update_params, index).local);
+                try self.walkExprSpan(jump.loop_values);
                 try self.walkExprSpan(jump.args);
             },
         }
@@ -11338,7 +11476,10 @@ const BodySizeCounter = struct {
                 self.countExpr(join_point.body);
                 self.countExpr(join_point.remainder);
             },
-            .jump => |jump| self.countExprSpan(jump.args),
+            .jump => |jump| {
+                self.countExprSpan(jump.loop_values);
+                self.countExprSpan(jump.args);
+            },
         }
     }
 };
@@ -11515,7 +11656,10 @@ fn collectAllFnUsesInExpr(
             collectAllFnUsesInExpr(program, join_point.body, owner, uses);
             collectAllFnUsesInExpr(program, join_point.remainder, owner, uses);
         },
-        .jump => |jump| collectAllFnUsesInExprSpan(program, jump.args, owner, uses),
+        .jump => |jump| {
+            collectAllFnUsesInExprSpan(program, jump.loop_values, owner, uses);
+            collectAllFnUsesInExprSpan(program, jump.args, owner, uses);
+        },
         .if_initialized_payload => |payload_switch| {
             collectAllFnUsesInExpr(program, payload_switch.cond, owner, uses);
             collectAllFnUsesInExpr(program, payload_switch.initialized, owner, uses);
@@ -11756,7 +11900,8 @@ fn exprCallsFn(program: *const Ast.Program, expr_id: Ast.ExprId, fn_id: Ast.FnId
         .break_ => |maybe| if (maybe) |value| exprCallsFn(program, value, fn_id) else false,
         .continue_ => |continue_| exprSpanCallsFn(program, continue_.values, fn_id),
         .join_point => |join_point| exprCallsFn(program, join_point.body, fn_id) or exprCallsFn(program, join_point.remainder, fn_id),
-        .jump => |jump| exprSpanCallsFn(program, jump.args, fn_id),
+        .jump => |jump| exprSpanCallsFn(program, jump.loop_values, fn_id) or
+            exprSpanCallsFn(program, jump.args, fn_id),
         .if_initialized_payload => |payload_switch| exprCallsFn(program, payload_switch.cond, fn_id) or
             exprCallsFn(program, payload_switch.initialized, fn_id) or
             exprCallsFn(program, payload_switch.uninitialized, fn_id),
@@ -11884,7 +12029,8 @@ fn exprContainsReturn(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
         .break_ => |maybe| if (maybe) |value| exprContainsReturn(program, value) else false,
         .continue_ => |continue_| exprSpanContainsReturn(program, continue_.values),
         .join_point => |join_point| exprContainsReturn(program, join_point.body) or exprContainsReturn(program, join_point.remainder),
-        .jump => |jump| exprSpanContainsReturn(program, jump.args),
+        .jump => |jump| exprSpanContainsReturn(program, jump.loop_values) or
+            exprSpanContainsReturn(program, jump.args),
         .if_initialized_payload => |payload_switch| exprContainsReturn(program, payload_switch.cond) or
             exprContainsReturn(program, payload_switch.initialized) or
             exprContainsReturn(program, payload_switch.uninitialized),
@@ -12022,8 +12168,11 @@ fn exprReferencesLocal(program: *const Ast.Program, expr_id: Ast.ExprId, local: 
         .loop_ => |loop| exprSpanReferencesLocal(program, loop.initial_values, local) or exprReferencesLocal(program, loop.body, local),
         .break_ => |maybe| if (maybe) |value| exprReferencesLocal(program, value, local) else false,
         .continue_ => |continue_| exprSpanReferencesLocal(program, continue_.values, local),
-        .join_point => |join_point| exprReferencesLocal(program, join_point.body, local) or exprReferencesLocal(program, join_point.remainder, local),
-        .jump => |jump| exprSpanReferencesLocal(program, jump.args, local),
+        .join_point => |join_point| typedLocalSpanContains(program, join_point.retained, local) or
+            exprReferencesLocal(program, join_point.body, local) or
+            exprReferencesLocal(program, join_point.remainder, local),
+        .jump => |jump| exprSpanReferencesLocal(program, jump.loop_values, local) or
+            exprSpanReferencesLocal(program, jump.args, local),
         .if_initialized_payload => |payload_switch| exprReferencesLocal(program, payload_switch.cond, local) or
             exprReferencesLocal(program, payload_switch.initialized, local) or
             exprReferencesLocal(program, payload_switch.uninitialized, local),
@@ -12037,6 +12186,14 @@ fn exprSpanReferencesLocal(program: *const Ast.Program, span: Ast.Span(Ast.ExprI
     for (0..exprs.len) |index| {
         const expr = GuardedList.at(exprs, index);
         if (exprReferencesLocal(program, expr, local)) return true;
+    }
+    return false;
+}
+
+fn typedLocalSpanContains(program: *const Ast.Program, span: Ast.Span(Ast.TypedLocal), local: Ast.LocalId) bool {
+    const locals = program.typedLocalSpan(span);
+    for (0..locals.len) |index| {
+        if (GuardedList.at(locals, index).local == local) return true;
     }
     return false;
 }
@@ -12165,7 +12322,8 @@ fn exprContainsFreeLoopControl(program: *const Ast.Program, expr_id: Ast.ExprId,
         .continue_ => |continue_| loop_depth == 0 or exprSpanContainsFreeLoopControl(program, continue_.values, loop_depth),
         .join_point => |join_point| exprContainsFreeLoopControl(program, join_point.body, loop_depth) or
             exprContainsFreeLoopControl(program, join_point.remainder, loop_depth),
-        .jump => |jump| exprSpanContainsFreeLoopControl(program, jump.args, loop_depth),
+        .jump => |jump| exprSpanContainsFreeLoopControl(program, jump.loop_values, loop_depth) or
+            exprSpanContainsFreeLoopControl(program, jump.args, loop_depth),
         .if_initialized_payload => |payload_switch| exprContainsFreeLoopControl(program, payload_switch.cond, loop_depth) or
             exprContainsFreeLoopControl(program, payload_switch.initialized, loop_depth) or
             exprContainsFreeLoopControl(program, payload_switch.uninitialized, loop_depth),
@@ -12320,6 +12478,7 @@ fn collectTupleLocalDemandInExpr(
         .break_ => |maybe| if (maybe) |value| collectTupleLocalDemandInExpr(program, local, value, used) else true,
         .continue_ => |continue_| collectTupleLocalDemandInExprSpan(program, local, continue_.values, used),
         .join_point => |join_point| blk: {
+            if (typedLocalSpanContains(program, join_point.retained, local)) @memset(used, true);
             var shadows = false;
             const params = program.typedLocalSpan(join_point.params);
             for (0..params.len) |index| {
@@ -12331,7 +12490,8 @@ fn collectTupleLocalDemandInExpr(
             if (!shadows and !collectTupleLocalDemandInExpr(program, local, join_point.body, used)) break :blk false;
             break :blk collectTupleLocalDemandInExpr(program, local, join_point.remainder, used);
         },
-        .jump => |jump| collectTupleLocalDemandInExprSpan(program, local, jump.args, used),
+        .jump => |jump| collectTupleLocalDemandInExprSpan(program, local, jump.loop_values, used) and
+            collectTupleLocalDemandInExprSpan(program, local, jump.args, used),
         .if_initialized_payload => |payload| blk: {
             if (payload.payload == local) break :blk false;
             break :blk collectTupleLocalDemandInExpr(program, local, payload.cond, used) and
@@ -12497,9 +12657,11 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
                     break;
                 }
             }
-            break :blk body_count + localUseCountInExpr(program, local, join_point.remainder);
+            break :blk @intFromBool(typedLocalSpanContains(program, join_point.retained, local)) +
+                body_count + localUseCountInExpr(program, local, join_point.remainder);
         },
-        .jump => |jump| localUseCountInExprSpan(program, local, jump.args),
+        .jump => |jump| localUseCountInExprSpan(program, local, jump.loop_values) +
+            localUseCountInExprSpan(program, local, jump.args),
         .if_initialized_payload => |payload_switch| localUseCountInExpr(program, local, payload_switch.cond) +
             (if (payload_switch.payload == local) @as(usize, 1) else 0) +
             localUseCountInExpr(program, local, payload_switch.initialized) +

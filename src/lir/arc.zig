@@ -1001,6 +1001,7 @@ const JoinSummary = struct {
     id: LIR.JoinPointId,
     start: LIR.CFStmtId,
     params: LIR.LocalSpan,
+    retained: LIR.LocalSpan,
     maybe_uninitialized_params: LIR.LocalSpan,
     remainder: LIR.CFStmtId,
     body: LIR.CFStmtId,
@@ -1599,6 +1600,7 @@ const Inserter = struct {
             tail = try self.addCFStmtAtSource(terminal.stmt, .{ .join = .{
                 .id = source.id,
                 .params = source.params,
+                .retained = source.retained,
                 .maybe_uninitialized_params = source.maybe_uninitialized_params,
                 .maybe_uninitialized_conditions = source.maybe_uninitialized_conditions,
                 .maybe_uninitialized_condition_masks = source.maybe_uninitialized_condition_masks,
@@ -3643,7 +3645,28 @@ const Inserter = struct {
         for (self.domain().refcounted_locals) |local| {
             if (self.groupUsedFromTable(reads, local)) summary.body_keep.set(local);
         }
+        self.placeJoinRetainedInto(summary, null, &summary.body_keep);
         self.placeSolveJoinParamsInto(summary, &summary.body_keep);
+    }
+
+    /// Add the producer-declared ownership environment of a shared body. When
+    /// an incoming state is available, copy only the exact units and residual
+    /// masks that every contributing edge still owns.
+    fn placeJoinRetainedInto(
+        self: *Inserter,
+        summary: *const JoinSummary,
+        source: ?*const OwnedSet,
+        keep: *OwnedSet,
+    ) void {
+        const retained = self.store.getLocalSpan(summary.retained);
+        for (0..GuardedList.borrowLen(retained)) |index| {
+            const local = GuardedList.at(retained, index);
+            if (source) |owned| {
+                if (owned.contains(local)) keep.copyResourceFrom(owned, local);
+            } else {
+                self.placeUnit(keep, local);
+            }
+        }
     }
 
     /// Places a join's params owned, skipping any the back edges leave
@@ -3728,11 +3751,13 @@ const Inserter = struct {
         if (!summary.body_reachable) return .{ .changed = false, .purged = false };
         var merged = try OwnedSet.init(self.solve_allocator, self.domain());
         assignOwnedSet(&merged, &summary.jump_common);
+        var retained = try OwnedSet.init(self.solve_allocator, self.domain());
+        self.placeJoinRetainedInto(summary, &merged, &retained);
         const reads = try self.computeReadsBeforeRebind(summary.body, null, 0);
         var owned_iter = merged.bits.iterator(.{});
         while (owned_iter.next()) |index| {
             const local = merged.domain.resourceLocalAt(index);
-            if (!self.groupUsedFromTable(reads, local)) merged.unset(local);
+            if (!self.groupUsedFromTable(reads, local) and !retained.contains(local)) merged.unset(local);
         }
         self.placeSolveJoinParamsInto(summary, &merged);
         if (merged.eql(&summary.body_keep)) return .{ .changed = false, .purged = false };
@@ -3857,6 +3882,7 @@ const Inserter = struct {
                 .id = join_stmt.id,
                 .start = segment.cursor,
                 .params = join_stmt.params,
+                .retained = join_stmt.retained,
                 .maybe_uninitialized_params = join_stmt.maybe_uninitialized_params,
                 .remainder = join_stmt.remainder,
                 .body = join_stmt.body,
@@ -3882,6 +3908,7 @@ const Inserter = struct {
         const summary = self.join_summaries[join_index].?;
         if (summary.body != join_stmt.body or summary.remainder != join_stmt.remainder or
             !localSpanEql(summary.params, join_stmt.params) or
+            !localSpanEql(summary.retained, join_stmt.retained) or
             !localSpanEql(summary.maybe_uninitialized_params, join_stmt.maybe_uninitialized_params))
         {
             arcInvariant("ARC solver saw one join id with conflicting metadata");
@@ -3905,6 +3932,9 @@ const Inserter = struct {
         var scope = segment.ctx.body_scope;
         while (scope) |entry| {
             if (entry.join_index == target_index) {
+                if (!summary.retained.isEmpty()) {
+                    arcInvariant("ARC retained-environment join had a recursive back edge; loop state must use explicit parameters");
+                }
                 // A back edge does not feed the body keep's general
                 // intersection—it conforms at emission by releasing down to
                 // the keep—but it does constrain which params the body may
@@ -6137,10 +6167,13 @@ const Inserter = struct {
                     // Entering a join statement itself continues with the
                     // remainder. The body is not a normal successor; it only
                     // runs through `.jump`, whose transfer semantics are
-                    // modeled by entering the collected body below. Still add
-                    // the body as an independent root so direct queries for
-                    // `groupUsedInPath(join.body, ...)` are cached by this run.
-                    _ = try self.ensureReadBeforeRebindNode(&graph, &work, join_stmt.body);
+                    // modeled by entering the collected body below. Seed the
+                    // producer-authored ownership environment on that shared
+                    // body node exactly once. Every incoming jump then sees
+                    // the same retained units through its existing successor
+                    // edge, instead of expanding the environment per edge.
+                    const body_node = try self.ensureReadBeforeRebindNode(&graph, &work, join_stmt.body);
+                    self.noteLivenessUseSpan(&graph.nodes.items[body_node].reads, join_stmt.retained);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, join_stmt.remainder);
                 },
                 .jump => {
@@ -10331,6 +10364,44 @@ test "RC maybe-initialized join payload releases conditionally on loop exit" {
     _ = try f.addProc(&.{}, join, .i64);
     try f.run();
     try f.expectRc(payload, 0, 1, 0);
+    try f.expectReachableConditionalDecrefBeforeSet(f.joinBody(join_id), payload, present, 1, present);
+}
+
+test "RC retained conditional environment releases once in shared join body" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const selector = try f.local(.i64);
+    const present = try f.local(.i64);
+    const payload = try f.local(.str);
+    const result = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    const ret = try f.ret(result);
+    const body = try f.assignI64(result, 1, ret);
+
+    const present_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const present_payload = try f.assignStr(payload, "present", present_jump);
+    const present_cond = try f.assignI64(present, 1, present_payload);
+
+    const absent_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const absent_cond = try f.assignI64(present, 0, absent_jump);
+
+    const switch_stmt = try f.switchStmt(selector, present_cond, absent_cond, null);
+    const remainder = try f.assignI64(selector, 1, switch_stmt);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = LIR.LocalSpan.empty(),
+        .retained = try f.span(&.{payload}),
+        .maybe_uninitialized_params = try f.span(&.{payload}),
+        .maybe_uninitialized_conditions = try f.span(&.{present}),
+        .maybe_uninitialized_condition_masks = try f.store.addU64Span(&.{1}),
+        .body = body,
+        .remainder = remainder,
+    } });
+
+    _ = try f.addProc(&.{}, join, .i64);
+    try f.run();
+    try testing.expectEqual(@as(usize, 1), f.countRc(payload, .decref));
     try f.expectReachableConditionalDecrefBeforeSet(f.joinBody(join_id), payload, present, 1, present);
 }
 

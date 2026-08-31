@@ -495,6 +495,15 @@ const Lowerer = struct {
     symbols: Common.SymbolGen,
     local_map: []?LIR.LocalId,
     typed_local_map: std.AutoHashMap(TypedLiftedLocal, LIR.LocalId),
+    /// Producer-authored initialization condition for every loop-carried
+    /// payload cell. This dense index is built once from loop initializers so
+    /// enclosing shared continuations can preserve the exact condition even
+    /// when their definition precedes the loop in expression order.
+    payload_conditions: []?PayloadCondition,
+    /// Dense lexical index for sparse loop updates. Local ids are globally
+    /// unique, so entering and leaving a loop installs and clears its exact
+    /// parameters without scanning enclosing parameter spans per jump.
+    active_loop_params: []?ActiveLoopParam,
     local_types: collections.DenseMap(LIR.LocalId, Type.TypeId),
     comptime_site_map: []?LIR.ComptimeSiteId,
     next_join_point: u32 = 0,
@@ -540,6 +549,11 @@ const Lowerer = struct {
         after_loop: LIR.CFStmtId,
     };
 
+    const PayloadCondition = struct {
+        condition: Lifted.LocalId,
+        mask: u64,
+    };
+
     const JoinContext = struct {
         source_id: Lifted.JoinPointId,
         join_id: LIR.JoinPointId,
@@ -556,6 +570,34 @@ const Lowerer = struct {
         const local_map = try allocator.alloc(?LIR.LocalId, solved.lifted.localCount());
         errdefer allocator.free(local_map);
         @memset(local_map, null);
+
+        const payload_conditions = try allocator.alloc(?PayloadCondition, solved.lifted.localCount());
+        errdefer allocator.free(payload_conditions);
+        @memset(payload_conditions, null);
+        for (0..solved.lifted.exprCount()) |raw_expr| {
+            const expr_id: Lifted.ExprId = @enumFromInt(@as(u32, @intCast(raw_expr)));
+            const expr = solved.lifted.getExpr(expr_id);
+            if (expr.data != .loop_) continue;
+            const loop = expr.data.loop_;
+            const params = solved.lifted.typedLocalSpan(loop.params);
+            const initial_values = solved.lifted.exprSpan(loop.initial_values);
+            if (params.len != initial_values.len) Common.invariant("loop parameter count differed from initializer count while indexing payload conditions");
+            for (0..params.len) |index| {
+                const initial = solved.lifted.getExpr(GuardedList.at(initial_values, index));
+                if (initial.data != .uninitialized_payload) continue;
+                const param = GuardedList.at(params, index);
+                const condition = initial.data.uninitialized_payload;
+                const slot = &payload_conditions[@intFromEnum(param.local)];
+                if (slot.* != null and (slot.*.?.condition != condition.condition or slot.*.?.mask != condition.mask)) {
+                    Common.invariant("one loop payload local had conflicting initialization conditions");
+                }
+                slot.* = .{ .condition = condition.condition, .mask = condition.mask };
+            }
+        }
+
+        const active_loop_params = try allocator.alloc(?ActiveLoopParam, solved.lifted.localCount());
+        errdefer allocator.free(active_loop_params);
+        @memset(active_loop_params, null);
 
         const comptime_site_map = try allocator.alloc(?LIR.ComptimeSiteId, solved.lifted.comptimeSiteCount());
         errdefer allocator.free(comptime_site_map);
@@ -618,6 +660,8 @@ const Lowerer = struct {
             .symbols = .{ .next = solved.lifted.next_symbol },
             .local_map = local_map,
             .typed_local_map = std.AutoHashMap(TypedLiftedLocal, LIR.LocalId).init(allocator),
+            .payload_conditions = payload_conditions,
+            .active_loop_params = active_loop_params,
             .local_types = collections.DenseMap(LIR.LocalId, Type.TypeId).init(allocator),
             .comptime_site_map = comptime_site_map,
             .loop_stack = .empty,
@@ -638,6 +682,8 @@ const Lowerer = struct {
         self.loop_stack.deinit(self.allocator);
         self.allocator.free(self.comptime_site_map);
         self.typed_local_map.deinit();
+        self.allocator.free(self.payload_conditions);
+        self.allocator.free(self.active_loop_params);
         self.local_types.deinit();
         self.allocator.free(self.local_map);
         self.const_plan_map.deinit();
@@ -686,6 +732,8 @@ const Lowerer = struct {
         self.loop_stack.deinit(self.allocator);
         self.allocator.free(self.comptime_site_map);
         self.typed_local_map.deinit();
+        self.allocator.free(self.payload_conditions);
+        self.allocator.free(self.active_loop_params);
         self.local_types.deinit();
         self.allocator.free(self.local_map);
         self.const_plan_map.deinit();
@@ -719,6 +767,8 @@ const Lowerer = struct {
         self.result = undefined;
         self.runtime_schemas = RuntimeSchemaStore.init(self.allocator);
         self.local_map = &.{};
+        self.payload_conditions = &.{};
+        self.active_loop_params = &.{};
         self.own_capture_spans = &.{};
         self.own_captures = .empty;
         self.recursive_slot_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(self.allocator);
@@ -5163,31 +5213,35 @@ const Lowerer = struct {
                 .tag_discriminant = ok_variant,
             } }, ok_body);
 
-        const out_backing_ty = self.runtimeBackingType(out_try_ty);
-        const out_backing_layout = try self.layoutOfType(out_backing_ty);
-        const out_backing_local = try self.addLocalForLayout(out_backing_layout);
-        const boundary = try self.assignNominalBoundary(target, out_backing_local, out_backing_layout, next);
+        const err_start = if (sequence.err_target) |err_target|
+            try self.lowerTryErrJump(input_try_local, err_variant, err_target)
+        else blk: {
+            const out_backing_ty = self.runtimeBackingType(out_try_ty);
+            const out_backing_layout = try self.layoutOfType(out_backing_ty);
+            const out_backing_local = try self.addLocalForLayout(out_backing_layout);
+            const boundary = try self.assignNominalBoundary(target, out_backing_local, out_backing_layout, next);
 
-        const err_payload_layout = self.tagUnionPayloadLayout(self.result.store.getLocal(input_try_local).layout_idx, err_variant);
-        const err_payload_local = try self.addLocalForLayout(err_payload_layout);
-        const err_tag = if (self.isZstLocal(out_backing_local))
-            try self.assignZst(out_backing_local, boundary)
-        else
-            try self.result.store.addCFStmt(.{ .assign_tag = .{
-                .target = out_backing_local,
-                .variant_index = out_err_variant,
-                .discriminant = out_err_variant,
-                .payload = err_payload_local,
-                .next = boundary,
-            } });
-        const err_start = if (self.isZstLocal(err_payload_local))
-            err_tag
-        else
-            try self.addAssignRef(err_payload_local, .{ .tag_payload_struct = .{
-                .source = input_try_local,
-                .variant_index = err_variant,
-                .tag_discriminant = err_variant,
-            } }, err_tag);
+            const err_payload_layout = self.tagUnionPayloadLayout(self.result.store.getLocal(input_try_local).layout_idx, err_variant);
+            const err_payload_local = try self.addLocalForLayout(err_payload_layout);
+            const err_tag = if (self.isZstLocal(out_backing_local))
+                try self.assignZst(out_backing_local, boundary)
+            else
+                try self.result.store.addCFStmt(.{ .assign_tag = .{
+                    .target = out_backing_local,
+                    .variant_index = out_err_variant,
+                    .discriminant = out_err_variant,
+                    .payload = err_payload_local,
+                    .next = boundary,
+                } });
+            break :blk if (self.isZstLocal(err_payload_local))
+                err_tag
+            else
+                try self.addAssignRef(err_payload_local, .{ .tag_payload_struct = .{
+                    .source = input_try_local,
+                    .variant_index = err_variant,
+                    .tag_discriminant = err_variant,
+                } }, err_tag);
+        };
 
         const switch_stmt = try self.discriminantSwitch(input_try_local, ok_variant, ok_start, err_start, sequence.err_is_cold);
         return try self.lowerExprInto(input_try_local, sequence.try_expr, switch_stmt);
@@ -5227,34 +5281,76 @@ const Lowerer = struct {
             ok_start,
         );
 
-        const out_backing_ty = self.runtimeBackingType(out_try_ty);
-        const out_backing_layout = try self.layoutOfType(out_backing_ty);
-        const out_backing_local = try self.addLocalForLayout(out_backing_layout);
-        const boundary = try self.assignNominalBoundary(target, out_backing_local, out_backing_layout, next);
+        const err_start = if (sequence.err_target) |err_target|
+            try self.lowerTryErrJump(input_try_local, err_variant, err_target)
+        else blk: {
+            const out_backing_ty = self.runtimeBackingType(out_try_ty);
+            const out_backing_layout = try self.layoutOfType(out_backing_ty);
+            const out_backing_local = try self.addLocalForLayout(out_backing_layout);
+            const boundary = try self.assignNominalBoundary(target, out_backing_local, out_backing_layout, next);
 
-        const err_payload_layout = self.tagUnionPayloadLayout(self.result.store.getLocal(input_try_local).layout_idx, err_variant);
+            const err_payload_layout = self.tagUnionPayloadLayout(self.result.store.getLocal(input_try_local).layout_idx, err_variant);
+            const err_payload_local = try self.addLocalForLayout(err_payload_layout);
+            const err_tag = if (self.isZstLocal(out_backing_local))
+                try self.assignZst(out_backing_local, boundary)
+            else
+                try self.result.store.addCFStmt(.{ .assign_tag = .{
+                    .target = out_backing_local,
+                    .variant_index = out_err_variant,
+                    .discriminant = out_err_variant,
+                    .payload = err_payload_local,
+                    .next = boundary,
+                } });
+            break :blk if (self.isZstLocal(err_payload_local))
+                err_tag
+            else
+                try self.addAssignRef(err_payload_local, .{ .tag_payload_struct = .{
+                    .source = input_try_local,
+                    .variant_index = err_variant,
+                    .tag_discriminant = err_variant,
+                } }, err_tag);
+        };
+
+        const switch_stmt = try self.discriminantSwitch(input_try_local, ok_variant, ok_start, err_start, sequence.err_is_cold);
+        return try self.lowerExprInto(input_try_local, sequence.try_expr, switch_stmt);
+    }
+
+    fn lowerTryErrJump(
+        self: *Lowerer,
+        input_try_local: LIR.LocalId,
+        err_variant: u16,
+        target: Lifted.JoinPointId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const join_point = self.activeJoinPoint(target);
+        const params = self.result.store.getLocalSpan(join_point.params);
+        if (params.len != 1 or join_point.param_tys.len != 1) {
+            Common.invariant("shared Try error continuation did not have exactly one parameter");
+        }
+
+        const err_payload_layout = self.tagUnionPayloadLayout(
+            self.result.store.getLocal(input_try_local).layout_idx,
+            err_variant,
+        );
+        const target_local = GuardedList.at(params, 0);
+        if (!self.layoutsMatch(self.result.store.getLocal(target_local).layout_idx, err_payload_layout)) {
+            Common.invariant("shared Try error continuation parameter layout differed from Err payload layout");
+        }
         const err_payload_local = try self.addLocalForLayout(err_payload_layout);
-        const err_tag = if (self.isZstLocal(out_backing_local))
-            try self.assignZst(out_backing_local, boundary)
-        else
-            try self.result.store.addCFStmt(.{ .assign_tag = .{
-                .target = out_backing_local,
-                .variant_index = out_err_variant,
-                .discriminant = out_err_variant,
-                .payload = err_payload_local,
-                .next = boundary,
-            } });
-        const err_start = if (self.isZstLocal(err_payload_local))
-            err_tag
+        var jump = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_point.join_id } });
+        jump = try self.result.store.addCFStmt(.{ .set_local = .{
+            .target = target_local,
+            .value = err_payload_local,
+            .mode = .initialize_join_param,
+            .next = jump,
+        } });
+        return if (self.isZstLocal(err_payload_local))
+            jump
         else
             try self.addAssignRef(err_payload_local, .{ .tag_payload_struct = .{
                 .source = input_try_local,
                 .variant_index = err_variant,
                 .tag_discriminant = err_variant,
-            } }, err_tag);
-
-        const switch_stmt = try self.discriminantSwitch(input_try_local, ok_variant, ok_start, err_start, sequence.err_is_cold);
-        return try self.lowerExprInto(input_try_local, sequence.try_expr, switch_stmt);
+            } }, jump);
     }
 
     fn bindTryRecordPayloadField(
@@ -5472,6 +5568,18 @@ const Lowerer = struct {
             param_locals[i] = try self.bindLocalForTyped(param.local, param_tys[i]);
         }
         const param_span = try self.result.store.addLocalSpan(param_locals);
+        for (0..params.len) |index| {
+            const param = GuardedList.at(params, index);
+            const slot = &self.active_loop_params[@intFromEnum(param.local)];
+            if (slot.* != null) Common.invariant("one local was active as two loop parameters");
+            slot.* = .{ .local = param_locals[index], .ty = param_tys[index] };
+        }
+        defer {
+            for (0..params.len) |index| {
+                const param = GuardedList.at(params, index);
+                self.active_loop_params[@intFromEnum(param.local)] = null;
+            }
+        }
         var maybe_uninitialized_params: std.ArrayList(LIR.LocalId) = .empty;
         defer maybe_uninitialized_params.deinit(self.allocator);
         var maybe_uninitialized_conditions: std.ArrayList(LIR.LocalId) = .empty;
@@ -5575,6 +5683,29 @@ const Lowerer = struct {
         }
 
         const param_span = try self.result.store.addLocalSpan(param_locals);
+        const retained = self.solved.lifted.typedLocalSpan(join_point.retained);
+        const retained_locals = try self.allocator.alloc(LIR.LocalId, retained.len);
+        defer self.allocator.free(retained_locals);
+        var maybe_uninitialized_retained: std.ArrayList(LIR.LocalId) = .empty;
+        defer maybe_uninitialized_retained.deinit(self.allocator);
+        var maybe_uninitialized_conditions: std.ArrayList(LIR.LocalId) = .empty;
+        defer maybe_uninitialized_conditions.deinit(self.allocator);
+        var maybe_uninitialized_condition_masks: std.ArrayList(u64) = .empty;
+        defer maybe_uninitialized_condition_masks.deinit(self.allocator);
+        for (0..retained.len) |index| {
+            const retained_local = GuardedList.at(retained, index);
+            const lir_local = try self.localFor(retained_local.local);
+            retained_locals[index] = lir_local;
+            if (self.payload_conditions[@intFromEnum(retained_local.local)]) |payload| {
+                try maybe_uninitialized_retained.append(self.allocator, lir_local);
+                try maybe_uninitialized_conditions.append(self.allocator, try self.localFor(payload.condition));
+                try maybe_uninitialized_condition_masks.append(self.allocator, payload.mask);
+            }
+        }
+        const retained_span = try self.result.store.addLocalSpan(retained_locals);
+        const maybe_uninitialized_span = try self.result.store.addLocalSpan(maybe_uninitialized_retained.items);
+        const maybe_uninitialized_conditions_span = try self.result.store.addLocalSpan(maybe_uninitialized_conditions.items);
+        const maybe_uninitialized_condition_masks_span = try self.result.store.addU64Span(maybe_uninitialized_condition_masks.items);
         const lir_join_id = self.freshJoinPointId();
         try self.join_stack.append(self.allocator, .{
             .source_id = join_point.id,
@@ -5589,6 +5720,10 @@ const Lowerer = struct {
         return try self.result.store.addCFStmt(.{ .join = .{
             .id = lir_join_id,
             .params = param_span,
+            .retained = retained_span,
+            .maybe_uninitialized_params = maybe_uninitialized_span,
+            .maybe_uninitialized_conditions = maybe_uninitialized_conditions_span,
+            .maybe_uninitialized_condition_masks = maybe_uninitialized_condition_masks_span,
             .body = body,
             .remainder = remainder,
         } });
@@ -5603,10 +5738,42 @@ const Lowerer = struct {
 
         const locals = try self.lowerExprsToJoinTempsAtTypes(join_point.params, join_point.param_tys, args);
         defer locals.deinit(self.allocator);
+
+        const update_params = self.solved.lifted.typedLocalSpan(jump.loop_params);
+        const update_values = self.solved.lifted.exprSpan(jump.loop_values);
+        if (update_params.len != update_values.len) {
+            Common.invariant("jump loop-update parameter count differed from value count during direct LIR lowering");
+        }
+        const update_targets = try self.allocator.alloc(LIR.LocalId, update_params.len);
+        defer self.allocator.free(update_targets);
+        const update_tys = try self.allocator.alloc(Type.TypeId, update_params.len);
+        defer self.allocator.free(update_tys);
+        for (0..update_params.len) |index| {
+            const param = GuardedList.at(update_params, index);
+            const active = self.activeLoopParam(param.local);
+            update_targets[index] = active.local;
+            update_tys[index] = active.ty;
+        }
+        const update_target_span = try self.result.store.addLocalSpan(update_targets);
+        const updates = try self.lowerExprsToJoinTempsAtTypes(update_target_span, update_tys, update_values);
+        defer updates.deinit(self.allocator);
+
         var lir_jump = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_point.join_id } });
         lir_jump = try self.prependJoinParamInitializers(join_point.params, locals.ids, lir_jump);
+        lir_jump = try self.prependJoinParamInitializers(update_target_span, updates.ids, lir_jump);
         lir_jump = try self.prependJoinExprsAtTypes(locals, join_point.param_tys, lir_jump);
+        lir_jump = try self.prependJoinExprsAtTypes(updates, update_tys, lir_jump);
         return lir_jump;
+    }
+
+    const ActiveLoopParam = struct {
+        local: LIR.LocalId,
+        ty: Type.TypeId,
+    };
+
+    fn activeLoopParam(self: *Lowerer, source: Lifted.LocalId) ActiveLoopParam {
+        return self.active_loop_params[@intFromEnum(source)] orelse
+            Common.invariant("jump loop update named a parameter outside its lexical loop scope");
     }
 
     fn lowerReturn(self: *Lowerer, ret: Mono.Return) Common.LowerError!LIR.CFStmtId {
