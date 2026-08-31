@@ -920,6 +920,33 @@ test "check type - record - default - list literal absorbs omitted defaulted fie
     );
 }
 
+test "issue 10886 - call parameter shape reaches nested list record constructions" {
+    const source =
+        \\Foo : { a : U64, b : U64 ?? 0 }
+        \\Wrapped : { items : List(Foo) }
+        \\
+        \\count : List(Foo) -> U64
+        \\count = |foos| List.len(foos)
+        \\
+        \\count_wrapped : Wrapped -> U64
+        \\count_wrapped = |wrapped| List.len(wrapped.items)
+        \\
+        \\direct = count([{ a: 123 }, { a: 456, b: 789 }])
+        \\nested = count_wrapped({ items: [{ a: 123 }, { a: 456, b: 789 }] })
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "U64");
+}
+
+test "issue 10886 - call parameter shape does not absorb required fields" {
+    const source =
+        \\Required : { a : U64, b : U64 }
+        \\count : List(Required) -> U64
+        \\count = |records| List.len(records)
+        \\bad = count([{ a: 123 }, { a: 456, b: 789 }])
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
 test "check type - record - opt - list literal conditional presence rejected (unannotated)" {
     const source =
         \\main! = |_| {}

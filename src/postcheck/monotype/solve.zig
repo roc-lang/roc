@@ -262,6 +262,16 @@ pub const GraphDiagnostics = struct {
     generated_private_nodes_visited: u64 = 0,
     finished_mono_scans: u64 = 0,
     finished_mono_nodes_visited: u64 = 0,
+    /// Declaration-backed nominal instantiation cache probes, and the
+    /// candidate instances those probes examined. Scanned candidates must
+    /// stay proportional to lookups rather than to instances created, or
+    /// repeated constructions of one declaration turn quadratic (issue
+    /// 10978 hit exactly that).
+    nominal_backing_lookups: u64 = 0,
+    nominal_backing_instances_scanned: u64 = 0,
+    /// Union-find resolutions across all graph operations: the broadest
+    /// deterministic proxy for total solver work.
+    union_find_resolutions: u64 = 0,
 };
 
 /// Graph-native named-type cells.
@@ -316,27 +326,95 @@ const NominalBackingDeclaration = struct {
     declaration_id: u32,
 };
 
-const NominalBackingCacheContext = struct {
-    pub fn hash(_: NominalBackingCacheContext, key: NominalBackingDeclaration) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        hasher.update(&key.module_bytes);
-        var declaration_id = std.mem.nativeToLittle(u32, key.declaration_id);
-        hasher.update(std.mem.asBytes(&declaration_id));
-        return hasher.final();
+const NominalBackingKey = struct {
+    declaration: NominalBackingDeclaration,
+    args: []const NodeId,
+};
+
+fn hashNominalBackingKey(declaration: NominalBackingDeclaration, args: []const NodeId) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    hasher.update(&declaration.module_bytes);
+    var declaration_id = std.mem.nativeToLittle(u32, declaration.declaration_id);
+    hasher.update(std.mem.asBytes(&declaration_id));
+    var arity = std.mem.nativeToLittle(u64, @intCast(args.len));
+    hasher.update(std.mem.asBytes(&arity));
+    for (args) |arg| {
+        var node_id = std.mem.nativeToLittle(u32, @intFromEnum(arg));
+        hasher.update(std.mem.asBytes(&node_id));
+    }
+    return hasher.final();
+}
+
+fn nominalBackingDeclarationsEqual(left: NominalBackingDeclaration, right: NominalBackingDeclaration) bool {
+    return std.mem.eql(u8, left.module_bytes[0..], right.module_bytes[0..]) and
+        left.declaration_id == right.declaration_id;
+}
+
+const NominalBackingKeyContext = struct {
+    pub fn hash(_: NominalBackingKeyContext, key: NominalBackingKey) u64 {
+        return hashNominalBackingKey(key.declaration, key.args);
     }
 
-    pub fn eql(_: NominalBackingCacheContext, left: NominalBackingDeclaration, right: NominalBackingDeclaration) bool {
-        return std.mem.eql(u8, left.module_bytes[0..], right.module_bytes[0..]) and
-            left.declaration_id == right.declaration_id;
+    pub fn eql(_: NominalBackingKeyContext, left: NominalBackingKey, right: NominalBackingKey) bool {
+        return nominalBackingDeclarationsEqual(left.declaration, right.declaration) and
+            std.mem.eql(NodeId, left.args, right.args);
     }
 };
 
-/// One instantiated backing of a declaration. Argument identity follows the
-/// union-find classes rather than raw node ids, which can redirect as producer
-/// evidence is applied.
+const NominalBackingLookup = struct {
+    declaration: NominalBackingDeclaration,
+    args: []const NodeId,
+};
+
+/// Hash-map adapter that resolves a lookup's permanent argument ids without
+/// allocating a temporary root tuple. Resident keys always contain live roots;
+/// `union_` eagerly rekeys every tuple that mentions its losing root.
+const NominalBackingLookupContext = struct {
+    graph: *InstGraph,
+
+    pub fn hash(self: NominalBackingLookupContext, lookup: NominalBackingLookup) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        hasher.update(&lookup.declaration.module_bytes);
+        var declaration_id = std.mem.nativeToLittle(u32, lookup.declaration.declaration_id);
+        hasher.update(std.mem.asBytes(&declaration_id));
+        var arity = std.mem.nativeToLittle(u64, @intCast(lookup.args.len));
+        hasher.update(std.mem.asBytes(&arity));
+        for (lookup.args) |arg| {
+            var node_id = std.mem.nativeToLittle(u32, @intFromEnum(self.graph.find(arg)));
+            hasher.update(std.mem.asBytes(&node_id));
+        }
+        return hasher.final();
+    }
+
+    pub fn eql(self: NominalBackingLookupContext, lookup: NominalBackingLookup, stored: NominalBackingKey) bool {
+        if (!nominalBackingDeclarationsEqual(lookup.declaration, stored.declaration) or
+            lookup.args.len != stored.args.len)
+        {
+            return false;
+        }
+        for (lookup.args, stored.args) |wanted, existing| {
+            if (self.graph.find(wanted) != existing) return false;
+        }
+        return true;
+    }
+};
+
+const NominalBackingInstanceId = enum(u32) { _ };
+
+/// One indexed instantiation of a declaration backing. Argument ids are stable
+/// arena storage and remain live union-find roots for as long as `active` is
+/// true. A root merge can collapse two keys; the retired entry stays allocated
+/// so reverse-index occurrences and previously returned node ids remain valid.
 const NominalBackingInstance = struct {
+    declaration: NominalBackingDeclaration,
     args: []NodeId,
     node: NodeId,
+    active: bool,
+};
+
+const NominalBackingOccurrence = struct {
+    instance: NominalBackingInstanceId,
+    arg_index: u32,
 };
 
 const ContainmentDependency = struct {
@@ -450,17 +528,23 @@ pub const InstGraph = struct {
     /// imported request use the exact finished TypeId rather than reconstructing
     /// an equivalent public shape.
     imported_monos: collections.DenseMap(NodeId, Type.TypeId),
-    /// Current extension root for each row root. This is the authority for
-    /// maintaining `row_parents`; stale extension edges are removed when row
-    /// content changes.
-    row_exts: std.ArrayList(?NodeId),
-    /// Row nodes by the extension node they currently chain through.
-    row_parents: collections.DenseMap(NodeId, std.ArrayList(NodeId)),
-    /// Declaration-backed nominal backings already instantiated in this graph,
-    /// bucketed by source declaration. Entries compare argument union-find
-    /// classes, so a backing instance keeps one identity after evidence merges
-    /// or redirects its original argument nodes.
-    nominal_backings: std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingCacheContext, 80),
+    /// Exact declaration-plus-current-argument-roots index for instantiated
+    /// nominal backings. Keys point into the stable argument storage owned by
+    /// `nominal_backing_instances`.
+    nominal_backing_index: std.HashMap(NominalBackingKey, NominalBackingInstanceId, NominalBackingKeyContext, 80),
+    nominal_backing_instances: std.ArrayList(NominalBackingInstance),
+    /// Argument positions by their current root. This is the precise
+    /// invalidation index used to rekey affected instances in `union_`.
+    nominal_backings_by_root: collections.DenseMap(NodeId, std.ArrayList(NominalBackingOccurrence)),
+    /// Reused scratch for de-duplicating instances that mention a losing root
+    /// in more than one argument position.
+    nominal_backing_affected: std.ArrayList(NominalBackingInstanceId),
+    nominal_backing_migration_epochs: std.ArrayList(u64),
+    nominal_backing_migration_epoch: u64,
+    /// Backing pairs whose keys became equal during root migration. Migration
+    /// restores every index invariant before these pairs are unified.
+    nominal_backing_collisions: std.ArrayList(NodePair),
+    processing_nominal_backing_collisions: bool,
     /// Exact source function node from which each generated-private request
     /// function was constructed. A generic source interface may itself carry
     /// upstream generated-private arguments; retaining that producer node is
@@ -484,11 +568,6 @@ pub const InstGraph = struct {
     containment_visit_epochs: std.ArrayList(u32),
     containment_visit_epoch: u32,
     containment_cache: collections.DenseMap(NodeId, ContainmentCacheEntry),
-    /// Scratch epoch marks for `compactRowParents`, indexed by node id. A
-    /// slot carrying the current epoch means its class root is already kept
-    /// in the list being compacted.
-    row_parent_seen_epochs: std.ArrayList(u64),
-    row_parent_seen_epoch: u64,
     /// Pools for the visited sets the graph's walks create per query. Fresh
     /// maps re-allocate and re-zero sparse chunks across the node/type ID
     /// domains on every walk; pooled maps keep their chunks.
@@ -520,9 +599,14 @@ pub const InstGraph = struct {
             .active_snapshot_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
             .imported_type_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
             .imported_monos = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
-            .row_exts = .empty,
-            .row_parents = collections.DenseMap(NodeId, std.ArrayList(NodeId)).init(allocator),
-            .nominal_backings = std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingCacheContext, 80).init(allocator),
+            .nominal_backing_index = std.HashMap(NominalBackingKey, NominalBackingInstanceId, NominalBackingKeyContext, 80).init(allocator),
+            .nominal_backing_instances = .empty,
+            .nominal_backings_by_root = collections.DenseMap(NodeId, std.ArrayList(NominalBackingOccurrence)).init(allocator),
+            .nominal_backing_affected = .empty,
+            .nominal_backing_migration_epochs = .empty,
+            .nominal_backing_migration_epoch = 0,
+            .nominal_backing_collisions = .empty,
+            .processing_nominal_backing_collisions = false,
             .request_source_interfaces = .empty,
             .forced_dynamic_iterator_roots = .empty,
             .recursive_argument_slots = .empty,
@@ -530,8 +614,6 @@ pub const InstGraph = struct {
             .containment_visit_epochs = .empty,
             .containment_visit_epoch = 0,
             .containment_cache = collections.DenseMap(NodeId, ContainmentCacheEntry).init(allocator),
-            .row_parent_seen_epochs = .empty,
-            .row_parent_seen_epoch = 0,
             .node_set_pool = collections.DenseMapPool(NodeId, void).init(allocator),
             .type_set_pool = collections.DenseMapPool(Type.TypeId, void).init(allocator),
         };
@@ -562,21 +644,21 @@ pub const InstGraph = struct {
         }
         self.node_snapshots.deinit();
         self.current_snapshots.deinit();
-        var parents = self.row_parents.valueIterator();
-        while (parents.next()) |list| {
-            list.deinit(allocator);
+        var backing_occurrences = self.nominal_backings_by_root.valueIterator();
+        while (backing_occurrences.next()) |occurrences| {
+            occurrences.deinit(allocator);
         }
-        var backing_buckets = self.nominal_backings.valueIterator();
-        while (backing_buckets.next()) |bucket| {
-            bucket.deinit(allocator);
-        }
-        self.nominal_backings.deinit();
+        self.nominal_backings_by_root.deinit();
+        self.nominal_backing_collisions.deinit(allocator);
+        self.nominal_backing_migration_epochs.deinit(allocator);
+        self.nominal_backing_affected.deinit(allocator);
+        self.nominal_backing_instances.deinit(allocator);
+        self.nominal_backing_index.deinit();
         self.request_source_interfaces.deinit(allocator);
         self.forced_dynamic_iterator_roots.deinit(allocator);
         self.recursive_argument_slots.deinit(allocator);
         self.containment_pending.deinit(allocator);
         self.containment_visit_epochs.deinit(allocator);
-        self.row_parent_seen_epochs.deinit(allocator);
         self.node_set_pool.deinit();
         self.type_set_pool.deinit();
         var containment_entries = self.containment_cache.valueIterator();
@@ -584,8 +666,6 @@ pub const InstGraph = struct {
             entry.deinit(allocator);
         }
         self.containment_cache.deinit();
-        self.row_parents.deinit();
-        self.row_exts.deinit(allocator);
         self.imported_monos.deinit();
         self.active_snapshot_nodes.deinit();
         self.imported_type_nodes.deinit();
@@ -1007,7 +1087,7 @@ pub const InstGraph = struct {
                 }
                 named.def.iterator_representation = .minted;
                 named.def.iterator_depth = item.depth;
-                try self.setContent(node, .{ .named = named });
+                self.setContent(node, .{ .named = named });
             }
         }
     }
@@ -1041,7 +1121,7 @@ pub const InstGraph = struct {
         def.iterator_kind = .forced_dynamic;
         def.iterator_depth = 0;
         def.iterator_topology = topology;
-        try self.setContent(node, .{ .named = .{
+        self.setContent(node, .{ .named = .{
             .named_type = provenance.public_source.named_type,
             .def = def,
             .kind = provenance.public_source.kind,
@@ -1407,7 +1487,7 @@ pub const InstGraph = struct {
                 .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator identity target stopped being named"),
             };
             named.def.generated = item.digest;
-            try self.setContent(item.node, .{ .named = named });
+            self.setContent(item.node, .{ .named = named });
         }
     }
 
@@ -1603,9 +1683,7 @@ pub const InstGraph = struct {
         try self.class_member_head.append(self.allocator, id);
         try self.class_member_tail.append(self.allocator, id);
         try self.containment_visit_epochs.append(self.allocator, 0);
-        try self.row_exts.append(self.allocator, null);
         try self.request_source_interfaces.append(self.allocator, null);
-        try self.registerRowParent(id, node_content);
         self.countDiagnostic("nodes_created");
         return id;
     }
@@ -1619,7 +1697,7 @@ pub const InstGraph = struct {
         comptime fill: fn (@TypeOf(context), NodeId) Allocator.Error!InstNode,
     ) Allocator.Error!NodeId {
         const reserved = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
-        try self.setContent(reserved, try fill(context, reserved));
+        self.setContent(reserved, try fill(context, reserved));
         return reserved;
     }
 
@@ -1629,19 +1707,21 @@ pub const InstGraph = struct {
         declaration_id: u32,
         args: []const NodeId,
     ) ?NodeId {
-        const bucket = self.nominal_backings.getPtr(.{
-            .module_bytes = module_bytes,
-            .declaration_id = declaration_id,
-        }) orelse return null;
-        instances: for (bucket.items) |*instance| {
-            if (instance.args.len != args.len) continue;
-            for (instance.args, args) |*stored, wanted| {
-                stored.* = self.find(stored.*);
-                if (stored.* != self.find(wanted)) continue :instances;
-            }
-            return instance.node;
-        }
-        return null;
+        self.countDiagnostic("nominal_backing_lookups");
+        const instance_id = self.nominal_backing_index.getAdapted(
+            NominalBackingLookup{
+                .declaration = .{
+                    .module_bytes = module_bytes,
+                    .declaration_id = declaration_id,
+                },
+                .args = args,
+            },
+            NominalBackingLookupContext{ .graph = self },
+        ) orelse return null;
+        self.countDiagnostic("nominal_backing_instances_scanned");
+        const instance = self.nominal_backing_instances.items[@intFromEnum(instance_id)];
+        if (!instance.active) Common.invariant("nominal backing index referenced a retired instance");
+        return instance.node;
     }
 
     pub fn putNominalBackingNode(
@@ -1652,127 +1732,164 @@ pub const InstGraph = struct {
         node: NodeId,
     ) Allocator.Error!void {
         self.requireRelationProduction();
+        const declaration = NominalBackingDeclaration{
+            .module_bytes = module_bytes,
+            .declaration_id = declaration_id,
+        };
         const stored_args = try self.arena().alloc(NodeId, args.len);
         for (stored_args, args) |*stored, arg| {
             stored.* = self.find(arg);
         }
-        const bucket = try self.nominal_backings.getOrPut(.{
-            .module_bytes = module_bytes,
-            .declaration_id = declaration_id,
+        const key = NominalBackingKey{ .declaration = declaration, .args = stored_args };
+        if (self.nominal_backing_index.get(key) != null) {
+            Common.invariant("nominal backing insertion duplicated an indexed instantiation");
+        }
+
+        const instance_id: NominalBackingInstanceId = @enumFromInt(@as(u32, @intCast(self.nominal_backing_instances.items.len)));
+        try self.nominal_backing_instances.append(self.allocator, .{
+            .declaration = declaration,
+            .args = stored_args,
+            .node = node,
+            .active = true,
         });
-        if (!bucket.found_existing) bucket.value_ptr.* = .empty;
-        try bucket.value_ptr.append(self.allocator, .{ .args = stored_args, .node = node });
-    }
-
-    fn registerRowParent(self: *InstGraph, row: NodeId, node_content: InstNode) Allocator.Error!void {
-        const row_root = self.find(row);
-        const maybe_ext = if (node_content == .tag_union)
-            node_content.tag_union.ext
-        else if (node_content == .record)
-            node_content.record.ext
-        else
-            null;
-        const ext = if (maybe_ext) |raw_ext| self.find(raw_ext) else {
-            try self.unregisterRowParent(row_root);
-            return;
-        };
-
-        const row_ext = &self.row_exts.items[@intFromEnum(row_root)];
-        if (row_ext.*) |old_ext| {
-            if (old_ext == ext) {
-                try self.addRowParent(ext, row_root);
-                return;
-            }
-            self.removeRowParent(old_ext, row_root);
-        }
-        row_ext.* = ext;
-        try self.addRowParent(ext, row_root);
-    }
-
-    fn unregisterRowParent(self: *InstGraph, row: NodeId) Allocator.Error!void {
-        const row_root = self.find(row);
-        const row_ext = &self.row_exts.items[@intFromEnum(row_root)];
-        if (row_ext.*) |old| {
-            row_ext.* = null;
-            self.removeRowParent(old, row_root);
+        try self.nominal_backing_migration_epochs.append(self.allocator, 0);
+        try self.nominal_backing_index.putNoClobber(key, instance_id);
+        for (stored_args, 0..) |root, arg_index| {
+            const occurrences = try self.nominal_backings_by_root.getOrPut(root);
+            if (!occurrences.found_existing) occurrences.value_ptr.* = .empty;
+            try occurrences.value_ptr.append(self.allocator, .{
+                .instance = instance_id,
+                .arg_index = @intCast(arg_index),
+            });
         }
     }
 
-    /// Short parent lists de-duplicate exactly on insert; above this length
-    /// the insert-time scan (with a `find` per element) would make merging
-    /// two classes quadratic in their parent counts, so longer lists append
-    /// unconditionally and compact when they would otherwise grow.
-    const row_parent_exact_scan_max = 16;
+    /// Rewrite every indexed nominal-backing key that mentions `loser`.
+    /// Resident hash keys point into mutable instance argument storage, so all
+    /// old keys are removed before any argument is changed and all new keys
+    /// are restored before collision-driven backing unification can reenter.
+    fn migrateNominalBackingRoot(self: *InstGraph, loser: NodeId, winner: NodeId) Allocator.Error!void {
+        const loser_occurrences = self.nominal_backings_by_root.getPtr(loser) orelse return;
+        const occurrence_count = loser_occurrences.items.len;
 
-    fn addRowParent(self: *InstGraph, ext: NodeId, row: NodeId) Allocator.Error!void {
-        const entry = try self.row_parents.getOrPut(self.find(ext));
-        if (!entry.found_existing) entry.value_ptr.* = .empty;
-        const list = entry.value_ptr;
-        const row_root = self.find(row);
-        if (list.items.len <= row_parent_exact_scan_max) {
-            for (list.items) |existing| {
-                if (self.find(existing) == row_root) return;
+        const winner_occurrences = try self.nominal_backings_by_root.getOrPut(winner);
+        if (!winner_occurrences.found_existing) winner_occurrences.value_ptr.* = .empty;
+        try winner_occurrences.value_ptr.ensureUnusedCapacity(self.allocator, occurrence_count);
+        try self.nominal_backing_affected.ensureUnusedCapacity(self.allocator, occurrence_count);
+        try self.nominal_backing_collisions.ensureUnusedCapacity(self.allocator, occurrence_count);
+        try self.nominal_backing_index.ensureTotalCapacity(self.nominal_backing_index.count());
+
+        var removed_occurrences = self.nominal_backings_by_root.fetchRemove(loser).?;
+        defer removed_occurrences.value.deinit(self.allocator);
+        const moved = removed_occurrences.value.items;
+
+        self.nominal_backing_affected.clearRetainingCapacity();
+        self.nominal_backing_migration_epoch +%= 1;
+        if (self.nominal_backing_migration_epoch == 0) {
+            @memset(self.nominal_backing_migration_epochs.items, 0);
+            self.nominal_backing_migration_epoch = 1;
+        }
+        const epoch = self.nominal_backing_migration_epoch;
+        for (moved) |occurrence| {
+            const instance_index = @intFromEnum(occurrence.instance);
+            const instance = &self.nominal_backing_instances.items[instance_index];
+            if (!instance.active) continue;
+            const arg_index = occurrence.arg_index;
+            if (arg_index >= instance.args.len) {
+                Common.invariant("nominal backing reverse index had an invalid argument position");
             }
-        } else if (list.items.len == list.capacity) {
-            // Duplicate class entries are tolerated by every reader (each
-            // resolves entries through `find`), so de-duplication can wait
-            // until the list is about to grow. Capacity doubles between
-            // compactions, keeping the total compaction work linear in the
-            // number of inserts.
-            try self.compactRowParents(list);
-            // Guarantee at least as many appends as surviving entries before
-            // the next compaction, so compaction cost amortizes to O(1) per
-            // insert even when it reclaims almost nothing.
-            try list.ensureUnusedCapacity(self.allocator, @max(list.items.len, row_parent_exact_scan_max));
-            for (list.items) |existing| {
-                if (existing == row_root) return;
+            // Retired collisions and root coalescing can leave stale or
+            // duplicate occurrences. Only current references move to the
+            // winner; every stale occurrence is discarded the first time its
+            // recorded root loses, keeping cleanup amortized linear.
+            if (instance.args[arg_index] != loser) continue;
+            if (self.nominal_backing_migration_epochs.items[instance_index] != epoch) {
+                self.nominal_backing_migration_epochs.items[instance_index] = epoch;
+                self.nominal_backing_affected.appendAssumeCapacity(occurrence.instance);
             }
         }
-        try list.append(self.allocator, row_root);
-    }
 
-    /// Rewrite every entry to its current class root and drop duplicate
-    /// classes, preserving order of first occurrence.
-    fn compactRowParents(self: *InstGraph, list: *std.ArrayList(NodeId)) Allocator.Error!void {
-        const epochs_len = self.nodes.items.len;
-        if (self.row_parent_seen_epochs.items.len < epochs_len) {
-            const old_len = self.row_parent_seen_epochs.items.len;
-            try self.row_parent_seen_epochs.resize(self.allocator, epochs_len);
-            @memset(self.row_parent_seen_epochs.items[old_len..], 0);
-        }
-        self.row_parent_seen_epoch += 1;
-        const epoch = self.row_parent_seen_epoch;
-        var write: usize = 0;
-        for (list.items) |existing| {
-            const existing_root = self.find(existing);
-            const slot = &self.row_parent_seen_epochs.items[@intFromEnum(existing_root)];
-            if (slot.* == epoch) continue;
-            slot.* = epoch;
-            list.items[write] = existing_root;
-            write += 1;
-        }
-        list.shrinkRetainingCapacity(write);
-    }
-
-    fn removeRowParent(self: *InstGraph, ext: NodeId, row: NodeId) void {
-        const ext_root = self.find(ext);
-        const parents = self.row_parents.getPtr(ext_root) orelse return;
-        const row_root = self.find(row);
-        var index: usize = 0;
-        while (index < parents.items.len) {
-            if (self.find(parents.items[index]) == row_root) {
-                _ = parents.swapRemove(index);
-                continue;
+        // Removing every old key first prevents one affected instance from
+        // colliding with another instance's stale pre-migration key.
+        for (self.nominal_backing_affected.items) |instance_id| {
+            const instance = &self.nominal_backing_instances.items[@intFromEnum(instance_id)];
+            const old_key = NominalBackingKey{
+                .declaration = instance.declaration,
+                .args = instance.args,
+            };
+            const removed = self.nominal_backing_index.fetchRemove(old_key) orelse
+                Common.invariant("active nominal backing instance was absent from its index");
+            if (removed.value != instance_id) {
+                Common.invariant("nominal backing key referenced the wrong instance");
             }
-            index += 1;
         }
-        if (parents.items.len == 0) {
-            var removed = self.row_parents.fetchRemove(ext_root).?;
-            removed.value.deinit(self.allocator);
+
+        const current_winner_occurrences = self.nominal_backings_by_root.getPtr(winner).?;
+        for (moved) |occurrence| {
+            const instance = &self.nominal_backing_instances.items[@intFromEnum(occurrence.instance)];
+            if (!instance.active) continue;
+            const arg_index = occurrence.arg_index;
+            if (instance.args[arg_index] != loser) continue;
+            instance.args[arg_index] = winner;
+            current_winner_occurrences.appendAssumeCapacity(occurrence);
+        }
+
+        for (self.nominal_backing_affected.items) |instance_id| {
+            const instance = &self.nominal_backing_instances.items[@intFromEnum(instance_id)];
+            if (!instance.active) continue;
+            const new_key = NominalBackingKey{
+                .declaration = instance.declaration,
+                .args = instance.args,
+            };
+            if (self.nominal_backing_index.get(new_key)) |existing_id| {
+                if (existing_id == instance_id) {
+                    Common.invariant("nominal backing migration encountered its own indexed key");
+                }
+                const existing_index = @intFromEnum(existing_id);
+                const existing = &self.nominal_backing_instances.items[existing_index];
+                if (!existing.active) {
+                    Common.invariant("nominal backing index referenced a retired collision");
+                }
+
+                const retained_id, const retired_id = if (@intFromEnum(instance_id) < existing_index)
+                    .{ instance_id, existing_id }
+                else
+                    .{ existing_id, instance_id };
+                const retained = &self.nominal_backing_instances.items[@intFromEnum(retained_id)];
+                const retired = &self.nominal_backing_instances.items[@intFromEnum(retired_id)];
+                if (retained_id == instance_id) {
+                    const removed = self.nominal_backing_index.fetchRemove(new_key) orelse
+                        Common.invariant("colliding nominal backing key disappeared during migration");
+                    if (removed.value != existing_id) {
+                        Common.invariant("colliding nominal backing key referenced the wrong instance");
+                    }
+                    self.nominal_backing_index.putAssumeCapacityNoClobber(new_key, instance_id);
+                }
+                retired.active = false;
+                self.nominal_backing_collisions.appendAssumeCapacity(.{
+                    .left = retained.node,
+                    .right = retired.node,
+                });
+            } else {
+                self.nominal_backing_index.putAssumeCapacityNoClobber(new_key, instance_id);
+            }
+        }
+    }
+
+    /// Process cache-key collapses only after migration has restored the
+    /// primary and reverse indexes. Nested unions enqueue more pairs for this
+    /// same drain instead of reentering it.
+    fn drainNominalBackingCollisions(self: *InstGraph) Allocator.Error!void {
+        if (self.processing_nominal_backing_collisions) return;
+        self.processing_nominal_backing_collisions = true;
+        defer self.processing_nominal_backing_collisions = false;
+        while (self.nominal_backing_collisions.pop()) |collision| {
+            try self.unify(collision.left, collision.right);
         }
     }
 
     fn find(self: *InstGraph, id: NodeId) NodeId {
+        self.countDiagnostic("union_find_resolutions");
         var current = id;
         while (true) {
             const node = self.nodes.items[@intFromEnum(current)];
@@ -1947,7 +2064,7 @@ pub const InstGraph = struct {
     /// instantiation node. Literal lowering calls this only when runtime demand
     /// reaches an unpinned literal leaf; custom specializations have already
     /// related the node to their concrete target before that point.
-    pub fn materializeLiteralDefault(self: *InstGraph, raw_node: NodeId) Allocator.Error!void {
+    pub fn materializeLiteralDefault(self: *InstGraph, raw_node: NodeId) void {
         self.requireRelationProduction();
         const node = self.find(raw_node);
         const node_content = self.nodes.items[@intFromEnum(node)];
@@ -1957,7 +2074,7 @@ pub const InstGraph = struct {
             Common.invariant("unresolved literal leaf had no checked default phase");
         const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
             Common.invariant("checking-finalized literal variable reached Monotype unresolved");
-        try self.setContent(node, switch (target) {
+        self.setContent(node, switch (target) {
             .dec => .{ .primitive = .dec },
             .str => .{ .primitive = .str },
         });
@@ -2780,7 +2897,7 @@ pub const InstGraph = struct {
 
         const args = try self.arena().alloc(NodeId, 1);
         args[0] = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-        try self.setContent(public_node, .{ .named = .{
+        self.setContent(public_node, .{ .named = .{
             .named_type = public_source.named_type,
             .def = public_source.def,
             .kind = public_source.kind,
@@ -2811,7 +2928,7 @@ pub const InstGraph = struct {
         }
 
         const args = try self.arena().dupe(NodeId, private_named.args);
-        try self.setContent(public_node, .{ .named = .{
+        self.setContent(public_node, .{ .named = .{
             .named_type = private_named.named_type,
             .def = private_named.def,
             .kind = private_named.kind,
@@ -2851,12 +2968,12 @@ pub const InstGraph = struct {
         switch (private_content) {
             .list => |private_elem| {
                 const elem = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-                try self.setContent(public_node, .{ .list = elem });
+                self.setContent(public_node, .{ .list = elem });
                 try self.relateOpaqueChild(elem, private_elem, row_width, pending);
             },
             .box => |private_elem| {
                 const elem = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-                try self.setContent(public_node, .{ .box = elem });
+                self.setContent(public_node, .{ .box = elem });
                 try self.relateOpaqueChild(elem, private_elem, row_width, pending);
             },
             .tuple => |private_items| {
@@ -2864,7 +2981,7 @@ pub const InstGraph = struct {
                 for (items) |*item| {
                     item.* = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
                 }
-                try self.setContent(public_node, .{ .tuple = items });
+                self.setContent(public_node, .{ .tuple = items });
                 for (items, private_items) |item, private_item| {
                     try self.relateOpaqueChild(item, private_item, row_width, pending);
                 }
@@ -2881,7 +2998,7 @@ pub const InstGraph = struct {
                     };
                 }
                 const ext = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-                try self.setContent(public_node, .{ .record = .{ .fields = fields, .ext = ext } });
+                self.setContent(public_node, .{ .record = .{ .fields = fields, .ext = ext } });
                 for (fields, private_row.fields) |field, private_field| {
                     try self.relateOpaqueChild(field.ty, private_field.ty, row_width, pending);
                 }
@@ -2901,7 +3018,7 @@ pub const InstGraph = struct {
                     };
                 }
                 const ext = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-                try self.setContent(public_node, .{ .tag_union = .{ .tags = tags, .ext = ext } });
+                self.setContent(public_node, .{ .tag_union = .{ .tags = tags, .ext = ext } });
                 for (tags, private_row.tags) |tag, private_tag| {
                     for (tag.payloads, private_tag.payloads) |payload, private_payload| {
                         try self.relateOpaqueChild(payload, private_payload, row_width, pending);
@@ -3405,48 +3522,41 @@ pub const InstGraph = struct {
         self.current_snapshots_dirty = false;
     }
 
-    /// Redirect `loser` into `winner`, moving row back references and
-    /// invalidating the current snapshot cache. Immutable snapshot provenance
-    /// remains attached to permanent node ids and resolves through `find`.
+    /// Redirect `loser` into `winner` and invalidate the current snapshot
+    /// cache. Immutable snapshot provenance remains attached to permanent node
+    /// ids and resolves through `find`.
     fn union_(self: *InstGraph, raw_winner: NodeId, raw_loser: NodeId) Allocator.Error!void {
         const winner = self.find(raw_winner);
         const loser = self.find(raw_loser);
         if (winner == loser) return;
-        try self.unregisterRowParent(loser);
+        // Rekey before changing union state. Its allocation preflight can still
+        // fail without staling a resident key.
+        try self.migrateNominalBackingRoot(loser, winner);
         const winner_tail = self.class_member_tail.items[@intFromEnum(winner)];
         const loser_head = self.class_member_head.items[@intFromEnum(loser)];
         self.class_member_next.items[@intFromEnum(winner_tail)] = loser_head;
         self.class_member_tail.items[@intFromEnum(winner)] = self.class_member_tail.items[@intFromEnum(loser)];
         self.nodes.items[@intFromEnum(loser)] = .{ .redirect = winner };
         self.versions.items[@intFromEnum(winner)] +%= 1;
-        if (self.row_parents.fetchRemove(loser)) |moved| {
-            var moved_list = moved.value;
-            for (moved_list.items) |parent| {
-                const parent_root = self.find(parent);
-                self.row_exts.items[@intFromEnum(parent_root)] = winner;
-                try self.addRowParent(winner, parent_root);
-            }
-            moved_list.deinit(self.allocator);
-        }
         self.countDiagnostic("class_unions");
         self.invalidateActiveSnapshots(winner);
+        try self.drainNominalBackingCollisions();
     }
 
     /// Replace a root's content with an observationally equivalent compressed
     /// form without invalidating immutable Type-shaped snapshots. Returns
     /// whether the stored graph content changed.
-    fn replaceContentWithoutSnapshotInvalidation(self: *InstGraph, raw_root: NodeId, new_content: InstNode) Allocator.Error!bool {
+    fn replaceContentWithoutSnapshotInvalidation(self: *InstGraph, raw_root: NodeId, new_content: InstNode) bool {
         const root = self.find(raw_root);
         if (instNodeEql(self.nodes.items[@intFromEnum(root)], new_content)) return false;
         self.nodes.items[@intFromEnum(root)] = new_content;
         self.versions.items[@intFromEnum(root)] +%= 1;
-        try self.registerRowParent(root, new_content);
         return true;
     }
 
     /// Replace a root's type content and invalidate every cached snapshot.
-    fn setContent(self: *InstGraph, root: NodeId, new_content: InstNode) Allocator.Error!void {
-        if (!try self.replaceContentWithoutSnapshotInvalidation(root, new_content)) return;
+    fn setContent(self: *InstGraph, root: NodeId, new_content: InstNode) void {
+        if (!self.replaceContentWithoutSnapshotInvalidation(root, new_content)) return;
         self.invalidateActiveSnapshots(root);
     }
 
@@ -3619,7 +3729,7 @@ pub const InstGraph = struct {
         if (left_content == .redirect) unreachable;
         if (left_content == .unresolved) {
             if (right_content == .unresolved) {
-                try self.setContent(right, .{ .unresolved = mergeVariables(left_content.unresolved, right_content.unresolved) });
+                self.setContent(right, .{ .unresolved = mergeVariables(left_content.unresolved, right_content.unresolved) });
                 try self.union_(right, left);
             } else if (right_content == .named and right_content.named.kind == .alias) {
                 try self.unifyThroughBacking(right, right_content, left, row_width, pending);
@@ -4029,7 +4139,7 @@ pub const InstGraph = struct {
         if (declared_backing.node != backing_node) {
             var compressed = named;
             compressed.backing = .{ .node = backing_node, .use = declared_backing.use, .authority = declared_backing.authority };
-            try self.setContent(named_node, .{ .named = compressed });
+            self.setContent(named_node, .{ .named = compressed });
         }
         // The named node already owns this exact structural backing. This
         // relation arises when a checked function interface names the wrapper
@@ -4091,7 +4201,7 @@ pub const InstGraph = struct {
             if (backing.node != result) {
                 var compressed = named;
                 compressed.backing = .{ .node = result, .use = backing.use, .authority = backing.authority };
-                try self.setContent(current, .{ .named = compressed });
+                self.setContent(current, .{ .named = compressed });
             }
             current = next;
         }
@@ -4201,7 +4311,7 @@ pub const InstGraph = struct {
                 const flat = try self.flattenTagRow(row);
                 if (flat.tags.len != 0) Common.invariant("instantiation unified a non-empty tag union with an empty tag union");
                 try self.unify(flat.ext, empty);
-                try self.setContent(row, .empty_tag_union);
+                self.setContent(row, .empty_tag_union);
                 try self.union_(empty, row);
             },
             .record => {
@@ -4213,7 +4323,7 @@ pub const InstGraph = struct {
                 }
                 try self.unify(flat.ext, empty);
                 if (flat.fields.len == 0) {
-                    try self.setContent(row, .empty_record);
+                    self.setContent(row, .empty_record);
                     try self.union_(empty, row);
                 } else {
                     // The empty construction adopts the explicit optional or
@@ -4256,7 +4366,7 @@ pub const InstGraph = struct {
         if (ext_content == .unresolved or ext_content == .empty_tag_union) {
             if (row.ext != ext) {
                 const flattened: InstNode = .{ .tag_union = .{ .tags = row.tags, .ext = ext } };
-                _ = try self.replaceContentWithoutSnapshotInvalidation(root, flattened);
+                _ = self.replaceContentWithoutSnapshotInvalidation(root, flattened);
             }
             return .{ .tags = row.tags, .ext = ext };
         }
@@ -4293,7 +4403,7 @@ pub const InstGraph = struct {
 
         const flat_tags = try self.arena().dupe(InstTag, tags.items);
         const flattened: InstNode = .{ .tag_union = .{ .tags = flat_tags, .ext = ext } };
-        _ = try self.replaceContentWithoutSnapshotInvalidation(root, flattened);
+        _ = self.replaceContentWithoutSnapshotInvalidation(root, flattened);
         return .{ .tags = flat_tags, .ext = ext };
     }
 
@@ -4315,7 +4425,7 @@ pub const InstGraph = struct {
         if (ext_content == .unresolved or ext_content == .empty_record) {
             if (row.ext != ext) {
                 const flattened: InstNode = .{ .record = .{ .fields = row.fields, .ext = ext } };
-                _ = try self.replaceContentWithoutSnapshotInvalidation(root, flattened);
+                _ = self.replaceContentWithoutSnapshotInvalidation(root, flattened);
             }
             return .{ .fields = row.fields, .ext = ext };
         }
@@ -4363,7 +4473,7 @@ pub const InstGraph = struct {
 
         const flat_fields = try self.arena().dupe(InstField, fields.items);
         const flattened: InstNode = .{ .record = .{ .fields = flat_fields, .ext = ext } };
-        _ = try self.replaceContentWithoutSnapshotInvalidation(root, flattened);
+        _ = self.replaceContentWithoutSnapshotInvalidation(root, flattened);
         return .{ .fields = flat_fields, .ext = ext };
     }
 
@@ -4455,7 +4565,7 @@ pub const InstGraph = struct {
             merged_ext = new_ext;
         }
 
-        try self.setContent(left, .{ .tag_union = .{
+        self.setContent(left, .{ .tag_union = .{
             .tags = try self.arena().dupe(InstTag, merged.items),
             .ext = merged_ext,
         } });
@@ -4482,7 +4592,7 @@ pub const InstGraph = struct {
                     Common.invariant("instantiation tried to write a tag row into a record row variable");
                 }
             }
-            try self.setContent(ext_root, .{ .tag_union = .{
+            self.setContent(ext_root, .{ .tag_union = .{
                 .tags = try self.arena().dupe(InstTag, tags),
                 .ext = tail_ext,
             } });
@@ -4597,7 +4707,7 @@ pub const InstGraph = struct {
             merged_ext = new_ext;
         }
 
-        try self.setContent(left, .{ .record = .{
+        self.setContent(left, .{ .record = .{
             .fields = try self.arena().dupe(InstField, merged.items),
             .ext = merged_ext,
         } });
@@ -4624,7 +4734,7 @@ pub const InstGraph = struct {
                     Common.invariant("instantiation tried to write a record row into a tag row variable");
                 }
             }
-            try self.setContent(ext_root, .{ .record = .{
+            self.setContent(ext_root, .{ .record = .{
                 .fields = try self.arena().dupe(InstField, fields),
                 .ext = tail_ext,
             } });
@@ -4772,7 +4882,7 @@ pub const InstGraph = struct {
             .erased => |digest| .{ .erased = digest },
             .zst => .zst,
         };
-        _ = try self.replaceContentWithoutSnapshotInvalidation(node, imported);
+        _ = self.replaceContentWithoutSnapshotInvalidation(node, imported);
         return node;
     }
 
@@ -4890,7 +5000,7 @@ pub const InstGraph = struct {
             .erased => |digest| .{ .erased = digest },
             .zst => .zst,
         };
-        _ = try self.replaceContentWithoutSnapshotInvalidation(node, imported_node);
+        _ = self.replaceContentWithoutSnapshotInvalidation(node, imported_node);
         return node;
     }
 
@@ -6121,6 +6231,45 @@ test "graph diagnostics count authoritative operations" {
     try std.testing.expectEqual(@as(u64, 1), diagnostics.finished_mono_nodes_visited);
 }
 
+test "issue 10941: row extension class unions remain linear" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+    var diagnostics: GraphDiagnostics = .{};
+    graph.setDiagnostics(&diagnostics);
+
+    // Repro for https://github.com/roc-lang/roc/issues/10941: re-rooting one
+    // row-extension class must do work linear in the graph nodes and unions.
+    const row_count = 128;
+    var extension = try graph.newNode(.empty_record);
+    for (0..row_count) |_| {
+        _ = try graph.newNode(.{ .record = .{
+            .fields = &.{},
+            .ext = extension,
+        } });
+        const replacement = try graph.newNode(.empty_record);
+        try graph.union_(replacement, extension);
+        extension = replacement;
+    }
+
+    try std.testing.expectEqual(@as(u64, row_count * 2 + 1), diagnostics.nodes_created);
+    try std.testing.expectEqual(@as(u64, row_count), diagnostics.class_unions);
+    const linear_work_limit = (diagnostics.nodes_created + diagnostics.class_unions) * 16;
+    if (diagnostics.union_find_resolutions > linear_work_limit) {
+        std.debug.print(
+            "row extension unions performed {d} union-find resolutions; expected at most {d}\n",
+            .{ diagnostics.union_find_resolutions, linear_work_limit },
+        );
+    }
+    try std.testing.expect(diagnostics.union_find_resolutions <= linear_work_limit);
+}
+
 test "completed monotype program view does not expose instantiation graph nodes" {
     @setEvalBranchQuota(10_000);
     comptime assertNoNodeId(Ast.ProgramView, "Ast.ProgramView");
@@ -6267,13 +6416,13 @@ test "open function interface shape preserves defaults and recursive structure" 
     try std.testing.expect(!std.mem.eql(u8, record_shape.bytes, tag_shape.bytes));
 
     const left_cycle = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-    try graph.setContent(left_cycle, .{ .tuple = try graph.arena().dupe(NodeId, &.{left_cycle}) });
+    graph.setContent(left_cycle, .{ .tuple = try graph.arena().dupe(NodeId, &.{left_cycle}) });
     const left_recursive = try graph.newNode(.{ .func = .{
         .args = try graph.arena().dupe(NodeId, &.{left_cycle}),
         .ret = ret,
     } });
     const right_cycle = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-    try graph.setContent(right_cycle, .{ .tuple = try graph.arena().dupe(NodeId, &.{right_cycle}) });
+    graph.setContent(right_cycle, .{ .tuple = try graph.arena().dupe(NodeId, &.{right_cycle}) });
     const right_recursive = try graph.newNode(.{ .func = .{
         .args = try graph.arena().dupe(NodeId, &.{right_cycle}),
         .ret = ret,
@@ -6377,7 +6526,7 @@ test "cyclic row extension is not a resolved graph type" {
     defer graph.destroy();
 
     const row = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-    try graph.setContent(row, .{ .tag_union = .{ .tags = &.{}, .ext = row } });
+    graph.setContent(row, .{ .tag_union = .{ .tags = &.{}, .ext = row } });
     try std.testing.expect(!try graph.typeIsResolved(row));
 }
 
@@ -6421,7 +6570,7 @@ test "active Monotype snapshots are immutable across graph mutations" {
     const first = try graph.activeTypeViewForNode(node);
     try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(first));
 
-    try graph.setContent(node, .{ .primitive = .str });
+    graph.setContent(node, .{ .primitive = .str });
     const second = try graph.activeTypeViewForNode(node);
 
     try std.testing.expect(first != second);
@@ -6751,7 +6900,7 @@ test "final sealing does not mutate an earlier active snapshot" {
     const snapshot_field = GuardedList.at(type_store.fieldSpan(type_store.get(snapshot).record), 0);
     try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(snapshot_field.ty));
 
-    try graph.setContent(a_ty, .{ .primitive = .str });
+    graph.setContent(a_ty, .{ .primitive = .str });
 
     try graph.freezeRelations();
     var finals = GraphTypeFinals.init(graph);
@@ -6792,7 +6941,7 @@ test "final sealing follows active snapshots stored only in field value types" {
     }) });
 
     try std.testing.expect(try graph.typeHasActiveSnapshots(wrapper));
-    try graph.setContent(value_node, .{ .primitive = .str });
+    graph.setContent(value_node, .{ .primitive = .str });
 
     try graph.freezeRelations();
     var finals = GraphTypeFinals.init(graph);
@@ -6863,7 +7012,7 @@ test "final graph function recursively replaces active snapshots" {
         .ret = row,
     } });
     const draft_fn = try graph.activeTypeViewForNode(fn_node);
-    try graph.setContent(a_ty, .{ .primitive = .str });
+    graph.setContent(a_ty, .{ .primitive = .str });
 
     try graph.freezeRelations();
     var finals = GraphTypeFinals.init(graph);
@@ -7028,12 +7177,12 @@ test "generated-private traversal scratch handles cycles and epoch rollover" {
     try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_private_nodes_visited);
 
     const unrelated = try graph.newNode(.{ .primitive = .u64 });
-    try graph.setContent(unrelated, .{ .primitive = .str });
+    graph.setContent(unrelated, .{ .primitive = .str });
     try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));
     try std.testing.expectEqual(@as(u64, 2), diagnostics.generated_private_cache_hits);
     try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_private_nodes_visited);
 
-    try graph.setContent(recursive, .zst);
+    graph.setContent(recursive, .zst);
     try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));
     try std.testing.expectEqual(@as(u64, 2), diagnostics.generated_private_cache_hits);
     try std.testing.expectEqual(@as(u64, 2), diagnostics.generated_private_nodes_visited);
@@ -7107,14 +7256,14 @@ test "iterator-interface containment caches exact graph dependencies" {
     try std.testing.expectEqual(@as(u64, 1), diagnostics.iterator_interface_cache_hits);
 
     const unrelated = try graph.newNode(.{ .primitive = .u64 });
-    try graph.setContent(unrelated, .{ .primitive = .str });
+    graph.setContent(unrelated, .{ .primitive = .str });
     try std.testing.expect(!try graph.containsIteratorInterface(root));
     try std.testing.expectEqual(@as(u64, 2), diagnostics.iterator_interface_cache_hits);
     try std.testing.expectEqual(@as(u64, 2), diagnostics.iterator_interface_nodes_visited);
 
     const module_identity = try name_store.internModuleIdentity(&([_]u8{0x42} ** 32));
     const type_name = try name_store.internTypeName("Iter");
-    try graph.setContent(child, .{ .named = .{
+    graph.setContent(child, .{ .named = .{
         .named_type = .{ .module = .{}, .ty = testCheckedTypeId(14) },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .@"opaque",
@@ -8351,6 +8500,125 @@ test "issue 9647: unresolved tag row extension absorbs rest without allocating a
     try std.testing.expectEqual(graph.find(right_ext), graph.find(rest.ext));
 }
 
+fn expectNominalBackingIndexConsistent(graph: *InstGraph) error{ TestExpectedEqual, TestUnexpectedResult }!void {
+    var active_count: u32 = 0;
+    for (graph.nominal_backing_instances.items, 0..) |instance, instance_index| {
+        if (!instance.active) continue;
+        active_count += 1;
+        const instance_id: NominalBackingInstanceId = @enumFromInt(@as(u32, @intCast(instance_index)));
+        const key = NominalBackingKey{
+            .declaration = instance.declaration,
+            .args = instance.args,
+        };
+        try std.testing.expectEqual(instance_id, graph.nominal_backing_index.get(key).?);
+        for (instance.args, 0..) |root, arg_index| {
+            const occurrences = graph.nominal_backings_by_root.getPtr(root) orelse return error.TestUnexpectedResult;
+            var matching_occurrences: usize = 0;
+            for (occurrences.items) |occurrence| {
+                if (occurrence.instance == instance_id and occurrence.arg_index == arg_index) {
+                    matching_occurrences += 1;
+                }
+            }
+            try std.testing.expectEqual(@as(usize, 1), matching_occurrences);
+        }
+    }
+    try std.testing.expectEqual(active_count, graph.nominal_backing_index.count());
+
+    var roots = graph.nominal_backings_by_root.iterator();
+    while (roots.next()) |entry| {
+        for (entry.value_ptr.items) |occurrence| {
+            const instance = graph.nominal_backing_instances.items[@intFromEnum(occurrence.instance)];
+            if (!instance.active) continue;
+            try std.testing.expect(occurrence.arg_index < instance.args.len);
+            try std.testing.expectEqual(entry.key_ptr.*, instance.args[occurrence.arg_index]);
+        }
+    }
+}
+
+test "nominal backing index rekeys root tuples and merges collisions" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_bytes = [_]u8{0xAB} ** 32;
+    const other_module_bytes = [_]u8{0xCD} ** 32;
+    const a = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const b = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const c = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const d = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+
+    // Repeated argument positions must both migrate. Once a and b merge, the
+    // two exact keys collapse and their already-published backing nodes become
+    // one solver class.
+    const repeated_left = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const repeated_right = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    try graph.putNominalBackingNode(module_bytes, 1, &.{ a, a }, repeated_left);
+    try graph.putNominalBackingNode(module_bytes, 1, &.{ b, b }, repeated_right);
+    try std.testing.expectEqual(repeated_left, graph.nominalBackingNode(module_bytes, 1, &.{ a, a }).?);
+    try std.testing.expectEqual(repeated_right, graph.nominalBackingNode(module_bytes, 1, &.{ b, b }).?);
+    try std.testing.expect(graph.nominalBackingNode(other_module_bytes, 1, &.{ a, a }) == null);
+    try std.testing.expect(graph.nominalBackingNode(module_bytes, 2, &.{ a, a }) == null);
+
+    // A partial tuple match stays distinct until every argument class agrees.
+    const pair_left = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const pair_right = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    try graph.putNominalBackingNode(module_bytes, 2, &.{ a, c }, pair_left);
+    try graph.putNominalBackingNode(module_bytes, 2, &.{ b, d }, pair_right);
+    try expectNominalBackingIndexConsistent(graph);
+
+    try graph.unify(a, b);
+
+    try expectNominalBackingIndexConsistent(graph);
+    try std.testing.expect(graph.sameClass(repeated_left, repeated_right));
+    try std.testing.expectEqual(
+        graph.find(repeated_left),
+        graph.find(graph.nominalBackingNode(module_bytes, 1, &.{ b, a }).?),
+    );
+    try std.testing.expectEqual(pair_left, graph.nominalBackingNode(module_bytes, 2, &.{ a, c }).?);
+    try std.testing.expectEqual(pair_right, graph.nominalBackingNode(module_bytes, 2, &.{ b, d }).?);
+    try std.testing.expect(!graph.sameClass(pair_left, pair_right));
+
+    try graph.unify(c, d);
+
+    try expectNominalBackingIndexConsistent(graph);
+    try std.testing.expect(graph.sameClass(pair_left, pair_right));
+    try std.testing.expectEqual(
+        graph.find(pair_left),
+        graph.find(graph.nominalBackingNode(module_bytes, 2, &.{ b, c }).?),
+    );
+
+    // Make the already-migrated a/b root lose once more. This also consumes
+    // stale occurrences left by the first collision instead of forwarding
+    // them into the new winner's list.
+    const e = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    try graph.unify(a, e);
+    try expectNominalBackingIndexConsistent(graph);
+    try std.testing.expectEqual(
+        graph.find(repeated_left),
+        graph.find(graph.nominalBackingNode(module_bytes, 1, &.{ e, b }).?),
+    );
+
+    // Empty argument tuples need no reverse-root entries and remain exact.
+    const empty_backing = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    try graph.putNominalBackingNode(module_bytes, 3, &.{}, empty_backing);
+    try std.testing.expectEqual(empty_backing, graph.nominalBackingNode(module_bytes, 3, &.{}).?);
+    try expectNominalBackingIndexConsistent(graph);
+
+    var active_instances: usize = 0;
+    for (graph.nominal_backing_instances.items) |instance| {
+        if (instance.active) active_instances += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 3), active_instances);
+    try std.testing.expectEqual(@as(u32, 3), graph.nominal_backing_index.count());
+}
+
 test "issue 9647: same nominal backing wrapper resolves to structural backing once" {
     const gpa = std.testing.allocator;
 
@@ -8425,7 +8693,7 @@ test "issue 9647: recursive nominal backing cycle is not chased as structural ba
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
 
     const nominal = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-    try graph.setContent(nominal, .{ .named = .{
+    graph.setContent(nominal, .{ .named = .{
         .named_type = named_type,
         .def = def,
         .kind = .nominal,
@@ -8467,7 +8735,7 @@ test "recursive nominal backing can meet an alias to that nominal" {
     const alias_def: Type.TypeDef = .{ .module = module_identity, .type_name = alias_name };
 
     const nominal = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-    try graph.setContent(nominal, .{ .named = .{
+    graph.setContent(nominal, .{ .named = .{
         .named_type = nominal_type,
         .def = nominal_def,
         .kind = .nominal,

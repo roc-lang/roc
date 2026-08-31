@@ -1314,6 +1314,14 @@ pub const EvidenceChainIndex = struct {
     index: u16,
 };
 
+/// Reference to an enclosing evidence slot. Same-name method calls can share
+/// target identity without sharing the callable instantiation recorded by the
+/// representative slot.
+pub const ConstraintEvidenceRef = struct {
+    index: EvidenceChainIndex,
+    independent_callable: bool = false,
+};
+
 /// Public `CheckedEvidence` declaration.
 ///
 /// How one dispatch obligation was satisfied: with a concrete target (plus
@@ -1334,7 +1342,7 @@ pub const CheckedEvidence = struct {
 
     pub const Resolution = union(enum) {
         direct: EvidenceNodeId,
-        constraint: EvidenceChainIndex,
+        constraint: ConstraintEvidenceRef,
         structural: StructuralEvidence,
         /// The checker proved this nested-procedure obligation is the matching
         /// evidence parameter projected from the concrete callable request.
@@ -1457,7 +1465,13 @@ pub const CheckedCallResolution = union(enum) {
     direct_parametric: DirectCall,
     /// The dispatcher is one of the enclosing callable's constrained scheme
     /// vars; each specialization edge supplies the target as evidence.
-    evidence_dependent: EvidenceChainIndex,
+    evidence_dependent: struct {
+        index: EvidenceChainIndex,
+        /// The evidence slot is shared with another same-name call. It supplies
+        /// only target identity; this plan must instantiate that target against
+        /// its own callable relation.
+        independent_callable: bool = false,
+    },
     /// The checker chose a compiler-derived structural implementation.
     structural: StructuralDerivation,
     /// Checking rejected this site; lowering must never consume the plan.

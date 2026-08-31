@@ -2149,7 +2149,32 @@ test "specialization scheduling is deterministic across repeat runs" {
     }
 }
 
-test "issue 10529 open Try chain with named local callback stays bounded" {
+test "issue 10529 ten-level open Try chain with inline callback stays bounded" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\take0 = |b| Ok({ val: b.get(0).map_err(|_| End)?, rest: b.drop_first(1) })
+        \\take1 = |b| Ok({ val: take0(b)?.val, rest: take0(b)?.rest })
+        \\take2 = |b| Ok({ val: take1(b)?.val, rest: take1(b)?.rest })
+        \\take3 = |b| Ok({ val: take2(b)?.val, rest: take2(b)?.rest })
+        \\take4 = |b| Ok({ val: take3(b)?.val, rest: take3(b)?.rest })
+        \\take5 = |b| Ok({ val: take4(b)?.val, rest: take4(b)?.rest })
+        \\take6 = |b| Ok({ val: take5(b)?.val, rest: take5(b)?.rest })
+        \\take7 = |b| Ok({ val: take6(b)?.val, rest: take6(b)?.rest })
+        \\take8 = |b| Ok({ val: take7(b)?.val, rest: take7(b)?.rest })
+        \\take9 = |b| Ok({ val: take8(b)?.val, rest: take8(b)?.rest })
+        \\
+        \\main : {} -> Try({ val : U8, rest : List(U8) }, [End, ..])
+        \\main = |_| take9([1, 2, 3])
+    ;
+
+    const counters = try monotypeCountersForModule(allocator, source);
+    // Each helper adds a fixed amount of work: completed transitive interface
+    // summaries replay without coupling the two independent calls.
+    try std.testing.expect(counters.template_misses <= 75);
+    try std.testing.expect(counters.nominal_backing_instantiations <= 2250);
+}
+
+test "independent same-name helper requirements lower separately" {
     const allocator = std.testing.allocator;
     const source =
         \\take0 = |b| {
@@ -2160,19 +2185,55 @@ test "issue 10529 open Try chain with named local callback stays bounded" {
         \\take2 = |b| Ok({ val: take1(b)?.val, rest: take1(b)?.rest })
         \\take3 = |b| Ok({ val: take2(b)?.val, rest: take2(b)?.rest })
         \\take4 = |b| Ok({ val: take3(b)?.val, rest: take3(b)?.rest })
-        \\take5 = |b| Ok({ val: take4(b)?.val, rest: take4(b)?.rest })
-        \\take6 = |b| Ok({ val: take5(b)?.val, rest: take5(b)?.rest })
         \\
         \\main : {} -> Try({ val : U8, rest : List(U8) }, [End, ..])
-        \\main = |_| take6([1, 2, 3])
+        \\main = |_| take4([1, 2, 3])
     ;
 
-    const counters = try monotypeCountersForModule(allocator, source);
-    try std.testing.expect(counters.template_misses <= 20);
-    // Generalized record fields retain distinct source-value/runtime-slot
-    // cells until specialization freeze. Keep that fixed linear bookkeeping
-    // bounded while guarding against the former exponential Try-chain growth.
-    try std.testing.expect(counters.nominal_backing_instantiations <= 325);
+    _ = try monotypeCountersForModule(allocator, source);
+}
+
+test "independent same-name method requirements specialize separately" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\f1 = |list| list.map(|item| U32.to_u64(item))
+        \\f2 = |list| list.map(|item| U32.to_u128(item))
+        \\g = |list| (f1(list), f2(list))
+        \\
+        \\main : {} -> (List(U64), List(U128))
+        \\main = |_| g([1.U32, 2.U32])
+    ;
+
+    _ = try monotypeCountersForModule(allocator, source);
+}
+
+test "independent same-name iterator requirements specialize separately" {
+    const allocator = std.testing.allocator;
+    // Empty.iter quantifies its element beyond the dispatcher, so the two
+    // loops instantiate the shared iter evidence at different element types.
+    const source =
+        \\Empty := [E].{
+        \\    iter : Empty -> Iter(item)
+        \\    iter = |_| List.iter([])
+        \\}
+        \\
+        \\g = |e| {
+        \\    var $a = 0.U64
+        \\    for x in e {
+        \\        $a = $a + x
+        \\    }
+        \\    var $b = 0.U128
+        \\    for x in e {
+        \\        $b = $b + x
+        \\    }
+        \\    ($a, $b)
+        \\}
+        \\
+        \\main : {} -> (U64, U128)
+        \\main = |_| g(Empty.E)
+    ;
+
+    _ = try monotypeCountersForModule(allocator, source);
 }
 
 test "specialization interface replay follows returned local functions through wrappers" {
@@ -2300,6 +2361,99 @@ test "imported and local generic specialization counters reuse closed types" {
     try std.testing.expect(counters.template_misses >= 2);
     try std.testing.expect(counters.template_hits >= 2);
     try std.testing.expect(counters.template_lookup_candidates <= counters.template_requests);
+}
+
+/// Repro source for https://github.com/roc-lang/roc/issues/10978: one
+/// function body constructing a parameterized recursive nominal type
+/// `construction_count` times (three constructions per generated line).
+fn issue10978NodeTreeSource(allocator: Allocator, construction_count: usize) Allocator.Error![]u8 {
+    var source = std.ArrayList(u8).empty;
+    errdefer source.deinit(allocator);
+
+    try source.appendSlice(allocator,
+        \\Node(msg) := [Text(Str), Element(Str, List(Node(msg)))].{
+        \\    text : Str -> Node(msg)
+        \\    text = |s| Text(s)
+        \\
+        \\    el : Str, List(Node(msg)) -> Node(msg)
+        \\    el = |tag, kids| Element(tag, kids)
+        \\}
+        \\
+        \\view : Str -> List(Node(Str))
+        \\view = |title| [
+        \\
+    );
+    for (0..construction_count) |_| {
+        try source.appendSlice(allocator, "    Node.el(\"p\", [Node.el(\"span\", [Node.text(title)])]),\n");
+    }
+    try source.appendSlice(allocator,
+        \\]
+        \\
+        \\main : U64
+        \\main = view("hi").len()
+        \\
+    );
+
+    return try source.toOwnedSlice(allocator);
+}
+
+test "issue 10978 repeated recursive nominal constructions scan bounded backing instances" {
+    // Repro for https://github.com/roc-lang/roc/issues/10978: check time is
+    // quadratic in the number of constructions of a parameterized recursive
+    // nominal type in one function body. Every construction probes the
+    // per-graph nominal-backing instance cache; the candidates each probe
+    // scans must stay proportional to the probe count, not to the number of
+    // instances already recorded. All counts here are deterministic: when
+    // the construction count doubles, linear work at most doubles them,
+    // while the quadratic rescan quadruples them.
+    const allocator = std.testing.allocator;
+
+    const Counts = struct { scanned: u64, finds: u64 };
+    var counts: [3]Counts = undefined;
+    const sizes = [_]usize{ 8, 16, 32 };
+    for (sizes, &counts) |n, *out| {
+        const source = try issue10978NodeTreeSource(allocator, n);
+        defer allocator.free(source);
+
+        var diagnostics = MonoLower.Diagnostics{};
+        var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
+            .diagnostics = &diagnostics,
+        });
+        defer lowered.deinit(allocator);
+
+        out.* = .{
+            .scanned = diagnostics.graph.nominal_backing_instances_scanned,
+            .finds = diagnostics.graph.union_find_resolutions,
+        };
+    }
+
+    const scan_growth_linear = counts[1].scanned <= counts[0].scanned *| 2 and
+        counts[2].scanned <= counts[1].scanned *| 2;
+    // Union-find pressure is the broad guard: compare growth between size
+    // doublings so fixed per-module work cancels. Linear lowering doubles
+    // the delta; the quadratic scan approaches quadrupling it.
+    const find_growth_linear = if (counts[0].finds <= counts[1].finds and counts[1].finds <= counts[2].finds) linear: {
+        const delta_small = counts[1].finds - counts[0].finds;
+        const delta_large = counts[2].finds - counts[1].finds;
+        break :linear delta_large <= (delta_small *| 5) / 2;
+    } else false;
+    if (!scan_growth_linear or !find_growth_linear) {
+        std.debug.print(
+            "recursive nominal construction work grew nonlinearly: " ++
+                "backing instances scanned {d}->{d}->{d}, " ++
+                "union-find resolutions {d}->{d}->{d}\n",
+            .{
+                counts[0].scanned,
+                counts[1].scanned,
+                counts[2].scanned,
+                counts[0].finds,
+                counts[1].finds,
+                counts[2].finds,
+            },
+        );
+    }
+    try std.testing.expect(scan_growth_linear);
+    try std.testing.expect(find_growth_linear);
 }
 
 test "closed direct method calls reuse specialization before durable key construction" {

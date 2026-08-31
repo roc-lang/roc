@@ -13424,7 +13424,10 @@ const InterfaceReplayEntry = struct {
     evidence: StoredConstFnEvidence,
     provisional_ty: Type.TypeId,
     representative: NodeId,
-    duplicates: std.ArrayList(NodeId) = .empty,
+    /// Immutable result of expanding the representative. Instantiating this
+    /// snapshot gives each independent request fresh variables while replaying
+    /// the complete transitive interface constraints.
+    summary_ty: ?Type.TypeId = null,
     status: InterfaceReplayStatus = .expanding,
 };
 
@@ -13440,7 +13443,6 @@ const InterfaceReplayState = struct {
     }
 
     fn deinit(self: *InterfaceReplayState, allocator: Allocator) void {
-        for (self.entries.items) |*entry| entry.duplicates.deinit(allocator);
         self.entries.deinit(allocator);
         var buckets = self.buckets.valueIterator();
         while (buckets.next()) |bucket| bucket.deinit(allocator);
@@ -17618,7 +17620,6 @@ const BodyContext = struct {
             &active_local_scopes,
             &replay_state,
         );
-        try self.finishCheckedTemplateInterfaceReplay(&replay_state);
     }
 
     fn applyCheckedTemplateInterfaceScopeRelations(
@@ -17840,7 +17841,18 @@ const BodyContext = struct {
                     entry.representative,
                     request_fn_node,
                 ),
-                .ready => try entry.duplicates.append(self.allocator, request_fn_node),
+                .ready => {
+                    // Never join an independent request to the completed live
+                    // graph. Its variables may subsequently be refined by its
+                    // caller. Instantiating the immutable summary preserves its
+                    // internal sharing while allocating fresh request variables.
+                    try relateFunctionRequestInterface(
+                        self.graph,
+                        try self.graph.instantiateProvisionalTypeView(entry.summary_ty orelse
+                            Common.invariant("ready interface replay had no summary")),
+                        request_fn_node,
+                    );
+                },
             }
             return;
         };
@@ -17890,30 +17902,9 @@ const BodyContext = struct {
             &active_local_scopes,
             replay_state,
         );
-        replay_state.entries.items[replay_index].status = .ready;
-    }
-
-    fn finishCheckedTemplateInterfaceReplay(
-        self: *BodyContext,
-        replay_state: *InterfaceReplayState,
-    ) Allocator.Error!void {
-        const final_types = try self.allocator.alloc(Type.TypeId, replay_state.entries.items.len);
-        defer self.allocator.free(final_types);
-        for (replay_state.entries.items, final_types) |entry, *final_ty| {
-            if (entry.status != .ready) {
-                Common.invariant("checked specialization interface replay did not finish");
-            }
-            final_ty.* = try self.graph.provisionalTypeViewForNode(entry.representative);
-        }
-        for (replay_state.entries.items, final_types) |entry, final_ty| {
-            for (entry.duplicates.items) |duplicate| {
-                try relateFunctionRequestInterface(
-                    self.graph,
-                    try self.graph.instantiateProvisionalTypeView(final_ty),
-                    duplicate,
-                );
-            }
-        }
+        const entry = &replay_state.entries.items[replay_index];
+        entry.summary_ty = try self.graph.provisionalTypeViewForNode(entry.representative);
+        entry.status = .ready;
     }
 
     fn lowerEntryWrapperAtCell(
@@ -19187,7 +19178,7 @@ const BodyContext = struct {
             .numeral, .str_from_quote => {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
                 if (!try self.graph.typeIsResolved(expr_node)) {
-                    try self.graph.materializeLiteralDefault(expr_node);
+                    self.graph.materializeLiteralDefault(expr_node);
                 }
                 const expr_ty = try self.resolvedTypeViewForNode(expr_node);
                 return try self.lowerExprWithType(expr_id, expr_ty);
@@ -36358,9 +36349,24 @@ const BodyContext = struct {
                 return .{ .target = try self.materializeEvidenceTarget(node, purpose) };
             },
             .constraint => |constraint_ref| {
-                const entry = self.evidence.at(constraint_ref) orelse
+                const entry = self.evidence.at(constraint_ref.index) orelse
                     Common.invariant("checked evidence reference was absent from its lexical chain");
-                return entry;
+                if (!constraint_ref.independent_callable) return entry;
+                return switch (entry) {
+                    .target => |target| blk: {
+                        const arena = self.builder.evidence_arena.allocator();
+                        const independent = try arena.create(SpecEvidenceTarget);
+                        independent.* = .{
+                            .view = target.view,
+                            .target = target.target,
+                            .instantiation = null,
+                            .local_proc_context = target.local_proc_context,
+                            .nested = .synthesize,
+                        };
+                        break :blk .{ .target = independent };
+                    },
+                    .structural, .unreachable_value, .checked_error => entry,
+                };
             },
             .structural => |evidence| return .{ .structural = .{
                 .derivation = evidence.derivation,
@@ -36566,11 +36572,13 @@ const BodyContext = struct {
                     .from_callable => .synthesize,
                 };
             },
-            .evidence_dependent => |constraint_ref| {
-                const entry = self.evidence.at(constraint_ref) orelse
+            .evidence_dependent => |dependent| {
+                const entry = self.evidence.at(dependent.index) orelse
                     Common.invariant("method target evidence was absent from its lexical chain");
                 return switch (entry) {
-                    .target => |target| switch (target.nested) {
+                    .target => |target| if (dependent.independent_callable)
+                        .synthesize
+                    else switch (target.nested) {
                         .resolved => |nested| .{ .resolved = nested },
                         .synthesize => .synthesize,
                     },
@@ -36593,11 +36601,13 @@ const BodyContext = struct {
                     .from_callable => .synthesize,
                 };
             },
-            .evidence_dependent => |constraint_ref| {
-                const entry = self.evidence.at(constraint_ref) orelse
+            .evidence_dependent => |dependent| {
+                const entry = self.evidence.at(dependent.index) orelse
                     Common.invariant("iterator target evidence was absent from its lexical chain");
                 return switch (entry) {
-                    .target => |target| switch (target.nested) {
+                    .target => |target| if (dependent.independent_callable)
+                        .synthesize
+                    else switch (target.nested) {
                         .resolved => |nested| .{ .resolved = nested },
                         .synthesize => .synthesize,
                     },
@@ -36629,16 +36639,21 @@ const BodyContext = struct {
                 };
                 return .{ .target = lookup };
             },
-            .evidence_dependent => |constraint_ref| {
-                const entry = self.evidence.at(constraint_ref) orelse
+            .evidence_dependent => |dependent| {
+                const entry = self.evidence.at(dependent.index) orelse
                     Common.invariant("dispatch resolution evidence was absent from its lexical chain");
                 return switch (entry) {
-                    .target => |target| .{ .target = .{
-                        .view = target.view,
-                        .target = target.target,
-                        .instantiation = target.instantiation,
-                        .local_proc_context = target.local_proc_context,
-                    } },
+                    .target => |target| .{
+                        .target = .{
+                            .view = target.view,
+                            .target = target.target,
+                            .instantiation = if (dependent.independent_callable)
+                                null
+                            else
+                                target.instantiation,
+                            .local_proc_context = target.local_proc_context,
+                        },
+                    },
                     .structural => |derivation| .{ .structural = derivation },
                     // Unreachable and checked-error dispatches crash before
                     // target resolution.
@@ -36717,7 +36732,7 @@ const BodyContext = struct {
         return switch (resolution) {
             .@"unreachable" => .unreachable_value,
             .checked_error => .checked_error,
-            .evidence_dependent => |constraint_ref| if (self.evidence.at(constraint_ref)) |entry| switch (entry) {
+            .evidence_dependent => |dependent| if (self.evidence.at(dependent.index)) |entry| switch (entry) {
                 .unreachable_value => .unreachable_value,
                 .checked_error => .checked_error,
                 .target, .structural => null,
@@ -47750,11 +47765,18 @@ const BodyContext = struct {
                 };
                 break :blk lookup;
             },
-            .evidence_dependent => |constraint_ref| if (self.evidence.at(constraint_ref)) |entry| switch (entry) {
+            .evidence_dependent => |dependent| if (self.evidence.at(dependent.index)) |entry| switch (entry) {
                 .target => |target| .{
                     .view = target.view,
                     .target = target.target,
-                    .instantiation = target.instantiation,
+                    // Shared evidence carries the callable instantiation of
+                    // whichever same-name relation the caller materialized.
+                    // An independent relation supplies only the target
+                    // identity and instantiates against its own plan.
+                    .instantiation = if (dependent.independent_callable)
+                        null
+                    else
+                        target.instantiation,
                     .local_proc_context = target.local_proc_context,
                 },
                 .structural, .unreachable_value, .checked_error => Common.invariant("iterator dispatch evidence was not a callable target"),
@@ -53491,7 +53513,7 @@ test "checked type instantiation scopes have exact isolated identities" {
     try std.testing.expectEqual(@as(u64, 2), diagnostics.body.instantiation_scopes_created);
 }
 
-test "specialization shard diagnostics remain private until coordinator publication" {
+test "specialization shard diagnostics remain private until coordinator commit" {
     const allocator = std.testing.allocator;
     var program = Ast.Program.init(allocator);
     defer program.deinit();

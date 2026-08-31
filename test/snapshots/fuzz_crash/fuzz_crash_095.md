@@ -20,7 +20,7 @@ t=0->(0)()
 
 The value's type, which does not have a method named from_numeral, is:
 
-    a -> _ret where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+    _arg -> _ret
 
 # TOKENS
 ~~~zig
@@ -48,7 +48,7 @@ t = 0 |> (0)
 (can-ir
 	(d-let
 		(p-assign (ident "t"))
-		(e-call (constraint-fn-var 221)
+		(e-call (constraint-fn-var 222)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-num (value "0")))))
 ~~~
