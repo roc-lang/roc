@@ -2665,7 +2665,7 @@ pub const Coordinator = struct {
             try self.workers.ensureTotalCapacity(self.gpa, n);
             var i: usize = 0;
             while (i < n) : (i += 1) {
-                const th = try std.Thread.spawn(.{}, workerThread, .{self});
+                const th = try std.Thread.spawn(.{ .stack_size = base.stack_budget.roc_stack_size }, workerThread, .{self});
                 try self.workers.append(self.gpa, th);
             }
         }
