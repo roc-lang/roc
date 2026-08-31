@@ -2769,9 +2769,9 @@ const BoolRootWorkerState = struct {
 
 fn boolRootWorker(state: *BoolRootWorkerState) void {
     // This thread runs compiled Roc code: give it the per-thread alternate
-    // signal stack and stack bounds the fault handler needs to classify (and
-    // recover from) a stack overflow in a test. Without this, the handler
-    // would run on the just-overflowed stack.
+    // signal stack and stack bounds the fault handler needs to classify a
+    // stack overflow in a test and longjmp back to the crash boundary.
+    // Without this, the handler would run on the just-overflowed stack.
     _ = base.stack_overflow.installForCurrentThread();
     while (true) {
         const index = state.next_call.fetchAdd(1, .monotonic);
