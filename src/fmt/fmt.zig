@@ -5150,6 +5150,16 @@ test "issue 10817: parenthesized multiline string pipe target stays expanded" {
     try std.testing.expectEqualStrings("a = ()\n\t|> (\n\t\t\\\\\n\t)\n", result);
 }
 
+test "parenthesized pipe target preserves multiline string indentation" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\a=()|>(\\first
+        \\\\second
+        \\)
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = ()\n\t|> (\n\t\t\\\\first\n\t\t\\\\second\n\t)\n", result);
+}
+
 test "parenthesized type application with leading newline is idempotent" {
     const result = try moduleFmtsStable(std.testing.allocator, "\ne:[(N())()]", false);
     defer std.testing.allocator.free(result);
