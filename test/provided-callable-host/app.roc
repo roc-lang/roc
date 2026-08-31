@@ -1,5 +1,6 @@
 app [
     make_boxed_callable,
+    make_boxed_str_callable,
     drop_boxed_callable,
     make_aliased_boxed_callables,
     make_shared_boxed_callables,
@@ -10,6 +11,9 @@ AliasedCallables : { first : Box(U64 -> U64), second : Box(U64 -> U64) }
 
 make_boxed_callable : U64 -> Box(U64 -> U64)
 make_boxed_callable = |offset| Box.box(|value| value + offset)
+
+make_boxed_str_callable : Str -> Box(U64 -> U64)
+make_boxed_str_callable = |captured| Box.box(|value| value + Str.count_utf8_bytes(captured))
 
 drop_boxed_callable : Box(U64 -> U64) -> {}
 drop_boxed_callable = |_callable| {}

@@ -11799,6 +11799,17 @@ columns until `deinit`. The mapped bytes and the scratch allocator must both
 outlive the view. Format version 15 introduced the portable columns; version 16
 added `LirProcSpec.ret_desc`.
 
+An interpreter-mode host entry pins each root's `LirInterpreter` on the heap.
+Every interpreter-created erased-callable allocation owns one reference to that
+interpreter, independent of the callable allocation's own Roc reference count,
+and its final-drop callback releases that reference after following the exact
+LIR capture-drop plan. Calls through a retained interpreter are reentrant on
+their current thread and serialized across threads. Runtime-created descriptor
+identities use lifetime-long storage, while operation-local interpreter scratch
+is recycled between independent host entries. The shim keeps the mapped
+`ProgramView` process-stable so every retained interpreter's store and layout
+pointers remain valid.
+
 Hosted proc entries keep their exact checked hosted ABI in both strategies. A
 boxy caller adapts arguments before the hosted call and adapts the result after
 the hosted call. It must not change the hosted dispatch index, hosted symbol
