@@ -166,6 +166,92 @@ fn takeStackOverflowRecovery() ?*const StackOverflowRecovery {
     return recovery;
 }
 
+const is_darwin = builtin.os.tag.isDarwin();
+
+/// Layouts mirroring the darwin signal frame (see the macOS `_mcontext.h` and
+/// `_ucontext.h` headers). Only the fields the escape path rewrites are named.
+const DarwinMcontext = switch (builtin.cpu.arch) {
+    .aarch64 => extern struct {
+        far: u64 align(16),
+        esr: u64,
+        x: [30]u64,
+        lr: u64,
+        sp: u64,
+        pc: u64,
+    },
+    .x86_64 => extern struct {
+        trapno: u16,
+        cpu: u16,
+        err: u32,
+        faultvaddr: u64,
+        rax: u64,
+        rbx: u64,
+        rcx: u64,
+        rdx: u64,
+        rdi: u64,
+        rsi: u64,
+        rbp: u64,
+        rsp: u64,
+        r8: u64,
+        r9: u64,
+        r10: u64,
+        r11: u64,
+        r12: u64,
+        r13: u64,
+        r14: u64,
+        r15: u64,
+        rip: u64,
+    },
+    else => void,
+};
+
+const DarwinUcontext = extern struct {
+    onstack: i32,
+    sigmask: if (supports_posix_signals) std.c.sigset_t else u32,
+    stack: if (supports_posix_signals) std.c.stack_t else usize,
+    link: ?*anyopaque,
+    mcsize: u64,
+    mcontext: *DarwinMcontext,
+};
+
+threadlocal var pending_escape_recovery: ?*const StackOverflowRecovery = null;
+
+fn escapeTrampoline() callconv(.c) noreturn {
+    const recovery = pending_escape_recovery orelse std.process.exit(134);
+    pending_escape_recovery = null;
+    recovery.escape(recovery.context);
+}
+
+/// On darwin, a longjmp straight out of a signal handler leaves this thread's
+/// signal mask and alternate-stack state stuck, so escape by rewriting the
+/// interrupted thread state instead: the handler returns normally, sigreturn
+/// restores the mask and clears the alternate-stack flag, and execution
+/// resumes at `escapeTrampoline` on the (now idle) alternate stack memory,
+/// which longjmps from an ordinary context. Returns false when the signal
+/// context is unavailable so the caller can fall through to process exit.
+fn redirectDarwinContextToEscape(context: ?*anyopaque, recovery: *const StackOverflowRecovery) bool {
+    if (comptime !is_darwin or DarwinMcontext == void) return false;
+    const raw_context = context orelse return false;
+    const uc: *DarwinUcontext = @ptrCast(@alignCast(raw_context));
+    pending_escape_recovery = recovery;
+    const landing_top = @intFromPtr(&thread_alt_stack_storage) + ALT_STACK_SIZE;
+    switch (comptime builtin.cpu.arch) {
+        .aarch64 => {
+            uc.mcontext.pc = @intFromPtr(&escapeTrampoline);
+            uc.mcontext.sp = landing_top & ~@as(usize, 0xf);
+            uc.mcontext.lr = 0;
+        },
+        .x86_64 => {
+            uc.mcontext.rip = @intFromPtr(&escapeTrampoline);
+            // Land as if a call had just pushed a return address, the stack
+            // alignment every x86_64 function prologue assumes.
+            uc.mcontext.rsp = (landing_top & ~@as(usize, 0xf)) - 8;
+        },
+        else => return false,
+    }
+    return true;
+}
+
 fn unblockFaultSignals() void {
     if (comptime !supports_posix_signals) return;
     var set = posix.sigemptyset();
@@ -242,6 +328,16 @@ pub const FaultKind = enum {
 };
 
 fn stackPointerFromSignalContext(context: ?*anyopaque) ?usize {
+    if (comptime is_darwin) {
+        if (comptime DarwinMcontext == void) return null;
+        const raw_context = context orelse return null;
+        const uc: *const DarwinUcontext = @ptrCast(@alignCast(raw_context));
+        return switch (comptime builtin.cpu.arch) {
+            .aarch64 => @intCast(uc.mcontext.sp),
+            .x86_64 => @intCast(uc.mcontext.rsp),
+            else => null,
+        };
+    }
     // zig 0.16 no longer exposes posix.ucontext_t / posix.REG, so for Linux we
     // read the faulting stack pointer from a locally-declared ucontext layout
     // (the kernel signal-frame ABI). For other arches/OSes we return null and
@@ -369,6 +465,9 @@ pub fn installForCurrentThread(callbacks: Callbacks) bool {
     if (!current_thread_installed) {
         const bounds = queryCurrentThreadStackBounds() orelse return false;
         thread_stack_bounds = bounds;
+        // Touch the escape slot now so its thread-local storage is fully
+        // materialized before a signal handler ever reads or writes it.
+        pending_escape_recovery = null;
 
         var alt_stack = posix.stack_t{
             .sp = &thread_alt_stack_storage,
@@ -530,6 +629,9 @@ fn handleSegvSignal(_: posix.SIG, info: *const posix.siginfo_t, context: ?*anyop
     switch (classifyFault(fault_addr, stack_pointer, thread_stack_bounds)) {
         .stack_overflow => {
             if (takeStackOverflowRecovery()) |recovery| {
+                if (comptime is_darwin) {
+                    if (redirectDarwinContextToEscape(context, recovery)) return;
+                }
                 // The kernel blocked SIGSEGV/SIGBUS for the duration of this
                 // handler; the escape longjmps out instead of returning, so
                 // unblock them here or the next fault on this thread would
