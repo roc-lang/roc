@@ -1020,12 +1020,14 @@ test "reachable proc pass publishes exact deduplicated boxy worker procs" {
     });
     try result.root_procs.append(std.testing.allocator, root_proc);
 
+    // This pass only inspects each slot's presence, structural-equality status,
+    // and worker proc; method identities are deliberately never read here.
     try result.boxy_method_slots.appendSlice(std.testing.allocator, &.{
-        .{ .method = @enumFromInt(0), .proc = second_worker },
-        .{ .method = @enumFromInt(1), .proc = second_worker },
-        .{ .method = @enumFromInt(2), .proc = first_worker },
-        .{ .present = false, .method = @enumFromInt(3), .proc = ignored_proc },
-        .{ .method = @enumFromInt(4), .proc = ignored_proc, .structural_eq = true },
+        .{ .method = undefined, .proc = second_worker },
+        .{ .method = undefined, .proc = second_worker },
+        .{ .method = undefined, .proc = first_worker },
+        .{ .present = false, .method = undefined, .proc = ignored_proc },
+        .{ .method = undefined, .proc = ignored_proc, .structural_eq = true },
     });
 
     try run(&result);
