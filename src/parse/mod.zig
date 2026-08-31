@@ -762,6 +762,47 @@ test "dollar-prefixed record field names are rejected with a single diagnostic" 
     }
 }
 
+test "abandoned inner record leaves no phantom fields on the outer record" {
+    // Regression: the bad-field-name recovery branch of record parsing used
+    // to abandon the inner record WITHOUT clearing its scratch record
+    // fields, so the OUTER record's recordFieldSpanFrom swept them up and
+    // canonicalization saw a phantom `b: 1` field not present as an outer
+    // field in the source.
+    const gpa = std.testing.allocator;
+    const source = "{ a: { b: 1, 2 }, c: 3 }";
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try expr(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 1), ast.parse_diagnostics.items.len);
+    try std.testing.expectEqual(
+        AST.Diagnostic.Tag.expected_expr_record_field_name,
+        ast.parse_diagnostics.items[0].tag,
+    );
+
+    const root = ast.store.getExpr(@enumFromInt(ast.root_node_idx));
+    try std.testing.expectEqual(.record, std.meta.activeTag(root));
+    const fields = ast.store.recordFieldSlice(root.record.fields);
+    try std.testing.expectEqual(@as(usize, 2), fields.len);
+
+    const a = ast.store.getRecordField(fields[0]);
+    try std.testing.expectEqualStrings("a", ast.resolve(a.name));
+    // The abandoned inner record degrades to a malformed value for `a`.
+    try std.testing.expectEqual(.supplied, std.meta.activeTag(a.value));
+    try std.testing.expectEqual(
+        .malformed,
+        std.meta.activeTag(ast.store.getExpr(a.value.supplied)),
+    );
+
+    const c = ast.store.getRecordField(fields[1]);
+    try std.testing.expectEqualStrings("c", ast.resolve(c.name));
+    try std.testing.expectEqual(.supplied, std.meta.activeTag(c.value));
+}
+
 fn vmExprAllocationFailureImpl(allocator: Allocator, tokens: tokenize.TokenizedBuffer) Allocator.Error!void {
     var parser = try Parser.init(tokens, allocator);
     defer parser.store.deinit();

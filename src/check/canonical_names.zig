@@ -61,6 +61,14 @@ pub const ArtifactRef = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
+/// 32-byte deep module content identity carried raw at post-check boundaries
+/// (the hash `base.module_identity` computes). Store-independent, unlike the
+/// dense `ModuleIdentityId`: consumers resolve it against loaded module views
+/// by content identity (design.md "Defaulted Fields", `moduleForIdentityHash`).
+pub const ModuleContentIdentity = struct {
+    bytes: [32]u8,
+};
+
 /// Digest for checked module identity at post-check boundaries.
 pub const CheckedModuleDigest = ArtifactRef;
 
@@ -579,6 +587,175 @@ pub const CanonicalNameStore = struct {
     }
 };
 
+/// Cumulative, store-qualified translation for dense canonical-name ids.
+///
+/// Type and syntax transfer can share this object so a source name is interned
+/// in the destination once even when it appears in both representations. Name
+/// interning is monotonic: an allocation failure may leave destination text
+/// interned, while the corresponding id mapping is added only after it succeeds.
+/// Procedure-base refs remain coordinator identities rather than body-local names.
+pub const NameRelocation = struct {
+    source: *const CanonicalNameStore,
+    destination: *CanonicalNameStore,
+    module_names: collections.DenseMap(ModuleNameId, ModuleNameId),
+    module_identities: collections.DenseMap(ModuleIdentityId, ModuleIdentityId),
+    type_names: collections.DenseMap(TypeNameId, TypeNameId),
+    method_names: collections.DenseMap(MethodNameId, MethodNameId),
+    record_field_labels: collections.DenseMap(RecordFieldLabelId, RecordFieldLabelId),
+    tag_labels: collections.DenseMap(TagLabelId, TagLabelId),
+    export_names: collections.DenseMap(ExportNameId, ExportNameId),
+    external_symbol_names: collections.DenseMap(ExternalSymbolNameId, ExternalSymbolNameId),
+
+    pub fn init(
+        allocator: Allocator,
+        source: *const CanonicalNameStore,
+        destination: *CanonicalNameStore,
+    ) NameRelocation {
+        return .{
+            .source = source,
+            .destination = destination,
+            .module_names = collections.DenseMap(ModuleNameId, ModuleNameId).init(allocator),
+            .module_identities = collections.DenseMap(ModuleIdentityId, ModuleIdentityId).init(allocator),
+            .type_names = collections.DenseMap(TypeNameId, TypeNameId).init(allocator),
+            .method_names = collections.DenseMap(MethodNameId, MethodNameId).init(allocator),
+            .record_field_labels = collections.DenseMap(RecordFieldLabelId, RecordFieldLabelId).init(allocator),
+            .tag_labels = collections.DenseMap(TagLabelId, TagLabelId).init(allocator),
+            .export_names = collections.DenseMap(ExportNameId, ExportNameId).init(allocator),
+            .external_symbol_names = collections.DenseMap(ExternalSymbolNameId, ExternalSymbolNameId).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *NameRelocation) void {
+        self.external_symbol_names.deinit();
+        self.export_names.deinit();
+        self.tag_labels.deinit();
+        self.record_field_labels.deinit();
+        self.method_names.deinit();
+        self.type_names.deinit();
+        self.module_identities.deinit();
+        self.module_names.deinit();
+        self.* = undefined;
+    }
+
+    pub fn mappedCount(self: *const NameRelocation) usize {
+        return self.module_names.count() +
+            self.module_identities.count() +
+            self.type_names.count() +
+            self.method_names.count() +
+            self.record_field_labels.count() +
+            self.tag_labels.count() +
+            self.export_names.count() +
+            self.external_symbol_names.count();
+    }
+
+    fn requireSource(self: *const NameRelocation, source: *const CanonicalNameStore) void {
+        if (source != self.source) {
+            @panic("canonical name relocation used with an unrelated source store");
+        }
+    }
+
+    fn relocateText(
+        self: *NameRelocation,
+        comptime Id: type,
+        source: *const CanonicalNameStore,
+        id: Id,
+        map: *collections.DenseMap(Id, Id),
+    ) Allocator.Error!Id {
+        self.requireSource(source);
+        if (source == self.destination) return id;
+        if (map.get(id)) |mapped| return mapped;
+
+        const mapped: Id = if (Id == ModuleNameId)
+            try self.destination.internModuleName(source.moduleNameText(id))
+        else if (Id == TypeNameId)
+            try self.destination.internTypeName(source.typeNameText(id))
+        else if (Id == MethodNameId)
+            try self.destination.internMethodName(source.methodNameText(id))
+        else if (Id == RecordFieldLabelId)
+            try self.destination.internRecordFieldLabel(source.recordFieldLabelText(id))
+        else if (Id == TagLabelId)
+            try self.destination.internTagLabel(source.tagLabelText(id))
+        else if (Id == ExportNameId)
+            try self.destination.internExportName(source.exportNameText(id))
+        else if (Id == ExternalSymbolNameId)
+            try self.destination.internExternalSymbolName(source.externalSymbolNameText(id))
+        else
+            @compileError("unsupported canonical text-name relocation domain");
+
+        try map.put(id, mapped);
+        return mapped;
+    }
+
+    pub fn relocateModuleName(
+        self: *NameRelocation,
+        source: *const CanonicalNameStore,
+        id: ModuleNameId,
+    ) Allocator.Error!ModuleNameId {
+        return self.relocateText(ModuleNameId, source, id, &self.module_names);
+    }
+
+    pub fn relocateModuleIdentity(
+        self: *NameRelocation,
+        source: *const CanonicalNameStore,
+        id: ModuleIdentityId,
+    ) Allocator.Error!ModuleIdentityId {
+        self.requireSource(source);
+        if (source == self.destination) return id;
+        if (self.module_identities.get(id)) |mapped| return mapped;
+        const mapped = try self.destination.internModuleIdentity(source.moduleIdentityBytes(id));
+        try self.module_identities.put(id, mapped);
+        return mapped;
+    }
+
+    pub fn relocateTypeName(
+        self: *NameRelocation,
+        source: *const CanonicalNameStore,
+        id: TypeNameId,
+    ) Allocator.Error!TypeNameId {
+        return self.relocateText(TypeNameId, source, id, &self.type_names);
+    }
+
+    pub fn relocateMethodName(
+        self: *NameRelocation,
+        source: *const CanonicalNameStore,
+        id: MethodNameId,
+    ) Allocator.Error!MethodNameId {
+        return self.relocateText(MethodNameId, source, id, &self.method_names);
+    }
+
+    pub fn relocateRecordFieldLabel(
+        self: *NameRelocation,
+        source: *const CanonicalNameStore,
+        id: RecordFieldLabelId,
+    ) Allocator.Error!RecordFieldLabelId {
+        return self.relocateText(RecordFieldLabelId, source, id, &self.record_field_labels);
+    }
+
+    pub fn relocateTagLabel(
+        self: *NameRelocation,
+        source: *const CanonicalNameStore,
+        id: TagLabelId,
+    ) Allocator.Error!TagLabelId {
+        return self.relocateText(TagLabelId, source, id, &self.tag_labels);
+    }
+
+    pub fn relocateExportName(
+        self: *NameRelocation,
+        source: *const CanonicalNameStore,
+        id: ExportNameId,
+    ) Allocator.Error!ExportNameId {
+        return self.relocateText(ExportNameId, source, id, &self.export_names);
+    }
+
+    pub fn relocateExternalSymbolName(
+        self: *NameRelocation,
+        source: *const CanonicalNameStore,
+        id: ExternalSymbolNameId,
+    ) Allocator.Error!ExternalSymbolNameId {
+        return self.relocateText(ExternalSymbolNameId, source, id, &self.external_symbol_names);
+    }
+};
+
 fn appendOptionalNestedProcSiteKey(
     scratch: *std.ArrayList(u8),
     maybe_key: ?NestedProcSiteKey,
@@ -641,6 +818,70 @@ test "canonical names dedupe by text" {
     const a = try names.internModuleName("Main");
     const b = try names.internModuleName("Main");
     try std.testing.expectEqual(a, b);
+}
+
+test "canonical name relocation qualifies every text domain by owning stores" {
+    const allocator = std.testing.allocator;
+    var source = CanonicalNameStore.init(allocator);
+    defer source.deinit();
+    var destination = CanonicalNameStore.init(allocator);
+    defer destination.deinit();
+
+    _ = try destination.internModuleName("Unrelated");
+    _ = try destination.internModuleIdentity(&([_]u8{0xFF} ** 32));
+    _ = try destination.internTypeName("Unrelated");
+    _ = try destination.internMethodName("unrelated");
+    _ = try destination.internRecordFieldLabel("unrelated");
+    _ = try destination.internTagLabel("Unrelated");
+    _ = try destination.internExportName("unrelated!");
+    _ = try destination.internExternalSymbolName("unrelated_external");
+
+    const module_name = try source.internModuleName("Main");
+    const module_identity = try source.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const type_name = try source.internTypeName("Model");
+    const method_name = try source.internMethodName("render");
+    const field_name = try source.internRecordFieldLabel("value");
+    const tag_name = try source.internTagLabel("Value");
+    const export_name = try source.internExportName("main!");
+    const external_name = try source.internExternalSymbolName("roc_main");
+
+    var relocation = NameRelocation.init(allocator, &source, &destination);
+    defer relocation.deinit();
+
+    const relocated_module_name = try relocation.relocateModuleName(&source, module_name);
+    const relocated_module_identity = try relocation.relocateModuleIdentity(&source, module_identity);
+    const relocated_type_name = try relocation.relocateTypeName(&source, type_name);
+    const relocated_method_name = try relocation.relocateMethodName(&source, method_name);
+    const relocated_field_name = try relocation.relocateRecordFieldLabel(&source, field_name);
+    const relocated_tag_name = try relocation.relocateTagLabel(&source, tag_name);
+    const relocated_export_name = try relocation.relocateExportName(&source, export_name);
+    const relocated_external_name = try relocation.relocateExternalSymbolName(&source, external_name);
+
+    try std.testing.expect(module_name != relocated_module_name);
+    try std.testing.expect(module_identity != relocated_module_identity);
+    try std.testing.expect(type_name != relocated_type_name);
+    try std.testing.expect(method_name != relocated_method_name);
+    try std.testing.expect(field_name != relocated_field_name);
+    try std.testing.expect(tag_name != relocated_tag_name);
+    try std.testing.expect(export_name != relocated_export_name);
+    try std.testing.expect(external_name != relocated_external_name);
+    try std.testing.expectEqualStrings("Main", destination.moduleNameText(relocated_module_name));
+    try std.testing.expectEqualSlices(u8, source.moduleIdentityBytes(module_identity), destination.moduleIdentityBytes(relocated_module_identity));
+    try std.testing.expectEqualStrings("Model", destination.typeNameText(relocated_type_name));
+    try std.testing.expectEqualStrings("render", destination.methodNameText(relocated_method_name));
+    try std.testing.expectEqualStrings("value", destination.recordFieldLabelText(relocated_field_name));
+    try std.testing.expectEqualStrings("Value", destination.tagLabelText(relocated_tag_name));
+    try std.testing.expectEqualStrings("main!", destination.exportNameText(relocated_export_name));
+    try std.testing.expectEqualStrings("roc_main", destination.externalSymbolNameText(relocated_external_name));
+    try std.testing.expectEqual(@as(usize, 8), relocation.mappedCount());
+
+    try std.testing.expectEqual(relocated_field_name, try relocation.relocateRecordFieldLabel(&source, field_name));
+    try std.testing.expectEqual(@as(usize, 8), relocation.mappedCount());
+
+    var shared = NameRelocation.init(allocator, &source, &source);
+    defer shared.deinit();
+    try std.testing.expectEqual(tag_name, try shared.relocateTagLabel(&source, tag_name));
+    try std.testing.expectEqual(@as(usize, 0), shared.mappedCount());
 }
 
 test "proc base identity includes nested owner mono specialization" {

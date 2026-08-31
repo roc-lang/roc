@@ -53,6 +53,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Repro for issue 10770: a nominal's phantom parameter survives a call boundary",
     },
     .{
+        .roc_file = "test/fx/issue_10843_nested_nominal_digest.roc",
+        .io_spec = "1>0",
+        .description = "Regression test: deeply nested parameterized nominals do not bypass the Monotype digest cache (issue #10843)",
+    },
+    .{
         .roc_file = "test/fx/subdir/app.roc",
         .io_spec = "1>Hello from stdout!|1>Line 1 to stdout|2>Line 2 to stderr|1>Line 3 to stdout|2>Error from stderr!",
         .description = "Relative paths starting with ..",

@@ -6,7 +6,7 @@ type=snippet
 # SOURCE
 ~~~roc
 # repro for https://github.com/roc-lang/roc/issues/10886
-Foo : { a : U64, b : U64 ?? 0 }
+Foo := { a : U64, b : U64 ?? 0 }
 Wrapped : { items : List(Foo) }
 Pair : (List(Foo), U64)
 Choice : [Items(List(Foo))]
@@ -29,35 +29,35 @@ count_choice = |choice| match choice {
 replace_items : Wrapped -> Wrapped
 replace_items = |wrapped| {
     ..wrapped,
-    items: [{ a: 123 }, { a: 456, b: 789 }],
+    items: [Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }],
 }
 
-direct = count([{ a: 123 }, { a: 456, b: 789 }])
+direct = count([Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }])
 
 nested_record = count_wrapped({
-    items: [{ a: 123 }, { a: 456, b: 789 }],
+    items: [Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }],
 })
 
 nested_tuple = count_pair((
-    [{ a: 123 }, { a: 456, b: 789 }],
+    [Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }],
     0,
 ))
 
 nested_tag = count_choice(Items([
-    { a: 123 },
-    { a: 456, b: 789 },
+    Foo.{ a: 123 },
+    Foo.{ a: 456, b: 789 },
 ]))
 
 nested_branch = count(if True {
-    [{ a: 123 }, { a: 456, b: 789 }]
+    [Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }]
 } else {
-    [{ a: 123 }, { a: 456, b: 789 }]
+    [Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }]
 })
 
 updated_record = replace_items({ items: [] })
 
 nominal = Nominal.{
-    items: [{ a: 123 }, { a: 456, b: 789 }],
+    items: [Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }],
 }
 ~~~
 # EXPECTED
@@ -66,7 +66,7 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,OpDoubleQuestion,Int,CloseCurly,
+UpperIdent,OpColonEqual,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,OpDoubleQuestion,Int,CloseCurly,
 UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseCurly,
 UpperIdent,OpColon,OpenRound,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,Comma,UpperIdent,CloseRound,
 UpperIdent,OpColon,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseRound,CloseSquare,
@@ -84,28 +84,28 @@ CloseCurly,
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,
 DoubleDot,LowerIdent,Comma,
-LowerIdent,OpColon,OpenSquare,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,Comma,
+LowerIdent,OpColon,OpenSquare,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,Comma,
 CloseCurly,
-LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,OpenSquare,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,CloseRound,
+LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,OpenSquare,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,CloseRound,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,OpenCurly,
-LowerIdent,OpColon,OpenSquare,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,Comma,
+LowerIdent,OpColon,OpenSquare,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,Comma,
 CloseCurly,CloseRound,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,NoSpaceOpenRound,
-OpenSquare,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,Comma,
+OpenSquare,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,Comma,
 Int,Comma,
 CloseRound,CloseRound,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,UpperIdent,NoSpaceOpenRound,OpenSquare,
-OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,
-OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,Comma,
+UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,
+UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,Comma,
 CloseSquare,CloseRound,CloseRound,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,KwIf,UpperIdent,OpenCurly,
-OpenSquare,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,
+OpenSquare,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,
 CloseCurly,KwElse,OpenCurly,
-OpenSquare,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,
+OpenSquare,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,
 CloseCurly,CloseRound,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,OpenCurly,LowerIdent,OpColon,OpenSquare,CloseSquare,CloseCurly,CloseRound,
 LowerIdent,OpAssign,UpperIdent,Dot,OpenCurly,
-LowerIdent,OpColon,OpenSquare,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,Comma,
+LowerIdent,OpColon,OpenSquare,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,Comma,
 CloseCurly,
 EndOfFile,
 ~~~
@@ -233,27 +233,35 @@ EndOfFile,
 						(e-ident (raw "wrapped")))
 					(field (field "items")
 						(e-list
-							(e-record
-								(field (field "a")
-									(e-int (raw "123"))))
-							(e-record
-								(field (field "a")
-									(e-int (raw "456")))
-								(field (field "b")
-									(e-int (raw "789")))))))))
+							(e-nominal-record
+								(mapper (e-tag (raw "Foo")))
+								(backing (e-record
+										(field (field "a")
+											(e-int (raw "123"))))))
+							(e-nominal-record
+								(mapper (e-tag (raw "Foo")))
+								(backing (e-record
+										(field (field "a")
+											(e-int (raw "456")))
+										(field (field "b")
+											(e-int (raw "789")))))))))))
 		(s-decl
 			(p-ident (raw "direct"))
 			(e-apply
 				(e-ident (raw "count"))
 				(e-list
-					(e-record
-						(field (field "a")
-							(e-int (raw "123"))))
-					(e-record
-						(field (field "a")
-							(e-int (raw "456")))
-						(field (field "b")
-							(e-int (raw "789")))))))
+					(e-nominal-record
+						(mapper (e-tag (raw "Foo")))
+						(backing (e-record
+								(field (field "a")
+									(e-int (raw "123"))))))
+					(e-nominal-record
+						(mapper (e-tag (raw "Foo")))
+						(backing (e-record
+								(field (field "a")
+									(e-int (raw "456")))
+								(field (field "b")
+									(e-int (raw "789")))))))))
 		(s-decl
 			(p-ident (raw "nested_record"))
 			(e-apply
@@ -261,28 +269,36 @@ EndOfFile,
 				(e-record
 					(field (field "items")
 						(e-list
-							(e-record
-								(field (field "a")
-									(e-int (raw "123"))))
-							(e-record
-								(field (field "a")
-									(e-int (raw "456")))
-								(field (field "b")
-									(e-int (raw "789")))))))))
+							(e-nominal-record
+								(mapper (e-tag (raw "Foo")))
+								(backing (e-record
+										(field (field "a")
+											(e-int (raw "123"))))))
+							(e-nominal-record
+								(mapper (e-tag (raw "Foo")))
+								(backing (e-record
+										(field (field "a")
+											(e-int (raw "456")))
+										(field (field "b")
+											(e-int (raw "789")))))))))))
 		(s-decl
 			(p-ident (raw "nested_tuple"))
 			(e-apply
 				(e-ident (raw "count_pair"))
 				(e-tuple
 					(e-list
-						(e-record
-							(field (field "a")
-								(e-int (raw "123"))))
-						(e-record
-							(field (field "a")
-								(e-int (raw "456")))
-							(field (field "b")
-								(e-int (raw "789")))))
+						(e-nominal-record
+							(mapper (e-tag (raw "Foo")))
+							(backing (e-record
+									(field (field "a")
+										(e-int (raw "123"))))))
+						(e-nominal-record
+							(mapper (e-tag (raw "Foo")))
+							(backing (e-record
+									(field (field "a")
+										(e-int (raw "456")))
+									(field (field "b")
+										(e-int (raw "789")))))))
 					(e-int (raw "0")))))
 		(s-decl
 			(p-ident (raw "nested_tag"))
@@ -291,14 +307,18 @@ EndOfFile,
 				(e-apply
 					(e-tag (raw "Items"))
 					(e-list
-						(e-record
-							(field (field "a")
-								(e-int (raw "123"))))
-						(e-record
-							(field (field "a")
-								(e-int (raw "456")))
-							(field (field "b")
-								(e-int (raw "789"))))))))
+						(e-nominal-record
+							(mapper (e-tag (raw "Foo")))
+							(backing (e-record
+									(field (field "a")
+										(e-int (raw "123"))))))
+						(e-nominal-record
+							(mapper (e-tag (raw "Foo")))
+							(backing (e-record
+									(field (field "a")
+										(e-int (raw "456")))
+									(field (field "b")
+										(e-int (raw "789"))))))))))
 		(s-decl
 			(p-ident (raw "nested_branch"))
 			(e-apply
@@ -308,25 +328,33 @@ EndOfFile,
 					(e-block
 						(statements
 							(e-list
-								(e-record
-									(field (field "a")
-										(e-int (raw "123"))))
-								(e-record
-									(field (field "a")
-										(e-int (raw "456")))
-									(field (field "b")
-										(e-int (raw "789")))))))
+								(e-nominal-record
+									(mapper (e-tag (raw "Foo")))
+									(backing (e-record
+											(field (field "a")
+												(e-int (raw "123"))))))
+								(e-nominal-record
+									(mapper (e-tag (raw "Foo")))
+									(backing (e-record
+											(field (field "a")
+												(e-int (raw "456")))
+											(field (field "b")
+												(e-int (raw "789")))))))))
 					(e-block
 						(statements
 							(e-list
-								(e-record
-									(field (field "a")
-										(e-int (raw "123"))))
-								(e-record
-									(field (field "a")
-										(e-int (raw "456")))
-									(field (field "b")
-										(e-int (raw "789"))))))))))
+								(e-nominal-record
+									(mapper (e-tag (raw "Foo")))
+									(backing (e-record
+											(field (field "a")
+												(e-int (raw "123"))))))
+								(e-nominal-record
+									(mapper (e-tag (raw "Foo")))
+									(backing (e-record
+											(field (field "a")
+												(e-int (raw "456")))
+											(field (field "b")
+												(e-int (raw "789"))))))))))))
 		(s-decl
 			(p-ident (raw "updated_record"))
 			(e-apply
@@ -341,19 +369,23 @@ EndOfFile,
 				(backing (e-record
 						(field (field "items")
 							(e-list
-								(e-record
-									(field (field "a")
-										(e-int (raw "123"))))
-								(e-record
-									(field (field "a")
-										(e-int (raw "456")))
-									(field (field "b")
-										(e-int (raw "789"))))))))))))
+								(e-nominal-record
+									(mapper (e-tag (raw "Foo")))
+									(backing (e-record
+											(field (field "a")
+												(e-int (raw "123"))))))
+								(e-nominal-record
+									(mapper (e-tag (raw "Foo")))
+									(backing (e-record
+											(field (field "a")
+												(e-int (raw "456")))
+											(field (field "b")
+												(e-int (raw "789"))))))))))))))
 ~~~
 # FORMATTED
 ~~~roc
 # repro for https://github.com/roc-lang/roc/issues/10886
-Foo : { a : U64, b : U64 ?? 0 }
+Foo := { a : U64, b : U64 ?? 0 }
 
 Wrapped : { items : List(Foo) }
 
@@ -380,39 +412,39 @@ count_choice = |choice| match choice {
 replace_items : Wrapped -> Wrapped
 replace_items = |wrapped| {
 	..wrapped,
-	items: [{ a: 123 }, { a: 456, b: 789 }],
+	items: [Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }],
 }
 
-direct = count([{ a: 123 }, { a: 456, b: 789 }])
+direct = count([Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }])
 
 nested_record = count_wrapped({
-	items: [{ a: 123 }, { a: 456, b: 789 }],
+	items: [Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }],
 })
 
 nested_tuple = count_pair((
-	[{ a: 123 }, { a: 456, b: 789 }],
+	[Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }],
 	0,
 ))
 
 nested_tag = count_choice(
 	Items([
-		{ a: 123 },
-		{ a: 456, b: 789 },
+		Foo.{ a: 123 },
+		Foo.{ a: 456, b: 789 },
 	]),
 )
 
 nested_branch = count(
 	if True {
-		[{ a: 123 }, { a: 456, b: 789 }]
+		[Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }]
 	} else {
-		[{ a: 123 }, { a: 456, b: 789 }]
+		[Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }]
 	},
 )
 
 updated_record = replace_items({ items: [] })
 
 nominal = Nominal.{
-	items: [{ a: 123 }, { a: 456, b: 789 }],
+	items: [Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }],
 }
 ~~~
 # CANONICALIZE
@@ -423,7 +455,7 @@ nominal = Nominal.{
 		(e-lambda
 			(args
 				(p-assign (ident "foos")))
-			(e-call (constraint-fn-var 591)
+			(e-call (constraint-fn-var 517)
 				(e-lookup-external
 					(builtin))
 				(e-lookup-local
@@ -438,7 +470,7 @@ nominal = Nominal.{
 		(e-lambda
 			(args
 				(p-assign (ident "wrapped")))
-			(e-call (constraint-fn-var 621)
+			(e-call (constraint-fn-var 537)
 				(e-lookup-external
 					(builtin))
 				(e-field-access
@@ -456,7 +488,7 @@ nominal = Nominal.{
 		(e-lambda
 			(args
 				(p-assign (ident "pair")))
-			(e-call (constraint-fn-var 649)
+			(e-call (constraint-fn-var 555)
 				(e-lookup-external
 					(builtin))
 				(e-tuple-access (index "0")
@@ -482,7 +514,7 @@ nominal = Nominal.{
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-call (constraint-fn-var 679)
+								(e-call (constraint-fn-var 575)
 									(e-lookup-external
 										(builtin))
 									(e-lookup-local
@@ -504,40 +536,44 @@ nominal = Nominal.{
 					(field (name "items")
 						(e-list
 							(elems
-								(e-record
-									(fields
-										(field (name "a")
-											(e-num (value "123")))))
-								(e-record
-									(fields
-										(field (name "a")
-											(e-num (value "456")))
-										(field (name "b")
-											(e-num (value "789")))))))))))
+								(e-nominal (nominal "Foo")
+									(e-record
+										(fields
+											(field (name "a")
+												(e-num (value "123"))))))
+								(e-nominal (nominal "Foo")
+									(e-record
+										(fields
+											(field (name "a")
+												(e-num (value "456")))
+											(field (name "b")
+												(e-num (value "789"))))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Wrapped") (local))
 				(ty-lookup (name "Wrapped") (local)))))
 	(d-let
 		(p-assign (ident "direct"))
-		(e-call (constraint-fn-var 876)
+		(e-call (constraint-fn-var 754)
 			(e-lookup-local
 				(p-assign (ident "count")))
 			(e-list
 				(elems
-					(e-record
-						(fields
-							(field (name "a")
-								(e-num (value "123")))))
-					(e-record
-						(fields
-							(field (name "a")
-								(e-num (value "456")))
-							(field (name "b")
-								(e-num (value "789")))))))))
+					(e-nominal (nominal "Foo")
+						(e-record
+							(fields
+								(field (name "a")
+									(e-num (value "123"))))))
+					(e-nominal (nominal "Foo")
+						(e-record
+							(fields
+								(field (name "a")
+									(e-num (value "456")))
+								(field (name "b")
+									(e-num (value "789"))))))))))
 	(d-let
 		(p-assign (ident "nested_record"))
-		(e-call (constraint-fn-var 962)
+		(e-call (constraint-fn-var 838)
 			(e-lookup-local
 				(p-assign (ident "count_wrapped")))
 			(e-record
@@ -545,10 +581,55 @@ nominal = Nominal.{
 					(field (name "items")
 						(e-list
 							(elems
+								(e-nominal (nominal "Foo")
+									(e-record
+										(fields
+											(field (name "a")
+												(e-num (value "123"))))))
+								(e-nominal (nominal "Foo")
+									(e-record
+										(fields
+											(field (name "a")
+												(e-num (value "456")))
+											(field (name "b")
+												(e-num (value "789")))))))))))))
+	(d-let
+		(p-assign (ident "nested_tuple"))
+		(e-call (constraint-fn-var 924)
+			(e-lookup-local
+				(p-assign (ident "count_pair")))
+			(e-tuple
+				(elems
+					(e-list
+						(elems
+							(e-nominal (nominal "Foo")
 								(e-record
 									(fields
 										(field (name "a")
-											(e-num (value "123")))))
+											(e-num (value "123"))))))
+							(e-nominal (nominal "Foo")
+								(e-record
+									(fields
+										(field (name "a")
+											(e-num (value "456")))
+										(field (name "b")
+											(e-num (value "789"))))))))
+					(e-num (value "0"))))))
+	(d-let
+		(p-assign (ident "nested_tag"))
+		(e-call (constraint-fn-var 1004)
+			(e-lookup-local
+				(p-assign (ident "count_choice")))
+			(e-tag (name "Items")
+				(args
+					(e-list
+						(elems
+							(e-nominal (nominal "Foo")
+								(e-record
+									(fields
+										(field (name "a")
+											(e-num (value "123"))))))
+							(e-nominal (nominal "Foo")
 								(e-record
 									(fields
 										(field (name "a")
@@ -556,47 +637,8 @@ nominal = Nominal.{
 										(field (name "b")
 											(e-num (value "789"))))))))))))
 	(d-let
-		(p-assign (ident "nested_tuple"))
-		(e-call (constraint-fn-var 1050)
-			(e-lookup-local
-				(p-assign (ident "count_pair")))
-			(e-tuple
-				(elems
-					(e-list
-						(elems
-							(e-record
-								(fields
-									(field (name "a")
-										(e-num (value "123")))))
-							(e-record
-								(fields
-									(field (name "a")
-										(e-num (value "456")))
-									(field (name "b")
-										(e-num (value "789")))))))
-					(e-num (value "0"))))))
-	(d-let
-		(p-assign (ident "nested_tag"))
-		(e-call (constraint-fn-var 1132)
-			(e-lookup-local
-				(p-assign (ident "count_choice")))
-			(e-tag (name "Items")
-				(args
-					(e-list
-						(elems
-							(e-record
-								(fields
-									(field (name "a")
-										(e-num (value "123")))))
-							(e-record
-								(fields
-									(field (name "a")
-										(e-num (value "456")))
-									(field (name "b")
-										(e-num (value "789")))))))))))
-	(d-let
 		(p-assign (ident "nested_branch"))
-		(e-call (constraint-fn-var 1268)
+		(e-call (constraint-fn-var 1150)
 			(e-lookup-local
 				(p-assign (ident "count")))
 			(e-if
@@ -606,33 +648,37 @@ nominal = Nominal.{
 						(e-block
 							(e-list
 								(elems
+									(e-nominal (nominal "Foo")
+										(e-record
+											(fields
+												(field (name "a")
+													(e-num (value "123"))))))
+									(e-nominal (nominal "Foo")
+										(e-record
+											(fields
+												(field (name "a")
+													(e-num (value "456")))
+												(field (name "b")
+													(e-num (value "789")))))))))))
+				(if-else
+					(e-block
+						(e-list
+							(elems
+								(e-nominal (nominal "Foo")
 									(e-record
 										(fields
 											(field (name "a")
-												(e-num (value "123")))))
+												(e-num (value "123"))))))
+								(e-nominal (nominal "Foo")
 									(e-record
 										(fields
 											(field (name "a")
 												(e-num (value "456")))
 											(field (name "b")
-												(e-num (value "789"))))))))))
-				(if-else
-					(e-block
-						(e-list
-							(elems
-								(e-record
-									(fields
-										(field (name "a")
-											(e-num (value "123")))))
-								(e-record
-									(fields
-										(field (name "a")
-											(e-num (value "456")))
-										(field (name "b")
-											(e-num (value "789"))))))))))))
+												(e-num (value "789")))))))))))))
 	(d-let
 		(p-assign (ident "updated_record"))
-		(e-call (constraint-fn-var 1288)
+		(e-call (constraint-fn-var 1164)
 			(e-lookup-local
 				(p-assign (ident "replace_items")))
 			(e-record
@@ -647,17 +693,19 @@ nominal = Nominal.{
 					(field (name "items")
 						(e-list
 							(elems
-								(e-record
-									(fields
-										(field (name "a")
-											(e-num (value "123")))))
-								(e-record
-									(fields
-										(field (name "a")
-											(e-num (value "456")))
-										(field (name "b")
-											(e-num (value "789"))))))))))))
-	(s-alias-decl
+								(e-nominal (nominal "Foo")
+									(e-record
+										(fields
+											(field (name "a")
+												(e-num (value "123"))))))
+								(e-nominal (nominal "Foo")
+									(e-record
+										(fields
+											(field (name "a")
+												(e-num (value "456")))
+											(field (name "b")
+												(e-num (value "789")))))))))))))
+	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-record
 			(field (field "a")
@@ -706,7 +754,7 @@ nominal = Nominal.{
 		(patt (type "Wrapped"))
 		(patt (type "Nominal")))
 	(type_decls
-		(alias (type "Foo")
+		(nominal (type "Foo")
 			(ty-header (name "Foo")))
 		(alias (type "Wrapped")
 			(ty-header (name "Wrapped")))

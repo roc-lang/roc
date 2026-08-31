@@ -42,8 +42,10 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v21: erased calls and procedures carry explicit packed-argument plans.
 /// v22: combines the independent v20 and v21 image changes.
 /// v23: Boxy type descriptors identify field-presence slots explicitly.
-/// v24: integer arithmetic uses explicit behavior-family operations.
-pub const FORMAT_VERSION: u32 = 24;
+/// v24: source file table entries carry package-qualified module identities
+///      alongside display names.
+/// v25: integer arithmetic uses explicit behavior-family operations.
+pub const FORMAT_VERSION: u32 = 25;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{
@@ -142,6 +144,8 @@ pub const LirStoreImage = extern struct {
     next_synthetic_symbol: u64,
     source_file_bytes: ArrayRef,
     source_file_ends: ArrayRef,
+    source_file_qualified_bytes: ArrayRef,
+    source_file_qualified_ends: ArrayRef,
     cf_stmt_locs: ArrayRef,
     cf_stmt_regions: ArrayRef,
     cf_stmt_inline_scopes: ArrayRef,
@@ -167,6 +171,8 @@ pub const LirStoreImage = extern struct {
             .next_synthetic_symbol = store.next_synthetic_symbol,
             .source_file_bytes = try arrayRef(base_ptr, image_size, store.source_file_bytes.unsafeRawItemsForView()),
             .source_file_ends = try arrayRef(base_ptr, image_size, store.source_file_ends.unsafeRawItemsForView()),
+            .source_file_qualified_bytes = try arrayRef(base_ptr, image_size, store.source_file_qualified_bytes.unsafeRawItemsForView()),
+            .source_file_qualified_ends = try arrayRef(base_ptr, image_size, store.source_file_qualified_ends.unsafeRawItemsForView()),
             .cf_stmt_locs = try arrayRef(base_ptr, image_size, store.cf_stmt_locs.unsafeRawItemsForView()),
             .cf_stmt_regions = try arrayRef(base_ptr, image_size, store.cf_stmt_regions.unsafeRawItemsForView()),
             .cf_stmt_inline_scopes = try arrayRef(base_ptr, image_size, store.cf_stmt_inline_scopes.unsafeRawItemsForView()),
@@ -199,6 +205,8 @@ pub const LirStoreImage = extern struct {
             .next_synthetic_symbol = store.next_synthetic_symbol,
             .source_file_bytes = try copyArrayRef(allocator, base_ptr, image_capacity, store.source_file_bytes.unsafeRawItemsForView()),
             .source_file_ends = try copyArrayRef(allocator, base_ptr, image_capacity, store.source_file_ends.unsafeRawItemsForView()),
+            .source_file_qualified_bytes = try copyArrayRef(allocator, base_ptr, image_capacity, store.source_file_qualified_bytes.unsafeRawItemsForView()),
+            .source_file_qualified_ends = try copyArrayRef(allocator, base_ptr, image_capacity, store.source_file_qualified_ends.unsafeRawItemsForView()),
             .cf_stmt_locs = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_stmt_locs.unsafeRawItemsForView()),
             .cf_stmt_regions = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_stmt_regions.unsafeRawItemsForView()),
             .cf_stmt_inline_scopes = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_stmt_inline_scopes.unsafeRawItemsForView()),
@@ -231,6 +239,8 @@ pub const LirStoreImage = extern struct {
             .pattern_ids = .empty,
             .source_file_bytes = try guardedListFromRef(u8, "LirStore.source_file_bytes", base_ptr, image_size, self.source_file_bytes),
             .source_file_ends = try guardedListFromRef(u32, "LirStore.source_file_ends", base_ptr, image_size, self.source_file_ends),
+            .source_file_qualified_bytes = try guardedListFromRef(u8, "LirStore.source_file_qualified_bytes", base_ptr, image_size, self.source_file_qualified_bytes),
+            .source_file_qualified_ends = try guardedListFromRef(u32, "LirStore.source_file_qualified_ends", base_ptr, image_size, self.source_file_qualified_ends),
             .cf_stmt_locs = try guardedListFromRef(base.SourceLoc, "LirStore.cf_stmt_locs", base_ptr, image_size, self.cf_stmt_locs),
             .cf_stmt_regions = try guardedListFromRef(base.Region, "LirStore.cf_stmt_regions", base_ptr, image_size, self.cf_stmt_regions),
             .cf_stmt_inline_scopes = try guardedListFromRef(LIR.InlineScopeId, "LirStore.cf_stmt_inline_scopes", base_ptr, image_size, self.cf_stmt_inline_scopes),
@@ -832,7 +842,7 @@ comptime {
     // this file, then update the expected field count below. A same-build
     // omission (a new store field left out of the image plumbing) is otherwise
     // silent, since `FORMAT_VERSION` only guards cross-version mismatches.
-    std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 30);
+    std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 32);
     std.debug.assert(@typeInfo(layout_mod.Store).@"struct".fields.len == 12);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".fields.len == 1);
 }
@@ -1247,7 +1257,7 @@ test "LIR image declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
-/// The 20 `LirStore` array-backed lists serialized as `ArrayRef`s, in the order
+/// The 22 `LirStore` array-backed lists serialized as `ArrayRef`s, in the order
 /// they appear in `LirStoreImage`. `strings` (a sub-image) and the scalar
 /// `next_synthetic_symbol` are serialized too but exercised separately below.
 const serialized_guarded_fields = [_][]const u8{
@@ -1264,6 +1274,8 @@ const serialized_guarded_fields = [_][]const u8{
     "proc_specs",
     "source_file_bytes",
     "source_file_ends",
+    "source_file_qualified_bytes",
+    "source_file_qualified_ends",
     "cf_stmt_locs",
     "cf_stmt_regions",
     "cf_stmt_inline_scopes",
