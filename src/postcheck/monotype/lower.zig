@@ -19178,7 +19178,7 @@ const BodyContext = struct {
             .numeral, .str_from_quote => {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
                 if (!try self.graph.typeIsResolved(expr_node)) {
-                    try self.graph.materializeLiteralDefault(expr_node);
+                    self.graph.materializeLiteralDefault(expr_node);
                 }
                 const expr_ty = try self.resolvedTypeViewForNode(expr_node);
                 return try self.lowerExprWithType(expr_id, expr_ty);
