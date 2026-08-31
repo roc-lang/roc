@@ -185,7 +185,7 @@ fn stagePlatformlessApp(
         }
 
         const field = ast.store.getRecordField(field_idx);
-        const value = field.value orelse continue;
+        const value = field.value.asSupplied() orelse continue;
         const spec_token = ast.store.singleStringPartToken(value) orelse continue;
         const spec_region = ast.tokens.resolve(spec_token);
         const spec = original_source[spec_region.start.offset..spec_region.end.offset];

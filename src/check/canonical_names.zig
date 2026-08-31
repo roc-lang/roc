@@ -61,6 +61,14 @@ pub const ArtifactRef = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
+/// 32-byte deep module content identity carried raw at post-check boundaries
+/// (the hash `base.module_identity` computes). Store-independent, unlike the
+/// dense `ModuleIdentityId`: consumers resolve it against loaded module views
+/// by content identity (design.md "Defaulted Fields", `moduleForIdentityHash`).
+pub const ModuleContentIdentity = struct {
+    bytes: [32]u8,
+};
+
 /// Digest for checked module identity at post-check boundaries.
 pub const CheckedModuleDigest = ArtifactRef;
 
