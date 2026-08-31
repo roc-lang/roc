@@ -1,3 +1,3 @@
 FieldKinds := [].{
-    Config : { ratio : Dec ?? 1.2 }
+    Config := { ratio : Dec ?? 1.2 }
 }

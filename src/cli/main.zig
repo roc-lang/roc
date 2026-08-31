@@ -12355,6 +12355,7 @@ fn runCompiledTestRoots(
     results: *std.ArrayList(CliTestResultItem),
     summary: *CliTestRunSummary,
     dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
+    max_workers: ?usize,
 ) Allocator.Error!void {
     var bool_roots = try ctx.gpa.alloc(eval.Inspected.BoolRoot, root_runs.len);
     defer ctx.gpa.free(bool_roots);
@@ -12369,13 +12370,14 @@ fn runCompiledTestRoots(
     }
 
     const eval_results = switch (mode) {
-        .dev => eval.Inspected.devEvalBoolRootsWithTiming(
+        .dev => eval.Inspected.devEvalBoolRootsWithTimingAndMaxWorkers(
             ctx.gpa,
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
             eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
             bool_roots,
             dev_timing,
+            max_workers,
         ),
         .llvm_size => eval.Inspected.llvmEvalBoolRoots(
             ctx.gpa,
@@ -12580,6 +12582,7 @@ fn runCheckedArtifactTests(
     module_results: *std.ArrayList(CliModuleTestResult),
     timing: ?*lir.CheckedPipeline.Timing,
     dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
+    max_workers: ?usize,
 ) (Allocator.Error || lir.CheckedPipeline.HostedBindingError || error{NoHomeDirectory})!CliTestRunSummary {
     const module = planned.module;
     const artifact = planned.artifact;
@@ -12596,7 +12599,7 @@ fn runCheckedArtifactTests(
     const mode = cliTestExecutionMode(opt);
     switch (mode) {
         .interpreter => try runInterpreterTestRoots(ctx, &lowered_module.lowered, lowered_module.root_runs, &results, &summary),
-        .dev => try runCompiledTestRoots(ctx, mode, &lowered_module.lowered, lowered_module.root_runs, &results, &summary, dev_timing),
+        .dev => try runCompiledTestRoots(ctx, mode, &lowered_module.lowered, lowered_module.root_runs, &results, &summary, dev_timing, max_workers),
         .llvm_size, .llvm_speed => unreachable,
     }
     summary.modules_with_tests = 1;
@@ -14301,6 +14304,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
                     &module_results,
                     &spec_timing,
                     &dev_timing,
+                    args.max_threads,
                 );
                 total.passed += summary.passed;
                 total.failed += summary.failed;

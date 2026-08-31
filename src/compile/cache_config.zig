@@ -151,11 +151,16 @@ pub const Constants = struct {
     /// 64: Compile-time root selection rejects values containing callables.
     /// 65: A hosted entry written without a module resolves to the platform
     ///     module's own declaration.
-    /// 66: Serialized canonicalization diagnostics retain the explicit codec
+    /// 66: Record expressions carry a span of unset (`name: _`) fields.
+    /// 67: Checked record expressions carry their unset field labels.
+    /// 68: `??` defaults restricted to nominal backing records (new diagnostic).
+    /// 69: Defaults are any pure expression; the not-literal diagnostic became
+    ///     the CAN default-cycle diagnostic.
+    /// 70: Serialized canonicalization diagnostics retain the explicit codec
     ///     family for internal builtin types.
-    /// 67: Annotation node payload packs its boolean flags into one byte and
+    /// 71: Annotation node payload packs its boolean flags into one byte and
     ///     records the source region of the annotated name.
-    pub const CACHE_VERSION = 67;
+    pub const CACHE_VERSION = 71;
 };
 
 /// Configuration for the Roc cache system.

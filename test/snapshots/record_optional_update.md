@@ -5,10 +5,10 @@ type=snippet
 ~~~
 # SOURCE
 ~~~roc
-Rec : { req : U8, opt_set ?: U8, opt_copy ?: U8, def : U8 ?? 5 }
+Rec := { req : U8, opt_set ?: U8, opt_copy ?: U8, def : U8 ?? 5 }
 
 base : Rec
-base = { req: 1 }
+base = Rec.{ req: 1 }
 
 updated = { ..base, req: 9, opt_set: 7 }
 ~~~
@@ -18,9 +18,9 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpQuestion,OpColon,UpperIdent,Comma,LowerIdent,OpQuestion,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,OpDoubleQuestion,Int,CloseCurly,
+UpperIdent,OpColonEqual,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpQuestion,OpColon,UpperIdent,Comma,LowerIdent,OpQuestion,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,OpDoubleQuestion,Int,CloseCurly,
 LowerIdent,OpColon,UpperIdent,
-LowerIdent,OpAssign,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,
+LowerIdent,OpAssign,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,
 LowerIdent,OpAssign,OpenCurly,DoubleDot,LowerIdent,Comma,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,
 EndOfFile,
 ~~~
@@ -47,9 +47,11 @@ EndOfFile,
 			(ty (name "Rec")))
 		(s-decl
 			(p-ident (raw "base"))
-			(e-record
-				(field (field "req")
-					(e-int (raw "1")))))
+			(e-nominal-record
+				(mapper (e-tag (raw "Rec")))
+				(backing (e-record
+						(field (field "req")
+							(e-int (raw "1")))))))
 		(s-decl
 			(p-ident (raw "updated"))
 			(e-record
@@ -69,10 +71,11 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "base"))
-		(e-record
-			(fields
-				(field (name "req")
-					(e-num (value "1")))))
+		(e-nominal (nominal "Rec")
+			(e-record
+				(fields
+					(field (name "req")
+						(e-num (value "1"))))))
 		(annotation
 			(ty-lookup (name "Rec") (local))))
 	(d-let
@@ -86,7 +89,7 @@ NO CHANGE
 					(e-num (value "9")))
 				(field (name "opt_set")
 					(e-num (value "7"))))))
-	(s-alias-decl
+	(s-nominal-decl
 		(ty-header (name "Rec"))
 		(ty-record
 			(field (field "req")
@@ -105,7 +108,7 @@ NO CHANGE
 		(patt (type "Rec"))
 		(patt (type "Rec")))
 	(type_decls
-		(alias (type "Rec")
+		(nominal (type "Rec")
 			(ty-header (name "Rec"))))
 	(expressions
 		(expr (type "Rec"))
