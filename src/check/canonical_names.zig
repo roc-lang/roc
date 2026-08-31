@@ -343,6 +343,168 @@ pub const CanonicalNameStore = struct {
         self.* = CanonicalNameStore.init(self.allocator);
     }
 
+    /// Immutable append boundary for every canonical-id backing array.
+    pub const SemanticMark = struct {
+        module_names: NameInterner.SemanticMark,
+        module_identities: NameInterner.SemanticMark,
+        type_names: NameInterner.SemanticMark,
+        method_names: NameInterner.SemanticMark,
+        record_field_labels: NameInterner.SemanticMark,
+        tag_labels: NameInterner.SemanticMark,
+        export_names: NameInterner.SemanticMark,
+        external_symbol_names: NameInterner.SemanticMark,
+        proc_bases: u32,
+    };
+
+    pub fn semanticMark(self: *const CanonicalNameStore) SemanticMark {
+        return .{
+            .module_names = self.module_names.semanticMark(),
+            .module_identities = self.module_identities.semanticMark(),
+            .type_names = self.type_names.semanticMark(),
+            .method_names = self.method_names.semanticMark(),
+            .record_field_labels = self.record_field_labels.semanticMark(),
+            .tag_labels = self.tag_labels.semanticMark(),
+            .export_names = self.export_names.semanticMark(),
+            .external_symbol_names = self.external_symbol_names.semanticMark(),
+            .proc_bases = @intCast(self.proc_bases.items.items.len),
+        };
+    }
+
+    /// Result-owned canonical-name suffix. Interner hash tables and proc-base
+    /// dedup maps are mutable acceleration state and are rebuilt on append.
+    pub const SemanticSegment = struct {
+        allocator: Allocator,
+        begin: SemanticMark,
+        end: SemanticMark,
+        module_names: NameInterner.SemanticSegment,
+        module_identities: NameInterner.SemanticSegment,
+        type_names: NameInterner.SemanticSegment,
+        method_names: NameInterner.SemanticSegment,
+        record_field_labels: NameInterner.SemanticSegment,
+        tag_labels: NameInterner.SemanticSegment,
+        export_names: NameInterner.SemanticSegment,
+        external_symbol_names: NameInterner.SemanticSegment,
+        proc_bases: []ProcBaseKey,
+
+        pub fn capture(
+            allocator: Allocator,
+            source: *const CanonicalNameStore,
+            begin: SemanticMark,
+            end: SemanticMark,
+        ) Allocator.Error!SemanticSegment {
+            std.debug.assert(begin.proc_bases <= end.proc_bases);
+            std.debug.assert(end.proc_bases <= source.proc_bases.items.items.len);
+            var module_names = try NameInterner.SemanticSegment.capture(
+                allocator,
+                &source.module_names,
+                begin.module_names,
+                end.module_names,
+            );
+            errdefer module_names.deinit();
+            var module_identities = try NameInterner.SemanticSegment.capture(
+                allocator,
+                &source.module_identities,
+                begin.module_identities,
+                end.module_identities,
+            );
+            errdefer module_identities.deinit();
+            var type_names = try NameInterner.SemanticSegment.capture(
+                allocator,
+                &source.type_names,
+                begin.type_names,
+                end.type_names,
+            );
+            errdefer type_names.deinit();
+            var method_names = try NameInterner.SemanticSegment.capture(
+                allocator,
+                &source.method_names,
+                begin.method_names,
+                end.method_names,
+            );
+            errdefer method_names.deinit();
+            var record_field_labels = try NameInterner.SemanticSegment.capture(
+                allocator,
+                &source.record_field_labels,
+                begin.record_field_labels,
+                end.record_field_labels,
+            );
+            errdefer record_field_labels.deinit();
+            var tag_labels = try NameInterner.SemanticSegment.capture(
+                allocator,
+                &source.tag_labels,
+                begin.tag_labels,
+                end.tag_labels,
+            );
+            errdefer tag_labels.deinit();
+            var export_names = try NameInterner.SemanticSegment.capture(
+                allocator,
+                &source.export_names,
+                begin.export_names,
+                end.export_names,
+            );
+            errdefer export_names.deinit();
+            var external_symbol_names = try NameInterner.SemanticSegment.capture(
+                allocator,
+                &source.external_symbol_names,
+                begin.external_symbol_names,
+                end.external_symbol_names,
+            );
+            errdefer external_symbol_names.deinit();
+            const proc_bases = try allocator.dupe(
+                ProcBaseKey,
+                source.proc_bases.items.items[begin.proc_bases..end.proc_bases],
+            );
+            return .{
+                .allocator = allocator,
+                .begin = begin,
+                .end = end,
+                .module_names = module_names,
+                .module_identities = module_identities,
+                .type_names = type_names,
+                .method_names = method_names,
+                .record_field_labels = record_field_labels,
+                .tag_labels = tag_labels,
+                .export_names = export_names,
+                .external_symbol_names = external_symbol_names,
+                .proc_bases = proc_bases,
+            };
+        }
+
+        /// Rebuild this suffix after an identical prefix, preserving every id.
+        pub fn appendTo(
+            self: *const SemanticSegment,
+            destination: *CanonicalNameStore,
+        ) Allocator.Error!void {
+            std.debug.assert(std.meta.eql(destination.semanticMark(), self.begin));
+            try self.module_names.appendTo(&destination.module_names, destination.allocator);
+            try self.module_identities.appendTo(&destination.module_identities, destination.allocator);
+            try self.type_names.appendTo(&destination.type_names, destination.allocator);
+            try self.method_names.appendTo(&destination.method_names, destination.allocator);
+            try self.record_field_labels.appendTo(&destination.record_field_labels, destination.allocator);
+            try self.tag_labels.appendTo(&destination.tag_labels, destination.allocator);
+            try self.export_names.appendTo(&destination.export_names, destination.allocator);
+            try self.external_symbol_names.appendTo(&destination.external_symbol_names, destination.allocator);
+            for (self.proc_bases, self.begin.proc_bases..) |key, expected| {
+                const inserted = try destination.internProcBase(key);
+                std.debug.assert(@intFromEnum(inserted) == expected);
+            }
+            std.debug.assert(std.meta.eql(destination.semanticMark(), self.end));
+        }
+
+        pub fn deinit(self: *SemanticSegment) void {
+            self.allocator.free(self.proc_bases);
+            self.external_symbol_names.deinit();
+            self.export_names.deinit();
+            self.tag_labels.deinit();
+            self.record_field_labels.deinit();
+            self.method_names.deinit();
+            self.type_names.deinit();
+            self.module_identities.deinit();
+            self.module_names.deinit();
+            self.* = undefined;
+        }
+    };
+
     /// Relocatable serialized form (build-only dedup/scratch fields excluded).
     pub const Serialized = extern struct {
         module_names: NameInterner.Serialized,
@@ -874,6 +1036,81 @@ test "canonical name relocation qualifies every text domain by owning stores" {
     defer shared.deinit();
     try std.testing.expectEqual(tag_name, try shared.relocateTagLabel(&source, tag_name));
     try std.testing.expectEqual(@as(usize, 0), shared.mappedCount());
+}
+
+test "canonical name semantic segments own and rebuild consecutive id ranges" {
+    const allocator = std.testing.allocator;
+    var source = CanonicalNameStore.init(allocator);
+    const start = source.semanticMark();
+    var empty = try CanonicalNameStore.SemanticSegment.capture(
+        allocator,
+        &source,
+        start,
+        start,
+    );
+    defer empty.deinit();
+    try std.testing.expectEqual(@as(usize, 0), empty.proc_bases.len);
+
+    const module_name = try source.internModuleName("Main");
+    const module_identity = try source.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const type_name = try source.internTypeName("Model");
+    const method_name = try source.internMethodName("render");
+    const field_name = try source.internRecordFieldLabel("value");
+    const tag_name = try source.internTagLabel("Value");
+    const export_name = try source.internExportName("main!");
+    const external_name = try source.internExternalSymbolName("roc_main");
+    const proc_base = try source.internProcBase(.{
+        .module_name = module_name,
+        .export_name = export_name,
+        .kind = .checked_source,
+        .ordinal = 7,
+    });
+    const middle = source.semanticMark();
+    var first = try CanonicalNameStore.SemanticSegment.capture(
+        allocator,
+        &source,
+        start,
+        middle,
+    );
+    defer first.deinit();
+
+    const second_field = try source.internRecordFieldLabel("next");
+    const second_tag = try source.internTagLabel("Next");
+    const end = source.semanticMark();
+    var second = try CanonicalNameStore.SemanticSegment.capture(
+        allocator,
+        &source,
+        middle,
+        end,
+    );
+    defer second.deinit();
+
+    var index: usize = 0;
+    while (index < 256) : (index += 1) {
+        var buffer: [32]u8 = undefined;
+        const text = try std.fmt.bufPrint(&buffer, "growth_{d}", .{index});
+        _ = try source.internRecordFieldLabel(text);
+        _ = try source.internTagLabel(text);
+    }
+    source.deinit();
+
+    var rebuilt = CanonicalNameStore.init(allocator);
+    defer rebuilt.deinit();
+    try empty.appendTo(&rebuilt);
+    try first.appendTo(&rebuilt);
+    try second.appendTo(&rebuilt);
+    try std.testing.expectEqualStrings("Main", rebuilt.moduleNameText(module_name));
+    try std.testing.expectEqualSlices(u8, &([_]u8{0xAB} ** 32), rebuilt.moduleIdentityBytes(module_identity));
+    try std.testing.expectEqualStrings("Model", rebuilt.typeNameText(type_name));
+    try std.testing.expectEqualStrings("render", rebuilt.methodNameText(method_name));
+    try std.testing.expectEqualStrings("value", rebuilt.recordFieldLabelText(field_name));
+    try std.testing.expectEqualStrings("Value", rebuilt.tagLabelText(tag_name));
+    try std.testing.expectEqualStrings("main!", rebuilt.exportNameText(export_name));
+    try std.testing.expectEqualStrings("roc_main", rebuilt.externalSymbolNameText(external_name));
+    try std.testing.expectEqualStrings("next", rebuilt.recordFieldLabelText(second_field));
+    try std.testing.expectEqualStrings("Next", rebuilt.tagLabelText(second_tag));
+    try std.testing.expectEqual(module_name, rebuilt.procBase(proc_base).module_name);
+    try std.testing.expectEqual(export_name, rebuilt.procBase(proc_base).export_name.?);
 }
 
 test "proc base identity includes nested owner mono specialization" {
