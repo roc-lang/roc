@@ -240,6 +240,30 @@ const cases = [_]Case{
         ,
     },
     .{
+        .name = "list sort copy-on-write, unique and shared inputs",
+        .source =
+        \\{
+        \\    shared = List.concat(
+        \\        ["a list element long enough to allocate", "another list element long enough"],
+        \\        ["a third list element long enough to allocate"],
+        \\    )
+        \\    holder = [shared, shared]
+        \\    unique_sorted = List.sort_with(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |a, b| a.count_utf8_bytes().order_relative_to(b.count_utf8_bytes()),
+        \\    )
+        \\    shared_sorted = List.sort_with(
+        \\        shared,
+        \\        |a, b| a.count_utf8_bytes().order_relative_to(b.count_utf8_bytes()),
+        \\    )
+        \\    List.len(unique_sorted) + List.len(shared_sorted) + List.len(holder)
+        \\}
+        ,
+    },
+    .{
         .name = "list element ops move ownership in and out",
         .source =
         \\{

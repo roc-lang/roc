@@ -547,6 +547,29 @@ test "fx platform byte-list file import finalizes bytes correctly" {
     try testRocTestSinglePass("--opt=dev", "test/fx/file_import_bytes_check_crash.roc");
 }
 
+test "roc test --opt=speed gives parallel test workers the full recursion stack budget" {
+    // Repro for https://github.com/roc-lang/roc/issues/10844: the optimized
+    // test runner executes expects on spawned worker threads, and those
+    // workers must carry the same stack budget as the roc executable's own
+    // recursion-capable thread (the 64 MiB `exe.stack_size` in build.zig).
+    // The two expects in this module each recurse ~26 MiB deep at
+    // `--opt=speed`, which fits that budget; running them must not crash the
+    // compiler process. `--no-cache` keeps a previously cached green result
+    // from masking the run, and two expects (rather than one) are what make
+    // the runner spawn worker threads at all.
+    const allocator = testing.allocator;
+    const run_result = try util.runRoc(
+        std.testing.io,
+        allocator,
+        &.{ "test", "--opt=speed", "--no-cache" },
+        "test/fx/DeepStackParallel.roc",
+    );
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+    try util.checkSuccess(run_result);
+    try testing.expectStringStartsWith(run_result.stdout, "All (2) tests passed in ");
+}
+
 test "fx platform match returning string" {
     // Tests that match expressions with string returns work correctly
     const allocator = testing.allocator;
@@ -1370,6 +1393,55 @@ test "fx platform runtime stack overflow" {
         try expectInterpreterRuntimeStackOverflow();
     }
     try expectDevRuntimeStackOverflow();
+}
+
+/// Shared body for the `roc test` stack-overflow recovery tests: two expects
+/// overflow their stacks on parallel worker threads and two pass, and the
+/// runner must report exactly that split as ordinary results with a clean
+/// non-zero exit -- never a dead process.
+fn expectTestStackOverflowsReportedAsFailures(opt: []const u8) FxPlatformTestError!void {
+    const allocator = testing.allocator;
+    const run_result = try util.runRoc(
+        std.testing.io,
+        allocator,
+        &.{ "test", opt, "--no-cache" },
+        "test/fx/StackOverflowTests.roc",
+    );
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+    try util.checkFailure(run_result);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "2 passed") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "2 failed") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "This Roc program overflowed its stack memory") != null);
+}
+
+test "roc test reports a stack overflow as that test's failure (dev backend)" {
+    try expectTestStackOverflowsReportedAsFailures("--opt=dev");
+}
+
+test "roc test reports a stack overflow as that test's failure (llvm speed)" {
+    try expectTestStackOverflowsReportedAsFailures("--opt=speed");
+}
+
+test "comptime stack overflow is a compile error, not a compiler crash" {
+    const allocator = testing.allocator;
+    const run_result = try util.runRoc(
+        std.testing.io,
+        allocator,
+        &.{"check"},
+        "test/fx/StackOverflowComptime.roc",
+    );
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+    try util.checkFailure(run_result);
+    const combined = [_][]const u8{ run_result.stdout, run_result.stderr };
+    var saw_overflow_diagnostic = false;
+    for (combined) |stream| {
+        if (std.mem.find(u8, stream, "This Roc program overflowed its stack memory") != null) {
+            saw_overflow_diagnostic = true;
+        }
+    }
+    try testing.expect(saw_overflow_diagnostic);
 }
 
 test "fx platform runtime division by zero" {
