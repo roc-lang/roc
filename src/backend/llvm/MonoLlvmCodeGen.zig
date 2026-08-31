@@ -256,6 +256,8 @@ pub const MonoLlvmCodeGen = struct {
     store: *const lir.LirStore,
     erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
     erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
+    /// Exact dense LIR proc ids reachable through Boxy method slots.
+    boxy_worker_procs: []const LirProcSpecId = &.{},
 
     /// Layout store for resolving composite type layouts (records, tuples).
     /// Set by the evaluator before calling generateCode.
@@ -362,7 +364,7 @@ pub const MonoLlvmCodeGen = struct {
     /// table here before calling any generated procedure.
     boxy_fn_table_global: ?LlvmBuilder.Value = null,
     /// Set as soon as this module lowers a Boxy operation. Linked entrypoints
-    /// use it to initialize the sidecar runtime and register dispatch thunks.
+    /// use it to initialize the sidecar runtime.
     boxy_runtime_used: bool = false,
 
     /// Errors reported while building LLVM IR.
@@ -1406,13 +1408,16 @@ pub const MonoLlvmCodeGen = struct {
             if (proc.is_static_initializer) continue;
             try self.compileProcBody(@enumFromInt(@as(u32, @intCast(i))), proc);
         }
-        if (self.boxy_runtime_used) try self.generateBoxyDictProcThunks(procs);
+        try self.generateBoxyDictProcThunks();
     }
 
-    fn generateBoxyDictProcThunks(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
-        for (procs, 0..) |proc, i| {
-            if (proc.is_static_initializer or proc.abi == .erased_callable or proc.hosted != null or proc.body == null) continue;
-            try self.generateBoxyDictProcThunk(@enumFromInt(@as(u32, @intCast(i))), proc);
+    fn generateBoxyDictProcThunks(self: *MonoLlvmCodeGen) Error!void {
+        for (self.boxy_worker_procs) |proc_id| {
+            const proc = self.store.getProcSpec(proc_id);
+            if (proc.is_static_initializer or proc.abi == .erased_callable or proc.hosted != null or proc.body == null) {
+                llvmInvariantFmt("boxy worker proc {d} had a non-worker procedure shape", .{@intFromEnum(proc_id)});
+            }
+            try self.generateBoxyDictProcThunk(proc_id, proc);
         }
     }
 
@@ -2166,7 +2171,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitBoxyRuntimeInit(self: *MonoLlvmCodeGen) Error!void {
-        if (!self.boxy_runtime_used) return;
+        if (!self.boxy_runtime_used and self.boxy_worker_procs.len == 0) return;
         const builder = self.builder orelse return error.CompilationFailed;
         if (self.host_call_mode == .extern_symbols) {
             const wip = self.wip orelse return error.CompilationFailed;

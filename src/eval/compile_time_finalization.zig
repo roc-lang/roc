@@ -1259,6 +1259,7 @@ fn lowerDevEvalAndFinishRoots(
         static_strings.entries,
         lowered.lir_result.boxy_erased_arg_desc_offsets.items,
         lowered.lir_result.boxy_erased_arg_desc_params.items,
+        lowered.lir_result.boxy_worker_procs.items,
         .normalize,
         roc_target.host_cpu.level(),
     );

@@ -792,6 +792,7 @@ fn buildGlueDylib(
         lowered.lir_result.boxy_erased_arg_desc_offsets.items,
         lowered.lir_result.boxy_erased_arg_desc_params.items,
     );
+    codegen.boxy_worker_procs = lowered.lir_result.boxy_worker_procs.items;
     codegen.layout_store = &lowered.lir_result.layouts;
     codegen.plugin_stamp_bytes = std.mem.asBytes(&stamp);
     codegen.plugin_stamp_alignment = @alignOf(GluePluginStampV1);

@@ -248,6 +248,8 @@ store: *const LirStore,
 layout_store: *const LayoutStore,
 erased_arg_desc_offsets: []const LIR.ErasedArgDescOffset,
 erased_arg_desc_params: []const LIR.ErasedArgDescParam,
+/// Exact dense LIR proc ids reachable through Boxy method slots.
+boxy_worker_procs: []const LIR.LirProcSpecId = &.{},
 module: WasmModule,
 pending_bodies: std.AutoHashMap(LocalFunctionIndex, CodeBuilder),
 active_fn_stack: std.ArrayList(LocalFunctionIndex),
@@ -8648,11 +8650,12 @@ pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocat
         if (proc.is_static_initializer) continue;
         try self.compileProcSpecBody(@enumFromInt(@as(u32, @intCast(i))), proc);
     }
-    if (self.boxy_symbol_targets.count() != 0) {
-        for (proc_specs, 0..) |proc, i| {
-            if (proc.is_static_initializer or proc.abi == .erased_callable or proc.hosted != null or proc.body == null) continue;
-            try self.generateBoxyDictProcThunk(@enumFromInt(@as(u32, @intCast(i))), proc);
+    for (self.boxy_worker_procs) |proc_id| {
+        const proc = self.store.getProcSpec(proc_id);
+        if (proc.is_static_initializer or proc.abi == .erased_callable or proc.hosted != null or proc.body == null) {
+            wasmInvariantFmt("Boxy worker proc {d} had a non-worker procedure shape", .{@intFromEnum(proc_id)});
         }
+        try self.generateBoxyDictProcThunk(proc_id, proc);
     }
 }
 
@@ -9317,11 +9320,14 @@ fn emitBoxyRuntimeInit(self: *Self) Allocator.Error!void {
     }
     try self.emitBoxyCall("roc_boxy_init_embedded");
 
-    const proc_specs = self.store.getProcSpecs();
-    for (proc_specs, 0..) |proc, i| {
-        const proc_id: u32 = @intCast(i);
-        const table_idx = self.boxy_dict_thunk_table_indices.get(proc_id) orelse continue;
-        try self.emitI32Const(@intCast(proc_id));
+    for (self.boxy_worker_procs) |proc_id| {
+        const proc = self.store.getProcSpec(proc_id);
+        const proc_index = @intFromEnum(proc_id);
+        const table_idx = self.boxy_dict_thunk_table_indices.get(proc_index) orelse wasmInvariantFmt(
+            "Boxy worker proc {d} had no generated dispatch thunk",
+            .{proc_index},
+        );
+        try self.emitI32Const(@intCast(proc_index));
         try self.emitFunctionTableIndexConst(table_idx);
         try self.emitI32Const(@intCast(@intFromEnum(self.runtimeRepresentationLayoutIdx(proc.ret_layout))));
         try self.emitI64Const(@bitCast(proc.rc_borrowed_params));
