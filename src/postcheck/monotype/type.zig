@@ -4750,6 +4750,47 @@ test "monotype named type digest includes generic arguments" {
     try std.testing.expect(!std.mem.eql(u8, i64_digest.bytes[0..], str_digest.bytes[0..]));
 }
 
+test "monotype cached digest visits nested parameterized nominals once" {
+    // Regression test for https://github.com/roc-lang/roc/issues/10843.
+    // Cache hits must return before doing any structural digest work.
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const type_name = try name_store.internTypeName("W");
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const depth = 64;
+    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    var nested = try store.add(.{ .primitive = .u64 });
+    var ladder: [depth]TypeId = undefined;
+    for (&ladder) |*ty| {
+        const args = try store.addSpan(&.{nested});
+        nested = try store.add(.{ .named = .{
+            .named_type = .{ .module = .{}, .ty = checked_ty },
+            .def = .{ .module = module_identity, .type_name = type_name },
+            .kind = .nominal,
+            .args = args,
+        } });
+        ty.* = nested;
+    }
+
+    var cold_stats: Store.DigestStats = .{};
+    _ = store.typeDigestCached(&name_store, nested, &cold_stats);
+    try std.testing.expectEqual(@as(u64, depth + 1), cold_stats.cache_misses);
+    try std.testing.expectEqual(@as(u64, depth + 1), cold_stats.nodes_visited);
+
+    var warm_stats: Store.DigestStats = .{};
+    for (ladder) |ty| {
+        _ = store.typeDigestCached(&name_store, ty, &warm_stats);
+    }
+    try std.testing.expectEqual(@as(u64, depth), warm_stats.cache_hits);
+    try std.testing.expectEqual(@as(u64, 0), warm_stats.cache_misses);
+    try std.testing.expectEqual(@as(u64, 0), warm_stats.nodes_visited);
+}
+
 test "monotype recursive nominal digest ignores how deep the knot is tied" {
     // A recursive nominal reached through independently lowered graphs can be
     // built either knotted (its recursive occurrence is the node itself) or
