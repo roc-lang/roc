@@ -344,106 +344,107 @@ pub const CanonicalNameStore = struct {
     }
 
     /// Immutable append boundary for every canonical-id backing array.
-    pub const SemanticMark = struct {
-        module_names: NameInterner.SemanticMark,
-        module_identities: NameInterner.SemanticMark,
-        type_names: NameInterner.SemanticMark,
-        method_names: NameInterner.SemanticMark,
-        record_field_labels: NameInterner.SemanticMark,
-        tag_labels: NameInterner.SemanticMark,
-        export_names: NameInterner.SemanticMark,
-        external_symbol_names: NameInterner.SemanticMark,
+    pub const EpochBoundary = struct {
+        module_names: NameInterner.EpochBoundary,
+        module_identities: NameInterner.EpochBoundary,
+        type_names: NameInterner.EpochBoundary,
+        method_names: NameInterner.EpochBoundary,
+        record_field_labels: NameInterner.EpochBoundary,
+        tag_labels: NameInterner.EpochBoundary,
+        export_names: NameInterner.EpochBoundary,
+        external_symbol_names: NameInterner.EpochBoundary,
         proc_bases: u32,
     };
 
-    pub fn semanticMark(self: *const CanonicalNameStore) SemanticMark {
+    pub fn epochBoundary(self: *const CanonicalNameStore) EpochBoundary {
         return .{
-            .module_names = self.module_names.semanticMark(),
-            .module_identities = self.module_identities.semanticMark(),
-            .type_names = self.type_names.semanticMark(),
-            .method_names = self.method_names.semanticMark(),
-            .record_field_labels = self.record_field_labels.semanticMark(),
-            .tag_labels = self.tag_labels.semanticMark(),
-            .export_names = self.export_names.semanticMark(),
-            .external_symbol_names = self.external_symbol_names.semanticMark(),
+            .module_names = self.module_names.epochBoundary(),
+            .module_identities = self.module_identities.epochBoundary(),
+            .type_names = self.type_names.epochBoundary(),
+            .method_names = self.method_names.epochBoundary(),
+            .record_field_labels = self.record_field_labels.epochBoundary(),
+            .tag_labels = self.tag_labels.epochBoundary(),
+            .export_names = self.export_names.epochBoundary(),
+            .external_symbol_names = self.external_symbol_names.epochBoundary(),
             .proc_bases = @intCast(self.proc_bases.items.items.len),
         };
     }
 
-    /// Result-owned canonical-name suffix. Interner hash tables and proc-base
-    /// dedup maps are mutable acceleration state and are rebuilt on append.
-    pub const SemanticSegment = struct {
+    /// Result-owned canonical-name suffix. String indexes are derived on append;
+    /// the proc-base dedup map remains absent because copied epoch stores
+    /// are immutable coordinator sources rather than interning destinations.
+    pub const EpochDelta = struct {
         allocator: Allocator,
-        begin: SemanticMark,
-        end: SemanticMark,
-        module_names: NameInterner.SemanticSegment,
-        module_identities: NameInterner.SemanticSegment,
-        type_names: NameInterner.SemanticSegment,
-        method_names: NameInterner.SemanticSegment,
-        record_field_labels: NameInterner.SemanticSegment,
-        tag_labels: NameInterner.SemanticSegment,
-        export_names: NameInterner.SemanticSegment,
-        external_symbol_names: NameInterner.SemanticSegment,
+        begin: EpochBoundary,
+        end: EpochBoundary,
+        module_names: NameInterner.EpochDelta,
+        module_identities: NameInterner.EpochDelta,
+        type_names: NameInterner.EpochDelta,
+        method_names: NameInterner.EpochDelta,
+        record_field_labels: NameInterner.EpochDelta,
+        tag_labels: NameInterner.EpochDelta,
+        export_names: NameInterner.EpochDelta,
+        external_symbol_names: NameInterner.EpochDelta,
         proc_bases: []ProcBaseKey,
 
         pub fn capture(
             allocator: Allocator,
             source: *const CanonicalNameStore,
-            begin: SemanticMark,
-            end: SemanticMark,
-        ) Allocator.Error!SemanticSegment {
+            begin: EpochBoundary,
+            end: EpochBoundary,
+        ) Allocator.Error!EpochDelta {
             std.debug.assert(begin.proc_bases <= end.proc_bases);
             std.debug.assert(end.proc_bases <= source.proc_bases.items.items.len);
-            var module_names = try NameInterner.SemanticSegment.capture(
+            var module_names = try NameInterner.EpochDelta.capture(
                 allocator,
                 &source.module_names,
                 begin.module_names,
                 end.module_names,
             );
             errdefer module_names.deinit();
-            var module_identities = try NameInterner.SemanticSegment.capture(
+            var module_identities = try NameInterner.EpochDelta.capture(
                 allocator,
                 &source.module_identities,
                 begin.module_identities,
                 end.module_identities,
             );
             errdefer module_identities.deinit();
-            var type_names = try NameInterner.SemanticSegment.capture(
+            var type_names = try NameInterner.EpochDelta.capture(
                 allocator,
                 &source.type_names,
                 begin.type_names,
                 end.type_names,
             );
             errdefer type_names.deinit();
-            var method_names = try NameInterner.SemanticSegment.capture(
+            var method_names = try NameInterner.EpochDelta.capture(
                 allocator,
                 &source.method_names,
                 begin.method_names,
                 end.method_names,
             );
             errdefer method_names.deinit();
-            var record_field_labels = try NameInterner.SemanticSegment.capture(
+            var record_field_labels = try NameInterner.EpochDelta.capture(
                 allocator,
                 &source.record_field_labels,
                 begin.record_field_labels,
                 end.record_field_labels,
             );
             errdefer record_field_labels.deinit();
-            var tag_labels = try NameInterner.SemanticSegment.capture(
+            var tag_labels = try NameInterner.EpochDelta.capture(
                 allocator,
                 &source.tag_labels,
                 begin.tag_labels,
                 end.tag_labels,
             );
             errdefer tag_labels.deinit();
-            var export_names = try NameInterner.SemanticSegment.capture(
+            var export_names = try NameInterner.EpochDelta.capture(
                 allocator,
                 &source.export_names,
                 begin.export_names,
                 end.export_names,
             );
             errdefer export_names.deinit();
-            var external_symbol_names = try NameInterner.SemanticSegment.capture(
+            var external_symbol_names = try NameInterner.EpochDelta.capture(
                 allocator,
                 &source.external_symbol_names,
                 begin.external_symbol_names,
@@ -470,28 +471,57 @@ pub const CanonicalNameStore = struct {
             };
         }
 
-        /// Rebuild this suffix after an identical prefix, preserving every id.
-        pub fn appendTo(
-            self: *const SemanticSegment,
+        /// Reserve every allocation needed to append this exact suffix.
+        pub fn prepareAppend(
+            self: *const EpochDelta,
             destination: *CanonicalNameStore,
         ) Allocator.Error!void {
-            std.debug.assert(std.meta.eql(destination.semanticMark(), self.begin));
-            try self.module_names.appendTo(&destination.module_names, destination.allocator);
-            try self.module_identities.appendTo(&destination.module_identities, destination.allocator);
-            try self.type_names.appendTo(&destination.type_names, destination.allocator);
-            try self.method_names.appendTo(&destination.method_names, destination.allocator);
-            try self.record_field_labels.appendTo(&destination.record_field_labels, destination.allocator);
-            try self.tag_labels.appendTo(&destination.tag_labels, destination.allocator);
-            try self.export_names.appendTo(&destination.export_names, destination.allocator);
-            try self.external_symbol_names.appendTo(&destination.external_symbol_names, destination.allocator);
-            for (self.proc_bases, self.begin.proc_bases..) |key, expected| {
-                const inserted = try destination.internProcBase(key);
-                std.debug.assert(@intFromEnum(inserted) == expected);
-            }
-            std.debug.assert(std.meta.eql(destination.semanticMark(), self.end));
+            std.debug.assert(std.meta.eql(destination.epochBoundary(), self.begin));
+            try self.module_names.prepareAppend(&destination.module_names, destination.allocator);
+            try self.module_identities.prepareAppend(&destination.module_identities, destination.allocator);
+            try self.type_names.prepareAppend(&destination.type_names, destination.allocator);
+            try self.method_names.prepareAppend(&destination.method_names, destination.allocator);
+            try self.record_field_labels.prepareAppend(&destination.record_field_labels, destination.allocator);
+            try self.tag_labels.prepareAppend(&destination.tag_labels, destination.allocator);
+            try self.export_names.prepareAppend(&destination.export_names, destination.allocator);
+            try self.external_symbol_names.prepareAppend(&destination.external_symbol_names, destination.allocator);
+            try destination.proc_bases.items.ensureTotalCapacity(
+                destination.allocator,
+                self.end.proc_bases,
+            );
         }
 
-        pub fn deinit(self: *SemanticSegment) void {
+        /// Append after `prepareAppend`; no logical mutation can fail.
+        pub fn appendPrepared(
+            self: *const EpochDelta,
+            destination: *CanonicalNameStore,
+        ) void {
+            std.debug.assert(std.meta.eql(destination.epochBoundary(), self.begin));
+            self.module_names.appendPrepared(&destination.module_names, destination.allocator);
+            self.module_identities.appendPrepared(&destination.module_identities, destination.allocator);
+            self.type_names.appendPrepared(&destination.type_names, destination.allocator);
+            self.method_names.appendPrepared(&destination.method_names, destination.allocator);
+            self.record_field_labels.appendPrepared(&destination.record_field_labels, destination.allocator);
+            self.tag_labels.appendPrepared(&destination.tag_labels, destination.allocator);
+            self.export_names.appendPrepared(&destination.export_names, destination.allocator);
+            self.external_symbol_names.appendPrepared(&destination.external_symbol_names, destination.allocator);
+            destination.proc_bases.items.appendSlice(
+                destination.allocator,
+                self.proc_bases,
+            ) catch unreachable;
+            std.debug.assert(std.meta.eql(destination.epochBoundary(), self.end));
+        }
+
+        /// Append this suffix after an identical prefix, preserving every id.
+        pub fn appendTo(
+            self: *const EpochDelta,
+            destination: *CanonicalNameStore,
+        ) Allocator.Error!void {
+            try self.prepareAppend(destination);
+            self.appendPrepared(destination);
+        }
+
+        pub fn deinit(self: *EpochDelta) void {
             self.allocator.free(self.proc_bases);
             self.external_symbol_names.deinit();
             self.export_names.deinit();
@@ -1038,11 +1068,11 @@ test "canonical name relocation qualifies every text domain by owning stores" {
     try std.testing.expectEqual(@as(usize, 0), shared.mappedCount());
 }
 
-test "canonical name semantic segments own and rebuild consecutive id ranges" {
+test "canonical name epoch deltas own consecutive id ranges" {
     const allocator = std.testing.allocator;
     var source = CanonicalNameStore.init(allocator);
-    const start = source.semanticMark();
-    var empty = try CanonicalNameStore.SemanticSegment.capture(
+    const start = source.epochBoundary();
+    var empty = try CanonicalNameStore.EpochDelta.capture(
         allocator,
         &source,
         start,
@@ -1065,8 +1095,8 @@ test "canonical name semantic segments own and rebuild consecutive id ranges" {
         .kind = .checked_source,
         .ordinal = 7,
     });
-    const middle = source.semanticMark();
-    var first = try CanonicalNameStore.SemanticSegment.capture(
+    const middle = source.epochBoundary();
+    var first = try CanonicalNameStore.EpochDelta.capture(
         allocator,
         &source,
         start,
@@ -1076,8 +1106,8 @@ test "canonical name semantic segments own and rebuild consecutive id ranges" {
 
     const second_field = try source.internRecordFieldLabel("next");
     const second_tag = try source.internTagLabel("Next");
-    const end = source.semanticMark();
-    var second = try CanonicalNameStore.SemanticSegment.capture(
+    const end = source.epochBoundary();
+    var second = try CanonicalNameStore.EpochDelta.capture(
         allocator,
         &source,
         middle,
@@ -1094,23 +1124,23 @@ test "canonical name semantic segments own and rebuild consecutive id ranges" {
     }
     source.deinit();
 
-    var rebuilt = CanonicalNameStore.init(allocator);
-    defer rebuilt.deinit();
-    try empty.appendTo(&rebuilt);
-    try first.appendTo(&rebuilt);
-    try second.appendTo(&rebuilt);
-    try std.testing.expectEqualStrings("Main", rebuilt.moduleNameText(module_name));
-    try std.testing.expectEqualSlices(u8, &([_]u8{0xAB} ** 32), rebuilt.moduleIdentityBytes(module_identity));
-    try std.testing.expectEqualStrings("Model", rebuilt.typeNameText(type_name));
-    try std.testing.expectEqualStrings("render", rebuilt.methodNameText(method_name));
-    try std.testing.expectEqualStrings("value", rebuilt.recordFieldLabelText(field_name));
-    try std.testing.expectEqualStrings("Value", rebuilt.tagLabelText(tag_name));
-    try std.testing.expectEqualStrings("main!", rebuilt.exportNameText(export_name));
-    try std.testing.expectEqualStrings("roc_main", rebuilt.externalSymbolNameText(external_name));
-    try std.testing.expectEqualStrings("next", rebuilt.recordFieldLabelText(second_field));
-    try std.testing.expectEqualStrings("Next", rebuilt.tagLabelText(second_tag));
-    try std.testing.expectEqual(module_name, rebuilt.procBase(proc_base).module_name);
-    try std.testing.expectEqual(export_name, rebuilt.procBase(proc_base).export_name.?);
+    var destination = CanonicalNameStore.init(allocator);
+    defer destination.deinit();
+    try empty.appendTo(&destination);
+    try first.appendTo(&destination);
+    try second.appendTo(&destination);
+    try std.testing.expectEqualStrings("Main", destination.moduleNameText(module_name));
+    try std.testing.expectEqualSlices(u8, &([_]u8{0xAB} ** 32), destination.moduleIdentityBytes(module_identity));
+    try std.testing.expectEqualStrings("Model", destination.typeNameText(type_name));
+    try std.testing.expectEqualStrings("render", destination.methodNameText(method_name));
+    try std.testing.expectEqualStrings("value", destination.recordFieldLabelText(field_name));
+    try std.testing.expectEqualStrings("Value", destination.tagLabelText(tag_name));
+    try std.testing.expectEqualStrings("main!", destination.exportNameText(export_name));
+    try std.testing.expectEqualStrings("roc_main", destination.externalSymbolNameText(external_name));
+    try std.testing.expectEqualStrings("next", destination.recordFieldLabelText(second_field));
+    try std.testing.expectEqualStrings("Next", destination.tagLabelText(second_tag));
+    try std.testing.expectEqual(module_name, destination.procBase(proc_base).module_name);
+    try std.testing.expectEqual(export_name, destination.procBase(proc_base).export_name.?);
 }
 
 test "proc base identity includes nested owner mono specialization" {

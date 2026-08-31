@@ -644,9 +644,9 @@ pub const Store = struct {
 
     /// Immutable append boundary for every durable type-store backing array.
     ///
-    /// Construction flags, traversal caches, and interning indexes are excluded:
-    /// they are mutable acceleration state rather than type semantics.
-    pub const SemanticMark = struct {
+    /// Construction flags, traversal caches, and interning indexes are excluded
+    /// because they are mutable acceleration state rather than durable type data.
+    pub const EpochBoundary = struct {
         types: u32,
         spans: u32,
         fields: u32,
@@ -654,7 +654,7 @@ pub const Store = struct {
         declared_fields: u32,
     };
 
-    pub fn semanticMark(self: *const Store) SemanticMark {
+    pub fn epochBoundary(self: *const Store) EpochBoundary {
         return .{
             .types = @intCast(self.types.len()),
             .spans = @intCast(self.spans.len()),
@@ -664,11 +664,11 @@ pub const Store = struct {
         };
     }
 
-    /// Result-owned semantic suffix preserving workspace-local dense ids.
-    pub const SemanticSegment = struct {
+    /// Result-owned type-store suffix preserving workspace-local dense ids.
+    pub const EpochDelta = struct {
         allocator: std.mem.Allocator,
-        begin: SemanticMark,
-        end: SemanticMark,
+        begin: EpochBoundary,
+        end: EpochBoundary,
         types: []Content,
         type_digests: []?names.TypeDigest,
         specialization_digests: []?names.TypeDigest,
@@ -681,10 +681,10 @@ pub const Store = struct {
         pub fn capture(
             allocator: std.mem.Allocator,
             source: *const Store,
-            begin: SemanticMark,
-            end: SemanticMark,
-        ) std.mem.Allocator.Error!SemanticSegment {
-            requireSemanticRange(source, begin, end);
+            begin: EpochBoundary,
+            end: EpochBoundary,
+        ) std.mem.Allocator.Error!EpochDelta {
+            requireEpochRange(source, begin, end);
             const types = try allocator.dupe(
                 Content,
                 source.types.unsafeRawItemsForView()[begin.types..end.types],
@@ -739,22 +739,58 @@ pub const Store = struct {
             };
         }
 
-        /// Rebuild this suffix after an identical prefix, preserving local ids.
-        ///
-        /// Mutable walk caches are intentionally reset. Full-digest buckets are
-        /// rebuilt from the captured eager digest beside each appended node.
-        pub fn appendTo(
-            self: *const SemanticSegment,
+        /// Reserve every allocation needed to append this exact suffix.
+        pub fn prepareAppend(
+            self: *const EpochDelta,
             destination: *Store,
         ) std.mem.Allocator.Error!void {
-            std.debug.assert(std.meta.eql(destination.semanticMark(), self.begin));
-            try destination.spans.appendSlice(destination.allocator, self.spans);
-            try destination.fields.appendSlice(destination.allocator, self.fields);
-            try destination.tags.appendSlice(destination.allocator, self.tags);
-            try destination.declared_fields.appendSlice(destination.allocator, self.declared_fields);
+            std.debug.assert(std.meta.eql(destination.epochBoundary(), self.begin));
+            try destination.spans.ensureTotalCapacity(destination.allocator, self.end.spans);
+            try destination.fields.ensureTotalCapacity(destination.allocator, self.end.fields);
+            try destination.tags.ensureTotalCapacity(destination.allocator, self.end.tags);
+            try destination.declared_fields.ensureTotalCapacity(
+                destination.allocator,
+                self.end.declared_fields,
+            );
+            try destination.types.ensureTotalCapacity(destination.allocator, self.end.types);
+            try destination.type_digests.ensureTotalCapacity(destination.allocator, self.end.types);
+            try destination.specialization_digests.ensureTotalCapacity(
+                destination.allocator,
+                self.end.types,
+            );
+            try destination.equality_digests.ensureTotalCapacity(destination.allocator, self.end.types);
+            try destination.constructing.ensureTotalCapacity(destination.allocator, self.end.types);
+            try destination.iterator_interface_cache.ensureTotalCapacity(
+                destination.allocator,
+                self.end.types,
+            );
+            try destination.iterator_interface_visit_epochs.ensureTotalCapacity(
+                destination.allocator,
+                self.end.types,
+            );
+        }
+
+        /// Append after `prepareAppend`; no durable or index mutation can fail.
+        ///
+        /// Full-digest buckets are intentionally omitted. Copied epoch
+        /// stores are immutable relocation sources, and the digest arrays carry
+        /// every durable cache needed while the destination program remains
+        /// the authoritative interning store.
+        pub fn appendPrepared(
+            self: *const EpochDelta,
+            destination: *Store,
+        ) void {
+            std.debug.assert(std.meta.eql(destination.epochBoundary(), self.begin));
+            destination.spans.appendSlice(destination.allocator, self.spans) catch unreachable;
+            destination.fields.appendSlice(destination.allocator, self.fields) catch unreachable;
+            destination.tags.appendSlice(destination.allocator, self.tags) catch unreachable;
+            destination.declared_fields.appendSlice(
+                destination.allocator,
+                self.declared_fields,
+            ) catch unreachable;
             for (self.types, 0..) |content, offset| {
                 const expected: TypeId = @enumFromInt(self.begin.types + @as(u32, @intCast(offset)));
-                const added = try destination.add(content);
+                const added = destination.add(content) catch unreachable;
                 std.debug.assert(added == expected);
                 destination.type_digests.set(@intFromEnum(added), self.type_digests[offset]);
                 destination.specialization_digests.set(
@@ -765,14 +801,20 @@ pub const Store = struct {
                     @intFromEnum(added),
                     self.equality_digests[offset],
                 );
-                if (self.type_digests[offset]) |digest| {
-                    try destination.indexInterned(digest, added);
-                }
             }
-            std.debug.assert(std.meta.eql(destination.semanticMark(), self.end));
+            std.debug.assert(std.meta.eql(destination.epochBoundary(), self.end));
         }
 
-        pub fn deinit(self: *SemanticSegment) void {
+        /// Append this suffix after an identical prefix, preserving local ids.
+        pub fn appendTo(
+            self: *const EpochDelta,
+            destination: *Store,
+        ) std.mem.Allocator.Error!void {
+            try self.prepareAppend(destination);
+            self.appendPrepared(destination);
+        }
+
+        pub fn deinit(self: *EpochDelta) void {
             self.allocator.free(self.declared_fields);
             self.allocator.free(self.tags);
             self.allocator.free(self.fields);
@@ -785,13 +827,13 @@ pub const Store = struct {
         }
     };
 
-    fn requireSemanticRange(
+    fn requireEpochRange(
         self: *const Store,
-        begin: SemanticMark,
-        end: SemanticMark,
+        begin: EpochBoundary,
+        end: EpochBoundary,
     ) void {
         if (self.hasSpeculativeConstruction()) {
-            Common.compilerBug("cannot capture a Monotype semantic epoch during speculative construction");
+            Common.compilerBug("cannot capture a Monotype type epoch during speculative construction");
         }
         std.debug.assert(self.type_digests.len() == self.types.len());
         std.debug.assert(self.specialization_digests.len() == self.types.len());
@@ -802,13 +844,13 @@ pub const Store = struct {
         std.debug.assert(begin.tags <= end.tags and end.tags <= self.tags.len());
         std.debug.assert(begin.declared_fields <= end.declared_fields and
             end.declared_fields <= self.declared_fields.len());
-        requireSemanticReferences(self, begin, end);
+        requireEpochReferences(self, begin, end);
     }
 
-    fn requireSemanticReferences(
+    fn requireEpochReferences(
         self: *const Store,
-        begin: SemanticMark,
-        end: SemanticMark,
+        begin: EpochBoundary,
+        end: EpochBoundary,
     ) void {
         const type_limit = end.types;
         const span_limit = end.spans;
@@ -819,43 +861,43 @@ pub const Store = struct {
             switch (content) {
                 .primitive, .erased, .zst => {},
                 .named => |named| {
-                    requireSemanticSpan(named.args, span_limit);
-                    requireSemanticSpan(named.declared_order, declared_limit);
-                    if (named.backing) |backing| requireSemanticType(backing.ty, type_limit);
+                    requireEpochSpan(named.args, span_limit);
+                    requireEpochSpan(named.declared_order, declared_limit);
+                    if (named.backing) |backing| requireEpochType(backing.ty, type_limit);
                 },
-                .record => |span_| requireSemanticSpan(span_, field_limit),
-                .tuple => |span_| requireSemanticSpan(span_, span_limit),
-                .tag_union => |span_| requireSemanticSpan(span_, tag_limit),
-                .list, .box => |ty| requireSemanticType(ty, type_limit),
+                .record => |span_| requireEpochSpan(span_, field_limit),
+                .tuple => |span_| requireEpochSpan(span_, span_limit),
+                .tag_union => |span_| requireEpochSpan(span_, tag_limit),
+                .list, .box => |ty| requireEpochType(ty, type_limit),
                 .func => |func| {
-                    requireSemanticSpan(func.args, span_limit);
-                    requireSemanticType(func.ret, type_limit);
+                    requireEpochSpan(func.args, span_limit);
+                    requireEpochType(func.ret, type_limit);
                 },
             }
         }
         for (self.spans.unsafeRawItemsForView()[begin.spans..end.spans]) |ty| {
-            requireSemanticType(ty, type_limit);
+            requireEpochType(ty, type_limit);
         }
         for (self.fields.unsafeRawItemsForView()[begin.fields..end.fields]) |field| {
-            requireSemanticType(field.ty, type_limit);
-            if (field.value_ty) |value_ty| requireSemanticType(value_ty, type_limit);
+            requireEpochType(field.ty, type_limit);
+            if (field.value_ty) |value_ty| requireEpochType(value_ty, type_limit);
         }
         for (self.tags.unsafeRawItemsForView()[begin.tags..end.tags]) |tag| {
-            requireSemanticSpan(tag.payloads, span_limit);
+            requireEpochSpan(tag.payloads, span_limit);
         }
         for (self.declared_fields.unsafeRawItemsForView()[begin.declared_fields..end.declared_fields]) |field| {
             switch (field) {
                 .named => {},
-                .padding => |ty| requireSemanticType(ty, type_limit),
+                .padding => |ty| requireEpochType(ty, type_limit),
             }
         }
     }
 
-    fn requireSemanticType(ty: TypeId, limit: u32) void {
+    fn requireEpochType(ty: TypeId, limit: u32) void {
         std.debug.assert(@intFromEnum(ty) < limit);
     }
 
-    fn requireSemanticSpan(span_: Span, limit: u32) void {
+    fn requireEpochSpan(span_: Span, limit: u32) void {
         std.debug.assert(span_.start <= limit);
         std.debug.assert(span_.len <= limit - span_.start);
     }
@@ -4007,7 +4049,7 @@ test "monotype type declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
-test "monotype type semantic segments own and rebuild consecutive suffixes" {
+test "monotype type epoch deltas own consecutive suffixes" {
     const gpa = std.testing.allocator;
     var name_store = names.NameStore.init(gpa);
     defer name_store.deinit();
@@ -4019,8 +4061,8 @@ test "monotype type semantic segments own and rebuild consecutive suffixes" {
     const type_name = try name_store.internTypeName("Model");
 
     var source = Store.init(gpa);
-    const start = source.semanticMark();
-    var empty = try Store.SemanticSegment.capture(gpa, &source, start, start);
+    const start = source.epochBoundary();
+    var empty = try Store.EpochDelta.capture(gpa, &source, start, start);
     defer empty.deinit();
     try std.testing.expectEqual(@as(usize, 0), empty.types.len);
     try std.testing.expectEqual(@as(usize, 0), empty.spans.len);
@@ -4050,7 +4092,7 @@ test "monotype type semantic segments own and rebuild consecutive suffixes" {
         .backing = .{ .ty = record, .use = .runtime_layout_only },
         .declared_order = &.{ .{ .named = field_name }, .{ .padding = unit } },
     });
-    const middle = source.semanticMark();
+    const middle = source.epochBoundary();
 
     const list = try source.internList(&name_store, named);
     const tuple = try source.internTuple(&name_store, &.{ record, tag_union, list });
@@ -4058,11 +4100,11 @@ test "monotype type semantic segments own and rebuild consecutive suffixes" {
     const expected_type_digest = source.typeDigest(&name_store, func);
     const expected_specialization_digest = source.specializationDigest(&name_store, func);
     const expected_equality_digest = source.equalityDigest(&name_store, func);
-    const end = source.semanticMark();
+    const end = source.epochBoundary();
 
-    var first = try Store.SemanticSegment.capture(gpa, &source, start, middle);
+    var first = try Store.EpochDelta.capture(gpa, &source, start, middle);
     defer first.deinit();
-    var second = try Store.SemanticSegment.capture(gpa, &source, middle, end);
+    var second = try Store.EpochDelta.capture(gpa, &source, middle, end);
     defer second.deinit();
 
     // Force every mutable source backing array to grow after capture. The
@@ -4085,45 +4127,45 @@ test "monotype type semantic segments own and rebuild consecutive suffixes" {
     }
     source.deinit();
 
-    var rebuilt = Store.init(gpa);
-    defer rebuilt.deinit();
-    try empty.appendTo(&rebuilt);
-    try first.appendTo(&rebuilt);
-    try second.appendTo(&rebuilt);
+    var destination = Store.init(gpa);
+    defer destination.deinit();
+    try empty.appendTo(&destination);
+    try first.appendTo(&destination);
+    try second.appendTo(&destination);
 
-    try std.testing.expect(std.meta.eql(rebuilt.semanticMark(), end));
-    try std.testing.expect(rebuilt.verify(&name_store) == null);
-    try std.testing.expectEqual(.u64, rebuilt.get(primitive).primitive);
+    try std.testing.expect(std.meta.eql(destination.epochBoundary(), end));
+    try std.testing.expect(destination.verify(&name_store) == null);
+    try std.testing.expectEqual(.u64, destination.get(primitive).primitive);
 
-    const rebuilt_fields = rebuilt.fieldSpan(rebuilt.get(record).record);
-    const rebuilt_field = GuardedList.at(rebuilt_fields, 0);
-    try std.testing.expectEqual(field_name, rebuilt_field.name);
-    try std.testing.expectEqual(primitive, rebuilt_field.ty);
-    try std.testing.expectEqual(unit, rebuilt_field.value_ty.?);
+    const destination_fields = destination.fieldSpan(destination.get(record).record);
+    const destination_field = GuardedList.at(destination_fields, 0);
+    try std.testing.expectEqual(field_name, destination_field.name);
+    try std.testing.expectEqual(primitive, destination_field.ty);
+    try std.testing.expectEqual(unit, destination_field.value_ty.?);
 
-    const rebuilt_tags = rebuilt.tagSpan(rebuilt.get(tag_union).tag_union);
-    const rebuilt_tag = GuardedList.at(rebuilt_tags, 0);
-    try std.testing.expectEqual(tag_name, rebuilt_tag.name);
-    try std.testing.expectEqual(record, GuardedList.at(rebuilt.span(rebuilt_tag.payloads), 0));
+    const destination_tags = destination.tagSpan(destination.get(tag_union).tag_union);
+    const destination_tag = GuardedList.at(destination_tags, 0);
+    try std.testing.expectEqual(tag_name, destination_tag.name);
+    try std.testing.expectEqual(record, GuardedList.at(destination.span(destination_tag.payloads), 0));
 
-    const rebuilt_named = rebuilt.get(named).named;
-    try std.testing.expectEqual(module, rebuilt_named.def.module);
-    try std.testing.expectEqual(type_name, rebuilt_named.def.type_name);
-    try std.testing.expectEqual(record, rebuilt_named.backing.?.ty);
-    const declared = rebuilt.declaredFieldSpan(rebuilt_named.declared_order);
+    const destination_named = destination.get(named).named;
+    try std.testing.expectEqual(module, destination_named.def.module);
+    try std.testing.expectEqual(type_name, destination_named.def.type_name);
+    try std.testing.expectEqual(record, destination_named.backing.?.ty);
+    const declared = destination.declaredFieldSpan(destination_named.declared_order);
     try std.testing.expectEqual(field_name, GuardedList.at(declared, 0).named);
     try std.testing.expectEqual(unit, GuardedList.at(declared, 1).padding);
 
-    const rebuilt_func = rebuilt.get(func).func;
-    try std.testing.expectEqual(tuple, GuardedList.at(rebuilt.span(rebuilt_func.args), 0));
-    try std.testing.expectEqual(primitive, GuardedList.at(rebuilt.span(rebuilt_func.args), 1));
-    try std.testing.expectEqual(named, rebuilt_func.ret);
-    try std.testing.expectEqual(expected_type_digest, rebuilt.typeDigest(&name_store, func));
+    const destination_func = destination.get(func).func;
+    try std.testing.expectEqual(tuple, GuardedList.at(destination.span(destination_func.args), 0));
+    try std.testing.expectEqual(primitive, GuardedList.at(destination.span(destination_func.args), 1));
+    try std.testing.expectEqual(named, destination_func.ret);
+    try std.testing.expectEqual(expected_type_digest, destination.typeDigest(&name_store, func));
     try std.testing.expectEqual(
         expected_specialization_digest,
-        rebuilt.specializationDigest(&name_store, func),
+        destination.specializationDigest(&name_store, func),
     );
-    try std.testing.expectEqual(expected_equality_digest, rebuilt.equalityDigest(&name_store, func));
+    try std.testing.expectEqual(expected_equality_digest, destination.equalityDigest(&name_store, func));
 }
 
 test "monotype cross-store import relocates names, side pools, sharing, and recursive members" {
