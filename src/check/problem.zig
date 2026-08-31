@@ -41,8 +41,10 @@ pub const NegativeUnsignedInt = types.NegativeUnsignedInt;
 pub const InvalidNumericLiteral = types.InvalidNumericLiteral;
 pub const TupleAccessNeedsAnnotation = types.TupleAccessNeedsAnnotation;
 pub const OptionalAccessOfRequiredField = types.OptionalAccessOfRequiredField;
+pub const UnsetOfRequiredField = types.UnsetOfRequiredField;
+pub const UnsetOfDefaultedField = types.UnsetOfDefaultedField;
 pub const EffectfulDefaultValue = types.EffectfulDefaultValue;
-pub const NonConcreteDefaultValue = types.NonConcreteDefaultValue;
+pub const DefaultConstrainsTypeParameter = types.DefaultConstrainsTypeParameter;
 pub const RecursiveDefaultValue = types.RecursiveDefaultValue;
 pub const CircularValueDefinition = types.CircularValueDefinition;
 pub const InvalidTupleAccess = types.InvalidTupleAccess;
@@ -89,6 +91,7 @@ pub const EffectfulExpect = types.EffectfulExpect;
 pub const EffectfulFunctionName = types.EffectfulFunctionName;
 
 // Comptime errors
+pub const ComptimeOrigin = types.ComptimeOrigin;
 pub const ComptimeCrash = types.ComptimeCrash;
 pub const ComptimeInvalidNumeral = types.ComptimeInvalidNumeral;
 pub const ComptimeInvalidQuote = types.ComptimeInvalidQuote;

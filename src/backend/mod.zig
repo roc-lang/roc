@@ -10,6 +10,7 @@ const roc_target = @import("roc_target");
 
 pub const dev = @import("dev/mod.zig");
 pub const wasm = @import("wasm/mod.zig");
+pub const in_process_abi = @import("in_process_abi.zig");
 
 // Re-export dev backend types at top level.
 pub const x86_64 = dev.x86_64;
@@ -53,6 +54,7 @@ test "backend tests" {
     const std = @import("std");
     std.testing.refAllDecls(StructuralTest);
     std.testing.refAllDecls(dev);
+    std.testing.refAllDecls(in_process_abi);
     std.testing.refAllDecls(wasm);
 }
 
