@@ -2312,15 +2312,7 @@ fn appendPublishedEntrypointRoots(
     switch (module_env.module_kind) {
         .default_app => {
             const main_ident = module_env.idents.main_bang;
-            const main_node_idx = module_env.getExposedValueNodeIndexById(main_ident) orelse {
-                if (builtin.mode == .Debug) {
-                    std.debug.panic(
-                        "checked artifact invariant violated: default app main! has no published root definition",
-                        .{},
-                    );
-                }
-                unreachable;
-            };
+            const main_node_idx = module_env.getExposedValueNodeIndexById(main_ident) orelse return;
             const main_def: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(main_node_idx)));
             const checked_type = try checkedTypeIdForRootSource(allocator, module, checked_types, .{ .def = main_def });
             if (try checkedTypeContainsError(allocator, &checked_types.store, checked_type)) return;
