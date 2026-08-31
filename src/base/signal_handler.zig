@@ -170,40 +170,36 @@ const is_darwin = builtin.os.tag.isDarwin();
 
 /// Layouts mirroring the darwin signal frame (see the macOS `_mcontext.h` and
 /// `_ucontext.h` headers). Only the fields the escape path rewrites are named.
-const DarwinMcontext = switch (builtin.cpu.arch) {
-    .aarch64 => extern struct {
-        far: u64 align(16),
-        esr: u64,
-        x: [30]u64,
-        lr: u64,
-        sp: u64,
-        pc: u64,
-    },
-    .x86_64 => extern struct {
-        trapno: u16,
-        cpu: u16,
-        err: u32,
-        faultvaddr: u64,
-        rax: u64,
-        rbx: u64,
-        rcx: u64,
-        rdx: u64,
-        rdi: u64,
-        rsi: u64,
-        rbp: u64,
-        rsp: u64,
-        r8: u64,
-        r9: u64,
-        r10: u64,
-        r11: u64,
-        r12: u64,
-        r13: u64,
-        r14: u64,
-        r15: u64,
-        rip: u64,
-    },
-    else => void,
-};
+const DarwinMcontext = if (builtin.cpu.arch == .aarch64) extern struct {
+    far: u64 align(16),
+    esr: u64,
+    x: [30]u64,
+    lr: u64,
+    sp: u64,
+    pc: u64,
+} else if (builtin.cpu.arch == .x86_64) extern struct {
+    trapno: u16,
+    cpu: u16,
+    err: u32,
+    faultvaddr: u64,
+    rax: u64,
+    rbx: u64,
+    rcx: u64,
+    rdx: u64,
+    rdi: u64,
+    rsi: u64,
+    rbp: u64,
+    rsp: u64,
+    r8: u64,
+    r9: u64,
+    r10: u64,
+    r11: u64,
+    r12: u64,
+    r13: u64,
+    r14: u64,
+    r15: u64,
+    rip: u64,
+} else void;
 
 const DarwinUcontext = extern struct {
     onstack: i32,
@@ -235,21 +231,20 @@ fn redirectDarwinContextToEscape(context: ?*anyopaque, recovery: *const StackOve
     const uc: *DarwinUcontext = @ptrCast(@alignCast(raw_context));
     pending_escape_recovery = recovery;
     const landing_top = @intFromPtr(&thread_alt_stack_storage) + ALT_STACK_SIZE;
-    switch (comptime builtin.cpu.arch) {
-        .aarch64 => {
-            uc.mcontext.pc = @intFromPtr(&escapeTrampoline);
-            uc.mcontext.sp = landing_top & ~@as(usize, 0xf);
-            uc.mcontext.lr = 0;
-        },
-        .x86_64 => {
-            uc.mcontext.rip = @intFromPtr(&escapeTrampoline);
-            // Land as if a call had just pushed a return address, the stack
-            // alignment every x86_64 function prologue assumes.
-            uc.mcontext.rsp = (landing_top & ~@as(usize, 0xf)) - 8;
-        },
-        else => return false,
+    if (comptime builtin.cpu.arch == .aarch64) {
+        uc.mcontext.pc = @intFromPtr(&escapeTrampoline);
+        uc.mcontext.sp = landing_top & ~@as(usize, 0xf);
+        uc.mcontext.lr = 0;
+        return true;
+    } else if (comptime builtin.cpu.arch == .x86_64) {
+        uc.mcontext.rip = @intFromPtr(&escapeTrampoline);
+        // Land as if a call had just pushed a return address, the stack
+        // alignment every x86_64 function prologue assumes.
+        uc.mcontext.rsp = (landing_top & ~@as(usize, 0xf)) - 8;
+        return true;
+    } else {
+        return false;
     }
-    return true;
 }
 
 fn unblockFaultSignals() void {
@@ -332,11 +327,13 @@ fn stackPointerFromSignalContext(context: ?*anyopaque) ?usize {
         if (comptime DarwinMcontext == void) return null;
         const raw_context = context orelse return null;
         const uc: *const DarwinUcontext = @ptrCast(@alignCast(raw_context));
-        return switch (comptime builtin.cpu.arch) {
-            .aarch64 => @intCast(uc.mcontext.sp),
-            .x86_64 => @intCast(uc.mcontext.rsp),
-            else => null,
-        };
+        if (comptime builtin.cpu.arch == .aarch64) {
+            return @intCast(uc.mcontext.sp);
+        } else if (comptime builtin.cpu.arch == .x86_64) {
+            return @intCast(uc.mcontext.rsp);
+        } else {
+            return null;
+        }
     }
     // zig 0.16 no longer exposes posix.ucontext_t / posix.REG, so for Linux we
     // read the faulting stack pointer from a locally-declared ucontext layout
