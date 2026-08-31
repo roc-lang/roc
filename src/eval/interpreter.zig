@@ -4399,6 +4399,18 @@ pub const Interpreter = struct {
     ) Error!void {
         self.bindCallerRocOps(ops);
         self.bindBoxyRuntime();
+        if (sljmp.supported) {
+            var call_jmp_buf: JmpBuf = undefined;
+            const prev_jmp_buf = self.roc_env.installJumpBuf(&call_jmp_buf);
+            defer self.roc_env.restoreJumpBuf(prev_jmp_buf);
+            const sj = setjmp(&call_jmp_buf);
+            if (sj != 0) {
+                self.recordActiveFailureLocIfUnset();
+                self.recordFailedCallStackIfUnset() catch {};
+                return error.Crash;
+            }
+        }
+
         const proc_id: LIR.LirProcSpecId = @enumFromInt(context.proc_id);
         const proc_spec = self.store.getProcSpec(proc_id);
         const proc_arg_locals = self.store.getLocalSpan(proc_spec.args);
