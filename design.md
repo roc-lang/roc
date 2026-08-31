@@ -2861,6 +2861,32 @@ identities. A forwarded requirement records its enclosing evidence index
 explicitly; checked errors and unreachable values remain distinct evidence
 kinds.
 
+Every procedure evidence parameter also carries an explicit dispatcher source.
+The source is exactly one of: a checked component path over the procedure's
+scheme callable; a checked component path over the exact checked dispatch-plan
+callable whose constraint introduced a specialization-time defaultable
+parameter; a nested constraint requirement resolved only by checked use-site
+evidence; an explicit specialization-time literal default; or an erased
+open-row remainder. Defaultable constraint-callable sources retain the
+dispatch plan identity and their path relative to that plan's callable in
+checked evidence at each instantiation edge. An empty path is not a defaulting
+signal and consumers must never infer one source category from path length.
+
+Monotype preserves a constraint-callable source as symbolic specialization
+evidence while constructing the specialization key. Interface relation replay
+then relates the source plan's checked callable and operands to the concrete
+request. Before a method dictionary or literal descriptor consumes that
+evidence, Monotype walks the producer-authored path over that now-related
+callable node at the exact dispatch consumption that requires it and resolves
+the concrete method evidence. It must not default the checked dispatcher,
+search another plan by method or type shape, or scan the solved graph for a
+matching component. Non-defaultable nested constraint requirements are marked
+use-site-only and must arrive as checked use-site evidence; they cannot be
+synthesized from a template. For runtime-dictionary requirements the checked
+entry remains a forwarded constraint slot: Boxy consumes its explicit slot and
+callable type in checked dictionary order, while the source recipe is retained
+for Monotype's specialization-time checked component-path walk.
+
 Boxy dictionary planning consumes those entries one-for-one in dictionary slot
 order. Each planned slot records the selected worker or structural operation,
 the concrete callable type used by its adapter, and fully planned hidden

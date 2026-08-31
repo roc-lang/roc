@@ -461,7 +461,7 @@ fn evidenceVectorEnd(
                     .from_callable => {},
                 }
             },
-            .structural, .unreachable_value, .checked_error => {},
+            .constraint_callable, .structural, .unreachable_value, .checked_error => {},
         }
     }
     return cursor;

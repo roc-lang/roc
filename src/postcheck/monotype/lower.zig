@@ -41,6 +41,7 @@ const PatternRefutability = can.PatternRefutability;
 
 const DispatchInstantiationPhase = enum {
     template_relation_replay,
+    type_query,
     expression_lowering,
 };
 
@@ -611,6 +612,7 @@ const MethodLookup = struct {
 const SpecEvidence = union(enum) {
     target: *const SpecEvidenceTarget,
     structural: SpecStructuralEvidence,
+    constraint_callable: SpecConstraintCallableEvidence,
     /// The edge left the requirement's dispatcher unsolved: no value of that
     /// type can ever reach the dispatch. Monotype represents that non-returning
     /// path with an ordinary Roc runtime crash instead of a dispatch call.
@@ -619,6 +621,16 @@ const SpecEvidence = union(enum) {
     /// if `roc run` continues and reaches the dispatch, Monotype emits an
     /// ordinary Roc runtime crash instead of returning a value.
     checked_error,
+};
+
+const SpecConstraintCallableEvidence = struct {
+    view: ModuleView,
+    plan: static_dispatch.StaticDispatchPlanId,
+    callable_ty: checked.CheckedTypeId,
+    method: names.MethodNameId,
+    structural: ?static_dispatch.StructuralKind,
+    path: []const static_dispatch.EvidencePathStep,
+    source_ref: ?static_dispatch.ConstraintCallableEvidence,
 };
 
 /// The checker's structural decision, retaining the exact checked evidence
@@ -1567,7 +1579,7 @@ fn specEvidenceEql(a: SpecEvidence, b: SpecEvidence) bool {
                 }
                 break :blk true;
             },
-            .structural, .unreachable_value, .checked_error => false,
+            .constraint_callable, .structural, .unreachable_value, .checked_error => false,
         },
         .structural => |a_structural| switch (b) {
             // The checked contract is provenance for materializing the
@@ -1575,11 +1587,26 @@ fn specEvidenceEql(a: SpecEvidence, b: SpecEvidence) bool {
             // Once the monomorphic callable agrees, structural specialization
             // identity is exactly the derivation selected by checking.
             .structural => |b_structural| std.meta.eql(a_structural.derivation, b_structural.derivation),
-            .target, .unreachable_value, .checked_error => false,
+            .target, .constraint_callable, .unreachable_value, .checked_error => false,
+        },
+        .constraint_callable => |a_source| switch (b) {
+            .constraint_callable => |b_source| std.mem.eql(u8, &a_source.view.key.bytes, &b_source.view.key.bytes) and
+                a_source.plan == b_source.plan and
+                std.meta.eql(a_source.view.types.rootKey(a_source.callable_ty), b_source.view.types.rootKey(b_source.callable_ty)) and
+                a_source.method == b_source.method and
+                std.meta.eql(a_source.structural, b_source.structural) and
+                evidencePathEql(a_source.path, b_source.path),
+            .target, .structural, .unreachable_value, .checked_error => false,
         },
         .unreachable_value => b == .unreachable_value,
         .checked_error => b == .checked_error,
     };
+}
+
+fn evidencePathEql(a: []const static_dispatch.EvidencePathStep, b: []const static_dispatch.EvidencePathStep) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |a_step, b_step| if (!std.meta.eql(a_step, b_step)) return false;
+    return true;
 }
 
 fn specMethodTargetEql(left: *const SpecEvidenceTarget, right: *const SpecEvidenceTarget) bool {
@@ -1609,7 +1636,7 @@ fn specEvidenceRequiresLocalContext(evidence: []const SpecEvidence) bool {
                 .synthesize => {},
             }
         },
-        .structural, .unreachable_value, .checked_error => {},
+        .constraint_callable, .structural, .unreachable_value, .checked_error => {},
     };
     return false;
 }
@@ -1621,8 +1648,43 @@ fn specEvidenceContainsStructural(evidence: []const SpecEvidence) bool {
             .synthesize => {},
         },
         .structural => return true,
-        .unreachable_value, .checked_error => {},
+        .constraint_callable, .unreachable_value, .checked_error => {},
     };
+    return false;
+}
+
+const ConstraintCallablePlanAddress = struct {
+    module: [32]u8,
+    plan: static_dispatch.StaticDispatchPlanId,
+};
+
+fn evidenceChainContainsConstraintCallable(
+    allocator: Allocator,
+    evidence: EvidenceChain,
+    wanted: ?ConstraintCallablePlanAddress,
+) Allocator.Error!bool {
+    var pending: std.ArrayListUnmanaged([]const SpecEvidence) = .empty;
+    defer pending.deinit(allocator);
+
+    var frame = evidence;
+    while (true) {
+        try pending.append(allocator, frame.vector);
+        frame = (frame.parent orelse break).*;
+    }
+
+    while (pending.pop()) |vector| {
+        for (vector) |entry| switch (entry) {
+            .target => |target| switch (target.nested) {
+                .resolved => |nested| try pending.append(allocator, nested),
+                .synthesize => {},
+            },
+            .constraint_callable => |source| {
+                if (wanted == null or
+                    (moduleBytesEqual(source.view.key.bytes, wanted.?.module) and source.plan == wanted.?.plan)) return true;
+            },
+            .structural, .unreachable_value, .checked_error => {},
+        };
+    }
     return false;
 }
 
@@ -1672,7 +1734,7 @@ fn specEvidenceLocalOwner(
                 .synthesize => {},
             }
         },
-        .structural, .unreachable_value, .checked_error => {},
+        .constraint_callable, .structural, .unreachable_value, .checked_error => {},
     };
     return owner;
 }
@@ -3631,6 +3693,12 @@ const Builder = struct {
                 } };
             },
             .structural => |structural| try nodes.append(self.allocator, .{ .structural = structural.derivation }),
+            .constraint_callable => |source| try nodes.append(self.allocator, .{ .constraint_callable = .{
+                .view = .{ .bytes = source.view.key.bytes },
+                .callable_key = source.view.types.rootKey(source.callable_ty),
+                .source = source.source_ref orelse
+                    Common.invariant("stored constraint-callable evidence lacked a checked module cache source reference"),
+            } }),
             .unreachable_value => try nodes.append(self.allocator, .unreachable_value),
             .checked_error => try nodes.append(self.allocator, .checked_error),
         };
@@ -17750,6 +17818,7 @@ const BodyContext = struct {
             const expr_ty = self.view.bodies.expr(plan.expr).ty;
             _ = try self.callableDispatchResultTypeNodeInPhase(
                 expr_ty,
+                plan_id,
                 callable_plan,
                 null,
                 .template_relation_replay,
@@ -27632,6 +27701,357 @@ const BodyContext = struct {
         return request_fn;
     }
 
+    fn checkedEvidenceRecordFieldChild(
+        self: *BodyContext,
+        path_view: ModuleView,
+        root: checked.CheckedTypeId,
+        label: names.RecordFieldNameId,
+    ) Allocator.Error!?checked.CheckedTypeId {
+        var current = root;
+        var remaining = self.view.types.payloadCount() + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            switch (checkedPayload(self.view, current)) {
+                .alias => |alias| current = alias.backing,
+                .record => |record| {
+                    for (record.fields) |field| {
+                        if (std.mem.eql(
+                            u8,
+                            self.view.names.recordFieldLabelText(field.name),
+                            path_view.names.recordFieldLabelText(label),
+                        )) return field.ty;
+                    }
+                    current = record.ext;
+                },
+                .record_unbound => |fields| {
+                    for (fields) |field| {
+                        if (std.mem.eql(
+                            u8,
+                            self.view.names.recordFieldLabelText(field.name),
+                            path_view.names.recordFieldLabelText(label),
+                        )) return field.ty;
+                    }
+                    return null;
+                },
+                .pending, .err, .flex, .rigid, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return null,
+            }
+        }
+        Common.invariant("checked constraint-callable record path encountered a cyclic row");
+    }
+
+    fn checkedEvidenceTagPayloadChild(
+        self: *BodyContext,
+        path_view: ModuleView,
+        root: checked.CheckedTypeId,
+        label: names.TagNameId,
+        payload_index: u32,
+    ) Allocator.Error!?checked.CheckedTypeId {
+        var current = root;
+        var remaining = self.view.types.payloadCount() + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            switch (checkedPayload(self.view, current)) {
+                .alias => |alias| current = alias.backing,
+                .tag_union => |tag_union| {
+                    for (tag_union.tags) |tag| {
+                        if (!std.mem.eql(
+                            u8,
+                            self.view.names.tagLabelText(tag.name),
+                            path_view.names.tagLabelText(label),
+                        )) continue;
+                        const payloads = tag.argsSlice(self.view.types);
+                        if (payload_index >= payloads.len) return null;
+                        return payloads[payload_index];
+                    }
+                    current = tag_union.ext;
+                },
+                .pending, .err, .flex, .rigid, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .empty_tag_union => return null,
+            }
+        }
+        Common.invariant("checked constraint-callable tag path encountered a cyclic row");
+    }
+
+    fn checkedEvidencePathLeaf(
+        self: *BodyContext,
+        path_view: ModuleView,
+        root: checked.CheckedTypeId,
+        path: []const static_dispatch.EvidencePathStep,
+    ) Allocator.Error!?checked.CheckedTypeId {
+        var current = root;
+        var index: usize = 0;
+        while (index < path.len) : (index += 1) {
+            const step = path[index];
+            switch (step.stepKind()) {
+                .fn_arg => switch (checkedPayload(self.view, current)) {
+                    .function => |function| {
+                        if (step.data >= function.args.len) return null;
+                        current = function.args[step.data];
+                    },
+                    .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
+                },
+                .fn_ret => switch (checkedPayload(self.view, current)) {
+                    .function => |function| current = function.ret,
+                    .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
+                },
+                .alias_arg => switch (checkedPayload(self.view, current)) {
+                    .alias => |alias| {
+                        if (step.data >= alias.args.len) return null;
+                        current = alias.args[step.data];
+                    },
+                    .pending, .err, .flex, .rigid, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return null,
+                },
+                .alias_backing => switch (checkedPayload(self.view, current)) {
+                    .alias => |alias| current = alias.backing,
+                    .pending, .err, .flex, .rigid, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return null,
+                },
+                .nominal_arg => switch (checkedPayload(self.view, current)) {
+                    .nominal => |nominal| {
+                        if (step.data >= nominal.args.len) return null;
+                        current = nominal.args[step.data];
+                    },
+                    .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return null,
+                },
+                .nominal_backing => switch (checkedPayload(self.view, current)) {
+                    .nominal => |nominal| current = self.view.types.nominalBackingTemplateForPayload(nominal) orelse return null,
+                    .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return null,
+                },
+                .tuple_elem => switch (checkedPayload(self.view, current)) {
+                    .tuple => |items| {
+                        if (step.data >= items.len) return null;
+                        current = items[step.data];
+                    },
+                    .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return null,
+                },
+                .record_field => current = try self.checkedEvidenceRecordFieldChild(path_view, current, @enumFromInt(step.data)) orelse return null,
+                .tag_payload_tag => {
+                    index += 1;
+                    if (index >= path.len or path[index].stepKind() != .tag_payload_index) return null;
+                    current = try self.checkedEvidenceTagPayloadChild(path_view, current, @enumFromInt(step.data), path[index].data) orelse return null;
+                },
+                .tag_payload_index => return null,
+            }
+        }
+        return current;
+    }
+
+    fn prepareConstraintCallablePlanInstantiation(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchPlanId,
+        callable_ty: checked.CheckedTypeId,
+    ) Allocator.Error!void {
+        return try self.prepareConstraintCallableInstantiation(
+            self.evidence,
+            self.view,
+            plan,
+            callable_ty,
+        );
+    }
+
+    fn prepareConstraintCallableInstantiation(
+        self: *BodyContext,
+        evidence: EvidenceChain,
+        source_view: ModuleView,
+        plan: static_dispatch.StaticDispatchPlanId,
+        instantiated_callable_ty: checked.CheckedTypeId,
+    ) Allocator.Error!void {
+        var pending: std.ArrayListUnmanaged([]const SpecEvidence) = .empty;
+        defer pending.deinit(self.allocator);
+
+        var frame = evidence;
+        while (true) {
+            try pending.append(self.allocator, frame.vector);
+            frame = (frame.parent orelse break).*;
+        }
+
+        while (pending.pop()) |vector| {
+            for (vector) |entry| switch (entry) {
+                .target => |target| switch (target.nested) {
+                    .resolved => |nested| try pending.append(self.allocator, nested),
+                    .synthesize => {},
+                },
+                .constraint_callable => |source| {
+                    if (!moduleBytesEqual(source.view.key.bytes, source_view.key.bytes) or source.plan != plan) continue;
+                    if (source.callable_ty != instantiated_callable_ty) continue;
+                    const leaf = try self.checkedEvidencePathLeaf(source.view, instantiated_callable_ty, source.path) orelse
+                        Common.invariant("constraint-callable source path did not resolve in its checked callable");
+                    const variable = switch (checkedPayload(self.view, leaf)) {
+                        .flex, .rigid => |variable| variable,
+                        .pending, .err, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => Common.invariant("constraint-callable source path did not select a checked variable"),
+                    };
+                    if (variable.numeric_default_phase == null) continue;
+                    if (self.scopedNode(leaf) == null) {
+                        try self.putScopedNode(leaf, try self.graph.newNode(.{ .unresolved = InstVariable.checkedVariable(
+                            null,
+                            variable.row_default,
+                        ) }));
+                    }
+                },
+                .structural, .unreachable_value, .checked_error => {},
+            };
+        }
+    }
+
+    const ConstraintCallableResolutionPhase = enum { plan_method, remaining, all };
+
+    fn resolveConstraintCallableEvidenceVector(
+        self: *BodyContext,
+        vector: []const SpecEvidence,
+        plan: static_dispatch.StaticDispatchPlanId,
+        plan_method: names.MethodNameId,
+        callable_node: NodeId,
+        phase: ConstraintCallableResolutionPhase,
+    ) Allocator.Error![]const SpecEvidence {
+        const arena = self.builder.evidence_arena.allocator();
+        const root_out = try arena.alloc(SpecEvidence, vector.len);
+        const Frame = struct {
+            input: []const SpecEvidence,
+            output: []SpecEvidence,
+            index: usize = 0,
+        };
+        var pending: std.ArrayListUnmanaged(Frame) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .input = vector, .output = root_out });
+
+        while (pending.items.len != 0) {
+            const frame_index = pending.items.len - 1;
+            if (pending.items[frame_index].index == pending.items[frame_index].input.len) {
+                _ = pending.pop();
+                continue;
+            }
+            const index = pending.items[frame_index].index;
+            pending.items[frame_index].index += 1;
+            const entry = pending.items[frame_index].input[index];
+            switch (entry) {
+                .target => |target| switch (target.nested) {
+                    .synthesize => pending.items[frame_index].output[index] = entry,
+                    .resolved => |nested| {
+                        const nested_out = try arena.alloc(SpecEvidence, nested.len);
+                        const copied = try arena.create(SpecEvidenceTarget);
+                        copied.* = target.*;
+                        copied.nested = .{ .resolved = nested_out };
+                        pending.items[frame_index].output[index] = .{ .target = copied };
+                        try pending.append(self.allocator, .{ .input = nested, .output = nested_out });
+                    },
+                },
+                .constraint_callable => |source| {
+                    const matches_plan = moduleBytesEqual(source.view.key.bytes, self.view.key.bytes) and source.plan == plan;
+                    const matches_phase = switch (phase) {
+                        .plan_method => source.method == plan_method,
+                        .remaining => source.method != plan_method,
+                        .all => true,
+                    };
+                    if (!matches_plan or !matches_phase) {
+                        pending.items[frame_index].output[index] = entry;
+                        continue;
+                    }
+                    const component_node = try self.walkEvidencePathNode(source.view, callable_node, source.path) orelse
+                        Common.invariant("constraint-callable evidence path did not match its live plan callable");
+                    pending.items[frame_index].output[index] = try self.synthesizeComponentEvidenceAtNode(
+                        source.view,
+                        source.method,
+                        source.structural,
+                        component_node,
+                    );
+                },
+                .structural, .unreachable_value, .checked_error => pending.items[frame_index].output[index] = entry,
+            }
+        }
+        return root_out;
+    }
+
+    fn resolveConstraintCallableEvidenceChain(
+        self: *BodyContext,
+        evidence: EvidenceChain,
+        plan: static_dispatch.StaticDispatchPlanId,
+        plan_method: names.MethodNameId,
+        callable_node: NodeId,
+        phase: ConstraintCallableResolutionPhase,
+    ) Allocator.Error!EvidenceChain {
+        var source_frames: std.ArrayListUnmanaged(*const EvidenceChain) = .empty;
+        defer source_frames.deinit(self.allocator);
+        var current: ?*const EvidenceChain = &evidence;
+        while (current) |frame| : (current = frame.parent) {
+            try source_frames.append(self.allocator, frame);
+        }
+
+        const arena = self.builder.evidence_arena.allocator();
+        const resolved_frames = try arena.alloc(EvidenceChain, source_frames.items.len);
+        var index = source_frames.items.len;
+        while (index > 0) {
+            index -= 1;
+            const source = source_frames.items[index];
+            resolved_frames[index] = .{
+                .scope = source.scope,
+                .vector = try self.resolveConstraintCallableEvidenceVector(
+                    source.vector,
+                    plan,
+                    plan_method,
+                    callable_node,
+                    phase,
+                ),
+                .parent = if (index + 1 < resolved_frames.len) &resolved_frames[index + 1] else null,
+            };
+        }
+        return resolved_frames[0];
+    }
+
+    fn pendingConstraintCallableForPlan(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+    ) ?SpecConstraintCallableEvidence {
+        const dependent = switch (plan.resolution) {
+            .evidence_dependent => |dependent| dependent,
+            .direct_closed, .direct_parametric, .direct_pending, .structural, .checked_error, .@"unreachable" => return null,
+        };
+        // A checked plan restored through a stored constant retains the
+        // dependency index from its declaring lexical scope. That slot is not
+        // part of the caller's evidence chain, so it cannot select pending
+        // constraint-callable evidence in this context.
+        const entry = self.evidence.at(dependent.index) orelse return null;
+        return switch (entry) {
+            .constraint_callable => |source| source,
+            .target, .structural, .unreachable_value, .checked_error => null,
+        };
+    }
+
+    fn resolveConstraintCallablePlanDependencies(
+        self: *BodyContext,
+        root_plan: static_dispatch.StaticDispatchPlanId,
+    ) Allocator.Error!void {
+        var pending: std.ArrayListUnmanaged(static_dispatch.StaticDispatchPlanId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root_plan);
+
+        while (pending.items.len != 0) {
+            const current_id = pending.items[pending.items.len - 1];
+            const current = self.view.static_dispatch_plans.plans[@intFromEnum(current_id)];
+            if (self.pendingConstraintCallableForPlan(current)) |source| {
+                if (!moduleBytesEqual(source.view.key.bytes, self.view.key.bytes)) {
+                    Common.invariant("constraint-callable plan dependency crossed module specialization state");
+                }
+                if (source.plan != current_id) {
+                    for (pending.items) |active| {
+                        if (active == source.plan) {
+                            Common.invariant("constraint-callable plan dependency graph was cyclic");
+                        }
+                    }
+                    try pending.append(self.allocator, source.plan);
+                    continue;
+                }
+            }
+
+            if (current_id == root_plan) return;
+            _ = try self.dispatchResultTypeNodeInPhaseAfterDependencies(
+                self.view.bodies.expr(current.expr).ty,
+                current_id,
+                null,
+                .type_query,
+            );
+            if (self.pendingConstraintCallableForPlan(current) != null) {
+                Common.invariant("constraint-callable source plan did not discharge its dependent evidence");
+            }
+            _ = pending.pop();
+        }
+    }
+
     fn instantiateCallableDispatchPlanCallNodeFromCaller(
         self: *BodyContext,
         callable_plan: CallableDispatchPlan,
@@ -27640,6 +28060,7 @@ const BodyContext = struct {
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!NodeId {
         return try self.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
+            null,
             callable_plan,
             caller,
             checked_ret_ty,
@@ -27650,6 +28071,7 @@ const BodyContext = struct {
 
     fn instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
         self: *BodyContext,
+        source_plan: ?static_dispatch.StaticDispatchPlanId,
         callable_plan: CallableDispatchPlan,
         caller: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
@@ -27662,6 +28084,12 @@ const BodyContext = struct {
         const function = self.checkedFunctionType(source_fn_ty);
         if (function.args.len != operands.len) {
             Common.invariant("checked dispatch plan arity differs from its function type");
+        }
+        if (source_plan) |plan_id| {
+            const source_record = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+            if (self.pendingConstraintCallableForPlan(source_record) != null) {
+                try self.prepareConstraintCallablePlanInstantiation(plan_id, source_fn_ty);
+            }
         }
         const fn_node = try self.instNode(source_fn_ty);
         const fn_graph = switch (self.graph.content(fn_node)) {
@@ -31123,6 +31551,7 @@ const BodyContext = struct {
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const plan_args = callable_plan.operands;
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
+            dispatchPlanIdForRuntimeExpr(fn_view, runtime.expr),
             callable_plan,
             &fn_ctx,
             expr.ty,
@@ -31457,6 +31886,7 @@ const BodyContext = struct {
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const plan_args = callable_plan.operands;
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
+            dispatchPlanIdForRuntimeExpr(fn_view, runtime.expr),
             callable_plan,
             &fn_ctx,
             expr.ty,
@@ -34600,30 +35030,34 @@ const BodyContext = struct {
         self.builder.countBodyDiagnostic("dispatch_expressions");
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        try self.resolveConstraintCallablePlanDependencies(plan_id);
+        const selects_constraint_callable_evidence = self.pendingConstraintCallableForPlan(plan) != null;
         var direct_parametric_low_level: ?can.CIR.Expr.LowLevel = null;
         const direct_graph_call = self.dispatchUsesDirectGraphCallee(plan);
         switch (plan.resolution) {
             .direct_closed => |direct| {
-                const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
-                switch (node.target.kind) {
-                    .procedure => |procedure| switch (procedure.runtime_target) {
-                        .low_level => |op| return try self.lowerClosedDirectLowLevelDispatch(
-                            checked_ret_ty,
-                            plan,
-                            op,
-                            expected_ret_cell,
-                        ),
-                        .procedure => return try self.lowerClosedDirectProcedureDispatch(
-                            checked_ret_ty,
-                            plan,
-                            direct.evidence,
-                            procedure,
-                            expected_ret_cell,
-                        ),
-                        .intrinsic, .graph_participating => {},
-                    },
-                    .local_proc => {},
-                    .structural => {},
+                if (!selects_constraint_callable_evidence) {
+                    const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
+                    switch (node.target.kind) {
+                        .procedure => |procedure| switch (procedure.runtime_target) {
+                            .low_level => |op| return try self.lowerClosedDirectLowLevelDispatch(
+                                checked_ret_ty,
+                                plan,
+                                op,
+                                expected_ret_cell,
+                            ),
+                            .procedure => return try self.lowerClosedDirectProcedureDispatch(
+                                checked_ret_ty,
+                                plan,
+                                direct.evidence,
+                                procedure,
+                                expected_ret_cell,
+                            ),
+                            .intrinsic, .graph_participating => {},
+                        },
+                        .local_proc => {},
+                        .structural => {},
+                    }
                 }
             },
             .direct_parametric => |direct| {
@@ -34664,21 +35098,34 @@ const BodyContext = struct {
         call_ctx.current_entry_root = self.current_entry_root;
 
         var callable_node = try call_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
+            plan_id,
             callable_plan,
             self,
             checked_ret_ty,
             expected_ret_node,
             .expression_lowering,
         );
+        if (selects_constraint_callable_evidence) {
+            self.evidence = try self.resolveConstraintCallableEvidenceChain(
+                self.evidence,
+                plan_id,
+                plan.method,
+                callable_node,
+                .plan_method,
+            );
+            call_ctx.evidence = self.evidence;
+        }
         const resolution = self.evidenceResolution(plan) orelse
             Common.invariant("runtime method call had no CheckedCallResolution evidence");
+        var resolved_remaining_constraint_evidence = false;
         switch (resolution) {
             .target => |initial_lookup| {
+                const relation_lookup = initial_lookup;
                 if (direct_parametric_low_level == null and !direct_graph_call) {
-                    const target_node = try self.methodTargetNodeFromPlan(initial_lookup, &call_ctx, plan.callable_ty);
+                    const target_node = try self.methodTargetNodeFromPlan(relation_lookup, &call_ctx, plan.callable_ty);
                     try relateFunctionRequestInterface(self.graph, target_node, callable_node);
                     if (try self.generatedIteratorMethodRequestNode(
-                        initial_lookup,
+                        relation_lookup,
                         target_node,
                         callable_node,
                         plan_args,
@@ -34686,14 +35133,33 @@ const BodyContext = struct {
                         callable_node = private_node;
                     }
                 }
+                self.evidence = try self.resolveConstraintCallableEvidenceChain(
+                    self.evidence,
+                    plan_id,
+                    plan.method,
+                    callable_node,
+                    if (selects_constraint_callable_evidence) .remaining else .all,
+                );
+                call_ctx.evidence = self.evidence;
+                resolved_remaining_constraint_evidence = true;
                 callable_node = try self.lowerAndCompleteIteratorMethodResultAtNode(
-                    initial_lookup,
+                    relation_lookup,
                     callable_node,
                     plan,
                     direct_graph_call,
                 );
             },
             .structural => {},
+        }
+        if (!resolved_remaining_constraint_evidence) {
+            self.evidence = try self.resolveConstraintCallableEvidenceChain(
+                self.evidence,
+                plan_id,
+                plan.method,
+                callable_node,
+                if (selects_constraint_callable_evidence) .remaining else .all,
+            );
+            call_ctx.evidence = self.evidence;
         }
         const callsite_intrinsic = switch (resolution) {
             .target => |lookup| self.callsiteIntrinsicForMethodTarget(lookup.target),
@@ -35873,13 +36339,32 @@ const BodyContext = struct {
         phase: DispatchInstantiationPhase,
     ) Allocator.Error!NodeId {
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
+        try self.resolveConstraintCallablePlanDependencies(plan_id);
+        return try self.dispatchResultTypeNodeInPhaseAfterDependencies(
+            checked_ret_ty,
+            plan_id,
+            expected_ret_node,
+            phase,
+        );
+    }
+
+    fn dispatchResultTypeNodeInPhaseAfterDependencies(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        plan_id: static_dispatch.StaticDispatchPlanId,
+        expected_ret_node: ?NodeId,
+        phase: DispatchInstantiationPhase,
+    ) Allocator.Error!NodeId {
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
-        if (try self.closedDirectGraphFreeResultNode(checked_ret_ty, plan, expected_ret_node)) |ret_node| {
-            return ret_node;
+        if (self.pendingConstraintCallableForPlan(plan) == null) {
+            if (try self.closedDirectGraphFreeResultNode(checked_ret_ty, plan, expected_ret_node)) |ret_node| {
+                return ret_node;
+            }
         }
         return switch (self.dispatchRuntimePlan(plan)) {
             .callable => |callable_plan| try self.callableDispatchResultTypeNodeInPhase(
                 checked_ret_ty,
+                plan_id,
                 callable_plan,
                 expected_ret_node,
                 phase,
@@ -35970,6 +36455,7 @@ const BodyContext = struct {
     fn callableDispatchResultTypeNodeInPhase(
         self: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
+        plan_id: static_dispatch.StaticDispatchPlanId,
         callable_plan: CallableDispatchPlan,
         expected_ret_node: ?NodeId,
         phase: DispatchInstantiationPhase,
@@ -35985,36 +36471,83 @@ const BodyContext = struct {
 
         const plan_args = callable_plan.operands;
         var callable_node = try call_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
+            plan_id,
             callable_plan,
             self,
             checked_ret_ty,
             expected_ret_node,
             phase,
         );
+        const resolves_constraint_callable = phase != .template_relation_replay and
+            try evidenceChainContainsConstraintCallable(self.allocator, self.evidence, .{
+                .module = self.view.key.bytes,
+                .plan = plan_id,
+            });
+        const selects_constraint_callable = self.pendingConstraintCallableForPlan(plan) != null;
+        if (resolves_constraint_callable and selects_constraint_callable) {
+            self.evidence = try self.resolveConstraintCallableEvidenceChain(
+                self.evidence,
+                plan_id,
+                plan.method,
+                callable_node,
+                .plan_method,
+            );
+            call_ctx.evidence = self.evidence;
+        }
+        const defer_target_relation = switch (phase) {
+            .template_relation_replay => self.pendingConstraintCallableForPlan(plan) != null,
+            .type_query, .expression_lowering => false,
+        };
+        if (defer_target_relation) {
+            return switch (self.graph.content(callable_node)) {
+                .func => |function| function.ret,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked dispatch plan had a non-function graph node"),
+            };
+        }
         const resolution = self.evidenceResolution(plan) orelse
             Common.invariant("runtime method result had no CheckedCallResolution evidence");
         switch (resolution) {
             .target => |lookup| {
-                const target_node = try self.methodTargetNodeFromPlan(lookup, &call_ctx, plan.callable_ty);
+                const relation_lookup = lookup;
+                const target_node = try self.methodTargetNodeFromPlan(relation_lookup, &call_ctx, plan.callable_ty);
                 try relateFunctionRequestInterface(self.graph, target_node, callable_node);
                 if (try self.generatedIteratorMethodRequestNode(
-                    lookup,
+                    relation_lookup,
                     target_node,
                     callable_node,
                     plan_args,
                 )) |private_node| {
                     callable_node = private_node;
                 }
+                if (resolves_constraint_callable) {
+                    self.evidence = try self.resolveConstraintCallableEvidenceChain(
+                        self.evidence,
+                        plan_id,
+                        plan.method,
+                        callable_node,
+                        if (selects_constraint_callable) .remaining else .all,
+                    );
+                    call_ctx.evidence = self.evidence;
+                }
                 if (phase == .expression_lowering) {
                     callable_node = try self.lowerAndCompleteIteratorMethodResultAtNode(
-                        lookup,
+                        relation_lookup,
                         callable_node,
                         plan,
                         self.dispatchUsesDirectGraphCallee(plan),
                     );
                 }
             },
-            .structural => {},
+            .structural => if (resolves_constraint_callable) {
+                self.evidence = try self.resolveConstraintCallableEvidenceChain(
+                    self.evidence,
+                    plan_id,
+                    plan.method,
+                    callable_node,
+                    if (selects_constraint_callable) .remaining else .all,
+                );
+                call_ctx.evidence = self.evidence;
+            },
         }
         return switch (self.graph.content(callable_node)) {
             .func => |function| function.ret,
@@ -36076,6 +36609,15 @@ const BodyContext = struct {
                         component_node,
                     );
                 },
+                .from_constraint_callable => |source| .{ .constraint_callable = .{
+                    .view = self.view,
+                    .plan = source.plan,
+                    .callable_ty = source.callable_ty,
+                    .method = source.method,
+                    .structural = source.structural,
+                    .path = self.view.static_dispatch_plans.constraint_callable_paths[source.path.start..][0..source.path.len],
+                    .source_ref = source,
+                } },
                 .direct, .constraint, .structural, .checked_error, .unreachable_value => try self.materializeEvidenceRef(ref, .body_lowering),
             };
         }
@@ -36109,7 +36651,7 @@ const BodyContext = struct {
                         };
                         break :blk .{ .target = independent };
                     },
-                    .structural, .unreachable_value, .checked_error => entry,
+                    .constraint_callable, .structural, .unreachable_value, .checked_error => entry,
                 };
             },
             .structural => |evidence| return .{ .structural = .{
@@ -36117,6 +36659,15 @@ const BodyContext = struct {
                 .checked = .{ .view = self.view, .evidence = evidence },
             } },
             .from_callable => Common.invariant("callable-derived checked evidence escaped a nested procedure construction recipe"),
+            .from_constraint_callable => |source| return .{ .constraint_callable = .{
+                .view = self.view,
+                .plan = source.plan,
+                .callable_ty = source.callable_ty,
+                .method = source.method,
+                .structural = source.structural,
+                .path = self.view.static_dispatch_plans.constraint_callable_paths[source.path.start..][0..source.path.len],
+                .source_ref = source,
+            } },
             .checked_error => return .checked_error,
             .unreachable_value => return .unreachable_value,
         }
@@ -36281,6 +36832,18 @@ const BodyContext = struct {
                     break :blk .{ .target = materialized };
                 },
                 .structural => |kind| .{ .structural = .{ .derivation = kind } },
+                .constraint_callable => |source| blk: {
+                    const view = self.builder.moduleForDigest(source.view);
+                    break :blk .{ .constraint_callable = .{
+                        .view = view,
+                        .plan = source.source.plan,
+                        .callable_ty = source.source.callable_ty,
+                        .method = source.source.method,
+                        .structural = source.source.structural,
+                        .path = view.static_dispatch_plans.constraint_callable_paths[source.source.path.start..][0..source.source.path.len],
+                        .source_ref = source.source,
+                    } };
+                },
                 .unreachable_value => .unreachable_value,
                 .checked_error => .checked_error,
             };
@@ -36326,7 +36889,7 @@ const BodyContext = struct {
                         .resolved => |nested| .{ .resolved = nested },
                         .synthesize => .synthesize,
                     },
-                    .structural, .unreachable_value, .checked_error => Common.invariant("method target selected non-target checked evidence"),
+                    .constraint_callable, .structural, .unreachable_value, .checked_error => Common.invariant("method target selected unresolved or non-target checked evidence"),
                 };
             },
             .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
@@ -36355,7 +36918,7 @@ const BodyContext = struct {
                         .resolved => |nested| .{ .resolved = nested },
                         .synthesize => .synthesize,
                     },
-                    .structural, .unreachable_value, .checked_error => Common.invariant("iterator target selected non-target checked evidence"),
+                    .constraint_callable, .structural, .unreachable_value, .checked_error => Common.invariant("iterator target selected unresolved or non-target checked evidence"),
                 };
             },
             .direct_pending => Common.invariant("unfinalized iterator direct call reached Monotype"),
@@ -36399,6 +36962,7 @@ const BodyContext = struct {
                         },
                     },
                     .structural => |derivation| .{ .structural = derivation },
+                    .constraint_callable => Common.invariant("unresolved constraint-callable evidence reached dispatch resolution"),
                     // Unreachable and checked-error dispatches crash before
                     // target resolution.
                     .unreachable_value, .checked_error => null,
@@ -36479,7 +37043,7 @@ const BodyContext = struct {
             .evidence_dependent => |dependent| if (self.evidence.at(dependent.index)) |entry| switch (entry) {
                 .unreachable_value => .unreachable_value,
                 .checked_error => .checked_error,
-                .target, .structural => null,
+                .target, .constraint_callable, .structural => null,
             } else Common.invariant("dispatch runtime evidence was absent from its lexical chain"),
             .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
             .direct_closed, .direct_parametric, .structural => null,
@@ -36762,6 +37326,26 @@ const BodyContext = struct {
         const out = try arena.alloc(SpecEvidence, params.len);
         for (params, 0..) |param, i| {
             const path = view.templates.evidenceParamPath(param);
+            switch (param.source) {
+                .constraint_callable => |source| {
+                    out[i] = .{ .constraint_callable = .{
+                        .view = view,
+                        .plan = source.plan,
+                        .callable_ty = source.callable_ty,
+                        .method = param.method,
+                        .structural = param.structural,
+                        .path = path,
+                        .source_ref = null,
+                    } };
+                    continue;
+                },
+                .checked_error => {
+                    out[i] = .checked_error;
+                    continue;
+                },
+                .use_site_only => Common.invariant("checked use-site-only evidence reached template synthesis without checked use-site evidence"),
+                .scheme_callable, .explicit_default, .erased_row_remainder => {},
+            }
             const component_ty = if (path.len == 0)
                 try self.defaultedEvidenceParamType(param)
             else
@@ -36790,8 +37374,10 @@ const BodyContext = struct {
     }
 
     fn defaultedEvidenceParamPrimitive(param: static_dispatch.EvidenceParamRecord) Type.Primitive {
-        const phase = param.pathless_default_phase orelse
-            Common.invariant("compiler-generated method edge did not contain a dispatcher path");
+        const phase = switch (param.source) {
+            .explicit_default => |phase| phase,
+            .scheme_callable, .constraint_callable, .use_site_only, .erased_row_remainder, .checked_error => Common.invariant("compiler-generated method edge did not contain an explicit default"),
+        };
         const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
             Common.invariant("checking-finalized pathless evidence param reached Monotype synthesis");
         return switch (target) {
@@ -47525,7 +48111,7 @@ const BodyContext = struct {
                         target.instantiation,
                     .local_proc_context = target.local_proc_context,
                 },
-                .structural, .unreachable_value, .checked_error => Common.invariant("iterator dispatch evidence was not a callable target"),
+                .constraint_callable, .structural, .unreachable_value, .checked_error => Common.invariant("iterator dispatch evidence was not a resolved callable target"),
             } else Common.invariant("iterator method evidence was absent from its lexical chain"),
             .direct_pending => Common.invariant("unfinalized iterator direct call reached Monotype"),
             .structural, .checked_error, .@"unreachable" => Common.invariant("iterator dispatch plan resolution was not a callable target"),
@@ -51325,6 +51911,11 @@ fn constStrNodeBytes(view: ModuleView, node: checked.ConstNodeId) []const u8 {
 }
 
 fn dispatchPlanForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId) static_dispatch.StaticDispatchCallPlan {
+    const plan_id = dispatchPlanIdForRuntimeExpr(view, expr_id);
+    return view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+}
+
+fn dispatchPlanIdForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId) static_dispatch.StaticDispatchPlanId {
     const expr = view.bodies.expr(expr_id);
     const plan_id = switch (expr.data) {
         .dispatch_call => |maybe| maybe orelse Common.invariant("stored serialization dispatch expression had no dispatch plan"),
@@ -51333,7 +51924,7 @@ fn dispatchPlanForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId) 
     };
     const plan_raw = @intFromEnum(plan_id);
     if (plan_raw >= view.static_dispatch_plans.plans.len) Common.invariant("stored serialization dispatch plan is outside plan table");
-    return view.static_dispatch_plans.plans[plan_raw];
+    return plan_id;
 }
 
 fn moduleDigestFromId(key: checked.ModuleId) names.CheckedModuleDigest {

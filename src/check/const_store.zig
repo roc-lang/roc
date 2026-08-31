@@ -262,6 +262,11 @@ pub const ConstFnEvidence = union(enum(u8)) {
         nested: ConstFnNestedEvidence,
     },
     structural: static_dispatch.StructuralDerivation,
+    constraint_callable: struct {
+        view: names.CheckedModuleDigest,
+        callable_key: names.CanonicalTypeKey,
+        source: static_dispatch.ConstraintCallableEvidence,
+    },
     unreachable_value,
     checked_error,
 };
@@ -863,7 +868,7 @@ pub const ConstStore = struct {
                         .from_callable => {},
                     }
                 },
-                .structural, .unreachable_value, .checked_error => {},
+                .constraint_callable, .structural, .unreachable_value, .checked_error => {},
             }
         }
         return cursor;

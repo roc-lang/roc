@@ -285,6 +285,18 @@ pub fn fnEvidenceDigest(
                 }
             },
             .structural => |derivation| writeStructuralDerivation(&hasher, derivation),
+            .constraint_callable => |source| {
+                writeBytes(&hasher, &source.view.bytes);
+                writeBytes(&hasher, &source.callable_key.bytes);
+                writeU32(&hasher, @intFromEnum(source.source.plan));
+                writeU32(&hasher, @intFromEnum(source.source.method));
+                writeU32(&hasher, source.source.path.start);
+                writeU32(&hasher, source.source.path.len);
+                if (source.source.structural) |kind| {
+                    writeU8(&hasher, 1);
+                    writeU8(&hasher, @intFromEnum(kind));
+                } else writeU8(&hasher, 0);
+            },
             .unreachable_value, .checked_error => {},
         }
     }
@@ -320,11 +332,17 @@ pub fn fnEvidenceEql(
                 .target => |right_target| {
                     if (!fnEvidenceTargetEql(left_target, right_target)) return false;
                 },
-                .structural, .unreachable_value, .checked_error => return false,
+                .constraint_callable, .structural, .unreachable_value, .checked_error => return false,
             },
             .structural => |left_structural| switch (right) {
                 .structural => |right_structural| if (!std.meta.eql(left_structural, right_structural)) return false,
-                .target, .unreachable_value, .checked_error => return false,
+                .target, .constraint_callable, .unreachable_value, .checked_error => return false,
+            },
+            .constraint_callable => |left_source| switch (right) {
+                .constraint_callable => |right_source| if (!std.meta.eql(left_source.view, right_source.view) or
+                    !std.meta.eql(left_source.callable_key, right_source.callable_key) or
+                    !std.meta.eql(left_source.source, right_source.source)) return false,
+                .target, .structural, .unreachable_value, .checked_error => return false,
             },
             .unreachable_value => if (right != .unreachable_value) return false,
             .checked_error => if (right != .checked_error) return false,
