@@ -2340,6 +2340,15 @@ resolved. An undetermined field-kind cell remains specialization-owned even
 when its associated checked type cell is otherwise concrete, so it cannot make
 a compile-time root request eligible.
 
+A data root whose value contains a callable slot is context-free only when its
+producer fixes that callable graph with an explicit source annotation. A
+callable root itself also supplies producer-side callable evidence. An
+unannotated data root with a reachable callable slot remains specialization-owned
+because an explicit consumer relation may still determine types inside that
+callable graph; it cannot cross Monotype's relation-freeze boundary as a
+context-free compile-time request. Data roots with no reachable callable slots
+continue to use the ordinary concreteness proof.
+
 Runtime lowering restores a selected hoisted root by checked expression id. While
 lowering the synthetic compile-time wrapper for that same root, lowering must
 suppress restoration of the root currently being evaluated so the original
