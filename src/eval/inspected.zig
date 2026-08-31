@@ -2967,8 +2967,8 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
             module.store,
             module.tables.erased_arg_desc_offsets,
             module.tables.erased_arg_desc_params,
+            module.tables.worker_procs,
         );
-        codegen.boxy_worker_procs = module.tables.worker_procs;
         codegen.layout_store = module.layouts;
         defer codegen.deinit();
 

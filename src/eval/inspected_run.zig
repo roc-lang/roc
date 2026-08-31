@@ -479,9 +479,9 @@ fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
         program.layouts,
         program.boxy_tables.erased_arg_desc_offsets,
         program.boxy_tables.erased_arg_desc_params,
+        program.boxy_tables.worker_procs,
         .default,
     );
-    codegen.boxy_worker_procs = program.boxy_tables.worker_procs;
     defer codegen.deinit();
 
     const proc = program.store.getProcSpec(program.main_proc);
@@ -564,8 +564,8 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
         program.store,
         program.boxy_tables.erased_arg_desc_offsets,
         program.boxy_tables.erased_arg_desc_params,
+        program.boxy_tables.worker_procs,
     );
-    codegen.boxy_worker_procs = program.boxy_tables.worker_procs;
     codegen.layout_store = program.layouts;
     defer codegen.deinit();
 

@@ -128,7 +128,7 @@ test "issue 10295: dev backend preserves deep structural equality under register
         .ret_layout = .bool,
     });
 
-    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, &.{}, .preserve, roc_target.host_cpu.level());
+    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, &.{}, &.{}, .preserve, roc_target.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
     const generated = try codegen.generateCode(root, .bool, 1);
@@ -199,7 +199,7 @@ test "issue 10295: nested list equality has bounded register pressure" {
         .ret_layout = .bool,
     });
 
-    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, &.{}, .preserve, roc_target.host_cpu.level());
+    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, &.{}, &.{}, .preserve, roc_target.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
     const generated = try codegen.generateCode(root, .bool, 1);
@@ -242,7 +242,7 @@ test "x86_64 Windows hosted U128 return stores all 16 bytes from XMM0" {
     });
 
     const WinCodeGen = dev.LirCodeGenMod.LirCodeGen(.x64win);
-    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, &.{}, .preserve, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
     codegen.generation_mode = .object_file;
 
@@ -289,7 +289,7 @@ test "x86_64 Windows U128 entrypoint return loads all 16 bytes into XMM0" {
     });
 
     const WinCodeGen = dev.LirCodeGenMod.LirCodeGen(.x64win);
-    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, &.{}, .preserve, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
     codegen.generation_mode = .object_file;
 

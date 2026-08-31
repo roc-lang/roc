@@ -249,7 +249,7 @@ layout_store: *const LayoutStore,
 erased_arg_desc_offsets: []const LIR.ErasedArgDescOffset,
 erased_arg_desc_params: []const LIR.ErasedArgDescParam,
 /// Exact dense LIR proc ids reachable through Boxy method slots.
-boxy_worker_procs: []const LIR.LirProcSpecId = &.{},
+boxy_worker_procs: []const LIR.LirProcSpecId,
 module: WasmModule,
 pending_bodies: std.AutoHashMap(LocalFunctionIndex, CodeBuilder),
 active_fn_stack: std.ArrayList(LocalFunctionIndex),
@@ -551,6 +551,7 @@ pub fn init(
     layout_store: *const LayoutStore,
     erased_arg_desc_offsets: []const LIR.ErasedArgDescOffset,
     erased_arg_desc_params: []const LIR.ErasedArgDescParam,
+    boxy_worker_procs: []const LIR.LirProcSpecId,
     cpu_level: CpuLevel,
 ) Self {
     return .{
@@ -560,6 +561,7 @@ pub fn init(
         .layout_store = layout_store,
         .erased_arg_desc_offsets = erased_arg_desc_offsets,
         .erased_arg_desc_params = erased_arg_desc_params,
+        .boxy_worker_procs = boxy_worker_procs,
         .module = WasmModule.init(allocator),
         .pending_bodies = std.AutoHashMap(LocalFunctionIndex, CodeBuilder).init(allocator),
         .active_fn_stack = .empty,
@@ -599,10 +601,11 @@ pub fn initWithModule(
     layout_store: *const LayoutStore,
     erased_arg_desc_offsets: []const LIR.ErasedArgDescOffset,
     erased_arg_desc_params: []const LIR.ErasedArgDescParam,
+    boxy_worker_procs: []const LIR.LirProcSpecId,
     module: *WasmModule,
     cpu_level: CpuLevel,
 ) Self {
-    var self = Self.init(allocator, store, layout_store, erased_arg_desc_offsets, erased_arg_desc_params, cpu_level);
+    var self = Self.init(allocator, store, layout_store, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, cpu_level);
     self.module.deinit();
     self.module = module.*;
     module.* = WasmModule.init(allocator);
@@ -22153,7 +22156,7 @@ test "wasm backend fuses overflow predicate with matching wrapping result" {
         .ret_layout = .u64,
     });
 
-    var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, .default);
+    var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
     try std.testing.expectEqual(@as(usize, 1), codegen.precomputed_overflow_results.count());
@@ -22164,7 +22167,7 @@ test "final static data address tracking keeps referenced data through DCE" {
     const fake_store: *const LirStore = undefined;
     const fake_layouts: *const LayoutStore = undefined;
 
-    var codegen = Self.init(allocator, fake_store, fake_layouts, &.{}, &.{}, .default);
+    var codegen = Self.init(allocator, fake_store, fake_layouts, &.{}, &.{}, &.{}, .default);
     defer codegen.deinit();
     codegen.configureStaticDataAddressTracking();
 

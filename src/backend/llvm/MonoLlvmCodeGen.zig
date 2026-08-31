@@ -257,7 +257,7 @@ pub const MonoLlvmCodeGen = struct {
     erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
     erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
     /// Exact dense LIR proc ids reachable through Boxy method slots.
-    boxy_worker_procs: []const LirProcSpecId = &.{},
+    boxy_worker_procs: []const LirProcSpecId,
 
     /// Layout store for resolving composite type layouts (records, tuples).
     /// Set by the evaluator before calling generateCode.
@@ -480,6 +480,7 @@ pub const MonoLlvmCodeGen = struct {
         store: *const lir.LirStore,
         erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
         erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
+        boxy_worker_procs: []const LirProcSpecId,
     ) MonoLlvmCodeGen {
         return .{
             .allocator = allocator,
@@ -489,6 +490,7 @@ pub const MonoLlvmCodeGen = struct {
             .store = store,
             .erased_arg_desc_offsets = erased_arg_desc_offsets,
             .erased_arg_desc_params = erased_arg_desc_params,
+            .boxy_worker_procs = boxy_worker_procs,
             .proc_registry = std.AutoHashMap(u32, LlvmBuilder.Function.Index).init(allocator),
             .builtin_functions = std.StringHashMap(LlvmBuilder.Function.Index).init(allocator),
             .cold_shims = std.StringHashMap(ColdShim).init(allocator),
@@ -516,9 +518,10 @@ pub const MonoLlvmCodeGen = struct {
         store: *const lir.LirStore,
         erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
         erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
+        boxy_worker_procs: []const LirProcSpecId,
         target: std.Target,
     ) MonoLlvmCodeGen {
-        var self = init(allocator, store, erased_arg_desc_offsets, erased_arg_desc_params);
+        var self = init(allocator, store, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs);
         self.target = target;
         self.triple = getLlvmTriple(target);
         self.data_layout = getLlvmDataLayout(target);
@@ -531,11 +534,12 @@ pub const MonoLlvmCodeGen = struct {
         store: *const lir.LirStore,
         erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
         erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
+        boxy_worker_procs: []const LirProcSpecId,
         target: std.Target,
     ) MonoLlvmCodeGen {
         // Linked objects use the symbol ABI: hosted functions are direct
         // extern calls and no RocOps reaches compiled code from the host.
-        var self = initWithTarget(allocator, store, erased_arg_desc_offsets, erased_arg_desc_params, target);
+        var self = initWithTarget(allocator, store, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target);
         self.builtin_symbol_mode = .native_object;
         self.proc_symbol_mode = .lir_symbol;
         self.host_call_mode = .extern_symbols;
@@ -2180,16 +2184,19 @@ pub const MonoLlvmCodeGen = struct {
             _ = wip.call(.normal, .ccc, .none, fn_ty, init_fn.toValue(builder), &.{self.rocOps()}, "") catch return error.OutOfMemory;
         }
 
-        var it = self.boxy_dict_thunks.iterator();
-        while (it.next()) |entry| {
-            const proc_id: LirProcSpecId = @enumFromInt(entry.key_ptr.*);
+        for (self.boxy_worker_procs) |proc_id| {
+            const proc_index = @intFromEnum(proc_id);
+            const thunk = self.boxy_dict_thunks.get(proc_index) orelse llvmInvariantFmt(
+                "boxy worker proc {d} had no generated dispatch thunk",
+                .{proc_index},
+            );
             const proc = self.store.getProcSpec(proc_id);
             try self.callBoxyVoid(
                 "roc_boxy_register_proc",
                 &.{ .i32, try self.ptrType(), .i32, .i64, .i1, .i64 },
                 &.{
-                    try self.boxyInt(.i32, entry.key_ptr.*),
-                    entry.value_ptr.*.toValue(builder),
+                    try self.boxyInt(.i32, proc_index),
+                    thunk.toValue(builder),
                     try self.boxyInt(.i32, @intFromEnum(self.layouts().runtimeRepresentationLayoutIdx(proc.ret_layout))),
                     try self.boxyInt(.i64, proc.rc_borrowed_params),
                     try self.boxyInt(.i1, @intFromBool(proc.rc_ret_borrowed)),

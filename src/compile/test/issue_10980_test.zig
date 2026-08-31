@@ -28,11 +28,11 @@ fn expectNoBoxyDictThunks(
         &lowered.lir_result.store,
         lowered.lir_result.boxy_erased_arg_desc_offsets.items,
         lowered.lir_result.boxy_erased_arg_desc_params.items,
+        lowered.lir_result.boxy_worker_procs.items,
         builtin.target,
     );
     defer codegen.deinit();
     codegen.layout_store = &lowered.lir_result.layouts;
-    codegen.boxy_worker_procs = lowered.lir_result.boxy_worker_procs.items;
 
     var generated = codegen.generateEntrypointModule("issue_10980", &.{}) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,

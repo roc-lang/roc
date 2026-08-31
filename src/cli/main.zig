@@ -1661,6 +1661,7 @@ fn generatePlatformHostShimFromLirData(
         store,
         &.{},
         &.{},
+        &.{},
         std_target,
     );
     codegen.layout_store = layouts;
@@ -9129,10 +9130,10 @@ fn writeDevWasmObject(
         &lowered.lir_result.layouts,
         lowered.lir_result.boxy_erased_arg_desc_offsets.items,
         lowered.lir_result.boxy_erased_arg_desc_params.items,
+        lowered.lir_result.boxy_worker_procs.items,
         &wasm_module,
         cpu_level,
     );
-    codegen.boxy_worker_procs = lowered.lir_result.boxy_worker_procs.items;
     wasm_module_owned_here = false;
     defer codegen.deinit();
     codegen.configureStackPointerReloc(stack_pointer_symbol);
@@ -9474,9 +9475,9 @@ fn compileLlvmAppObject(
         &lowered.lir_result.store,
         lowered.lir_result.boxy_erased_arg_desc_offsets.items,
         lowered.lir_result.boxy_erased_arg_desc_params.items,
+        lowered.lir_result.boxy_worker_procs.items,
         std_target,
     );
-    codegen.boxy_worker_procs = lowered.lir_result.boxy_worker_procs.items;
     codegen.layout_store = &lowered.lir_result.layouts;
     const emit_debug_info = args.debug;
     codegen.emit_debug_info = emit_debug_info;
