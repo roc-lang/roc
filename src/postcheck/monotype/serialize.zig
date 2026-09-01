@@ -726,10 +726,12 @@ pub const MappedProgramView = struct {
                 self.exprRefInBounds(payload.uninitialized),
             .try_sequence => |try_| self.exprRefInBounds(try_.try_expr) and
                 self.localRefInBounds(try_.ok_local) and
+                (try_.err_target == null or @intFromEnum(try_.err_target.?) < self.exprs.len) and
                 self.exprRefInBounds(try_.ok_body),
             .try_record_sequence => |try_| self.exprRefInBounds(try_.try_expr) and
                 self.localRefInBounds(try_.value_local) and
                 self.localRefInBounds(try_.rest_local) and
+                (try_.err_target == null or @intFromEnum(try_.err_target.?) < self.exprs.len) and
                 self.exprRefInBounds(try_.ok_body),
             .block => |block| self.stmtIdSpanInBounds(block.statements) and self.exprRefInBounds(block.final_expr),
             .loop_ => |loop| self.typedLocalSpanInBounds(loop.params) and
@@ -737,11 +739,16 @@ pub const MappedProgramView = struct {
                 self.exprRefInBounds(loop.body),
             .break_ => |maybe_expr| if (maybe_expr) |expr| self.exprRefInBounds(expr) else true,
             .continue_ => |continue_| self.exprIdSpanInBounds(continue_.values),
-            // These shared-union variants are post-lift-only and are never
-            // valid in a serialized Monotype specialization.
-            .join_point,
-            .jump,
-            => false,
+            .join_point => |join_point| @intFromEnum(join_point.id) < self.exprs.len and
+                self.typedLocalSpanInBounds(join_point.params) and
+                self.typedLocalSpanInBounds(join_point.retained) and
+                self.exprRefInBounds(join_point.body) and
+                self.exprRefInBounds(join_point.remainder),
+            .jump => |jump| @intFromEnum(jump.target) < self.exprs.len and
+                self.exprIdSpanInBounds(jump.args) and
+                self.typedLocalSpanInBounds(jump.loop_params) and
+                self.exprIdSpanInBounds(jump.loop_values) and
+                jump.loop_params.len == jump.loop_values.len,
             .dbg,
             .expect,
             => |expr| self.exprRefInBounds(expr),

@@ -757,6 +757,7 @@ const Lowerer = struct {
                 .try_expr = try self.lowerExpr(sequence.try_expr),
                 .ok_local = try self.localFor(sequence.ok_local, try self.lowerType(self.solved.local_tys[@intFromEnum(sequence.ok_local)])),
                 .err_is_cold = sequence.err_is_cold,
+                .err_target = sequence.err_target,
                 .ok_body = try self.lowerExpr(sequence.ok_body),
             } },
             .try_record_sequence => |sequence| .{ .try_record_sequence = .{
@@ -766,6 +767,7 @@ const Lowerer = struct {
                 .rest_local = try self.localFor(sequence.rest_local, try self.lowerType(self.solved.local_tys[@intFromEnum(sequence.rest_local)])),
                 .rest_field = sequence.rest_field,
                 .err_is_cold = sequence.err_is_cold,
+                .err_target = sequence.err_target,
                 .ok_body = try self.lowerExpr(sequence.ok_body),
             } },
             .block => |block| .{ .block = .{
@@ -782,12 +784,15 @@ const Lowerer = struct {
             .join_point => |join_point| .{ .join_point = .{
                 .id = join_point.id,
                 .params = try self.lowerTypedLocalSpan(join_point.params),
+                .retained = try self.lowerTypedLocalSpan(join_point.retained),
                 .body = try self.lowerExpr(join_point.body),
                 .remainder = try self.lowerExpr(join_point.remainder),
             } },
             .jump => |jump| .{ .jump = .{
                 .target = jump.target,
                 .args = try self.lowerExprSpan(jump.args),
+                .loop_params = try self.lowerTypedLocalSpan(jump.loop_params),
+                .loop_values = try self.lowerExprSpan(jump.loop_values),
             } },
             .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.value) },
             .crash => |msg| .{ .crash = msg },
