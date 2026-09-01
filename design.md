@@ -425,6 +425,16 @@ explicit checked proof that doing so preserves compile-time observables.
 
 ### Checker Implementation Contract
 
+Directly nested conditionals use explicit continuation storage. This includes
+conditionals produced when canonicalization lowers `and` and `or`; valid source
+depth must not become compiler thread call depth. Each nested conditional owns
+an ordinary checker expression frame, so rank, generalization, dispatch,
+call-position, and hoist state enter and finish in exactly the same order as any
+other expression. The conditional state and expression-frame payloads live in
+separate typed arrays backed first by local storage and then by the general
+allocator. Checking must not flatten CIR after the fact or infer that a
+conditional came from a particular source operator.
+
 The checker has one authoritative state for effect propagation and compile-time
 root selection. This state is owned by checking, updated during the existing
 `checkExpr` traversal, finalized before checked module output, and exported as

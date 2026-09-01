@@ -16162,154 +16162,261 @@ fn commitProjectedStoredValue(
     return true;
 }
 
-fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
-    const trace = tracy.trace(@src());
-    defer trace.end();
+const ExprCheckFrame = struct {
+    checker: *Self,
+    env: *Env,
+    expr_idx: CIR.Expr.Idx,
+    expr: CIR.Expr,
+    expr_region: Region,
+    expr_var_raw: Var,
+    expr_var: Var,
+    mb_anno_vars: ?AnnoVars,
+    nested_expected: Expected,
+    is_call_arg: bool,
+    is_immediate_callee: bool,
+    is_binding_rhs: bool,
+    previous_instantiation_source: ?CIR.Expr.Idx,
+    previous_instantiation_is_immediate_callee: bool,
+    previous_discarded_binding_rhs_expr: ?CIR.Expr.Idx,
+    previous_active_scheme_root: ?Var,
+    suppress_group_member_generalize: bool,
+    should_generalize: bool,
+    rank_pushed: bool,
+    hoist_frame: ?HoistFrameGuard,
+    active: bool = true,
+
+    fn deinit(self: *ExprCheckFrame) void {
+        if (!self.active) return;
+
+        if (self.hoist_frame) |*hoist_frame| {
+            hoist_frame.deinit();
+        }
+        if (self.rank_pushed) {
+            self.env.var_pool.popRank();
+        }
+        self.checker.active_scheme_root = self.previous_active_scheme_root;
+        self.checker.discarded_binding_rhs_expr = self.previous_discarded_binding_rhs_expr;
+        self.checker.instantiation_is_immediate_callee = self.previous_instantiation_is_immediate_callee;
+        self.checker.instantiation_source_expr = self.previous_instantiation_source;
+        self.checker.checking_binding_rhs_pattern = null;
+        self.active = false;
+    }
+
+    fn finish(self: *ExprCheckFrame, does_fx: bool) std.mem.Allocator.Error!void {
+        const checker = self.checker;
+        const env = self.env;
+
+        // Check if we have an annotation
+        if (self.mb_anno_vars) |anno_vars| {
+            // Unify the anno with the expr var
+            const annotation_result = try checker.unifyInContext(anno_vars.anno_var, self.expr_var, env, anno_vars.context);
+            if (annotation_result.isProblem()) {
+                // The diagnostic belongs to checking, but later stages need an
+                // explicit executable value. End-of-check poisoning replaces this
+                // expression with a runtime error while the binding retains the
+                // annotation's checked type for all independent consumers.
+                try checker.erroneous_value_exprs.put(checker.gpa, self.expr_idx, {});
+            }
+
+            // Check if the expression type contains any errors anywhere in its
+            // structure. If it does and we have an annotation, use the annotation
+            // type for the pattern instead of the expression type. This preserves
+            // the annotation type for other code that references this identifier,
+            // even when the expression has errors.
+            checker.var_set.clearRetainingCapacity();
+            if (try checker.varContainsError(self.expr_var, &checker.var_set)) {
+                // A method's callable wrapper is explicit input to method-template
+                // publication, so keep that wrapper around its already-erroneous
+                // child. Other annotated values are the executable boundary and
+                // must themselves become the runtime error.
+                const is_method_callable = isFunctionDef(&checker.cir.store, checker.cir.store.getExpr(self.expr_idx)) and
+                    checker.exprDefinesMethod(self.expr_idx);
+                if (!is_method_callable) {
+                    try checker.erroneous_value_exprs.put(checker.gpa, self.expr_idx, {});
+                }
+                // If there was an annotation AND the expr contains errors, then unify the
+                // raw expr var against the annotation
+                _ = try checker.unify(self.expr_var_raw, anno_vars.anno_var_backup, env);
+            } else {
+                // Otherwise, make the explicit annotation the checked root for
+                // this expression. The body has already constrained the
+                // annotation's backing and any underscore variables above.
+                _ = try checker.unify(self.expr_var_raw, anno_vars.anno_var, env);
+            }
+        }
+
+        checker.var_set.clearRetainingCapacity();
+        if (self.mb_anno_vars == null) {
+            if (try checker.varContainsError(self.expr_var, &checker.var_set)) {
+                try checker.erroneous_value_exprs.put(checker.gpa, self.expr_idx, {});
+                checker.call_operand_type_error_exprs.items[nodeSlot(self.expr_idx)] = true;
+            }
+        }
+
+        // Check any accumulated static dispatch constraints
+        try checker.checkStaticDispatchConstraints(env, false);
+
+        // If this type of expr should be generalized, generalize it!
+        if (self.should_generalize) {
+            // Bind pending record-destructure binders BEFORE boundary literal
+            // defaulting: a numeral flowing through a destructured field only
+            // becomes signature-reachable once the binder is unified through
+            // the row, and defaulting's reachability classification must see
+            // that link (see `judgeRecordDestructBinds`).
+            try checker.judgeRecordDestructBinds(env);
+            if (env.rank() == checker.currentGroupBoundaryRank()) {
+                // This frame is the enclosing group's generalization boundary (a
+                // singleton group's def RHS). Resolve dispatch obligations into
+                // unchecked groups before anything here generalizes (Invariant D),
+                // interleaved with boundary defaulting.
+                try checker.runGroupBoundary(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }}, env);
+            } else {
+                // Inner lambda: boundary defaulting runs first—it must see
+                // ranks BEFORE they are promoted to generalized. Pending dispatch
+                // obligations (pinned at the group's boundary rank) escape this
+                // frame and stay live for the group boundary.
+                try checker.defaultLiteralsAtGeneralizationBoundary(.{ .owner = self.expr_var_raw, .interface = self.expr_var }, env);
+            }
+            try checker.judgeFieldKindsAtBoundary(env);
+            try checker.generalizer.generalize(checker.gpa, &env.var_pool, env.rank());
+            try checker.deduplicateGeneralizedDispatchRequirements(self.expr_var_raw);
+            try checker.publishBindingScheme(self.expr_var_raw);
+            checker.retireNonGeneralizedTypeSchemes(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }});
+            try checker.retireStructurallyPublishedTypeSchemeRequirements(
+                &.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }},
+                env.rank(),
+            );
+            // The scheme's vars froze at generalized rank: judge this def's
+            // dispatch-constrained receivers now, while the judgment is a
+            // local question about one scheme (see
+            // `judgeAmbiguityCandidatesAtGeneralization`).
+            try checker.judgeAmbiguityCandidatesAtGeneralization(.{ .owner = self.expr_var_raw, .interface = self.expr_var });
+        }
+
+        try self.hoist_frame.?.finish(does_fx);
+        self.deinit();
+    }
+};
+
+fn beginExprCheckFrame(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    env: *Env,
+    expected: Expected,
+) std.mem.Allocator.Error!ExprCheckFrame {
+    const expr = self.cir.store.getExpr(expr_idx);
+    const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
+    const expr_var_raw = ModuleEnv.varFrom(expr_idx);
+    const previous_instantiation_source = self.instantiation_source_expr;
+    const previous_instantiation_is_immediate_callee = self.instantiation_is_immediate_callee;
+    const previous_discarded_binding_rhs_expr = self.discarded_binding_rhs_expr;
+    const previous_active_scheme_root = self.active_scheme_root;
+
+    var frame = ExprCheckFrame{
+        .checker = self,
+        .env = env,
+        .expr_idx = expr_idx,
+        .expr = expr,
+        .expr_region = expr_region,
+        .expr_var_raw = expr_var_raw,
+        .expr_var = undefined,
+        .mb_anno_vars = null,
+        .nested_expected = expected,
+        .is_call_arg = false,
+        .is_immediate_callee = false,
+        .is_binding_rhs = false,
+        .previous_instantiation_source = previous_instantiation_source,
+        .previous_instantiation_is_immediate_callee = previous_instantiation_is_immediate_callee,
+        .previous_discarded_binding_rhs_expr = previous_discarded_binding_rhs_expr,
+        .previous_active_scheme_root = previous_active_scheme_root,
+        .suppress_group_member_generalize = false,
+        .should_generalize = false,
+        .rank_pushed = false,
+        .hoist_frame = null,
+    };
+    errdefer frame.deinit();
 
     // Attribute any dispatcher instantiated while checking this expression to it,
     // so an ambiguity verdict can pinpoint the source of an unsatisfiable
     // body-forced where-clause. Restored on exit to track the innermost expr.
-    const prev_instantiation_source = self.instantiation_source_expr;
     self.instantiation_source_expr = expr_idx;
-    defer self.instantiation_source_expr = prev_instantiation_source;
 
-    const expr = self.cir.store.getExpr(expr_idx);
-    const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
-    const expr_var_raw = ModuleEnv.varFrom(expr_idx);
     // Expression nodes can be checked again after more constraints settle. The
     // dense slot always describes this check, so a prior error cannot retire a
     // parent after the expression has checked successfully.
     self.call_operand_type_error_exprs.items[nodeSlot(expr_idx)] = false;
 
-    // Consume the checking_call_arg flag: it applies only to this immediate
-    // checkExpr call and must not propagate to recursive calls (e.g. nested call
-    // arguments). Value-producing wrappers explicitly forward it only to the
-    // child that supplies their result (see `checkExprInCallPosition`), keeping
-    // an immediately called lambda from generalizing through a closure, block,
-    // conditional, or match.
-    const is_call_arg = self.checking_call_arg;
+    // Consume the call-position flags. Value-producing wrappers explicitly
+    // forward them only to the child that supplies their result.
+    frame.is_call_arg = self.checking_call_arg;
     self.checking_call_arg = false;
-
-    const is_immediate_callee = self.checking_immediate_callee;
+    frame.is_immediate_callee = self.checking_immediate_callee;
     self.checking_immediate_callee = false;
+    self.instantiation_is_immediate_callee = frame.is_immediate_callee;
 
-    const prev_instantiation_is_immediate_callee = self.instantiation_is_immediate_callee;
-    self.instantiation_is_immediate_callee = is_immediate_callee;
-    defer self.instantiation_is_immediate_callee = prev_instantiation_is_immediate_callee;
-
-    // Consume the binding-RHS flag: it applies only to this immediate checkExpr
-    // call and must not propagate into subexpressions.
-    const is_binding_rhs = self.checking_binding_rhs;
+    // Consume the binding-RHS flag: it applies only to this expression.
+    frame.is_binding_rhs = self.checking_binding_rhs;
     const binding_rhs_pattern = self.checking_binding_rhs_pattern;
     self.checking_binding_rhs = false;
     self.checking_binding_rhs_pattern = null;
-
-    const prev_discarded_binding_rhs_expr = self.discarded_binding_rhs_expr;
-    if (is_binding_rhs) {
+    if (frame.is_binding_rhs) {
         if (binding_rhs_pattern) |pattern_idx| {
             if (self.cir.store.getPattern(pattern_idx) == .underscore) {
                 self.discarded_binding_rhs_expr = expr_idx;
             }
         }
     }
-    defer self.discarded_binding_rhs_expr = prev_discarded_binding_rhs_expr;
 
     // A recursive group member's top-level RHS lives in the group's shared
     // rank frame and generalizes at the group boundary, not on its own.
-    // Consume-once; `e_closure` re-asserts it onto its inner lambda below.
-    const suppress_group_member_generalize = self.suppress_generalize_expr == expr_idx;
-    if (suppress_group_member_generalize) self.suppress_generalize_expr = null;
+    frame.suppress_group_member_generalize = self.suppress_generalize_expr == expr_idx;
+    if (frame.suppress_group_member_generalize) self.suppress_generalize_expr = null;
 
-    // Decide whether this binding generalizes—see `shouldGeneralize` for the
-    // three qualifying paths and why each is sound.
-    const should_generalize = !suppress_group_member_generalize and
-        self.shouldGeneralize(expr, expected.annotation, is_binding_rhs, is_call_arg);
+    frame.should_generalize = !frame.suppress_group_member_generalize and
+        self.shouldGeneralize(expr, expected.annotation, frame.is_binding_rhs, frame.is_call_arg);
+    if (frame.should_generalize) self.active_scheme_root = expr_var_raw;
 
-    // A generalizing expression owns every pending dispatch relation created
-    // while its body is checked. Save/restore makes nested generalized lambdas
-    // exact owners rather than folding their requirements into an enclosing
-    // scheme.
-    const previous_active_scheme_root = self.active_scheme_root;
-    if (should_generalize) self.active_scheme_root = expr_var_raw;
-    defer self.active_scheme_root = previous_active_scheme_root;
-
-    // Push/pop ranks based on if we should generalize
-    if (should_generalize) try env.var_pool.pushRank();
-    defer if (should_generalize) {
-        env.var_pool.popRank();
-    };
+    if (frame.should_generalize) {
+        try env.var_pool.pushRank();
+        frame.rank_pushed = true;
+    }
 
     try self.setVarRank(expr_var_raw, env);
 
-    // Generate the expr var and the expected type vars.
-    //
-    // If the current expression has an annotation, materialize it once here and
-    // pass children the resulting expected var. Children must not regenerate the
-    // same annotation, because that creates distinct rigid vars with the same
-    // source names.
-    const expr_var: Var, const mb_anno_vars: ?AnnoVars, const nested_expected: Expected = blk: {
+    // Materialize an annotation once at the expression frame that owns it.
+    frame.expr_var, frame.mb_anno_vars, frame.nested_expected = blk: {
         if (expr == .e_closure) {
-            // Closures delegate to their inner lambda's checkExpr, which handles
-            // annotation and generalization. Forward expected so the annotation
-            // type is created at the lambda's rank.
-            // (The e_closure-wraps-e_lambda invariant is asserted by isFunctionDef.)
             break :blk .{ expr_var_raw, null, expected };
         }
 
         if (expected.annotation) |annotation_idx| {
-            // Generate the type for the annotation
             try self.generateAnnotationType(annotation_idx, env);
             if (self.checking_predeclared_body_def) |predeclared_def_idx| {
                 try self.recordPredeclaredBodyAnnotationPairs(predeclared_def_idx, annotation_idx);
             }
             const anno_var = ModuleEnv.varFrom(annotation_idx);
-
-            // Copy/paste the variable. This will be used if the expr errors to
-            // preserve the type annotation for places that reference this def.
-            const anno_var_backup = try self.instantiateVarOrphan(
-                anno_var,
-                env,
-                env.rank(),
-                .use_last_var,
-            );
-
+            const anno_var_backup = try self.instantiateVarOrphan(anno_var, env, env.rank(), .use_last_var);
             break :blk .{
                 try self.fresh(env, expr_region),
-                .{
+                AnnoVars{
                     .anno_var = anno_var,
                     .anno_var_backup = anno_var_backup,
                     .context = .type_annotation,
                 },
-                // The annotation is also the expected result of any `if`/
-                // `match` at the body's root: each branch checks against it
-                // directly (instead of pairwise against the previous branch),
-                // so annotation-declared facts—e.g. an `optional` field
-                // kind—pin branch types before the branches merge
-                // (design.md "Field Kinds (All-Dynamic Optional Fields)").
                 expected.withMaterializedAnnotation(.{
                     .var_ = anno_var,
                     .context = .type_annotation,
                 }).withBranchResult(anno_var),
             };
         } else if (expected.expected_type) |expected_type| {
-            const expected_var_backup = try self.instantiateVarOrphan(
-                expected_type.var_,
-                env,
-                env.rank(),
-                .use_last_var,
-            );
-
+            const expected_var_backup = try self.instantiateVarOrphan(expected_type.var_, env, env.rank(), .use_last_var);
             break :blk .{
                 try self.fresh(env, expr_region),
-                .{
+                AnnoVars{
                     .anno_var = expected_type.var_,
                     .anno_var_backup = expected_var_backup,
                     .context = expected_type.context,
                 },
-                // As in the annotation path above: the expected type is the
-                // expected result of any `if`/`match` at the body's root, so
-                // branches check against it directly and annotation-declared
-                // facts pin branch types before the branches merge.
                 expected.withBranchResult(expected_type.var_),
             };
         } else {
@@ -16317,13 +16424,31 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         }
     };
 
+    self.checking_binding_rhs_pattern = binding_rhs_pattern;
+    frame.hoist_frame = try self.beginHoistFrame(expr_idx, frame.is_binding_rhs, frame.nested_expected.hoist_position);
+    self.checking_binding_rhs_pattern = null;
+
+    return frame;
+}
+
+fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    var frame = try self.beginExprCheckFrame(expr_idx, env, expected);
+    defer frame.deinit();
+
+    const expr = frame.expr;
+    const expr_region = frame.expr_region;
+    const expr_var_raw = frame.expr_var_raw;
+    const expr_var = frame.expr_var;
+    const mb_anno_vars = frame.mb_anno_vars;
+    const nested_expected = frame.nested_expected;
+    const is_call_arg = frame.is_call_arg;
+    const is_immediate_callee = frame.is_immediate_callee;
+    const suppress_group_member_generalize = frame.suppress_group_member_generalize;
     var does_fx = false; // Does this expression potentially perform any side effects?
     const child_expected = nested_expected.forStatement();
-    self.checking_binding_rhs_pattern = binding_rhs_pattern;
-    errdefer self.checking_binding_rhs_pattern = null;
-    var hoist_frame = try self.beginHoistFrame(expr_idx, is_binding_rhs, nested_expected.hoist_position);
-    self.checking_binding_rhs_pattern = null;
-    defer hoist_frame.deinit();
 
     switch (expr) {
         // str //
@@ -17867,7 +17992,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_if => |if_expr| {
-            does_fx = try self.checkIfElseExpr(
+            does_fx = try self.checkIfElseExprIterative(
                 expr_idx,
                 expr_region,
                 env,
@@ -18382,98 +18507,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
     }
 
-    // Check if we have an annotation
-    if (mb_anno_vars) |anno_vars| {
-        // Unify the anno with the expr var
-        const annotation_result = try self.unifyInContext(anno_vars.anno_var, expr_var, env, anno_vars.context);
-        if (annotation_result.isProblem()) {
-            // The diagnostic belongs to checking, but later stages need an
-            // explicit executable value. End-of-check poisoning replaces this
-            // expression with a runtime error while the binding retains the
-            // annotation's checked type for all independent consumers.
-            try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
-        }
-
-        // Check if the expression type contains any errors anywhere in its
-        // structure. If it does and we have an annotation, use the annotation
-        // type for the pattern instead of the expression type. This preserves
-        // the annotation type for other code that references this identifier,
-        // even when the expression has errors.
-        //
-        // For example, if the annotation is `I64 -> Str` and the expression has
-        // an error in the return type (making it `I64 -> Error`), the pattern
-        // should still get `I64 -> Str` from the annotation.
-        self.var_set.clearRetainingCapacity();
-        if (try self.varContainsError(expr_var, &self.var_set)) {
-            // A method's callable wrapper is explicit input to method-template
-            // publication, so keep that wrapper around its already-erroneous
-            // child. Other annotated values are the executable boundary and
-            // must themselves become the runtime error.
-            const is_method_callable = isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr_idx)) and
-                self.exprDefinesMethod(expr_idx);
-            if (!is_method_callable) {
-                try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
-            }
-            // If there was an annotation AND the expr contains errors, then unify the
-            // raw expr var against the annotation
-            _ = try self.unify(expr_var_raw, anno_vars.anno_var_backup, env);
-        } else {
-            // Otherwise, make the explicit annotation the checked root for
-            // this expression. The body has already constrained the
-            // annotation's backing and any underscore variables above.
-            _ = try self.unify(expr_var_raw, anno_vars.anno_var, env);
-        }
-    }
-
-    self.var_set.clearRetainingCapacity();
-    if (mb_anno_vars == null) {
-        if (try self.varContainsError(expr_var, &self.var_set)) {
-            try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
-            self.call_operand_type_error_exprs.items[nodeSlot(expr_idx)] = true;
-        }
-    }
-
-    // Check any accumulated static dispatch constraints
-    try self.checkStaticDispatchConstraints(env, false);
-
-    // If this type of expr should be generalized, generalize it!
-    if (should_generalize) {
-        // Bind pending record-destructure binders BEFORE boundary literal
-        // defaulting: a numeral flowing through a destructured field only
-        // becomes signature-reachable once the binder is unified through
-        // the row, and defaulting's reachability classification must see
-        // that link (see `judgeRecordDestructBinds`).
-        try self.judgeRecordDestructBinds(env);
-        if (env.rank() == self.currentGroupBoundaryRank()) {
-            // This frame is the enclosing group's generalization boundary (a
-            // singleton group's def RHS). Resolve dispatch obligations into
-            // unchecked groups before anything here generalizes (Invariant D),
-            // interleaved with boundary defaulting.
-            try self.runGroupBoundary(&.{.{ .owner = expr_var_raw, .interface = expr_var }}, env);
-        } else {
-            // Inner lambda: boundary defaulting runs first—it must see
-            // ranks BEFORE they are promoted to generalized. Pending dispatch
-            // obligations (pinned at the group's boundary rank) escape this
-            // frame and stay live for the group boundary.
-            try self.defaultLiteralsAtGeneralizationBoundary(.{ .owner = expr_var_raw, .interface = expr_var }, env);
-        }
-        try self.judgeFieldKindsAtBoundary(env);
-        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
-        try self.deduplicateGeneralizedDispatchRequirements(expr_var_raw);
-        try self.publishBindingScheme(expr_var_raw);
-        self.retireNonGeneralizedTypeSchemes(&.{.{ .owner = expr_var_raw, .interface = expr_var }});
-        try self.retireStructurallyPublishedTypeSchemeRequirements(
-            &.{.{ .owner = expr_var_raw, .interface = expr_var }},
-            env.rank(),
-        );
-        // The scheme's vars froze at generalized rank: judge this def's
-        // dispatch-constrained receivers now, while the judgment is a
-        // local question about one scheme (see
-        // `judgeAmbiguityCandidatesAtGeneralization`).
-        try self.judgeAmbiguityCandidatesAtGeneralization(.{ .owner = expr_var_raw, .interface = expr_var });
-    }
-
-    try hoist_frame.finish(does_fx);
+    try frame.finish(does_fx);
     return does_fx;
 }
 
@@ -20202,8 +20236,163 @@ fn tagsCanUseSamePayloads(self: *Self, expected_tag: types_mod.Tag, actual_tag: 
 
 // if-else //
 
-/// Check the types for an if-else expr
-fn checkIfElseExpr(
+const IfCheckPhase = enum {
+    schedule_first_cond,
+    after_first_cond,
+    schedule_first_body,
+    after_first_body,
+    schedule_branch_cond,
+    after_branch_cond,
+    schedule_branch_body,
+    after_branch_body,
+    schedule_remaining_cond,
+    after_remaining_cond,
+    schedule_remaining_body,
+    after_remaining_body,
+    schedule_final_else,
+    after_final_else,
+    finish,
+};
+
+const IfCheckState = struct {
+    owns_expr_frame: bool,
+    if_expr_idx: CIR.Expr.Idx,
+    expr_region: Region,
+    if_: @FieldType(CIR.Expr, @tagName(.e_if)),
+    expected: Expected,
+    is_call_arg: bool,
+    is_immediate_callee: bool,
+    expected_branch_ret: ?Var,
+    child_expected: Expected,
+    branch_acc: ?Var,
+    does_fx: bool = false,
+    branch_var: Var = undefined,
+    num_branches: u32,
+    last_if_branch: CIR.Expr.IfBranch.Idx,
+    branch_index: usize = 1,
+    remaining_index: usize = 0,
+    phase: IfCheckPhase = .schedule_first_cond,
+};
+
+const NestedIfCheck = struct {
+    state: IfCheckState,
+    expr_frame: ExprCheckFrame,
+};
+
+const IfChildResult = union(enum) {
+    checked: bool,
+    nested: NestedIfCheck,
+};
+
+fn initIfCheckState(
+    self: *Self,
+    owns_expr_frame: bool,
+    if_expr_idx: CIR.Expr.Idx,
+    expr_region: Region,
+    env: *Env,
+    if_: @FieldType(CIR.Expr, @tagName(.e_if)),
+    expected: Expected,
+    is_call_arg: bool,
+    is_immediate_callee: bool,
+) std.mem.Allocator.Error!IfCheckState {
+    const branches = self.cir.store.sliceIfBranches(if_.branches);
+    std.debug.assert(branches.len > 0);
+    const expected_branch_ret = expected.branch_result;
+    const branch_acc: ?Var = if (expected_branch_ret) |expected_ret|
+        try self.instantiateVarOrphanFlexed(expected_ret, env, .use_last_var)
+    else
+        null;
+
+    return .{
+        .owns_expr_frame = owns_expr_frame,
+        .if_expr_idx = if_expr_idx,
+        .expr_region = expr_region,
+        .if_ = if_,
+        .expected = expected,
+        .is_call_arg = is_call_arg,
+        .is_immediate_callee = is_immediate_callee,
+        .expected_branch_ret = expected_branch_ret,
+        .child_expected = expected.forStatement(),
+        .branch_acc = branch_acc,
+        .num_branches = @intCast(branches.len + 1),
+        .last_if_branch = branches[0],
+    };
+}
+
+fn checkIfChild(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    env: *Env,
+    expected: Expected,
+    forward_call_position: bool,
+    is_call_arg: bool,
+    is_immediate_callee: bool,
+) std.mem.Allocator.Error!IfChildResult {
+    if (self.cir.store.getExpr(expr_idx) != .e_if) {
+        if (forward_call_position) {
+            return .{ .checked = try self.checkExprInCallPosition(
+                expr_idx,
+                env,
+                expected,
+                is_call_arg,
+                is_immediate_callee,
+            ) };
+        }
+
+        const saved_checking_call_arg = self.checking_call_arg;
+        const saved_checking_immediate_callee = self.checking_immediate_callee;
+        self.checking_call_arg = false;
+        self.checking_immediate_callee = false;
+        defer self.checking_call_arg = saved_checking_call_arg;
+        defer self.checking_immediate_callee = saved_checking_immediate_callee;
+        return .{ .checked = try self.checkExpr(expr_idx, env, expected) };
+    }
+
+    const saved_checking_call_arg = self.checking_call_arg;
+    const saved_checking_immediate_callee = self.checking_immediate_callee;
+    self.checking_call_arg = if (forward_call_position) is_call_arg else false;
+    self.checking_immediate_callee = if (forward_call_position) is_immediate_callee else false;
+    defer self.checking_call_arg = saved_checking_call_arg;
+    defer self.checking_immediate_callee = saved_checking_immediate_callee;
+
+    var expr_frame = try self.beginExprCheckFrame(expr_idx, env, expected);
+    errdefer expr_frame.deinit();
+    return .{ .nested = .{
+        .state = try self.initIfCheckState(
+            true,
+            expr_idx,
+            expr_frame.expr_region,
+            env,
+            expr_frame.expr.e_if,
+            expr_frame.nested_expected,
+            expr_frame.is_call_arg,
+            expr_frame.is_immediate_callee,
+        ),
+        .expr_frame = expr_frame,
+    } };
+}
+
+fn descendIntoNestedIf(
+    frame_allocator: std.mem.Allocator,
+    parents: *std.ArrayList(IfCheckState),
+    expr_frames: *std.ArrayList(ExprCheckFrame),
+    parent: IfCheckState,
+    nested: NestedIfCheck,
+) std.mem.Allocator.Error!IfCheckState {
+    var nested_frame = nested.expr_frame;
+    expr_frames.append(frame_allocator, nested_frame) catch |err| {
+        nested_frame.deinit();
+        return err;
+    };
+    parents.append(frame_allocator, parent) catch |err| {
+        var stored_frame = expr_frames.pop().?;
+        stored_frame.deinit();
+        return err;
+    };
+    return nested.state;
+}
+
+fn checkIfElseExprIterative(
     self: *Self,
     if_expr_idx: CIR.Expr.Idx,
     expr_region: Region,
@@ -20215,188 +20404,301 @@ fn checkIfElseExpr(
 ) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
-    const expected_branch_ret = expected.branch_result;
-    const child_expected = expected.forStatement();
 
-    // Accumulator for the meet of all compatible branch bodies. Branches fold
-    // into this instead of into the shared `expected_ret`, which is unified
-    // with the whole expr (and hence the accumulator) exactly once, at the
-    // end. Seeded with an ORPHAN COPY of the expected type (never the shared
-    // var itself): the accumulator is the meet of the branches AND the
-    // annotation, so annotation-declared facts—e.g. an `optional` field
-    // kind—constrain every branch as it folds in, while the pristine
-    // `expected_ret` stays the untouched reference that step-(1) probes and
-    // error reports compare against (design.md "Field Kinds (All-Dynamic
-    // Optional Fields)").
-    const branch_acc: ?Var = if (expected_branch_ret) |expected_ret|
-        try self.instantiateVarOrphanFlexed(expected_ret, env, .use_last_var)
-    else
-        null;
+    var fallback_state = std.heap.stackFallback(16 * 1024, self.gpa);
+    const frame_allocator = fallback_state.get();
+    var parents: std.ArrayList(IfCheckState) = .empty;
+    defer parents.deinit(frame_allocator);
+    var expr_frames: std.ArrayList(ExprCheckFrame) = .empty;
+    defer expr_frames.deinit(frame_allocator);
 
-    const branches = self.cir.store.sliceIfBranches(if_.branches);
-
-    // Should never be 0
-    std.debug.assert(branches.len > 0);
-
-    // Get the first branch
-    const first_branch_idx = branches[0];
-    const first_branch = self.cir.store.getIfBranch(first_branch_idx);
-
-    // Check the condition of the 1st branch
-    var does_fx = try self.checkExpr(first_branch.cond, env, child_expected);
-    const first_cond_var: Var = ModuleEnv.varFrom(first_branch.cond);
-    const bool_var = try self.freshBool(env, expr_region);
-    const first_cond_result = try self.unifyInContext(bool_var, first_cond_var, env, .if_condition);
-    if (if_.warn_unused_branches and first_cond_result.isEstablished()) {
-        try self.warnIfComptimeConditionalExpr(first_branch.cond, .if_condition, expected);
-    }
-
-    // Then we check the 1st branch's body
-    does_fx = try self.checkExprInCallPosition(
-        first_branch.body,
+    var current = try self.initIfCheckState(
+        false,
+        if_expr_idx,
+        expr_region,
         env,
-        expected.forBranchBody(),
+        if_,
+        expected,
         is_call_arg,
         is_immediate_callee,
-    ) or does_fx;
-
-    if (expected_branch_ret) |expected_ret| {
-        const branch_ctx = problem.Context{ .if_branch = .{
-            .branch_index = 0,
-            .num_branches = @intCast(branches.len + 1),
-            .is_else = false,
-            .parent_if_expr = if_expr_idx,
-            .last_if_branch = first_branch_idx,
-        } };
-        try self.checkBranchBodyAgainstExpected(first_branch.body, expected_ret, branch_acc.?, branch_ctx, env);
+    );
+    var last_child: ?bool = null;
+    errdefer {
+        while (expr_frames.pop()) |frame| {
+            var owned_frame = frame;
+            owned_frame.deinit();
+        }
     }
 
-    // The 1st branch's body is the type all other branches must match (when no expected type)
-    const branch_var = @as(Var, ModuleEnv.varFrom(first_branch.body));
-
-    // Total number of branches (including final else)
-    const num_branches: u32 = @intCast(branches.len + 1);
-
-    var last_if_branch = first_branch_idx;
-    for (branches[1..], 1..) |branch_idx, cur_index| {
-        const branch = self.cir.store.getIfBranch(branch_idx);
-
-        // Check the branches condition
-        does_fx = try self.checkExpr(branch.cond, env, child_expected.suppressHoistSelection()) or does_fx;
-        const cond_var: Var = ModuleEnv.varFrom(branch.cond);
-        const branch_bool_var = try self.freshBool(env, expr_region);
-        const cond_result = try self.unifyInContext(branch_bool_var, cond_var, env, .if_condition);
-        if (if_.warn_unused_branches and cond_result.isEstablished()) {
-            try self.warnIfComptimeConditionalExpr(branch.cond, .if_condition, expected);
-        }
-
-        // Check the branch body
-        does_fx = try self.checkExprInCallPosition(
-            branch.body,
-            env,
-            expected.forBranchBody(),
-            is_call_arg,
-            is_immediate_callee,
-        ) or does_fx;
-
-        // Check against expected return type BEFORE pairwise unification
-        if (expected_branch_ret) |expected_ret| {
-            const branch_ctx = problem.Context{ .if_branch = .{
-                .branch_index = @intCast(cur_index),
-                .num_branches = num_branches,
-                .is_else = false,
-                .parent_if_expr = if_expr_idx,
-                .last_if_branch = last_if_branch,
-            } };
-            try self.checkBranchBodyAgainstExpected(branch.body, expected_ret, branch_acc.?, branch_ctx, env);
-        } else {
-            const body_var: Var = ModuleEnv.varFrom(branch.body);
-            const body_result = try self.unifyInContext(branch_var, body_var, env, .{ .if_branch = .{
-                .branch_index = @intCast(cur_index),
-                .num_branches = num_branches,
-                .is_else = false,
-                .parent_if_expr = if_expr_idx,
-                .last_if_branch = last_if_branch,
-            } });
-
-            if (!body_result.isAccepted()) {
-                // Check remaining branches to catch their individual errors
-                for (branches[cur_index + 1 ..]) |remaining_branch_idx| {
-                    const remaining_branch = self.cir.store.getIfBranch(remaining_branch_idx);
-
-                    does_fx = try self.checkExpr(remaining_branch.cond, env, child_expected.suppressHoistSelection()) or does_fx;
-                    const remaining_cond_var: Var = ModuleEnv.varFrom(remaining_branch.cond);
-
-                    const fresh_bool = try self.freshBool(env, expr_region);
-                    const remaining_cond_result = try self.unifyInContext(fresh_bool, remaining_cond_var, env, .if_condition);
-                    if (if_.warn_unused_branches and remaining_cond_result.isEstablished()) {
-                        try self.warnIfComptimeConditionalExpr(remaining_branch.cond, .if_condition, expected);
-                    }
-
-                    does_fx = try self.checkExprInCallPosition(
-                        remaining_branch.body,
-                        env,
-                        expected.forBranchBody(),
-                        is_call_arg,
-                        is_immediate_callee,
-                    ) or does_fx;
-                    try self.markErroneous(ModuleEnv.varFrom(remaining_branch.body));
+    if_kernel: while (true) {
+        const branches = self.cir.store.sliceIfBranches(current.if_.branches);
+        switch (current.phase) {
+            .schedule_first_cond => {
+                current.phase = .after_first_cond;
+                const first_branch = self.cir.store.getIfBranch(branches[0]);
+                switch (try self.checkIfChild(first_branch.cond, env, current.child_expected, false, false, false)) {
+                    .checked => |does_fx| last_child = does_fx,
+                    .nested => |nested| {
+                        current = try descendIntoNestedIf(frame_allocator, &parents, &expr_frames, current, nested);
+                    },
                 }
-
-                // Break to avoid cascading errors
-                break;
-            }
+            },
+            .after_first_cond => {
+                current.does_fx = last_child.? or current.does_fx;
+                last_child = null;
+                const first_branch = self.cir.store.getIfBranch(branches[0]);
+                const first_cond_var: Var = ModuleEnv.varFrom(first_branch.cond);
+                const bool_var = try self.freshBool(env, current.expr_region);
+                const result = try self.unifyInContext(bool_var, first_cond_var, env, .if_condition);
+                if (current.if_.warn_unused_branches and result.isEstablished()) {
+                    try self.warnIfComptimeConditionalExpr(first_branch.cond, .if_condition, current.expected);
+                }
+                current.phase = .schedule_first_body;
+            },
+            .schedule_first_body => {
+                current.phase = .after_first_body;
+                const first_branch = self.cir.store.getIfBranch(branches[0]);
+                switch (try self.checkIfChild(
+                    first_branch.body,
+                    env,
+                    current.expected.forBranchBody(),
+                    true,
+                    current.is_call_arg,
+                    current.is_immediate_callee,
+                )) {
+                    .checked => |does_fx| last_child = does_fx,
+                    .nested => |nested| {
+                        current = try descendIntoNestedIf(frame_allocator, &parents, &expr_frames, current, nested);
+                    },
+                }
+            },
+            .after_first_body => {
+                current.does_fx = last_child.? or current.does_fx;
+                last_child = null;
+                const first_branch_idx = branches[0];
+                const first_branch = self.cir.store.getIfBranch(first_branch_idx);
+                if (current.expected_branch_ret) |expected_ret| {
+                    const branch_ctx = problem.Context{ .if_branch = .{
+                        .branch_index = 0,
+                        .num_branches = current.num_branches,
+                        .is_else = false,
+                        .parent_if_expr = current.if_expr_idx,
+                        .last_if_branch = first_branch_idx,
+                    } };
+                    try self.checkBranchBodyAgainstExpected(first_branch.body, expected_ret, current.branch_acc.?, branch_ctx, env);
+                }
+                current.branch_var = ModuleEnv.varFrom(first_branch.body);
+                current.phase = if (current.branch_index < branches.len) .schedule_branch_cond else .schedule_final_else;
+            },
+            .schedule_branch_cond => {
+                current.phase = .after_branch_cond;
+                const branch = self.cir.store.getIfBranch(branches[current.branch_index]);
+                switch (try self.checkIfChild(
+                    branch.cond,
+                    env,
+                    current.child_expected.suppressHoistSelection(),
+                    false,
+                    false,
+                    false,
+                )) {
+                    .checked => |does_fx| last_child = does_fx,
+                    .nested => |nested| {
+                        current = try descendIntoNestedIf(frame_allocator, &parents, &expr_frames, current, nested);
+                    },
+                }
+            },
+            .after_branch_cond => {
+                current.does_fx = last_child.? or current.does_fx;
+                last_child = null;
+                const branch = self.cir.store.getIfBranch(branches[current.branch_index]);
+                const cond_var: Var = ModuleEnv.varFrom(branch.cond);
+                const bool_var = try self.freshBool(env, current.expr_region);
+                const result = try self.unifyInContext(bool_var, cond_var, env, .if_condition);
+                if (current.if_.warn_unused_branches and result.isEstablished()) {
+                    try self.warnIfComptimeConditionalExpr(branch.cond, .if_condition, current.expected);
+                }
+                current.phase = .schedule_branch_body;
+            },
+            .schedule_branch_body => {
+                current.phase = .after_branch_body;
+                const branch = self.cir.store.getIfBranch(branches[current.branch_index]);
+                switch (try self.checkIfChild(
+                    branch.body,
+                    env,
+                    current.expected.forBranchBody(),
+                    true,
+                    current.is_call_arg,
+                    current.is_immediate_callee,
+                )) {
+                    .checked => |does_fx| last_child = does_fx,
+                    .nested => |nested| {
+                        current = try descendIntoNestedIf(frame_allocator, &parents, &expr_frames, current, nested);
+                    },
+                }
+            },
+            .after_branch_body => {
+                current.does_fx = last_child.? or current.does_fx;
+                last_child = null;
+                const branch_idx = branches[current.branch_index];
+                const branch = self.cir.store.getIfBranch(branch_idx);
+                if (current.expected_branch_ret) |expected_ret| {
+                    const branch_ctx = problem.Context{ .if_branch = .{
+                        .branch_index = @intCast(current.branch_index),
+                        .num_branches = current.num_branches,
+                        .is_else = false,
+                        .parent_if_expr = current.if_expr_idx,
+                        .last_if_branch = current.last_if_branch,
+                    } };
+                    try self.checkBranchBodyAgainstExpected(branch.body, expected_ret, current.branch_acc.?, branch_ctx, env);
+                } else {
+                    const body_var: Var = ModuleEnv.varFrom(branch.body);
+                    const result = try self.unifyInContext(current.branch_var, body_var, env, .{ .if_branch = .{
+                        .branch_index = @intCast(current.branch_index),
+                        .num_branches = current.num_branches,
+                        .is_else = false,
+                        .parent_if_expr = current.if_expr_idx,
+                        .last_if_branch = current.last_if_branch,
+                    } });
+                    if (!result.isAccepted()) {
+                        current.remaining_index = current.branch_index + 1;
+                        current.phase = if (current.remaining_index < branches.len)
+                            .schedule_remaining_cond
+                        else
+                            .schedule_final_else;
+                        continue :if_kernel;
+                    }
+                }
+                current.last_if_branch = branch_idx;
+                current.branch_index += 1;
+                current.phase = if (current.branch_index < branches.len) .schedule_branch_cond else .schedule_final_else;
+            },
+            .schedule_remaining_cond => {
+                current.phase = .after_remaining_cond;
+                const branch = self.cir.store.getIfBranch(branches[current.remaining_index]);
+                switch (try self.checkIfChild(
+                    branch.cond,
+                    env,
+                    current.child_expected.suppressHoistSelection(),
+                    false,
+                    false,
+                    false,
+                )) {
+                    .checked => |does_fx| last_child = does_fx,
+                    .nested => |nested| {
+                        current = try descendIntoNestedIf(frame_allocator, &parents, &expr_frames, current, nested);
+                    },
+                }
+            },
+            .after_remaining_cond => {
+                current.does_fx = last_child.? or current.does_fx;
+                last_child = null;
+                const branch = self.cir.store.getIfBranch(branches[current.remaining_index]);
+                const cond_var: Var = ModuleEnv.varFrom(branch.cond);
+                const bool_var = try self.freshBool(env, current.expr_region);
+                const result = try self.unifyInContext(bool_var, cond_var, env, .if_condition);
+                if (current.if_.warn_unused_branches and result.isEstablished()) {
+                    try self.warnIfComptimeConditionalExpr(branch.cond, .if_condition, current.expected);
+                }
+                current.phase = .schedule_remaining_body;
+            },
+            .schedule_remaining_body => {
+                current.phase = .after_remaining_body;
+                const branch = self.cir.store.getIfBranch(branches[current.remaining_index]);
+                switch (try self.checkIfChild(
+                    branch.body,
+                    env,
+                    current.expected.forBranchBody(),
+                    true,
+                    current.is_call_arg,
+                    current.is_immediate_callee,
+                )) {
+                    .checked => |does_fx| last_child = does_fx,
+                    .nested => |nested| {
+                        current = try descendIntoNestedIf(frame_allocator, &parents, &expr_frames, current, nested);
+                    },
+                }
+            },
+            .after_remaining_body => {
+                current.does_fx = last_child.? or current.does_fx;
+                last_child = null;
+                const branch = self.cir.store.getIfBranch(branches[current.remaining_index]);
+                try self.markErroneous(ModuleEnv.varFrom(branch.body));
+                current.remaining_index += 1;
+                current.phase = if (current.remaining_index < branches.len)
+                    .schedule_remaining_cond
+                else
+                    .schedule_final_else;
+            },
+            .schedule_final_else => {
+                current.phase = .after_final_else;
+                switch (try self.checkIfChild(
+                    current.if_.final_else,
+                    env,
+                    current.expected.forBranchBody(),
+                    true,
+                    current.is_call_arg,
+                    current.is_immediate_callee,
+                )) {
+                    .checked => |does_fx| last_child = does_fx,
+                    .nested => |nested| {
+                        current = try descendIntoNestedIf(frame_allocator, &parents, &expr_frames, current, nested);
+                    },
+                }
+            },
+            .after_final_else => {
+                current.does_fx = last_child.? or current.does_fx;
+                last_child = null;
+                if (current.expected_branch_ret) |expected_ret| {
+                    const branch_ctx = problem.Context{ .if_branch = .{
+                        .branch_index = current.num_branches - 1,
+                        .num_branches = current.num_branches,
+                        .is_else = true,
+                        .parent_if_expr = current.if_expr_idx,
+                        .last_if_branch = current.last_if_branch,
+                    } };
+                    try self.checkBranchBodyAgainstExpected(
+                        current.if_.final_else,
+                        expected_ret,
+                        current.branch_acc.?,
+                        branch_ctx,
+                        env,
+                    );
+                    const if_expr_var: Var = ModuleEnv.varFrom(current.if_expr_idx);
+                    _ = try self.unify(if_expr_var, current.branch_acc.?, env);
+                    _ = try self.unify(if_expr_var, expected_ret, env);
+                } else {
+                    const final_else_var: Var = ModuleEnv.varFrom(current.if_.final_else);
+                    _ = try self.unifyInContext(current.branch_var, final_else_var, env, .{ .if_branch = .{
+                        .branch_index = current.num_branches - 1,
+                        .num_branches = current.num_branches,
+                        .is_else = true,
+                        .parent_if_expr = current.if_expr_idx,
+                        .last_if_branch = current.last_if_branch,
+                    } });
+                    const if_expr_var: Var = ModuleEnv.varFrom(current.if_expr_idx);
+                    _ = try self.unify(if_expr_var, current.branch_var, env);
+                }
+                current.phase = .finish;
+            },
+            .finish => {
+                const does_fx = current.does_fx;
+                if (current.owns_expr_frame) {
+                    var expr_frame = expr_frames.pop().?;
+                    defer expr_frame.deinit();
+                    try expr_frame.finish(does_fx);
+                }
+                if (parents.pop()) |parent| {
+                    current = parent;
+                    last_child = does_fx;
+                } else {
+                    return does_fx;
+                }
+            },
         }
-
-        last_if_branch = branch_idx;
     }
-
-    // Check the final else
-    does_fx = try self.checkExprInCallPosition(
-        if_.final_else,
-        env,
-        expected.forBranchBody(),
-        is_call_arg,
-        is_immediate_callee,
-    ) or does_fx;
-
-    // Check final else against expected return type before pairwise unification
-    if (expected_branch_ret) |expected_ret| {
-        const branch_ctx = problem.Context{ .if_branch = .{
-            .branch_index = num_branches - 1,
-            .num_branches = num_branches,
-            .is_else = true,
-            .parent_if_expr = if_expr_idx,
-            .last_if_branch = last_if_branch,
-        } };
-        try self.checkBranchBodyAgainstExpected(if_.final_else, expected_ret, branch_acc.?, branch_ctx, env);
-        const if_expr_var: Var = ModuleEnv.varFrom(if_expr_idx);
-        // Tie the whole expr to the accumulated branch meet, then to the shared
-        // expected return type. This is the ONLY place `expected_ret` is merged
-        // for the if-expr, and it runs in the load-bearing `(expr, expected)`
-        // operand order so `expected_ret` survives as the union-find root (see
-        // `store.union_`): flipping it ties recursive type parameters off to
-        // duplicate rigids of the same name, which then fail to unify.
-        _ = try self.unify(if_expr_var, branch_acc.?, env);
-        _ = try self.unify(if_expr_var, expected_ret, env);
-    } else {
-        const final_else_var: Var = ModuleEnv.varFrom(if_.final_else);
-        _ = try self.unifyInContext(branch_var, final_else_var, env, .{ .if_branch = .{
-            .branch_index = num_branches - 1,
-            .num_branches = num_branches,
-            .is_else = true,
-            .parent_if_expr = if_expr_idx,
-            .last_if_branch = last_if_branch,
-        } });
-
-        // Set the entire expr's type to be the type of the branch
-        const if_expr_var: Var = ModuleEnv.varFrom(if_expr_idx);
-        _ = try self.unify(if_expr_var, branch_var, env);
-    }
-
-    return does_fx;
 }
 
+/// Check the types for an if-else expr
 // match //
 
 /// Check the types for a match expr
