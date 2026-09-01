@@ -25936,7 +25936,7 @@ test "immutable aliases share storage but aliases of mutable locals do not" {
         .next = alias1_stmt,
     } });
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
     const HostCodeGen = @TypeOf(codegen.codegen);
     if (comptime builtin.cpu.arch == .aarch64) {
