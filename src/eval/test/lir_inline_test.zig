@@ -433,6 +433,9 @@ const StructuralJsonLirStats = struct {
     procedures: usize,
     statements: usize,
     locals: usize,
+    reference_counting: usize,
+    decrefs: usize,
+    conditional_decrefs: usize,
 };
 
 fn structuralJsonLirStats(
@@ -447,10 +450,25 @@ fn structuralJsonLirStats(
     var lowered = try lowerModule(allocator, source, .wrappers);
     defer lowered.deinit(allocator);
     const store = &lowered.lowered.lir_result.store;
+    var reference_counting: usize = 0;
+    var decrefs: usize = 0;
+    var conditional_decrefs: usize = 0;
+    for (store.getCFStmts()) |stmt| {
+        if (stmt == .decref) {
+            reference_counting += 1;
+            decrefs += 1;
+        } else if (stmt == .decref_if_initialized) {
+            reference_counting += 1;
+            conditional_decrefs += 1;
+        }
+    }
     return .{
         .procedures = store.getProcSpecs().len,
         .statements = store.getCFStmts().len,
         .locals = store.getLocals().len,
+        .reference_counting = reference_counting,
+        .decrefs = decrefs,
+        .conditional_decrefs = conditional_decrefs,
     };
 }
 
@@ -1874,6 +1892,125 @@ test "issue 10889 nested optional JSON parser specialization growth is bounded" 
         );
     }
     try std.testing.expect(nested_expression_growth <= flat_expression_growth * 2);
+}
+
+test "issue 10979 flat JSON record parser growth is linear in field count" {
+    const allocator = std.testing.allocator;
+    const eight = try structuralJsonMonotypeStats(allocator, 8, "Str", .parse);
+    const sixteen = try structuralJsonMonotypeStats(allocator, 16, "Str", .parse);
+    const thirty_two = try structuralJsonMonotypeStats(allocator, 32, "Str", .parse);
+    const sixty_four = try structuralJsonMonotypeStats(allocator, 64, "Str", .parse);
+
+    const narrow_per_field = (sixteen.expressions - eight.expressions) / 8;
+    const wide_per_field = (sixty_four.expressions - thirty_two.expressions) / 32;
+    if (wide_per_field > narrow_per_field * 2) {
+        std.debug.print(
+            "flat JSON parser per-field Monotype cost grew from {d} expressions per field in the 8->16 window " ++
+                "to {d} in the 32->64 window (expressions {d}/{d}/{d}/{d}, locals {d}/{d}/{d}/{d})\n",
+            .{
+                narrow_per_field,
+                wide_per_field,
+                eight.expressions,
+                sixteen.expressions,
+                thirty_two.expressions,
+                sixty_four.expressions,
+                eight.locals,
+                sixteen.locals,
+                thirty_two.locals,
+                sixty_four.locals,
+            },
+        );
+    }
+    try std.testing.expect(wide_per_field <= narrow_per_field * 2);
+}
+
+test "issue 10979 flat JSON record parser ARC growth is linear in field count" {
+    const allocator = std.testing.allocator;
+    const four = try structuralJsonLirStats(allocator, 4, "Str", .parse);
+    const eight = try structuralJsonLirStats(allocator, 8, "Str", .parse);
+    const sixteen = try structuralJsonLirStats(allocator, 16, "Str", .parse);
+
+    const narrow_per_field = (eight.reference_counting - four.reference_counting) / 4;
+    const wide_per_field = (sixteen.reference_counting - eight.reference_counting) / 8;
+    const narrow_statements_per_field = (eight.statements - four.statements) / 4;
+    const wide_statements_per_field = (sixteen.statements - eight.statements) / 8;
+    if (wide_per_field * 2 > narrow_per_field * 3 or
+        wide_statements_per_field * 2 > narrow_statements_per_field * 3)
+    {
+        std.debug.print(
+            "flat JSON parser per-field ARC cost grew from {d} statements per field in the 4->8 window " ++
+                "to {d} in the 8->16 window; total LIR grew from {d} to {d} statements per field " ++
+                "(RC statements {d}/{d}/{d}, decrefs {d}/{d}/{d}, conditional {d}/{d}/{d}, total statements {d}/{d}/{d})\n",
+            .{
+                narrow_per_field,
+                wide_per_field,
+                narrow_statements_per_field,
+                wide_statements_per_field,
+                four.reference_counting,
+                eight.reference_counting,
+                sixteen.reference_counting,
+                four.decrefs,
+                eight.decrefs,
+                sixteen.decrefs,
+                four.conditional_decrefs,
+                eight.conditional_decrefs,
+                sixteen.conditional_decrefs,
+                four.statements,
+                eight.statements,
+                sixteen.statements,
+            },
+        );
+    }
+    try std.testing.expect(wide_per_field * 2 <= narrow_per_field * 3);
+    try std.testing.expect(wide_statements_per_field * 2 <= narrow_statements_per_field * 3);
+}
+
+test "issue 10979 shared JSON record continuations preserve field semantics" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Shape : { f0 : Str, f1 : Str }
+        \\
+        \\main : Bool
+        \\main = {
+        \\    duplicate : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    duplicate = Json.parse("{ \"f0\": \"first\", \"f1\": \"middle\", \"f0\": \"last\" }")
+        \\    missing : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    missing = Json.parse("{ \"f0\": \"only\" }")
+        \\    invalid : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    invalid = Json.parse("{ \"f0\": \"started\", ")
+        \\    duplicate_ok = match duplicate {
+        \\        Ok(record) => record.f0 == "last" and record.f1 == "middle"
+        \\        Err(_) => False
+        \\    }
+        \\    missing_ok = match missing {
+        \\        Err(MissingRequiredField(field)) => field == "f1"
+        \\        _ => False
+        \\    }
+        \\    invalid_ok = match invalid {
+        \\        Err(InvalidJson(_)) => True
+        \\        _ => False
+        \\    }
+        \\    duplicate_ok and missing_ok and invalid_ok
+        \\}
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
 }
 
 test "issue 10121 structural JSON helper sharing survives LIR lowering" {

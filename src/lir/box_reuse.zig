@@ -425,6 +425,7 @@ const Transform = struct {
         self.store.getCFStmtPtr(join_stmt_id).* = .{ .join = .{
             .id = join_stmt.id,
             .params = try self.store.addLocalSpan(&.{ join_payload, result_box, payload_ptr }),
+            .retained = join_stmt.retained,
             .maybe_uninitialized_params = join_stmt.maybe_uninitialized_params,
             .maybe_uninitialized_conditions = join_stmt.maybe_uninitialized_conditions,
             .maybe_uninitialized_condition_masks = join_stmt.maybe_uninitialized_condition_masks,
