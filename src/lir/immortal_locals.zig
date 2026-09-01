@@ -4,15 +4,18 @@
 //! refcount word set to `REFCOUNT_STATIC_DATA` (zero), and both `increfRcPtr`
 //! and `decrefRcPtr` return without touching a count when they read that
 //! value. A retain or release on such a value is therefore a call, a load and
-//! a compare that can only ever decide to do nothing, and backends may emit
-//! nothing in its place.
+//! a compare that can only ever decide to do nothing.
 //!
 //! This is deliberately not an ARC question. ARC still gives these values an
 //! ownership unit, still places the retains and releases, and the debug
-//! certifier still verifies that placement; the analysis here runs after all
-//! of that and only decides what reaches the machine. Keeping it out of the
+//! certifier still verifies that placement; `elide` runs after all of that and
+//! drops the statements the placement made redundant. Keeping it out of the
 //! ownership model is what makes it safe: no accounting changes, so no
 //! placement changes.
+//!
+//! The elision happens here, in the LIR, and not in the backends: a backend
+//! follows the `incref` and `decref` statements it is given and does not
+//! reason about reference counting itself.
 //!
 //! `str_literal` is not included and must not be. A string literal longer than
 //! a small string is materialized by `str_from_literal`, which heap-allocates
@@ -207,6 +210,167 @@ const Pass = struct {
         }
     }
 };
+
+/// Drops every `incref` and `decref` on a local that only image data writes.
+///
+/// Runs after ARC has placed reference counts and the debug certifier has
+/// checked that placement, so the ledger it verified is the one ARC produced;
+/// what is removed here is only the runtime no-ops that placement implies.
+/// A `free` is left alone: releasing image data would be a placement bug
+/// rather than a no-op worth eliding, and removing it would hide that.
+///
+/// Returns how many statements were dropped.
+pub fn elide(gpa: Allocator, store: *LirStore) Allocator.Error!usize {
+    var immortal = try compute(gpa, store);
+    defer immortal.deinit(gpa);
+
+    const count = store.cfStmtCount();
+    // `next` of each dropped statement, or itself when it is kept.
+    const successor = try gpa.alloc(LIR.CFStmtId, count);
+    defer gpa.free(successor);
+    const dropped = try gpa.alloc(bool, count);
+    defer gpa.free(dropped);
+    @memset(dropped, false);
+
+    var drop_count: usize = 0;
+    for (store.getCFStmts(), 0..) |stmt, index| {
+        const id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(index)));
+        successor[index] = id;
+        const value: LIR.LocalId, const next: LIR.CFStmtId = switch (stmt) {
+            .incref => |s| .{ s.value, s.next },
+            .decref => |s| .{ s.value, s.next },
+            .decref_if_initialized => |s| .{ s.value, s.next },
+            else => continue,
+        };
+        if (!immortal.contains(value)) continue;
+        dropped[index] = true;
+        successor[index] = next;
+        drop_count += 1;
+    }
+    if (drop_count == 0) return 0;
+
+    // Collapse runs of dropped statements so every edge lands on a kept one.
+    // Following `next` terminates because it only ever moves forward through
+    // the run and the last statement of a run is kept.
+    for (0..count) |index| {
+        if (!dropped[index]) continue;
+        var target = successor[index];
+        var guard: usize = 0;
+        while (dropped[@intFromEnum(target)]) {
+            target = successor[@intFromEnum(target)];
+            guard += 1;
+            if (guard > count) immortalInvariant("dropped reference-count statements form a cycle");
+        }
+        successor[index] = target;
+    }
+
+    const resolve = struct {
+        fn call(table: []const LIR.CFStmtId, id: LIR.CFStmtId) LIR.CFStmtId {
+            return table[@intFromEnum(id)];
+        }
+    }.call;
+
+    for (0..count) |index| {
+        const id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(index)));
+        const stmt = store.getCFStmtPtr(id);
+        switch (stmt.*) {
+            inline .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .assign_call_dict,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .comptime_branch_taken,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            => |*s| s.next = resolve(successor, s.next),
+            .boxy_tag_match => |*s| {
+                s.on_match = resolve(successor, s.on_match);
+                s.on_miss = resolve(successor, s.on_miss);
+            },
+            .str_match => |*s| {
+                s.on_match = resolve(successor, s.on_match);
+                s.on_miss = resolve(successor, s.on_miss);
+            },
+            .str_match_set => |*s| {
+                s.on_miss = resolve(successor, s.on_miss);
+                const arms = store.getStrMatchArmsMut(s.arms);
+                for (0..arms.len) |arm_index| {
+                    const arm = GuardedList.atPtr(arms, arm_index);
+                    arm.on_match = resolve(successor, arm.on_match);
+                }
+            },
+            .switch_stmt => |*s| {
+                s.default_branch = resolve(successor, s.default_branch);
+                if (s.continuation) |continuation| s.continuation = resolve(successor, continuation);
+                const branches = store.getCFSwitchBranchesMut(s.branches);
+                for (0..branches.len) |branch_index| {
+                    const branch = GuardedList.atPtr(branches, branch_index);
+                    branch.body = resolve(successor, branch.body);
+                }
+            },
+            .switch_initialized_payload => |*s| {
+                s.initialized_branch = resolve(successor, s.initialized_branch);
+                s.uninitialized_branch = resolve(successor, s.uninitialized_branch);
+            },
+            .join => |*s| {
+                s.body = resolve(successor, s.body);
+                s.remainder = resolve(successor, s.remainder);
+            },
+            .jump,
+            .ret,
+            .crash,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .loop_continue,
+            .loop_break,
+            => {},
+        }
+    }
+
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const proc = store.getProcSpecPtr(proc_id);
+        if (proc.body) |body| proc.body = resolve(successor, body);
+        const joins = store.getJoinPointSpanMut(proc.join_points);
+        for (0..joins.len) |join_index| {
+            const join = GuardedList.atPtr(joins, join_index);
+            join.body = resolve(successor, join.body);
+        }
+    }
+
+    return drop_count;
+}
+
+fn immortalInvariant(comptime message: []const u8) noreturn {
+    if (@import("builtin").mode == .Debug) {
+        @panic("immortal locals invariant violated: " ++ message);
+    }
+    unreachable;
+}
 
 test {
     std.testing.refAllDecls(@This());
