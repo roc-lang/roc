@@ -52,7 +52,12 @@
 //!   real in-edges disagree about, so every group is witnessed by at least one real jump
 //!   and a group-walk finding always corresponds to a real entry state. In
 //!   the worst case this degenerates to one group per distinct summary—
-//!   the pre-fixpoint exact behavior—but with no cap and no skip path.
+//!   the pre-fixpoint exact behavior—which is exponential in the number of
+//!   relevant names, so it is capped: past `max_join_groups` a join stops
+//!   splitting on lifetime provenance and absorbs into a group whose
+//!   provenance drops to what both members prove. Provenance is proof, so
+//!   dropping it only makes later checks demand more; the cap can report a
+//!   finding exactness would not, never hide one. Nothing is skipped.
 //!
 //! Why one walk under the group's meet partition covers every member
 //! (soundness of the join): a member's entry state is the group state with
@@ -70,9 +75,11 @@
 //! only moves down the refinement order as members arrive.
 //!
 //! Termination and re-walk bound: a group's partition strictly refines at
-//! most (relevant locals - 1) times, and a group is only re-walked when its
-//! partition refined, so each group walks at most n times—the lattice
-//! height replaces summary enumeration. Group *creation* is bounded by
+//! most (relevant locals - 1) times, and each conditional cell's
+//! may-already-released fact changes from false to true at most once. A group
+//! is re-walked only for one of those strict changes, so each group walks at
+//! most 2n times—the lattice height replaces summary enumeration. Group
+//! *creation* is bounded by
 //! Dickson's lemma: mode vectors and partitions are finite, and among
 //! groups sharing both, balance vectors that keep growing pointwise are
 //! reported as a per-iteration accumulation finding after
@@ -192,6 +199,9 @@ fn certifyStoreWithWorkStats(
     const rc_local = try arc_solve.computeLocalContainsRefcounted(allocator, store, layouts, boxy_rc_descs);
     defer allocator.free(rc_local);
 
+    var maybe_uninitialized = try MaybeUninitializedConditions.init(allocator, store, diag);
+    defer maybe_uninitialized.deinit();
+
     try certifyRcAtomicity(allocator, store, rc_local, roots, diag);
     try certifyUniqueArgs(allocator, store, rc_local, sigs, diag);
 
@@ -201,6 +211,7 @@ fn certifyStoreWithWorkStats(
         .layouts = layouts,
         .sigs = sigs,
         .rc_local = rc_local,
+        .maybe_uninitialized = &maybe_uninitialized,
         .lender_arena = std.heap.ArenaAllocator.init(allocator),
         .records = collections.DenseMap(LIR.JoinPointId, JoinRecord).init(allocator),
         .memo = std.AutoHashMap(MemoEntry, void).init(allocator),
@@ -522,6 +533,12 @@ pub fn certifyStoreOrPanic(
                     extra_locals[index] = link.origin;
                 }
                 writeFailureContext(&context, store, layouts, sigs, proc_id, diag.context_stmt, diag.context_local, extra_locals[0..diag.chain_len]);
+                // Say what went wrong before dumping the procedure. The dump
+                // runs to thousands of lines, and a reader whose output is
+                // truncated -- a CI log, a test harness capturing a child --
+                // otherwise keeps the part they cannot use and loses the part
+                // they need.
+                std.debug.print("\nARC: {s}{s}\n", .{ diag.message(), context.text() });
                 var buffer: std.Io.Writer.Allocating = .init(allocator);
                 defer buffer.deinit();
                 debug_print.writeProc(allocator, store, layouts, proc_id, &buffer.writer) catch {};
@@ -1039,6 +1056,84 @@ const PresenceCondition = struct {
     }
 };
 
+/// One exact LocalId-indexed view of the condition metadata that LIR joins
+/// carry for maybe-uninitialized payload cells. ARC's solver treats this as a
+/// property of the payload cell, not of one particular join: every later
+/// release of the cell must remain guarded by the same condition. The
+/// certifier consumes the producer-authored facts through the same indexing
+/// model so intermediate joins preserve one symbolic conditional state instead
+/// of enumerating the cell's initialized and uninitialized runtime states.
+const MaybeUninitializedConditions = struct {
+    allocator: Allocator,
+    condition: []u32,
+    mask: []u64,
+
+    fn init(
+        allocator: Allocator,
+        store: *const LirStore,
+        diag: *Diagnostic,
+    ) CertifyError!MaybeUninitializedConditions {
+        const condition = try allocator.alloc(u32, store.localCount());
+        errdefer allocator.free(condition);
+        const mask = try allocator.alloc(u64, store.localCount());
+        errdefer allocator.free(mask);
+        @memset(condition, no_dense);
+        @memset(mask, 0);
+
+        for (0..store.cfStmtCount()) |stmt_index| {
+            const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+            const stmt = store.getCFStmt(stmt_id);
+            if (stmt != .join) continue;
+
+            const params = store.getLocalSpan(stmt.join.maybe_uninitialized_params);
+            const conditions = store.getLocalSpan(stmt.join.maybe_uninitialized_conditions);
+            const masks = store.getU64Span(stmt.join.maybe_uninitialized_condition_masks);
+            if (params.len != conditions.len or params.len != masks.len) {
+                diag.context_stmt = stmt_id;
+                diag.set("stmt={d}: maybe-uninitialized join metadata arity mismatch", .{stmt_index});
+                return error.Certification;
+            }
+
+            for (0..GuardedList.borrowLen(params)) |index| {
+                const param = GuardedList.at(params, index);
+                const presence = GuardedList.at(conditions, index);
+                const presence_mask = GuardedList.at(masks, index);
+                const param_index = @intFromEnum(param);
+                if (param_index >= condition.len or @intFromEnum(presence) >= condition.len) {
+                    diag.context_stmt = stmt_id;
+                    diag.set("stmt={d}: maybe-uninitialized join metadata names an out-of-bounds local", .{stmt_index});
+                    return error.Certification;
+                }
+                if (condition[param_index] == no_dense) {
+                    condition[param_index] = @intFromEnum(presence);
+                    mask[param_index] = presence_mask;
+                } else if (condition[param_index] != @intFromEnum(presence) or mask[param_index] != presence_mask) {
+                    diag.context_stmt = stmt_id;
+                    diag.context_local = param;
+                    diag.set("stmt={d}: maybe-uninitialized local {d} has conflicting presence conditions", .{ stmt_index, param_index });
+                    return error.Certification;
+                }
+            }
+        }
+
+        return .{ .allocator = allocator, .condition = condition, .mask = mask };
+    }
+
+    fn deinit(self: *MaybeUninitializedConditions) void {
+        self.allocator.free(self.condition);
+        self.allocator.free(self.mask);
+    }
+
+    fn get(self: *const MaybeUninitializedConditions, local: LIR.LocalId) ?PresenceCondition {
+        const index = @intFromEnum(local);
+        if (index >= self.condition.len or self.condition[index] == no_dense) return null;
+        return .{
+            .local = @enumFromInt(self.condition[index]),
+            .mask = self.mask[index],
+        };
+    }
+};
+
 /// One exact state mutation made while transferring a call argument. A
 /// restituted outcome replays these mutations backwards, proving that the
 /// returned unit is the same ownership place the call received (including a
@@ -1132,8 +1227,22 @@ const ValueInfo = struct {
 };
 
 /// One forked ownership state along a control-flow path.
+/// Retired certifier states, kept so a fork can refill one instead of
+/// allocating a fresh set of buffers.
+///
+/// A state holds one array per refcounted local plus four indexed by value,
+/// and every branch clones the whole thing. On a wide derived codec that is
+/// tens of thousands of clone/free pairs of multi-kilobyte buffers, which in
+/// a Debug build means the same number of trips through the page allocator.
+/// Reusing them keeps the buffers hot and the allocator out of the loop.
+/// Entries are sized for one procedure, so the pool is drained between
+/// procedures.
+const StatePool = std.ArrayList(State);
+
 const State = struct {
     allocator: Allocator,
+    /// Where this state's buffers go when it dies, or null to free them.
+    pool: ?*StatePool = null,
     /// Dense proc-local position per store local, owned by the certifier and
     /// stable for the lifetime of every state for the current proc.
     local_dense: []const u32,
@@ -1164,10 +1273,25 @@ const State = struct {
     /// along this exact path. The initial restitution capability consumes it
     /// before a terminal jump/return, so it never crosses a join summary.
     result_discriminant: u32 = no_dense,
+    /// Producer-declared maybe-uninitialized payload conditions not yet
+    /// refined by an explicit initialized-payload switch on this path. The
+    /// declaration is an exact LIR scope boundary: nested joins preserve its
+    /// symbolic cells until a switch resolves them, while joins that precede
+    /// or sit outside the declaration must not manufacture them.
+    maybe_uninitialized_unresolved: std.bit_set.DynamicBitSetUnmanaged,
+    /// Payload cells that may already have been spent by a guarded release on
+    /// one path. The bit is a may-fact: joins union it, a fresh payload write or
+    /// producer-authored conditional join clears it, and another guarded read
+    /// before either transition is a possible double release.
+    maybe_uninitialized_released: std.bit_set.DynamicBitSetUnmanaged,
 
     fn init(allocator: Allocator, local_dense: []const u32, proc_local_count: usize) Allocator.Error!State {
         const local_value = try allocator.alloc(ValueId, proc_local_count);
+        errdefer allocator.free(local_value);
         @memset(local_value, no_value);
+        var maybe_uninitialized_unresolved = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_local_count);
+        errdefer maybe_uninitialized_unresolved.deinit(allocator);
+        const maybe_uninitialized_released = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_local_count);
         return .{
             .allocator = allocator,
             .local_dense = local_dense,
@@ -1179,10 +1303,32 @@ const State = struct {
             .claims = .empty,
             .outcome_discriminants = .empty,
             .result_discriminant = no_dense,
+            .maybe_uninitialized_unresolved = maybe_uninitialized_unresolved,
+            .maybe_uninitialized_released = maybe_uninitialized_released,
         };
     }
 
     fn deinit(self: *State) void {
+        if (self.pool) |pool| {
+            self.balance.clearRetainingCapacity();
+            self.holder.clearRetainingCapacity();
+            self.conditional_condition.clearRetainingCapacity();
+            self.conditional_condition_mask.clearRetainingCapacity();
+            self.claims.clearRetainingCapacity();
+            self.outcome_discriminants.clearRetainingCapacity();
+            // Recycling is an optimization; if the pool cannot grow, fall
+            // through and free the buffers as usual.
+            pool.append(self.allocator, self.*) catch {
+                self.freeBuffers();
+                return;
+            };
+            self.* = undefined;
+            return;
+        }
+        self.freeBuffers();
+    }
+
+    fn freeBuffers(self: *State) void {
         self.allocator.free(self.local_value);
         self.balance.deinit(self.allocator);
         self.holder.deinit(self.allocator);
@@ -1190,9 +1336,20 @@ const State = struct {
         self.conditional_condition_mask.deinit(self.allocator);
         self.claims.deinit(self.allocator);
         self.outcome_discriminants.deinit(self.allocator);
+        self.maybe_uninitialized_unresolved.deinit(self.allocator);
+        self.maybe_uninitialized_released.deinit(self.allocator);
     }
 
     fn clone(self: *const State) Allocator.Error!State {
+        if (self.pool) |pool| {
+            if (pool.pop()) |recycled| {
+                var reused = recycled;
+                errdefer reused.freeBuffers();
+                try reused.refillFrom(self);
+                return reused;
+            }
+        }
+
         const local_value = try self.allocator.dupe(ValueId, self.local_value);
         errdefer self.allocator.free(local_value);
         var balance = try self.balance.clone(self.allocator);
@@ -1205,9 +1362,14 @@ const State = struct {
         errdefer conditional_condition_mask.deinit(self.allocator);
         var claims = try self.claims.clone(self.allocator);
         errdefer claims.deinit(self.allocator);
-        const outcome_discriminants = try self.outcome_discriminants.clone(self.allocator);
+        var outcome_discriminants = try self.outcome_discriminants.clone(self.allocator);
+        errdefer outcome_discriminants.deinit(self.allocator);
+        var maybe_uninitialized_unresolved = try self.maybe_uninitialized_unresolved.clone(self.allocator);
+        errdefer maybe_uninitialized_unresolved.deinit(self.allocator);
+        const maybe_uninitialized_released = try self.maybe_uninitialized_released.clone(self.allocator);
         return .{
             .allocator = self.allocator,
+            .pool = self.pool,
             .local_dense = self.local_dense,
             .local_value = local_value,
             .balance = balance,
@@ -1217,7 +1379,49 @@ const State = struct {
             .claims = claims,
             .outcome_discriminants = outcome_discriminants,
             .result_discriminant = self.result_discriminant,
+            .maybe_uninitialized_unresolved = maybe_uninitialized_unresolved,
+            .maybe_uninitialized_released = maybe_uninitialized_released,
         };
+    }
+
+    /// Overwrites a recycled state with `source`, keeping the buffers it
+    /// already owns. Every field a fresh clone would set is set here too.
+    fn refillFrom(self: *State, source: *const State) Allocator.Error!void {
+        if (self.local_value.len != source.local_value.len) {
+            self.local_value = try self.allocator.realloc(self.local_value, source.local_value.len);
+        }
+        @memcpy(self.local_value, source.local_value);
+
+        try copyList(i32, &self.balance, &source.balance, self.allocator);
+        try copyList(ValueId, &self.holder, &source.holder, self.allocator);
+        try copyList(u32, &self.conditional_condition, &source.conditional_condition, self.allocator);
+        try copyList(u64, &self.conditional_condition_mask, &source.conditional_condition_mask, self.allocator);
+
+        self.claims.clearRetainingCapacity();
+        try self.claims.ensureTotalCapacity(self.allocator, source.claims.count());
+        var claim_it = source.claims.iterator();
+        while (claim_it.next()) |entry| self.claims.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+
+        self.outcome_discriminants.clearRetainingCapacity();
+        try self.outcome_discriminants.ensureTotalCapacity(self.allocator, source.outcome_discriminants.count());
+        var discriminant_it = source.outcome_discriminants.iterator();
+        while (discriminant_it.next()) |entry| {
+            self.outcome_discriminants.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+        }
+
+        self.local_dense = source.local_dense;
+        self.pool = source.pool;
+        self.result_discriminant = source.result_discriminant;
+    }
+
+    fn copyList(
+        comptime T: type,
+        destination: *std.ArrayList(T),
+        source: *const std.ArrayList(T),
+        allocator: Allocator,
+    ) Allocator.Error!void {
+        destination.clearRetainingCapacity();
+        try destination.appendSlice(allocator, source.items);
     }
 
     fn claimsOf(self: *const State, value: ValueId) u64 {
@@ -1242,6 +1446,14 @@ const State = struct {
 
     fn valueAtDense(self: *const State, dense: usize) ValueId {
         return self.local_value[dense];
+    }
+
+    fn maybeUninitializedIsUnresolved(self: *const State, dense: usize) bool {
+        return self.maybe_uninitialized_unresolved.isSet(dense);
+    }
+
+    fn maybeUninitializedMayBeReleased(self: *const State, dense: usize) bool {
+        return self.maybe_uninitialized_released.isSet(dense);
     }
 
     fn bindValue(self: *State, local: LIR.LocalId, value: ValueId) void {
@@ -1317,6 +1529,26 @@ const SummaryProvenance = struct {
     payload_projection: u64 = arc_dismantle.no_projection,
 };
 
+/// Cap on the number of entry-state groups kept for one join.
+///
+/// Below the cap the abstraction is exact: a summary no group accepts starts
+/// its own group. That is unbounded on its own (mode vectors are finite but
+/// exponential in the number of relevant names), and a derived codec for a
+/// wide record reaches thousands of groups, which is a build that does not
+/// finish rather than one that reports something.
+///
+/// At the cap, summaries that differ only in lifetime provenance stop
+/// splitting: they are absorbed into an existing group whose provenance is
+/// weakened to what both agree on. Every provenance component is a *proof*
+/// that a value stays live (a lender conjunction, a live holder, a deferred
+/// field take), so dropping one only makes later checks demand more. Widening
+/// can therefore report a finding that exactness would not, but it can never
+/// hide one.
+///
+/// Real procedures stay far below this: the busiest join in a 117k-statement
+/// module keeps two groups.
+const max_join_groups: usize = 8;
+
 fn summaryProvenanceEql(a: ?*const SummaryProvenance, b: ?*const SummaryProvenance) bool {
     if (a == b) return true;
     if (a == null or b == null) return a == b;
@@ -1372,6 +1604,13 @@ const LocalSummary = struct {
     /// ownership unit, so rebuilt states must keep it readable after the
     /// unit moves on.
     abi_live: bool = false,
+    /// The payload's producer-declared conditional state is unresolved on this
+    /// path. This is independent of ownership class because the cell can be
+    /// physically uninitialized until its explicit refining switch.
+    maybe_uninitialized_unresolved: bool = false,
+    /// At least one represented path already spent this conditional cell.
+    /// Unlike ownership mode, this is a may-fact and joins by union.
+    maybe_uninitialized_released: bool = false,
     /// For conditional-owned locals: raw local id of the presence condition.
     condition: u32,
     /// For conditional-owned locals: presence mask on `condition`.
@@ -1400,13 +1639,14 @@ const JoinRecord = struct {
     /// every local the body subtree reads before rebinding. Jump states must
     /// agree only on these; everything else was settled before the jump.
     relevant: std.bit_set.DynamicBitSetUnmanaged,
-    maybe_uninitialized_params: LIR.LocalSpan,
-    maybe_uninitialized_conditions: LIR.LocalSpan,
-    maybe_uninitialized_condition_masks: LIR.U64Span,
+    /// Dense proc-local positions declared maybe-uninitialized by this join.
+    /// This is indexed once from the producer-authored spans for O(1) checks
+    /// while summarizing every nested continuation.
+    maybe_uninitialized: std.bit_set.DynamicBitSetUnmanaged,
     /// Joined entry-state abstractions. Every jump summary is absorbed into
     /// exactly one group (see `absorbJoinSummary`); the body is certified
-    /// once per group state, re-walked only when absorbing a summary
-    /// strictly refines the group's must-alias partition.
+    /// once per group state, re-walked only when absorbing a summary strictly
+    /// refines its must-alias partition or adds a may-already-released fact.
     groups: std.ArrayList(JoinGroup),
 };
 
@@ -1418,7 +1658,10 @@ const JoinRecord = struct {
 /// `provenance`) is identical across all absorbed summaries, `repr` encodes
 /// the *meet* (common refinement) of their must-alias partitions, `balance`
 /// carries the per-fine-class attributed units, and sparse `provenance`
-/// retains any dormant liveness proof independently of ownership. Walking
+/// retains any dormant liveness proof independently of ownership. A
+/// maybe-uninitialized cell's released bit is a may-fact unioned across
+/// members, so a possible repeated guarded use is certified once rather
+/// than creating separate groups. Walking
 /// the body under this state certifies every absorbed summary at once—see
 /// the module doc comment for why a walk under the finer partition covers
 /// the coarser member states.
@@ -1482,6 +1725,7 @@ const Certifier = struct {
     layouts: *const layout_mod.Store,
     sigs: arc_sig.SigTable,
     rc_local: []const bool,
+    maybe_uninitialized: *const MaybeUninitializedConditions,
     values: std.ArrayList(ValueInfo) = .empty,
     lender_arena: std.heap.ArenaAllocator,
     records: collections.DenseMap(LIR.JoinPointId, JoinRecord),
@@ -1495,6 +1739,9 @@ const Certifier = struct {
     /// Hash-conses sparse descriptors within one proc so join comparisons
     /// usually reduce to pointer equality and repeated walks retain no copies.
     provenance_interner: SummaryProvenanceInterner = .empty,
+    /// Retired states for the procedure being certified. Sized per procedure,
+    /// so `certifyProc` drains it before moving on.
+    state_pool: StatePool = .empty,
     /// Reused while normalizing sparse provenance for one summary entry.
     provenance_value_scratch: std.ArrayList(ValueId) = .empty,
     provenance_lender_scratch: std.ArrayList(u32) = .empty,
@@ -1547,6 +1794,8 @@ const Certifier = struct {
         self.summary_scratch.deinit(self.allocator);
         self.repr_scratch.deinit();
         self.provenance_interner.deinit(self.allocator);
+        self.drainStatePool();
+        self.state_pool.deinit(self.allocator);
         self.provenance_value_scratch.deinit(self.allocator);
         self.provenance_lender_scratch.deinit(self.allocator);
         self.provenance_holder_scratch.deinit(self.allocator);
@@ -1568,6 +1817,7 @@ const Certifier = struct {
         var iter = self.records.valueIterator();
         while (iter.next()) |record| {
             record.relevant.deinit(self.allocator);
+            record.maybe_uninitialized.deinit(self.allocator);
             for (record.groups.items) |group| self.allocator.free(group.summary);
             record.groups.deinit(self.allocator);
         }
@@ -2224,6 +2474,8 @@ const Certifier = struct {
                         self.summary_scratch.items[repr].provenance;
                 }
             }
+            summary.maybe_uninitialized_unresolved = state.maybeUninitializedIsUnresolved(dense);
+            summary.maybe_uninitialized_released = state.maybeUninitializedMayBeReleased(dense);
             self.summary_scratch.appendAssumeCapacity(summary);
         }
 
@@ -2401,13 +2653,51 @@ const Certifier = struct {
         return provenance;
     }
 
+    /// The provenance both states prove, for widening a group at the cap.
+    ///
+    /// Each component is an independent proof, so a component survives only
+    /// when the two agree on it exactly; a conjunction that differs proves
+    /// nothing in common and is dropped whole. Losing every component leaves
+    /// no provenance, which is the strictest state and always safe.
+    fn meetProvenance(
+        a: ?*const SummaryProvenance,
+        b: ?*const SummaryProvenance,
+    ) ?*const SummaryProvenance {
+        // Names that agree keep what they prove. A name the two disagree
+        // about drops to no provenance at all rather than to the components
+        // they happen to share: dropping everything is a fixed point, so a
+        // later summary that disagrees again finds the group already at the
+        // bottom and is simply covered, which is what stops widening from
+        // re-walking the body once per arriving edge.
+        return if (summaryProvenanceEql(a, b)) a else null;
+    }
+
+    /// Weakens a group's provenance to what it and `summary` both prove.
+    /// Reports whether anything moved, so a group whose state is unchanged is
+    /// not re-walked.
+    fn widenGroupProvenance(group: *JoinGroup, summary: []const LocalSummary) bool {
+        var changed = false;
+        for (group.summary, summary) |*ge, se| {
+            const met = meetProvenance(ge.provenance, se.provenance);
+            if (met != ge.provenance) {
+                ge.provenance = met;
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
     fn summaryDigest(cursor: LIR.CFStmtId, summary: []const LocalSummary) u64 {
         var hasher = std.hash.Wyhash.init(0x6172635f63657274);
         hasher.update(std.mem.asBytes(&cursor));
         for (summary, 0..) |entry, dense| {
-            if (entry.class == .unbound) continue;
+            if (entry.class == .unbound and
+                !entry.maybe_uninitialized_unresolved and
+                !entry.maybe_uninitialized_released) continue;
             const dense_u32: u32 = @intCast(dense);
             hasher.update(std.mem.asBytes(&dense_u32));
+            hasher.update(std.mem.asBytes(&entry.maybe_uninitialized_unresolved));
+            hasher.update(std.mem.asBytes(&entry.maybe_uninitialized_released));
             hasher.update(std.mem.asBytes(&entry.class));
             hasher.update(std.mem.asBytes(&entry.repr));
             hasher.update(std.mem.asBytes(&entry.balance));
@@ -2435,12 +2725,28 @@ const Certifier = struct {
         return hasher.final();
     }
 
+    /// Frees every recycled state. Buffers are sized for one procedure's
+    /// local count, so they must not outlive it.
+    fn drainStatePool(self: *Certifier) void {
+        while (self.state_pool.pop()) |retired| {
+            var state = retired;
+            state.pool = null;
+            state.freeBuffers();
+        }
+    }
+
     /// Rebuilds a fresh state from an agreed join-entry summary. Alias sets
     /// share one fresh value; borrows are re-linked to the fresh values of the
     /// locals their liveness anchors on.
     fn stateFromSummary(self: *Certifier, summary: []const LocalSummary) CertifyError!State {
         var state = try State.init(self.allocator, self.local_dense.items, self.proc_locals.items.len);
+        state.pool = &self.state_pool;
         errdefer state.deinit();
+
+        for (summary, 0..) |entry, dense| {
+            if (entry.maybe_uninitialized_unresolved) state.maybe_uninitialized_unresolved.set(dense);
+            if (entry.maybe_uninitialized_released) state.maybe_uninitialized_released.set(dense);
+        }
 
         // Allocate every representative before attaching provenance. Lender,
         // holder, and payload edges may point forward in dense-local order.
@@ -2587,6 +2893,20 @@ const Certifier = struct {
                 },
             }
         }
+        // At the cap, stop splitting on provenance: absorb into a group that
+        // agrees on every other mode component and weaken its provenance to
+        // what both prove. See `max_join_groups`.
+        if (record.groups.items.len >= max_join_groups) {
+            for (record.groups.items, 0..) |*group, group_index| {
+                if (!modesCompatibleWith(group.summary, summary, .ignore_provenance)) continue;
+                const widened = widenGroupProvenance(group, summary);
+                return switch (try self.meetGroupSummary(group, summary)) {
+                    .unchanged => if (widened) .{ .walk = group_index } else .covered,
+                    .refined, .conflict => .{ .walk = group_index },
+                };
+            }
+        }
+
         const copy = try self.allocator.dupe(LocalSummary, summary);
         errdefer self.allocator.free(copy);
         try record.groups.append(self.allocator, .{ .summary = copy, .queued = false });
@@ -2598,18 +2918,31 @@ const Certifier = struct {
     /// and the same sparse provenance. Partition (`repr`) and balances are the
     /// joinable components and are deliberately not compared here.
     fn modesCompatible(a: []const LocalSummary, b: []const LocalSummary) bool {
+        return modesCompatibleWith(a, b, .compare_provenance);
+    }
+
+    /// Whether provenance participates in mode compatibility. Ignoring it is
+    /// what lets a join at `max_join_groups` absorb instead of split; the
+    /// group's provenance is then weakened to the meet, so the walk assumes
+    /// only what both members prove.
+    const ProvenanceMatch = enum { compare_provenance, ignore_provenance };
+
+    fn modesCompatibleWith(a: []const LocalSummary, b: []const LocalSummary, provenance: ProvenanceMatch) bool {
+        const compare = provenance == .compare_provenance;
         for (a, b) |ga, sb| {
             if (ga.class != sb.class) return false;
             if (ga.abi_live != sb.abi_live) return false;
+            if (ga.maybe_uninitialized_unresolved != sb.maybe_uninitialized_unresolved) return false;
             switch (ga.class) {
                 .unbound => {},
                 // Claims are per-field spend records, not attributable
                 // balances; states disagreeing on them walk separately.
-                .owned => if (ga.claims != sb.claims or !summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
+                .owned => if (ga.claims != sb.claims or
+                    (compare and !summaryProvenanceEql(ga.provenance, sb.provenance))) return false,
                 .conditional_owned => if (ga.condition != sb.condition or
                     ga.condition_mask != sb.condition_mask or
-                    !summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
-                .borrowed => if (!summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
+                    (compare and !summaryProvenanceEql(ga.provenance, sb.provenance))) return false,
+                .borrowed => if (compare and !summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
                 .representation => {},
             }
         }
@@ -2632,10 +2965,10 @@ const Certifier = struct {
     const MeetOutcome = enum {
         /// The summary is subsumed: same partition, same balances.
         unchanged,
-        /// The group's partition was refined (and balances re-attributed);
-        /// the group state strictly decreased and the body must be
-        /// re-walked. This happens at most once per name, so a group is
-        /// re-walked at most `proc_locals.len` times.
+        /// The group's partition was refined (and balances re-attributed), or
+        /// a conditional cell gained a may-already-released fact. The body
+        /// must be re-walked under the stricter state. Partition refinement
+        /// and released-bit union each happen at most once per name.
         refined,
         /// Balance attribution failed: the summary's units cannot be
         /// reconciled with the group's (divergent entry balances, or an
@@ -2768,6 +3101,10 @@ const Certifier = struct {
         // Commit: rewrite the group's partition and balances in place.
         var changed = false;
         for (g, 0..) |*entry, dense| {
+            if (!entry.maybe_uninitialized_released and summary[dense].maybe_uninitialized_released) {
+                entry.maybe_uninitialized_released = true;
+                changed = true;
+            }
             if (entry.class == .unbound) continue;
             const new_repr = meet_repr[dense];
             if (entry.repr != new_repr) {
@@ -3794,20 +4131,17 @@ const Certifier = struct {
         return reads.clone(self.allocator);
     }
 
-    fn maybeUninitializedCondition(record: *const JoinRecord, store: *const LirStore, local: LIR.LocalId) ?PresenceCondition {
-        const params = store.getLocalSpan(record.maybe_uninitialized_params);
-        const conditions = store.getLocalSpan(record.maybe_uninitialized_conditions);
-        const masks = store.getU64Span(record.maybe_uninitialized_condition_masks);
-        if (params.len != conditions.len or params.len != masks.len) {
-            std.debug.panic("ARC borrow certifier invariant violated: maybe-uninitialized join metadata arity mismatch", .{});
-        }
+    fn computeJoinMaybeUninitialized(
+        self: *Certifier,
+        params_span: LIR.LocalSpan,
+    ) Allocator.Error!std.bit_set.DynamicBitSetUnmanaged {
+        var maybe_uninitialized = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.proc_locals.items.len);
+        const params = self.store.getLocalSpan(params_span);
         for (0..GuardedList.borrowLen(params)) |index| {
-            const param = GuardedList.at(params, index);
-            const condition = GuardedList.at(conditions, index);
-            const mask = GuardedList.at(masks, index);
-            if (param == local) return .{ .local = condition, .mask = mask };
+            const dense = self.denseOf(GuardedList.at(params, index));
+            if (dense != no_dense) maybe_uninitialized.set(dense);
         }
-        return null;
+        return maybe_uninitialized;
     }
 
     /// Adds every local carrier needed to restore one dependency. The
@@ -3956,8 +4290,41 @@ const Certifier = struct {
 
         for (self.proc_locals.items, 0..) |local, dense| {
             var summary = LocalSummary{ .class = .unbound, .repr = 0, .balance = 0, .condition = no_dense, .condition_mask = 0 };
-            if (self.relevant_scratch.isSet(dense)) {
-                if (maybeUninitializedCondition(record, self.store, local)) |condition| {
+            const condition_unresolved = state.maybeUninitializedIsUnresolved(dense);
+            const condition_released = state.maybeUninitializedMayBeReleased(dense);
+            const declared_by_target = record.maybe_uninitialized.isSet(dense);
+            const relevant = self.relevant_scratch.isSet(dense);
+            if (relevant) {
+                const value = state.valueAtDense(dense);
+                const declared_condition = self.maybe_uninitialized.get(local);
+                // A producer-declared maybe-uninitialized cell represents one
+                // optional ownership unit. Its declaring target is the
+                // authoritative ownership boundary and always canonicalizes
+                // the cell. An intermediate continuation canonicalizes only
+                // an unresolved intact/absent cell; once the unit is consumed,
+                // claimed, or transferred into a holder it summarizes the
+                // real post-consumption state instead of manufacturing a unit.
+                const value_is_absent = value == no_value or
+                    (state.balanceOf(value) == 0 and !try self.valueIsLive(state, value));
+                const value_is_intact_cell = value != no_value and
+                    state.balanceOf(value) == 1 and
+                    state.claimsOf(value) == 0 and
+                    state.holderOf(value) == no_value;
+                const canonicalize_conditional = declared_condition != null and
+                    (declared_by_target or
+                        (condition_unresolved and (value_is_absent or value_is_intact_cell)));
+                if (canonicalize_conditional) {
+                    const condition = declared_condition.?;
+                    if (value != no_value) {
+                        if (state.conditionalConditionOf(value)) |actual_condition| {
+                            if (!actual_condition.eql(condition)) {
+                                return self.fail(
+                                    "maybe-uninitialized local {d} carried a conflicting presence condition",
+                                    .{@intFromEnum(local)},
+                                );
+                            }
+                        }
+                    }
                     summary = .{
                         .class = .conditional_owned,
                         .repr = self.denseOf(local),
@@ -3966,7 +4333,6 @@ const Certifier = struct {
                         .condition_mask = condition.mask,
                     };
                 } else {
-                    const value = state.valueAtDense(dense);
                     if (value != no_value) {
                         const repr = self.repr_scratch.get(value) orelse 0;
                         const units = state.balanceOf(value);
@@ -4013,6 +4379,12 @@ const Certifier = struct {
                     }
                 }
             }
+            // The target declaration consumes the incoming scope marker and
+            // establishes one canonical conditional entry state. Retaining
+            // the per-edge marker here would split that one declared state
+            // back into every runtime presence subset.
+            summary.maybe_uninitialized_unresolved = relevant and condition_unresolved and !declared_by_target;
+            summary.maybe_uninitialized_released = relevant and condition_released and !declared_by_target;
             self.summary_scratch.appendAssumeCapacity(summary);
         }
 
@@ -4069,6 +4441,8 @@ const Certifier = struct {
         self.current_proc = proc_id;
         self.current_sig = self.sigs.get(proc_id);
         self.current_proc_body = body;
+        // Recycled buffers are sized for this procedure's local count.
+        defer self.drainStatePool();
         self.current_return_local = null;
         self.values.clearRetainingCapacity();
         self.provenance_interner.clearRetainingCapacity();
@@ -4128,6 +4502,7 @@ const Certifier = struct {
         try self.relevant_scratch.resize(self.allocator, self.proc_locals.items.len, false);
 
         var state = try State.init(self.allocator, self.local_dense.items, self.proc_locals.items.len);
+        state.pool = &self.state_pool;
         {
             errdefer state.deinit();
             const proc_args = self.store.getLocalSpan(proc.args);
@@ -4160,7 +4535,21 @@ const Certifier = struct {
         }
 
         try work.append(self.allocator, .{ .segment = .{ .cursor = body, .state = state } });
+        // Companion to the bound inside `runSegment`: that one catches a single
+        // walk that never ends, this one catches a worklist that keeps growing.
+        // The busiest procedure in a 117k-statement module queues 1572 segments
+        // against a limit of 29k, so a procedure that passes this is not
+        // converging.
+        const item_limit = @max(@as(usize, 1) << 16, self.store.cfStmtCount());
+        var items: usize = 0;
         while (work.pop()) |item| {
+            items += 1;
+            if (items > item_limit) {
+                return self.fail(
+                    "certifying this procedure queued more than {d} segments without settling",
+                    .{item_limit},
+                );
+            }
             if (self.work_stats) |stats| stats.work_items += 1;
             switch (item) {
                 .segment => |segment| try self.runSegment(&work, segment),
@@ -4184,6 +4573,11 @@ const Certifier = struct {
         group.queued = false;
         var body_state = try self.stateFromSummary(group.summary);
         errdefer body_state.deinit();
+        var declared = record.maybe_uninitialized.iterator(.{});
+        while (declared.next()) |dense| {
+            body_state.maybe_uninitialized_unresolved.unset(dense);
+            body_state.maybe_uninitialized_released.unset(dense);
+        }
         try work.append(self.allocator, .{ .segment = .{
             .cursor = record.body,
             .state = body_state,
@@ -4196,8 +4590,24 @@ const Certifier = struct {
         defer state.deinit();
         var cursor = segment.cursor;
         self.current_origin_join = segment.origin_join;
+        // A segment walk ends by reaching a terminator or by meeting a state it
+        // has already memoized. Nothing else bounds it, so a walk whose state
+        // never repeats runs forever, and the only symptom is a build that
+        // never finishes. Bound it instead: the limit is far above any real
+        // walk (the largest segment in a 117k-statement module takes 154
+        // steps), so crossing it means the memo is not converging, and saying
+        // so with the proc and statement is worth more than hanging.
+        const step_limit = @max(@as(usize, 1) << 16, self.store.cfStmtCount() * 2);
+        var walk_steps: usize = 0;
 
         while (true) {
+            walk_steps += 1;
+            if (walk_steps > step_limit) {
+                return self.fail(
+                    "segment walk passed {d} statements without reaching a terminator or a repeated state",
+                    .{step_limit},
+                );
+            }
             self.current_stmt = cursor;
 
             if (self.memo_points.isSet(@intFromEnum(cursor))) {
@@ -4281,6 +4691,11 @@ const Certifier = struct {
                 .init_uninitialized => |init| {
                     if (self.isRc(init.target)) {
                         state.bindValue(init.target, no_value);
+                        const dense = self.denseOf(init.target);
+                        if (dense != no_dense) {
+                            state.maybe_uninitialized_unresolved.unset(dense);
+                            state.maybe_uninitialized_released.unset(dense);
+                        }
                     }
                     cursor = init.next;
                 },
@@ -4488,6 +4903,12 @@ const Certifier = struct {
                             state.bindValue(assign.target, state.valueOf(assign.value));
                         }
                     }
+                    if (assign.mode == .initialize_join_param and self.maybe_uninitialized.get(assign.target) != null) {
+                        const dense = self.denseOf(assign.target);
+                        if (dense != no_dense) state.maybe_uninitialized_unresolved.set(dense);
+                    }
+                    const target_dense = self.denseOf(assign.target);
+                    if (target_dense != no_dense) state.maybe_uninitialized_released.unset(target_dense);
                     cursor = assign.next;
                 },
                 .debug => |debug_stmt| {
@@ -4518,9 +4939,19 @@ const Certifier = struct {
                     if (!self.isRc(rc.value)) {
                         return self.fail("decref_if_initialized of non-refcounted local {d}", .{@intFromEnum(rc.value)});
                     }
+                    const dense = self.denseOf(rc.value);
+                    if (dense != no_dense and state.maybeUninitializedMayBeReleased(dense)) {
+                        return self.fail(
+                            "conditional payload local {d} may already have been released",
+                            .{@intFromEnum(rc.value)},
+                        );
+                    }
                     if (state.valueOf(rc.value) != no_value) {
                         try self.applyRelease(&state, rc.value);
+                        state.bindValue(rc.value, no_value);
+                        if (dense != no_dense) state.maybe_uninitialized_released.set(dense);
                     }
+                    if (dense != no_dense) state.maybe_uninitialized_unresolved.unset(dense);
                     cursor = rc.next;
                 },
                 .free => |rc| {
@@ -4557,6 +4988,13 @@ const Certifier = struct {
                 .switch_initialized_payload => |switch_stmt| {
                     _ = try self.requireLive(&state, switch_stmt.cond);
                     if (self.isRc(switch_stmt.payload)) {
+                        const payload_dense = self.denseOf(switch_stmt.payload);
+                        if (payload_dense != no_dense and state.maybeUninitializedMayBeReleased(payload_dense)) {
+                            return self.fail(
+                                "initialized-payload switch reads local {d} after its conditional unit may have been released",
+                                .{@intFromEnum(switch_stmt.payload)},
+                            );
+                        }
                         const payload_value = state.valueOf(switch_stmt.payload);
                         if (payload_value != no_value) {
                             if (state.conditionalConditionOf(payload_value)) |condition| {
@@ -4572,6 +5010,7 @@ const Certifier = struct {
                                 var initialized_state = try state.clone();
                                 errdefer initialized_state.deinit();
                                 initialized_state.markDefinitelyInitialized(payload_value);
+                                if (payload_dense != no_dense) initialized_state.maybe_uninitialized_unresolved.unset(payload_dense);
                                 try work.append(self.allocator, .{ .segment = .{ .cursor = switch_stmt.initialized_branch, .state = initialized_state, .origin_join = segment.origin_join } });
 
                                 var uninitialized_state = try state.clone();
@@ -4579,6 +5018,7 @@ const Certifier = struct {
                                 const units = uninitialized_state.balanceOf(payload_value);
                                 if (units > 0) try uninitialized_state.addBalance(payload_value, -units);
                                 uninitialized_state.bindValue(switch_stmt.payload, no_value);
+                                if (payload_dense != no_dense) uninitialized_state.maybe_uninitialized_unresolved.unset(payload_dense);
                                 try work.append(self.allocator, .{ .segment = .{ .cursor = switch_stmt.uninitialized_branch, .state = uninitialized_state, .origin_join = segment.origin_join } });
                                 return;
                             }
@@ -4591,6 +5031,7 @@ const Certifier = struct {
                             switch_stmt.uninitialized_branch;
                         var branch_state = try state.clone();
                         errdefer branch_state.deinit();
+                        if (payload_dense != no_dense) branch_state.maybe_uninitialized_unresolved.unset(payload_dense);
                         try work.append(self.allocator, .{ .segment = .{ .cursor = target, .state = branch_state, .origin_join = segment.origin_join } });
                         return;
                     }
@@ -4649,19 +5090,29 @@ const Certifier = struct {
                     return;
                 },
                 .join => |join_stmt| {
+                    const maybe_uninitialized_params = self.store.getLocalSpan(join_stmt.maybe_uninitialized_params);
+                    for (0..GuardedList.borrowLen(maybe_uninitialized_params)) |index| {
+                        const dense = self.denseOf(GuardedList.at(maybe_uninitialized_params, index));
+                        if (dense != no_dense) {
+                            state.maybe_uninitialized_unresolved.set(dense);
+                            state.maybe_uninitialized_released.unset(dense);
+                        }
+                    }
                     const record = try self.records.getOrPut(join_stmt.id);
                     if (record.found_existing) {
                         if (record.value_ptr.body != join_stmt.body) {
                             return self.fail("join {d} redefined with a different body", .{@intFromEnum(join_stmt.id)});
                         }
                     } else {
+                        var relevant = try self.computeJoinRelevant(join_stmt.body);
+                        errdefer relevant.deinit(self.allocator);
+                        var maybe_uninitialized = try self.computeJoinMaybeUninitialized(join_stmt.maybe_uninitialized_params);
+                        errdefer maybe_uninitialized.deinit(self.allocator);
                         record.value_ptr.* = .{
                             .body = join_stmt.body,
                             .params = join_stmt.params,
-                            .relevant = try self.computeJoinRelevant(join_stmt.body),
-                            .maybe_uninitialized_params = join_stmt.maybe_uninitialized_params,
-                            .maybe_uninitialized_conditions = join_stmt.maybe_uninitialized_conditions,
-                            .maybe_uninitialized_condition_masks = join_stmt.maybe_uninitialized_condition_masks,
+                            .relevant = relevant,
+                            .maybe_uninitialized = maybe_uninitialized,
                             .groups = .empty,
                         };
                     }
@@ -6215,6 +6666,125 @@ test "certify follows uninitialized payload switch branch when rc payload is unb
     // the certifier follows the uninitialized branch selected by ownership
     // state.
     try f.certify();
+}
+
+test "decref_if_initialized tracks a guarded cell release across aliases" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const payload = try f.local(.str);
+    const alias = try f.local(.str);
+    const cond = try f.local(.i64);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const release_alias = try f.decrefStmt(alias, .str, ret);
+    const second_guarded_release = try f.decrefIfInitializedStmt(cond, payload, .str, release_alias);
+    const first_guarded_release = try f.decrefIfInitializedStmt(cond, payload, .str, second_guarded_release);
+    const retain_alias = try f.increfStmt(alias, .str, first_guarded_release);
+    const bind_alias = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = alias,
+        .op = .{ .local = payload },
+        .next = retain_alias,
+    } });
+    const result_assign = try f.assignI64(result, bind_alias);
+    const cond_assign = try f.assignI64(cond, result_assign);
+    const body = try f.assignStr(payload, cond_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    // The condition is unchanged, so the second guarded release can run on
+    // the same initialized path and must be rejected even though another alias
+    // still carries an independent retained unit.
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "may already have been released") != null);
+}
+
+fn conditionalJoinChainWork(field_count: usize) CertifyError!CertifierWorkStats {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+
+    var payloads: [16]LIR.LocalId = undefined;
+    var conditions: [16]LIR.LocalId = undefined;
+    var masks: [16]u64 = undefined;
+    const presence = try f.local(.i64);
+    const result = try f.local(.i64);
+    for (0..field_count) |index| {
+        payloads[index] = try f.local(.str);
+        conditions[index] = presence;
+        masks[index] = @as(u64, 1) << @intCast(index);
+    }
+
+    const loop_join = f.freshJoinPointId();
+    const ret = try f.ret(result);
+    var loop_body = try f.assignI64(result, ret);
+    for (payloads[0..field_count], masks[0..field_count]) |payload, mask| {
+        loop_body = try f.store.addCFStmt(.{ .decref_if_initialized = .{
+            .cond = presence,
+            .cond_mask = mask,
+            .value = payload,
+            .rc = CertifyTest.rcHelper(.decref, .str),
+            .next = loop_body,
+        } });
+    }
+
+    var field_flow = try f.store.addCFStmt(.{ .jump = .{ .target = loop_join } });
+    var field_index = field_count;
+    while (field_index > 0) {
+        field_index -= 1;
+        const field_join = f.freshJoinPointId();
+        const initialized_jump = try f.store.addCFStmt(.{ .jump = .{ .target = field_join } });
+        const uninitialized_jump = try f.store.addCFStmt(.{ .jump = .{ .target = field_join } });
+        const parsed = try f.local(.str);
+        const initialize_payload = try f.store.addCFStmt(.{ .set_local = .{
+            .target = payloads[field_index],
+            .value = parsed,
+            .mode = .initialize_join_param,
+            .next = initialized_jump,
+        } });
+        const parse_value = try f.assignStr(parsed, initialize_payload);
+        const clear_old_payload = try f.store.addCFStmt(.{ .decref_if_initialized = .{
+            .cond = presence,
+            .cond_mask = masks[field_index],
+            .value = payloads[field_index],
+            .rc = CertifyTest.rcHelper(.decref, .str),
+            .next = parse_value,
+        } });
+        const choose = try f.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = presence,
+            .branches = try f.store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{
+                .{ .value = 1, .body = clear_old_payload },
+            }),
+            .default_branch = uninitialized_jump,
+        } });
+        field_flow = try f.store.addCFStmt(.{ .join = .{
+            .id = field_join,
+            .params = LIR.LocalSpan.empty(),
+            .body = field_flow,
+            .remainder = choose,
+        } });
+    }
+
+    const outer_join = try f.store.addCFStmt(.{ .join = .{
+        .id = loop_join,
+        .params = try f.store.addLocalSpan(payloads[0..field_count]),
+        .maybe_uninitialized_params = try f.store.addLocalSpan(payloads[0..field_count]),
+        .maybe_uninitialized_conditions = try f.store.addLocalSpan(conditions[0..field_count]),
+        .maybe_uninitialized_condition_masks = try f.store.addU64Span(masks[0..field_count]),
+        .body = loop_body,
+        .remainder = field_flow,
+    } });
+    const body = try f.assignI64(presence, outer_join);
+    _ = try f.addProc(&.{}, body, .i64);
+    return f.certifyAndMeasureWork();
+}
+
+test "certifier keeps conditionally initialized join-chain work linear" {
+    const narrow = try conditionalJoinChainWork(4);
+    const wide = try conditionalJoinChainWork(8);
+
+    // Doubling a chain may double its structural work plus constants. A 3x
+    // bound leaves ample headroom while deterministically rejecting the old
+    // one-group-per-field-presence-subset behavior.
+    try testing.expect(wide.work_items <= narrow.work_items * 3);
 }
 
 test "certify flags uninitialized payload switch branch that reads unbound payload" {

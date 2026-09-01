@@ -761,9 +761,14 @@ const Lifter = struct {
             },
             .break_ => |maybe| if (maybe) |value| try self.rewriteExpr(value),
             .continue_ => |continue_| try self.rewriteExprSpan(continue_.values),
-            .join_point,
-            .jump,
-            => Common.invariant("lifted join-point control reached Monotype lifting"),
+            .join_point => |join_point| {
+                try self.rewriteExpr(join_point.body);
+                try self.rewriteExpr(join_point.remainder);
+            },
+            .jump => |jump| {
+                try self.rewriteExprSpan(jump.loop_values);
+                try self.rewriteExprSpan(jump.args);
+            },
         }
     }
 
@@ -1486,6 +1491,8 @@ const CaptureSet = struct {
                 for (0..values.len) |value_index| try self.collectExpr(GuardedList.at(values, value_index), bound);
             },
             .join_point => |join_point| {
+                const retained = input.typedLocalSpan(join_point.retained);
+                for (0..retained.len) |index| try self.addIfFree(GuardedList.at(retained, index).local, bound);
                 var added = std.ArrayList(Mono.LocalId).empty;
                 defer added.deinit(self.allocator);
                 try bindTypedLocalsTracked(self.allocator, input, bound, input.typedLocalSpan(join_point.params), &added);
@@ -1494,6 +1501,8 @@ const CaptureSet = struct {
                 try self.collectExpr(join_point.remainder, bound);
             },
             .jump => |jump| {
+                const loop_values = input.exprSpan(jump.loop_values);
+                for (0..loop_values.len) |value_index| try self.collectExpr(GuardedList.at(loop_values, value_index), bound);
                 const args = input.exprSpan(jump.args);
                 for (0..args.len) |arg_index| try self.collectExpr(GuardedList.at(args, arg_index), bound);
             },
@@ -2303,6 +2312,8 @@ const CaptureGraphBuilder = struct {
             .break_ => |maybe| if (maybe) |value| try self.collectExpr(value, node),
             .continue_ => |continue_| try self.collectExprSpan(continue_.values, node),
             .join_point => |join_point| {
+                const retained = input.typedLocalSpan(join_point.retained);
+                for (0..retained.len) |index| try self.addDirect(node, GuardedList.at(retained, index).local);
                 var added: std.ArrayList(Ast.LocalId) = .empty;
                 defer added.deinit(self.graph.allocator);
                 try self.bindTypedLocals(input.typedLocalSpan(join_point.params), &added);
@@ -2310,7 +2321,10 @@ const CaptureGraphBuilder = struct {
                 self.removeLocals(added.items);
                 try self.collectExpr(join_point.remainder, node);
             },
-            .jump => |jump| try self.collectExprSpan(jump.args, node),
+            .jump => |jump| {
+                try self.collectExprSpan(jump.loop_values, node);
+                try self.collectExprSpan(jump.args, node);
+            },
         }
     }
 };

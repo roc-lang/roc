@@ -753,6 +753,14 @@ pub const BuildEnv = struct {
         self.coordinator = coord;
     }
 
+    /// Reuse compilation workers for post-check lowering after checking finishes.
+    ///
+    /// Embeddings without a coordinator retain sequential post-check lowering.
+    pub fn postCheckExecutor(self: *BuildEnv) ?base.post_check_task_executor.Executor {
+        const coordinator = self.coordinator orelse return null;
+        return coordinator.postCheckExecutor();
+    }
+
     /// Register a directory as a workspace root, skipping it if an existing root
     /// already contains it. Takes ownership of nothing; copies `dir` when stored.
     fn addWorkspaceRoot(self: *BuildEnv, dir: []const u8) Allocator.Error!void {

@@ -1062,9 +1062,14 @@ pub const CFStmt = union(enum) {
     join: struct {
         id: JoinPointId,
         params: LocalSpan,
-        /// Join params whose initial value is the compiler-only
-        /// uninitialized marker. ARC must not blindly release these outside
-        /// explicit initialized-payload switches.
+        /// Outer ownership units explicitly transferred to the shared body.
+        /// They have no runtime ABI and need no assignments; ARC keeps them
+        /// across every jump and emits their release once in the body.
+        retained: LocalSpan = .empty(),
+        /// Join-environment locals whose initial value is the compiler-only
+        /// uninitialized marker. This includes rebound parameters and
+        /// pass-through retained locals. ARC must release them only under
+        /// their explicit initialization condition.
         maybe_uninitialized_params: LocalSpan = .empty(),
         /// Conditions parallel to `maybe_uninitialized_params`. Entry `i`
         /// proves whether `maybe_uninitialized_params[i]` is initialized.

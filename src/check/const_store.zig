@@ -262,6 +262,11 @@ pub const ConstFnEvidence = union(enum(u8)) {
         nested: ConstFnNestedEvidence,
     },
     structural: static_dispatch.StructuralDerivation,
+    constraint_callable: struct {
+        view: names.CheckedModuleDigest,
+        callable_key: names.CanonicalTypeKey,
+        source: static_dispatch.ConstraintCallableEvidence,
+    },
     unreachable_value,
     checked_error,
 };
@@ -312,8 +317,21 @@ pub const FnDef = union(enum) {
     local_template: names.ProcTemplate,
     imported_template: names.ProcTemplate,
     nested: struct {
+        /// Checked template whose lowering recorded this stored function: the
+        /// site's owning template for a template-owned site, or—when
+        /// `default_root` is set—the template whose body materialized the
+        /// defaulted-field expression (the lexical context the evidence
+        /// frames were recorded against).
         owner: names.ProcTemplate,
         site: names.ProcSiteId,
+        /// Set iff `site` is a DEFAULT-ROOT site: a lambda/closure inside a
+        /// defaulted-field expression (design.md "Defaulted Fields"). The
+        /// payload is the declaring module's 32-byte content identity;
+        /// `site` indexes THAT module's `nested_proc_sites` table, and the
+        /// site's owner there is `.default_root` (it belongs to no checked
+        /// procedure template). Null for template-owned sites, where `owner`
+        /// itself names the site's owning template.
+        default_root: ?names.ModuleContentIdentity = null,
         context_fn_key: names.TypeDigest,
         local_proc_context_digest: ?names.TypeDigest = null,
     },
@@ -863,7 +881,7 @@ pub const ConstStore = struct {
                         .from_callable => {},
                     }
                 },
-                .structural, .unreachable_value, .checked_error => {},
+                .constraint_callable, .structural, .unreachable_value, .checked_error => {},
             }
         }
         return cursor;

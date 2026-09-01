@@ -585,7 +585,8 @@ const InlineAnalyzer = struct {
                 if (!try self.visitBodyCallees(join_point.body, loop_depth)) return false;
                 return try self.visitBodyCallees(join_point.remainder, loop_depth);
             },
-            .jump => |jump| try self.visitSpanCallees(jump.args, loop_depth),
+            .jump => |jump| try self.visitSpanCallees(jump.loop_values, loop_depth) and
+                try self.visitSpanCallees(jump.args, loop_depth),
             .if_initialized_payload => |payload_switch| {
                 if (!try self.visitBodyCallees(payload_switch.cond, loop_depth)) return false;
                 if (!try self.visitBodyCallees(payload_switch.initialized, loop_depth)) return false;

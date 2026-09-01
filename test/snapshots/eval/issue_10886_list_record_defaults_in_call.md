@@ -5,7 +5,7 @@ type=snippet
 ~~~
 # SOURCE
 ~~~roc
-Foo : { a : U64, b : U64 ?? 10 }
+Foo := { a : U64, b : U64 ?? 10 }
 Wrapped : { items : List(Foo) }
 Nominal := { items : List(Foo) }
 
@@ -15,16 +15,16 @@ accept = |foos| foos
 accept_wrapped : Wrapped -> Wrapped
 accept_wrapped = |wrapped| wrapped
 
-foos = accept([{ a: 123 }, { a: 456, b: 789 }])
+foos = accept([Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }])
 wrapped = accept_wrapped({
-    items: [{ a: 123 }, { a: 456, b: 789 }],
+    items: [Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }],
 })
 updated = {
     ..wrapped,
-    items: [{ a: 123 }, { a: 456, b: 789 }],
+    items: [Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }],
 }
 nominal = Nominal.{
-    items: [{ a: 123 }, { a: 456, b: 789 }],
+    items: [Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }],
 }
 
 expect List.fold(foos, 0, |sum, foo| sum + foo.b) == 799
@@ -38,23 +38,23 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,OpDoubleQuestion,Int,CloseCurly,
+UpperIdent,OpColonEqual,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,OpDoubleQuestion,Int,CloseCurly,
 UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseCurly,
 UpperIdent,OpColonEqual,OpenCurly,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseCurly,
 LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,
-LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,OpenSquare,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,CloseRound,
+LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,OpenSquare,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,CloseRound,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,OpenCurly,
-LowerIdent,OpColon,OpenSquare,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,Comma,
+LowerIdent,OpColon,OpenSquare,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,Comma,
 CloseCurly,CloseRound,
 LowerIdent,OpAssign,OpenCurly,
 DoubleDot,LowerIdent,Comma,
-LowerIdent,OpColon,OpenSquare,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,Comma,
+LowerIdent,OpColon,OpenSquare,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,Comma,
 CloseCurly,
 LowerIdent,OpAssign,UpperIdent,Dot,OpenCurly,
-LowerIdent,OpColon,OpenSquare,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,Comma,
+LowerIdent,OpColon,OpenSquare,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,CloseCurly,Comma,UpperIdent,Dot,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,CloseSquare,Comma,
 CloseCurly,
 KwExpect,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,Comma,Int,Comma,OpBar,LowerIdent,Comma,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,NoSpaceDotLowerIdent,CloseRound,OpEquals,Int,
 KwExpect,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,NoSpaceDotLowerIdent,Comma,Int,Comma,OpBar,LowerIdent,Comma,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,NoSpaceDotLowerIdent,CloseRound,OpEquals,Int,
@@ -122,14 +122,18 @@ EndOfFile,
 			(e-apply
 				(e-ident (raw "accept"))
 				(e-list
-					(e-record
-						(field (field "a")
-							(e-int (raw "123"))))
-					(e-record
-						(field (field "a")
-							(e-int (raw "456")))
-						(field (field "b")
-							(e-int (raw "789")))))))
+					(e-nominal-record
+						(mapper (e-tag (raw "Foo")))
+						(backing (e-record
+								(field (field "a")
+									(e-int (raw "123"))))))
+					(e-nominal-record
+						(mapper (e-tag (raw "Foo")))
+						(backing (e-record
+								(field (field "a")
+									(e-int (raw "456")))
+								(field (field "b")
+									(e-int (raw "789")))))))))
 		(s-decl
 			(p-ident (raw "wrapped"))
 			(e-apply
@@ -137,14 +141,18 @@ EndOfFile,
 				(e-record
 					(field (field "items")
 						(e-list
-							(e-record
-								(field (field "a")
-									(e-int (raw "123"))))
-							(e-record
-								(field (field "a")
-									(e-int (raw "456")))
-								(field (field "b")
-									(e-int (raw "789")))))))))
+							(e-nominal-record
+								(mapper (e-tag (raw "Foo")))
+								(backing (e-record
+										(field (field "a")
+											(e-int (raw "123"))))))
+							(e-nominal-record
+								(mapper (e-tag (raw "Foo")))
+								(backing (e-record
+										(field (field "a")
+											(e-int (raw "456")))
+										(field (field "b")
+											(e-int (raw "789")))))))))))
 		(s-decl
 			(p-ident (raw "updated"))
 			(e-record
@@ -152,14 +160,18 @@ EndOfFile,
 					(e-ident (raw "wrapped")))
 				(field (field "items")
 					(e-list
-						(e-record
-							(field (field "a")
-								(e-int (raw "123"))))
-						(e-record
-							(field (field "a")
-								(e-int (raw "456")))
-							(field (field "b")
-								(e-int (raw "789"))))))))
+						(e-nominal-record
+							(mapper (e-tag (raw "Foo")))
+							(backing (e-record
+									(field (field "a")
+										(e-int (raw "123"))))))
+						(e-nominal-record
+							(mapper (e-tag (raw "Foo")))
+							(backing (e-record
+									(field (field "a")
+										(e-int (raw "456")))
+									(field (field "b")
+										(e-int (raw "789"))))))))))
 		(s-decl
 			(p-ident (raw "nominal"))
 			(e-nominal-record
@@ -167,14 +179,18 @@ EndOfFile,
 				(backing (e-record
 						(field (field "items")
 							(e-list
-								(e-record
-									(field (field "a")
-										(e-int (raw "123"))))
-								(e-record
-									(field (field "a")
-										(e-int (raw "456")))
-									(field (field "b")
-										(e-int (raw "789"))))))))))
+								(e-nominal-record
+									(mapper (e-tag (raw "Foo")))
+									(backing (e-record
+											(field (field "a")
+												(e-int (raw "123"))))))
+								(e-nominal-record
+									(mapper (e-tag (raw "Foo")))
+									(backing (e-record
+											(field (field "a")
+												(e-int (raw "456")))
+											(field (field "b")
+												(e-int (raw "789"))))))))))))
 		(s-expect
 			(e-binop (op "==")
 				(e-apply
@@ -255,7 +271,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-Foo : { a : U64, b : U64 ?? 10 }
+Foo := { a : U64, b : U64 ?? 10 }
 
 Wrapped : { items : List(Foo) }
 
@@ -267,19 +283,19 @@ accept = |foos| foos
 accept_wrapped : Wrapped -> Wrapped
 accept_wrapped = |wrapped| wrapped
 
-foos = accept([{ a: 123 }, { a: 456, b: 789 }])
+foos = accept([Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }])
 
 wrapped = accept_wrapped({
-	items: [{ a: 123 }, { a: 456, b: 789 }],
+	items: [Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }],
 })
 
 updated = {
 	..wrapped,
-	items: [{ a: 123 }, { a: 456, b: 789 }],
+	items: [Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }],
 }
 
 nominal = Nominal.{
-	items: [{ a: 123 }, { a: 456, b: 789 }],
+	items: [Foo.{ a: 123 }, Foo.{ a: 456, b: 789 }],
 }
 
 expect List.fold(foos, 0, |sum, foo| sum + foo.b) == 799
@@ -316,24 +332,26 @@ expect List.fold(nominal.items, 0, |sum, foo| sum + foo.b) == 799
 				(ty-lookup (name "Wrapped") (local)))))
 	(d-let
 		(p-assign (ident "foos"))
-		(e-call (constraint-fn-var 586)
+		(e-call (constraint-fn-var 508)
 			(e-lookup-local
 				(p-assign (ident "accept")))
 			(e-list
 				(elems
-					(e-record
-						(fields
-							(field (name "a")
-								(e-num (value "123")))))
-					(e-record
-						(fields
-							(field (name "a")
-								(e-num (value "456")))
-							(field (name "b")
-								(e-num (value "789")))))))))
+					(e-nominal (nominal "Foo")
+						(e-record
+							(fields
+								(field (name "a")
+									(e-num (value "123"))))))
+					(e-nominal (nominal "Foo")
+						(e-record
+							(fields
+								(field (name "a")
+									(e-num (value "456")))
+								(field (name "b")
+									(e-num (value "789"))))))))))
 	(d-let
 		(p-assign (ident "wrapped"))
-		(e-call (constraint-fn-var 672)
+		(e-call (constraint-fn-var 592)
 			(e-lookup-local
 				(p-assign (ident "accept_wrapped")))
 			(e-record
@@ -341,16 +359,18 @@ expect List.fold(nominal.items, 0, |sum, foo| sum + foo.b) == 799
 					(field (name "items")
 						(e-list
 							(elems
-								(e-record
-									(fields
-										(field (name "a")
-											(e-num (value "123")))))
-								(e-record
-									(fields
-										(field (name "a")
-											(e-num (value "456")))
-										(field (name "b")
-											(e-num (value "789"))))))))))))
+								(e-nominal (nominal "Foo")
+									(e-record
+										(fields
+											(field (name "a")
+												(e-num (value "123"))))))
+								(e-nominal (nominal "Foo")
+									(e-record
+										(fields
+											(field (name "a")
+												(e-num (value "456")))
+											(field (name "b")
+												(e-num (value "789")))))))))))))
 	(d-let
 		(p-assign (ident "updated"))
 		(e-record
@@ -361,16 +381,18 @@ expect List.fold(nominal.items, 0, |sum, foo| sum + foo.b) == 799
 				(field (name "items")
 					(e-list
 						(elems
-							(e-record
-								(fields
-									(field (name "a")
-										(e-num (value "123")))))
-							(e-record
-								(fields
-									(field (name "a")
-										(e-num (value "456")))
-									(field (name "b")
-										(e-num (value "789")))))))))))
+							(e-nominal (nominal "Foo")
+								(e-record
+									(fields
+										(field (name "a")
+											(e-num (value "123"))))))
+							(e-nominal (nominal "Foo")
+								(e-record
+									(fields
+										(field (name "a")
+											(e-num (value "456")))
+										(field (name "b")
+											(e-num (value "789"))))))))))))
 	(d-let
 		(p-assign (ident "nominal"))
 		(e-nominal (nominal "Nominal")
@@ -379,17 +401,19 @@ expect List.fold(nominal.items, 0, |sum, foo| sum + foo.b) == 799
 					(field (name "items")
 						(e-list
 							(elems
-								(e-record
-									(fields
-										(field (name "a")
-											(e-num (value "123")))))
-								(e-record
-									(fields
-										(field (name "a")
-											(e-num (value "456")))
-										(field (name "b")
-											(e-num (value "789"))))))))))))
-	(s-alias-decl
+								(e-nominal (nominal "Foo")
+									(e-record
+										(fields
+											(field (name "a")
+												(e-num (value "123"))))))
+								(e-nominal (nominal "Foo")
+									(e-record
+										(fields
+											(field (name "a")
+												(e-num (value "456")))
+											(field (name "b")
+												(e-num (value "789")))))))))))))
+	(s-nominal-decl
 		(ty-header (name "Foo"))
 		(ty-record
 			(field (field "a")
@@ -411,7 +435,7 @@ expect List.fold(nominal.items, 0, |sum, foo| sum + foo.b) == 799
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 873)
+				(e-call (constraint-fn-var 790)
 					(e-lookup-external
 						(builtin))
 					(e-lookup-local
@@ -421,7 +445,7 @@ expect List.fold(nominal.items, 0, |sum, foo| sum + foo.b) == 799
 						(args
 							(p-assign (ident "sum"))
 							(p-assign (ident "foo")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 869)
+						(e-dispatch-call (method "plus") (constraint-fn-var 781)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "sum"))))
@@ -437,7 +461,7 @@ expect List.fold(nominal.items, 0, |sum, foo| sum + foo.b) == 799
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 906)
+				(e-call (constraint-fn-var 828)
 					(e-lookup-external
 						(builtin))
 					(e-field-access
@@ -451,7 +475,7 @@ expect List.fold(nominal.items, 0, |sum, foo| sum + foo.b) == 799
 						(args
 							(p-assign (ident "sum"))
 							(p-assign (ident "foo")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 902)
+						(e-dispatch-call (method "plus") (constraint-fn-var 819)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "sum"))))
@@ -467,7 +491,7 @@ expect List.fold(nominal.items, 0, |sum, foo| sum + foo.b) == 799
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 939)
+				(e-call (constraint-fn-var 866)
 					(e-lookup-external
 						(builtin))
 					(e-field-access
@@ -481,7 +505,7 @@ expect List.fold(nominal.items, 0, |sum, foo| sum + foo.b) == 799
 						(args
 							(p-assign (ident "sum"))
 							(p-assign (ident "foo")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 935)
+						(e-dispatch-call (method "plus") (constraint-fn-var 857)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "sum"))))
@@ -497,7 +521,7 @@ expect List.fold(nominal.items, 0, |sum, foo| sum + foo.b) == 799
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 980)
+				(e-call (constraint-fn-var 907)
 					(e-lookup-external
 						(builtin))
 					(e-field-access
@@ -511,7 +535,7 @@ expect List.fold(nominal.items, 0, |sum, foo| sum + foo.b) == 799
 						(args
 							(p-assign (ident "sum"))
 							(p-assign (ident "foo")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 976)
+						(e-dispatch-call (method "plus") (constraint-fn-var 898)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "sum"))))
@@ -536,7 +560,7 @@ expect List.fold(nominal.items, 0, |sum, foo| sum + foo.b) == 799
 		(patt (type "Wrapped"))
 		(patt (type "Nominal")))
 	(type_decls
-		(alias (type "Foo")
+		(nominal (type "Foo")
 			(ty-header (name "Foo")))
 		(alias (type "Wrapped")
 			(ty-header (name "Wrapped")))

@@ -71,6 +71,7 @@ pub const TypedLocal = struct {
 pub const JoinPointExpr = struct {
     id: JoinPointId,
     params: Span(TypedLocal),
+    retained: Span(TypedLocal) = Span(TypedLocal).empty(),
     body: ExprId,
     remainder: ExprId,
 };
@@ -79,6 +80,10 @@ pub const JoinPointExpr = struct {
 pub const JumpExpr = struct {
     target: JoinPointId,
     args: Span(ExprId),
+    /// Explicit sparse rebinding of lexically enclosing loop parameters before
+    /// the jump. Both spans are parallel and use simultaneous assignment.
+    loop_params: Span(TypedLocal) = Span(TypedLocal).empty(),
+    loop_values: Span(ExprId) = Span(ExprId).empty(),
 };
 
 /// Record field expression entry.
@@ -141,6 +146,9 @@ pub const TrySequence = struct {
     /// The Err propagation edge is compiler-proven cold. LIR lowering may
     /// preserve this as explicit branch metadata; backends must not infer it.
     err_is_cold: bool = false,
+    /// Explicit enclosing continuation for shared generated-code error
+    /// propagation. Null preserves ordinary inline Err construction.
+    err_target: ?JoinPointId = null,
     ok_body: ExprId,
 };
 
@@ -156,6 +164,9 @@ pub const TryRecordSequence = struct {
     /// The Err propagation edge is compiler-proven cold. LIR lowering may
     /// preserve this as explicit branch metadata; backends must not infer it.
     err_is_cold: bool = false,
+    /// Explicit enclosing continuation for shared generated-code error
+    /// propagation. Null preserves ordinary inline Err construction.
+    err_target: ?JoinPointId = null,
     ok_body: ExprId,
 };
 
@@ -493,7 +504,7 @@ pub const Program = struct {
     comptime_sites: ProgramList(ComptimeSite, "comptime_sites"),
     /// Source file table for `SourceLoc.file` indices (copied from the lifted
     /// program; owned by this program).
-    source_files: ProgramList([]const u8, "source_files"),
+    source_files: ProgramList(base.SourceFileEntry, "source_files"),
     /// Source location per expression, parallel to `exprs`.
     expr_locs: ProgramList(base.SourceLoc, "expr_locs"),
     /// Checked source region per expression, parallel to `exprs`.
@@ -567,7 +578,10 @@ pub const Program = struct {
         self.stmt_locs.deinit(self.allocator);
         self.expr_regions.deinit(self.allocator);
         self.expr_locs.deinit(self.allocator);
-        for (self.source_files.unsafeRawItemsForView()) |file| self.allocator.free(file);
+        for (self.source_files.unsafeRawItemsForView()) |file| {
+            self.allocator.free(file.name);
+            self.allocator.free(file.qualified_name);
+        }
         self.source_files.deinit(self.allocator);
         for (self.comptime_sites.unsafeRawItemsForView()) |site| {
             self.allocator.free(site.branch_regions);
@@ -826,7 +840,7 @@ pub const Program = struct {
         return self.runtime_schema_requests.len();
     }
 
-    pub fn sourceFileNames(self: *const Program) []const []const u8 {
+    pub fn sourceFiles(self: *const Program) []const base.SourceFileEntry {
         return self.source_files.unsafeRawItemsForView();
     }
 

@@ -927,6 +927,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .join => |s| try self.store.addCFStmt(.{ .join = .{
                     .id = try self.mapJoinPoint(s.id),
                     .params = try self.mapLocalSpan(s.params),
+                    .retained = try self.mapLocalSpan(s.retained),
                     .maybe_uninitialized_params = try self.mapLocalSpan(s.maybe_uninitialized_params),
                     .maybe_uninitialized_conditions = try self.mapLocalSpan(s.maybe_uninitialized_conditions),
                     .maybe_uninitialized_condition_masks = s.maybe_uninitialized_condition_masks,

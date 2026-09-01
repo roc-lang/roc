@@ -12,6 +12,7 @@ const check = @import("check");
 const parse = @import("parse");
 const reporting = @import("reporting");
 const eval = @import("eval");
+const post_check_executor = @import("base").post_check_task_executor;
 const watch_inputs = @import("watch_inputs.zig");
 
 const ModuleEnv = can.ModuleEnv;
@@ -170,12 +171,15 @@ pub const WorkerTask = union(enum) {
     canonicalize: CanonicalizeTask,
     /// Type-check a canonicalized module
     type_check: TypeCheckTask,
+    /// Type-erased post-check work whose context owns all persistent task state.
+    post_check: post_check_executor.Task,
 
     pub fn getPackageName(self: WorkerTask) ?[]const u8 {
         return switch (self) {
             .parse => |t| t.package_name,
             .canonicalize => |t| t.package_name,
             .type_check => |t| t.package_name,
+            .post_check => null,
         };
     }
 
@@ -184,6 +188,7 @@ pub const WorkerTask = union(enum) {
             .parse => |t| t.module_id,
             .canonicalize => |t| t.module_id,
             .type_check => |t| t.module_id,
+            .post_check => null,
         };
     }
 
@@ -192,6 +197,7 @@ pub const WorkerTask = union(enum) {
             .parse => |t| t.module_name,
             .canonicalize => |t| t.module_name,
             .type_check => |t| t.module_name,
+            .post_check => null,
         };
     }
 };
@@ -391,6 +397,8 @@ pub const WorkerResult = union(enum) {
     cycle_detected: CycleDetected,
     /// A worker stage ran out of memory
     worker_oom: WorkerOom,
+    /// Returned in worker arrival order; `Completion.id` identifies the task.
+    post_check: post_check_executor.Completion,
 
     pub fn getPackageName(self: WorkerResult) []const u8 {
         return switch (self) {
@@ -401,6 +409,7 @@ pub const WorkerResult = union(enum) {
             .compile_failed => |r| r.package_name,
             .cycle_detected => |r| r.package_name,
             .worker_oom => |r| r.package_name,
+            .post_check => "",
         };
     }
 
@@ -413,6 +422,7 @@ pub const WorkerResult = union(enum) {
             .compile_failed => |r| r.module_id,
             .cycle_detected => |r| r.module_id,
             .worker_oom => |r| r.module_id,
+            .post_check => 0,
         };
     }
 
@@ -425,12 +435,14 @@ pub const WorkerResult = union(enum) {
             .compile_failed => |r| r.module_name,
             .cycle_detected => |r| r.module_name,
             .worker_oom => |r| r.module_name,
+            .post_check => "",
         };
     }
 
     /// Free any owned memory in the result
     pub fn deinit(self: *WorkerResult, gpa: Allocator) void {
         switch (self.*) {
+            .post_check => {},
             .parsed => |*r| {
                 for (r.discovered_local_imports.items) |imp| {
                     gpa.free(imp.import_name);
