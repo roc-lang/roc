@@ -6532,20 +6532,22 @@ that checked module. The same checked function template may therefore produce
 many Monotype bodies, and the same checked nested lambda site may produce many
 nested Monotype functions, each with a different monomorphic function type.
 
-Each independently sealed specialization group owns an instantiation graph:
-union-find nodes with explicit row-extension links, created by instantiating
-checked types on first touch. An ordinary procedure body begins a group by
-itself. The root producer may explicitly mark adjacent procedure-template roots
-as one shared group so a callee request proven equivalent under the complete
-graph-local specialization identity is reused before a second root replays that
-request. Test plans select this grouping; ordinary build and platform roots are
-independently sealed. Every root still uses a fresh instantiation scope, owns
-its own body and durable specialization record, and contributes its own checked
-relations; sharing the graph never authorizes importing a checked node from
-another scope. The reuse key includes callable family, method scope, checked
-source-function key, exact evidence topology, lexical context, and the exact
-function request interface. A different or still-unproven request remains
-independent.
+Each root owns an independently sealed instantiation graph: union-find nodes
+with explicit row-extension links, created by instantiating checked types on
+first touch. Every root uses a fresh instantiation scope, owns its own body and
+durable specialization record, and contributes its own checked relations.
+Specialization body scheduling may deduplicate global deferred work, but never
+authorizes importing a checked node or root-owned graph state from another
+root.
+
+Procedure-use roots and ordinary specialization bodies can lower concurrently
+because their results cross the worker boundary as sealed, graph-free drafts.
+Each executor lane owns a private cumulative type/name domain; after a frozen
+batch completes, the coordinator absorbs each immutable suffix and assigns
+program identities strictly in request order. This keeps global identity
+independent of worker scheduling without locking coordinator state. Root kinds
+that reserve durable identities or write directly to the final program remain
+serial barriers until they have the same sealed-draft boundary.
 
 Instantiation graph node ids are dense, append-only indexes for the lifetime of
 the graph. Per-node optional attributes such as a row root's current extension

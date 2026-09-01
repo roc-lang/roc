@@ -52,7 +52,12 @@
 //!   real in-edges disagree about, so every group is witnessed by at least one real jump
 //!   and a group-walk finding always corresponds to a real entry state. In
 //!   the worst case this degenerates to one group per distinct summary—
-//!   the pre-fixpoint exact behavior—but with no cap and no skip path.
+//!   the pre-fixpoint exact behavior—which is exponential in the number of
+//!   relevant names, so it is capped: past `max_join_groups` a join stops
+//!   splitting on lifetime provenance and absorbs into a group whose
+//!   provenance drops to what both members prove. Provenance is proof, so
+//!   dropping it only makes later checks demand more; the cap can report a
+//!   finding exactness would not, never hide one. Nothing is skipped.
 //!
 //! Why one walk under the group's meet partition covers every member
 //! (soundness of the join): a member's entry state is the group state with
@@ -522,6 +527,12 @@ pub fn certifyStoreOrPanic(
                     extra_locals[index] = link.origin;
                 }
                 writeFailureContext(&context, store, layouts, sigs, proc_id, diag.context_stmt, diag.context_local, extra_locals[0..diag.chain_len]);
+                // Say what went wrong before dumping the procedure. The dump
+                // runs to thousands of lines, and a reader whose output is
+                // truncated -- a CI log, a test harness capturing a child --
+                // otherwise keeps the part they cannot use and loses the part
+                // they need.
+                std.debug.print("\nARC: {s}{s}\n", .{ diag.message(), context.text() });
                 var buffer: std.Io.Writer.Allocating = .init(allocator);
                 defer buffer.deinit();
                 debug_print.writeProc(allocator, store, layouts, proc_id, &buffer.writer) catch {};
@@ -1132,8 +1143,22 @@ const ValueInfo = struct {
 };
 
 /// One forked ownership state along a control-flow path.
+/// Retired certifier states, kept so a fork can refill one instead of
+/// allocating a fresh set of buffers.
+///
+/// A state holds one array per refcounted local plus four indexed by value,
+/// and every branch clones the whole thing. On a wide derived codec that is
+/// tens of thousands of clone/free pairs of multi-kilobyte buffers, which in
+/// a Debug build means the same number of trips through the page allocator.
+/// Reusing them keeps the buffers hot and the allocator out of the loop.
+/// Entries are sized for one procedure, so the pool is drained between
+/// procedures.
+const StatePool = std.ArrayList(State);
+
 const State = struct {
     allocator: Allocator,
+    /// Where this state's buffers go when it dies, or null to free them.
+    pool: ?*StatePool = null,
     /// Dense proc-local position per store local, owned by the certifier and
     /// stable for the lifetime of every state for the current proc.
     local_dense: []const u32,
@@ -1183,6 +1208,26 @@ const State = struct {
     }
 
     fn deinit(self: *State) void {
+        if (self.pool) |pool| {
+            self.balance.clearRetainingCapacity();
+            self.holder.clearRetainingCapacity();
+            self.conditional_condition.clearRetainingCapacity();
+            self.conditional_condition_mask.clearRetainingCapacity();
+            self.claims.clearRetainingCapacity();
+            self.outcome_discriminants.clearRetainingCapacity();
+            // Recycling is an optimization; if the pool cannot grow, fall
+            // through and free the buffers as usual.
+            pool.append(self.allocator, self.*) catch {
+                self.freeBuffers();
+                return;
+            };
+            self.* = undefined;
+            return;
+        }
+        self.freeBuffers();
+    }
+
+    fn freeBuffers(self: *State) void {
         self.allocator.free(self.local_value);
         self.balance.deinit(self.allocator);
         self.holder.deinit(self.allocator);
@@ -1193,6 +1238,15 @@ const State = struct {
     }
 
     fn clone(self: *const State) Allocator.Error!State {
+        if (self.pool) |pool| {
+            if (pool.pop()) |recycled| {
+                var reused = recycled;
+                errdefer reused.freeBuffers();
+                try reused.refillFrom(self);
+                return reused;
+            }
+        }
+
         const local_value = try self.allocator.dupe(ValueId, self.local_value);
         errdefer self.allocator.free(local_value);
         var balance = try self.balance.clone(self.allocator);
@@ -1208,6 +1262,7 @@ const State = struct {
         const outcome_discriminants = try self.outcome_discriminants.clone(self.allocator);
         return .{
             .allocator = self.allocator,
+            .pool = self.pool,
             .local_dense = self.local_dense,
             .local_value = local_value,
             .balance = balance,
@@ -1218,6 +1273,46 @@ const State = struct {
             .outcome_discriminants = outcome_discriminants,
             .result_discriminant = self.result_discriminant,
         };
+    }
+
+    /// Overwrites a recycled state with `source`, keeping the buffers it
+    /// already owns. Every field a fresh clone would set is set here too.
+    fn refillFrom(self: *State, source: *const State) Allocator.Error!void {
+        if (self.local_value.len != source.local_value.len) {
+            self.local_value = try self.allocator.realloc(self.local_value, source.local_value.len);
+        }
+        @memcpy(self.local_value, source.local_value);
+
+        try copyList(i32, &self.balance, &source.balance, self.allocator);
+        try copyList(ValueId, &self.holder, &source.holder, self.allocator);
+        try copyList(u32, &self.conditional_condition, &source.conditional_condition, self.allocator);
+        try copyList(u64, &self.conditional_condition_mask, &source.conditional_condition_mask, self.allocator);
+
+        self.claims.clearRetainingCapacity();
+        try self.claims.ensureTotalCapacity(self.allocator, source.claims.count());
+        var claim_it = source.claims.iterator();
+        while (claim_it.next()) |entry| self.claims.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+
+        self.outcome_discriminants.clearRetainingCapacity();
+        try self.outcome_discriminants.ensureTotalCapacity(self.allocator, source.outcome_discriminants.count());
+        var discriminant_it = source.outcome_discriminants.iterator();
+        while (discriminant_it.next()) |entry| {
+            self.outcome_discriminants.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+        }
+
+        self.local_dense = source.local_dense;
+        self.pool = source.pool;
+        self.result_discriminant = source.result_discriminant;
+    }
+
+    fn copyList(
+        comptime T: type,
+        destination: *std.ArrayList(T),
+        source: *const std.ArrayList(T),
+        allocator: Allocator,
+    ) Allocator.Error!void {
+        destination.clearRetainingCapacity();
+        try destination.appendSlice(allocator, source.items);
     }
 
     fn claimsOf(self: *const State, value: ValueId) u64 {
@@ -1316,6 +1411,26 @@ const SummaryProvenance = struct {
     payload_source: u32 = no_dense,
     payload_projection: u64 = arc_dismantle.no_projection,
 };
+
+/// Cap on the number of entry-state groups kept for one join.
+///
+/// Below the cap the abstraction is exact: a summary no group accepts starts
+/// its own group. That is unbounded on its own (mode vectors are finite but
+/// exponential in the number of relevant names), and a derived codec for a
+/// wide record reaches thousands of groups, which is a build that does not
+/// finish rather than one that reports something.
+///
+/// At the cap, summaries that differ only in lifetime provenance stop
+/// splitting: they are absorbed into an existing group whose provenance is
+/// weakened to what both agree on. Every provenance component is a *proof*
+/// that a value stays live (a lender conjunction, a live holder, a deferred
+/// field take), so dropping one only makes later checks demand more. Widening
+/// can therefore report a finding that exactness would not, but it can never
+/// hide one.
+///
+/// Real procedures stay far below this: the busiest join in a 117k-statement
+/// module keeps two groups.
+const max_join_groups: usize = 8;
 
 fn summaryProvenanceEql(a: ?*const SummaryProvenance, b: ?*const SummaryProvenance) bool {
     if (a == b) return true;
@@ -1495,6 +1610,9 @@ const Certifier = struct {
     /// Hash-conses sparse descriptors within one proc so join comparisons
     /// usually reduce to pointer equality and repeated walks retain no copies.
     provenance_interner: SummaryProvenanceInterner = .empty,
+    /// Retired states for the procedure being certified. Sized per procedure,
+    /// so `certifyProc` drains it before moving on.
+    state_pool: StatePool = .empty,
     /// Reused while normalizing sparse provenance for one summary entry.
     provenance_value_scratch: std.ArrayList(ValueId) = .empty,
     provenance_lender_scratch: std.ArrayList(u32) = .empty,
@@ -1547,6 +1665,8 @@ const Certifier = struct {
         self.summary_scratch.deinit(self.allocator);
         self.repr_scratch.deinit();
         self.provenance_interner.deinit(self.allocator);
+        self.drainStatePool();
+        self.state_pool.deinit(self.allocator);
         self.provenance_value_scratch.deinit(self.allocator);
         self.provenance_lender_scratch.deinit(self.allocator);
         self.provenance_holder_scratch.deinit(self.allocator);
@@ -2401,6 +2521,40 @@ const Certifier = struct {
         return provenance;
     }
 
+    /// The provenance both states prove, for widening a group at the cap.
+    ///
+    /// Each component is an independent proof, so a component survives only
+    /// when the two agree on it exactly; a conjunction that differs proves
+    /// nothing in common and is dropped whole. Losing every component leaves
+    /// no provenance, which is the strictest state and always safe.
+    fn meetProvenance(
+        a: ?*const SummaryProvenance,
+        b: ?*const SummaryProvenance,
+    ) ?*const SummaryProvenance {
+        // Names that agree keep what they prove. A name the two disagree
+        // about drops to no provenance at all rather than to the components
+        // they happen to share: dropping everything is a fixed point, so a
+        // later summary that disagrees again finds the group already at the
+        // bottom and is simply covered, which is what stops widening from
+        // re-walking the body once per arriving edge.
+        return if (summaryProvenanceEql(a, b)) a else null;
+    }
+
+    /// Weakens a group's provenance to what it and `summary` both prove.
+    /// Reports whether anything moved, so a group whose state is unchanged is
+    /// not re-walked.
+    fn widenGroupProvenance(group: *JoinGroup, summary: []const LocalSummary) bool {
+        var changed = false;
+        for (group.summary, summary) |*ge, se| {
+            const met = meetProvenance(ge.provenance, se.provenance);
+            if (met != ge.provenance) {
+                ge.provenance = met;
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
     fn summaryDigest(cursor: LIR.CFStmtId, summary: []const LocalSummary) u64 {
         var hasher = std.hash.Wyhash.init(0x6172635f63657274);
         hasher.update(std.mem.asBytes(&cursor));
@@ -2435,11 +2589,22 @@ const Certifier = struct {
         return hasher.final();
     }
 
+    /// Frees every recycled state. Buffers are sized for one procedure's
+    /// local count, so they must not outlive it.
+    fn drainStatePool(self: *Certifier) void {
+        while (self.state_pool.pop()) |retired| {
+            var state = retired;
+            state.pool = null;
+            state.freeBuffers();
+        }
+    }
+
     /// Rebuilds a fresh state from an agreed join-entry summary. Alias sets
     /// share one fresh value; borrows are re-linked to the fresh values of the
     /// locals their liveness anchors on.
     fn stateFromSummary(self: *Certifier, summary: []const LocalSummary) CertifyError!State {
         var state = try State.init(self.allocator, self.local_dense.items, self.proc_locals.items.len);
+        state.pool = &self.state_pool;
         errdefer state.deinit();
 
         // Allocate every representative before attaching provenance. Lender,
@@ -2587,6 +2752,20 @@ const Certifier = struct {
                 },
             }
         }
+        // At the cap, stop splitting on provenance: absorb into a group that
+        // agrees on every other mode component and weaken its provenance to
+        // what both prove. See `max_join_groups`.
+        if (record.groups.items.len >= max_join_groups) {
+            for (record.groups.items, 0..) |*group, group_index| {
+                if (!modesCompatibleWith(group.summary, summary, .ignore_provenance)) continue;
+                const widened = widenGroupProvenance(group, summary);
+                return switch (try self.meetGroupSummary(group, summary)) {
+                    .unchanged => if (widened) .{ .walk = group_index } else .covered,
+                    .refined, .conflict => .{ .walk = group_index },
+                };
+            }
+        }
+
         const copy = try self.allocator.dupe(LocalSummary, summary);
         errdefer self.allocator.free(copy);
         try record.groups.append(self.allocator, .{ .summary = copy, .queued = false });
@@ -2598,6 +2777,17 @@ const Certifier = struct {
     /// and the same sparse provenance. Partition (`repr`) and balances are the
     /// joinable components and are deliberately not compared here.
     fn modesCompatible(a: []const LocalSummary, b: []const LocalSummary) bool {
+        return modesCompatibleWith(a, b, .compare_provenance);
+    }
+
+    /// Whether provenance participates in mode compatibility. Ignoring it is
+    /// what lets a join at `max_join_groups` absorb instead of split; the
+    /// group's provenance is then weakened to the meet, so the walk assumes
+    /// only what both members prove.
+    const ProvenanceMatch = enum { compare_provenance, ignore_provenance };
+
+    fn modesCompatibleWith(a: []const LocalSummary, b: []const LocalSummary, provenance: ProvenanceMatch) bool {
+        const compare = provenance == .compare_provenance;
         for (a, b) |ga, sb| {
             if (ga.class != sb.class) return false;
             if (ga.abi_live != sb.abi_live) return false;
@@ -2605,11 +2795,12 @@ const Certifier = struct {
                 .unbound => {},
                 // Claims are per-field spend records, not attributable
                 // balances; states disagreeing on them walk separately.
-                .owned => if (ga.claims != sb.claims or !summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
+                .owned => if (ga.claims != sb.claims or
+                    (compare and !summaryProvenanceEql(ga.provenance, sb.provenance))) return false,
                 .conditional_owned => if (ga.condition != sb.condition or
                     ga.condition_mask != sb.condition_mask or
-                    !summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
-                .borrowed => if (!summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
+                    (compare and !summaryProvenanceEql(ga.provenance, sb.provenance))) return false,
+                .borrowed => if (compare and !summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
                 .representation => {},
             }
         }
@@ -4069,6 +4260,8 @@ const Certifier = struct {
         self.current_proc = proc_id;
         self.current_sig = self.sigs.get(proc_id);
         self.current_proc_body = body;
+        // Recycled buffers are sized for this procedure's local count.
+        defer self.drainStatePool();
         self.current_return_local = null;
         self.values.clearRetainingCapacity();
         self.provenance_interner.clearRetainingCapacity();
@@ -4128,6 +4321,7 @@ const Certifier = struct {
         try self.relevant_scratch.resize(self.allocator, self.proc_locals.items.len, false);
 
         var state = try State.init(self.allocator, self.local_dense.items, self.proc_locals.items.len);
+        state.pool = &self.state_pool;
         {
             errdefer state.deinit();
             const proc_args = self.store.getLocalSpan(proc.args);
@@ -4160,7 +4354,21 @@ const Certifier = struct {
         }
 
         try work.append(self.allocator, .{ .segment = .{ .cursor = body, .state = state } });
+        // Companion to the bound inside `runSegment`: that one catches a single
+        // walk that never ends, this one catches a worklist that keeps growing.
+        // The busiest procedure in a 117k-statement module queues 1572 segments
+        // against a limit of 29k, so a procedure that passes this is not
+        // converging.
+        const item_limit = @max(@as(usize, 1) << 16, self.store.cfStmtCount());
+        var items: usize = 0;
         while (work.pop()) |item| {
+            items += 1;
+            if (items > item_limit) {
+                return self.fail(
+                    "certifying this procedure queued more than {d} segments without settling",
+                    .{item_limit},
+                );
+            }
             if (self.work_stats) |stats| stats.work_items += 1;
             switch (item) {
                 .segment => |segment| try self.runSegment(&work, segment),
@@ -4196,8 +4404,24 @@ const Certifier = struct {
         defer state.deinit();
         var cursor = segment.cursor;
         self.current_origin_join = segment.origin_join;
+        // A segment walk ends by reaching a terminator or by meeting a state it
+        // has already memoized. Nothing else bounds it, so a walk whose state
+        // never repeats runs forever, and the only symptom is a build that
+        // never finishes. Bound it instead: the limit is far above any real
+        // walk (the largest segment in a 117k-statement module takes 154
+        // steps), so crossing it means the memo is not converging, and saying
+        // so with the proc and statement is worth more than hanging.
+        const step_limit = @max(@as(usize, 1) << 16, self.store.cfStmtCount() * 2);
+        var walk_steps: usize = 0;
 
         while (true) {
+            walk_steps += 1;
+            if (walk_steps > step_limit) {
+                return self.fail(
+                    "segment walk passed {d} statements without reaching a terminator or a repeated state",
+                    .{step_limit},
+                );
+            }
             self.current_stmt = cursor;
 
             if (self.memo_points.isSet(@intFromEnum(cursor))) {

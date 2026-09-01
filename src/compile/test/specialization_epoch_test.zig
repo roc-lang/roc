@@ -2,6 +2,13 @@
 
 const harness = @import("lower_to_lir_harness.zig");
 const expectSpecializationParallelismDeterministicLir = harness.expectSpecializationParallelismDeterministicLir;
+const expectProcedureRootParallelismDeterministicLir = harness.expectProcedureRootParallelismDeterministicLir;
+
+test "multiple procedure-use roots lower deterministically in parallel" {
+    try expectProcedureRootParallelismDeterministicLir(
+        \\main! = |_args| Ok({})
+    );
+}
 
 test "multiple ordinary specialization epochs lower deterministically in parallel" {
     // `through` has independent scalar, list, and record specializations. Each
