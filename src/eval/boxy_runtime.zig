@@ -234,8 +234,8 @@ pub const SingleFieldPayloadInfo = struct {
     offset: u32,
 };
 
-/// The boxy descriptor tables lowered with a program: the static side inputs to
-/// the boxy runtime.
+/// Boxy metadata lowered with a program: the runtime's static descriptor
+/// tables plus the exact worker proc set consumed by machine backends.
 pub const BoxyTables = struct {
     type_descs: []const LirProgram.BoxyTypeDesc = &.{},
     dicts: []const LirProgram.BoxyDict = &.{},
@@ -248,6 +248,7 @@ pub const BoxyTables = struct {
     adapt_steps: []const LirProgram.BoxyAdaptStep = &.{},
     payload_steps: []const LirProgram.BoxyPayloadStep = &.{},
     method_slots: []const LirProgram.BoxyMethodSlot = &.{},
+    worker_procs: []const LIR.LirProcSpecId = &.{},
     method_arg_layouts: []const layout_mod.Idx = &.{},
     method_hidden_desc_sources: []const LirProgram.BoxyMethodHiddenDescSource = &.{},
     erased_arg_layouts: []const layout_mod.Idx = &.{},
@@ -267,6 +268,7 @@ pub const BoxyTables = struct {
             self.adapt_steps.len != 0 or
             self.payload_steps.len != 0 or
             self.method_slots.len != 0 or
+            self.worker_procs.len != 0 or
             self.method_arg_layouts.len != 0 or
             self.method_hidden_desc_sources.len != 0 or
             self.erased_arg_layouts.len != 0 or
@@ -299,6 +301,7 @@ pub const BoxyTables = struct {
             .adapt_steps = result.boxy_adapt_steps.items,
             .payload_steps = result.boxy_payload_steps.items,
             .method_slots = result.boxy_method_slots.items,
+            .worker_procs = result.boxy_worker_procs.items,
             .method_arg_layouts = result.boxy_method_arg_layouts.items,
             .method_hidden_desc_sources = result.boxy_method_hidden_desc_sources.items,
             .erased_arg_layouts = result.boxy_erased_arg_layouts.items,
@@ -321,6 +324,7 @@ pub const BoxyTables = struct {
             .adapt_steps = view.boxy_adapt_steps,
             .payload_steps = view.boxy_payload_steps,
             .method_slots = view.boxy_method_slots,
+            .worker_procs = view.boxy_worker_procs,
             .method_arg_layouts = view.boxy_method_arg_layouts,
             .method_hidden_desc_sources = view.boxy_method_hidden_desc_sources,
             .erased_arg_layouts = view.boxy_erased_arg_layouts,

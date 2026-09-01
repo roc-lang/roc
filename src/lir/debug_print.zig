@@ -536,6 +536,11 @@ const Printer = struct {
                     try writer.print("join j{d} params=[", .{@intFromEnum(s.id)});
                     try self.writeLocals(s.params, writer);
                     try writer.writeAll("]");
+                    if (!s.retained.isEmpty()) {
+                        try writer.writeAll(" retained=[");
+                        try self.writeLocals(s.retained, writer);
+                        try writer.writeAll("]");
+                    }
                     if (!s.maybe_uninitialized_params.isEmpty()) {
                         try writer.writeAll(" maybe_uninitialized=[");
                         try self.writeLocals(s.maybe_uninitialized_params, writer);

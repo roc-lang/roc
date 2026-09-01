@@ -389,8 +389,8 @@ fn collectContainingRegionsFromExpr(
             const fields = ast.store.recordFieldSlice(r.fields);
             for (fields) |field_idx| {
                 const field = ast.store.getRecordField(field_idx);
-                if (field.value) |value| {
-                    try collectContainingRegionsFromExpr(allocator, ast, value, target_offset, regions);
+                if (field.value == .supplied) {
+                    try collectContainingRegionsFromExpr(allocator, ast, field.value.supplied, target_offset, regions);
                 }
             }
             if (r.ext) |ext| {
@@ -490,8 +490,8 @@ fn collectContainingRegionsFromExpr(
             const fields = ast.store.recordFieldSlice(rb.fields);
             for (fields) |field_idx| {
                 const field = ast.store.getRecordField(field_idx);
-                if (field.value) |value| {
-                    try collectContainingRegionsFromExpr(allocator, ast, value, target_offset, regions);
+                if (field.value == .supplied) {
+                    try collectContainingRegionsFromExpr(allocator, ast, field.value.supplied, target_offset, regions);
                 }
             }
         },
