@@ -456,12 +456,8 @@ pub const DevBoolRootTiming = struct {
     }
 };
 
-/// Per-call mutable observation state passed to optimized test entrypoints.
-pub const TestInvocationContext = extern struct {
-    expect_err_set: u32 = 0,
-    expect_err_start: u32 = 0,
-    expect_err_end: u32 = 0,
-};
+/// Per-call state passed to optimized test entrypoints.
+pub const TestInvocationContext = boxy_abi.InProcessContext;
 
 /// A host event observed while evaluating a bool-returning test root.
 pub const BoolRootEvent = union(enum) {
@@ -2515,6 +2511,7 @@ pub fn devEvalBoolRootsWithTimingAndMaxWorkers(
             static_strings.entries,
             tables.erased_arg_desc_offsets,
             tables.erased_arg_desc_params,
+            tables.worker_procs,
             .preserve,
             roc_target.host_cpu.level(),
         );
@@ -2631,6 +2628,7 @@ fn callBoolRoot(
     store: *const lir.LirStore,
     tables: boxy_runtime.BoxyTables,
     target: BoolRootCallTarget,
+    boxy_fns: *const BoxyNativeFnTable,
     root: BoolRoot,
     longjmp_on_crash: bool,
     call_index: usize,
@@ -2652,7 +2650,7 @@ fn callBoolRoot(
     }
     runtime_env.resetObservation();
     runtime_env.resetAllocationTracker();
-    var test_context: TestInvocationContext = .{};
+    var test_context: TestInvocationContext = .{ .boxy_fn_table = boxy_fns };
     const boxy_runtime_instance = if (tables.needsRuntimeForStore(store))
         try boxy_abi.createRuntimeFromStores(allocator, store, layouts, tables, runtime_env.get_ops())
     else
@@ -2678,13 +2676,11 @@ fn callBoolRoot(
     if (sj == 0) {
         switch (target) {
             .llvm => |entry| {
-                const boxy_fns = boxyNativeFnTable();
                 entry(
                     runtime_env.get_ops(),
                     &test_context,
                     ret_buf.ptr,
                     if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
-                    &boxy_fns,
                 );
             },
             .dev => |entry| {
@@ -2733,7 +2729,7 @@ fn callBoolRoot(
     };
 }
 
-const LlvmBoolRootEntryFn = *const fn (*builtins.host_abi.RocOps, *TestInvocationContext, [*]u8, ?*anyopaque, *const BoxyNativeFnTable) callconv(.c) void;
+const LlvmBoolRootEntryFn = *const fn (*builtins.host_abi.RocOps, *TestInvocationContext, [*]u8, ?*anyopaque) callconv(.c) void;
 
 /// An entrypoint wrapper inside a dev-backend executable mapping.
 const DevBoolRootEntry = struct {
@@ -2759,6 +2755,7 @@ const BoolRootCall = struct {
 const BoolRootWorkerState = struct {
     allocator: Allocator,
     calls: []const BoolRootCall,
+    boxy_fns: *const BoxyNativeFnTable,
     longjmp_on_crash: bool,
     next_call: std.atomic.Value(usize),
     results: []?BoolRootEvalResult,
@@ -2784,6 +2781,7 @@ fn boolRootWorker(state: *BoolRootWorkerState) void {
             call.store,
             call.tables,
             call.target,
+            state.boxy_fns,
             call.root,
             state.longjmp_on_crash,
             index,
@@ -2830,9 +2828,12 @@ fn runBoolRootCalls(
     defer allocator.free(errors);
     for (errors) |*slot| slot.* = null;
 
+    const boxy_fns = boxyNativeFnTable();
+
     var state = BoolRootWorkerState{
         .allocator = allocator,
         .calls = calls,
+        .boxy_fns = &boxy_fns,
         .longjmp_on_crash = longjmp_on_crash,
         .next_call = std.atomic.Value(usize).init(0),
         .results = slots,
@@ -2968,6 +2969,7 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
             module.store,
             module.tables.erased_arg_desc_offsets,
             module.tables.erased_arg_desc_params,
+            module.tables.worker_procs,
         );
         codegen.layout_store = module.layouts;
         defer codegen.deinit();

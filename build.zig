@@ -746,7 +746,7 @@ const CheckTypeCheckerPatternsStep = struct {
         .{ .file = "inspected.zig", .start = 226, .end = 232 },
         // inspected.zig trims the trailing newline off a rendered report. This is
         // presentation text on its way out, not a type-checker comparison.
-        .{ .file = "inspected.zig", .start = 2211, .end = 2211 },
+        .{ .file = "inspected.zig", .start = 2207, .end = 2207 },
         // inspected.zig converts a NUL-terminated dylib path from the linker into a
         // slice. Path bytes, not identifiers.
         .{ .file = "inspected.zig", .start = 3000, .end = 3008 },
@@ -5509,6 +5509,13 @@ pub fn build(b: *std.Build) void {
 
         if (std.mem.eql(u8, module_test.test_step.name, "base")) {
             module_test.test_step.root_module.addImport("stack_overflow_test_options", stack_overflow_test_options_module);
+        }
+
+        // Compile tests lower real apps to LIR and hand the result to the LLVM
+        // backend to assert on what it emits. Building the LLVM module is pure
+        // Zig (the vendored IR builder), so no LLVM library linkage is needed.
+        if (std.mem.eql(u8, module_test.test_step.name, "compile")) {
+            module_test.test_step.root_module.addImport("llvm_codegen", llvm_codegen_module);
         }
 
         if (std.mem.eql(u8, module_test.test_step.name, "glue")) {

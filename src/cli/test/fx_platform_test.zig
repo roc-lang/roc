@@ -431,6 +431,30 @@ test "fx platform provided root preserves boxed callable identity (speed backend
     try expectProvidedBoxedCallableIdentity("--opt=speed", "fx_provided_boxed_callable_identity_speed");
 }
 
+/// Repro for https://github.com/roc-lang/roc/issues/10775: a boxed callable the
+/// host owns stays callable after the provided root that produced it returned,
+/// so invoking it through the erased-callable ABI must return 42.
+fn expectProvidedBoxedCallablePostRootCall(opt_flag: []const u8, output_basename: []const u8) FxPlatformTestError!void {
+    try expectProvidedCallableHostSelfTest(
+        opt_flag,
+        output_basename,
+        "--run-provided-boxed-callable-post-root-call",
+        "provided boxed callable post-root call",
+    );
+}
+
+test "fx platform host calls boxed callable after provided root returns (interpreter)" {
+    try expectProvidedBoxedCallablePostRootCall("--opt=interpreter", "fx_provided_boxed_callable_post_root_call_interpreter");
+}
+
+test "fx platform host calls boxed callable after provided root returns (dev backend)" {
+    try expectProvidedBoxedCallablePostRootCall("--opt=dev", "fx_provided_boxed_callable_post_root_call_dev");
+}
+
+test "fx platform host calls boxed callable after provided root returns (speed backend)" {
+    try expectProvidedBoxedCallablePostRootCall("--opt=speed", "fx_provided_boxed_callable_post_root_call_speed");
+}
+
 test "fx platform direct run preserves RocOps after F32.abs before list allocation" {
     const allocator = testing.allocator;
 

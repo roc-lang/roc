@@ -458,11 +458,12 @@ sub check_active_body_draft_seal_access {
         }
 
         # `sealActiveBodyDraft` composes the synchronous path, while
-        # `commitFinalizedBodyDraft` is the same ordered commit suffix used
-        # after a queued shard crosses the coordinator handoff.
+        # Finalized graph-backed bodies and sealed graph-free shards each own
+        # one ordered draft commit suffix.
         my $owns_body_draft_commit =
             ($current_fn // '') eq 'sealActiveBodyDraft' ||
-            ($current_fn // '') eq 'commitFinalizedBodyDraft';
+            ($current_fn // '') eq 'commitFinalizedBodyDraft' ||
+            ($current_fn // '') eq 'commitSealedBodyDraft';
         if (!$in_test && !$owns_body_draft_commit) {
             if ($code =~ /\b[A-Za-z_][A-Za-z0-9_]*\.sealCoreIntoProgram\(/) {
                 push @violations, "$rel:$line_no: active-body-draft-seal-bypass: $line";

@@ -1661,6 +1661,7 @@ fn generatePlatformHostShimFromLirData(
         store,
         &.{},
         &.{},
+        &.{},
         std_target,
     );
     codegen.layout_store = layouts;
@@ -6376,6 +6377,7 @@ fn writeDevRunImageToSharedMemory(
             static_strings.entries,
             lowered.lir_result.boxy_erased_arg_desc_offsets.items,
             lowered.lir_result.boxy_erased_arg_desc_params.items,
+            lowered.lir_result.boxy_worker_procs.items,
             .preserve,
             roc_target.host_cpu.level(),
         );
@@ -6826,6 +6828,7 @@ fn lowerLirWithBuildEnv(
         specialization_strategy,
         base.target.TargetUsize.native,
         false,
+        build_env.postCheckExecutor(),
         &spec_timing,
     );
     errdefer lowered.deinit();
@@ -9128,6 +9131,7 @@ fn writeDevWasmObject(
         &lowered.lir_result.layouts,
         lowered.lir_result.boxy_erased_arg_desc_offsets.items,
         lowered.lir_result.boxy_erased_arg_desc_params.items,
+        lowered.lir_result.boxy_worker_procs.items,
         &wasm_module,
         cpu_level,
     );
@@ -9472,6 +9476,7 @@ fn compileLlvmAppObject(
         &lowered.lir_result.store,
         lowered.lir_result.boxy_erased_arg_desc_offsets.items,
         lowered.lir_result.boxy_erased_arg_desc_params.items,
+        lowered.lir_result.boxy_worker_procs.items,
         std_target,
     );
     codegen.layout_store = &lowered.lir_result.layouts;
@@ -9874,6 +9879,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         specialization_strategy,
         target_usize,
         args.synthetic_default_platform,
+        build_env.postCheckExecutor(),
         &spec_timing,
     );
     defer lowered.deinit();
@@ -10241,6 +10247,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         specialization_strategy,
         target_usize,
         args.synthetic_default_platform,
+        build_env.postCheckExecutor(),
         &spec_timing,
     );
     defer lowered.deinit();
@@ -10327,6 +10334,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         lowered.lir_result.store.getProcSpecs(),
         lowered.lir_result.boxy_erased_arg_desc_offsets.items,
         lowered.lir_result.boxy_erased_arg_desc_params.items,
+        lowered.lir_result.boxy_worker_procs.items,
         target,
         obj_path,
         ctx.coreCtx(),
@@ -10607,6 +10615,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         specialization_strategy,
         base.target.TargetUsize.native,
         false,
+        build_env.postCheckExecutor(),
         &spec_timing,
     );
     defer lowered.deinit();
@@ -11731,6 +11740,7 @@ fn lowerCheckedSourceToLir(
     specialization_strategy: base.SpecializationStrategy,
     target_usize: base.target.TargetUsize,
     proc_debug_names: bool,
+    post_check_executor: ?base.post_check_task_executor.Executor,
     timing: ?*lir.CheckedPipeline.Timing,
 ) lir.CheckedPipeline.LowerResourceError!lir.CheckedPipeline.LoweredProgram {
     const selected_roots: []const check.CheckedArtifact.RootRequest = switch (roots) {
@@ -11794,6 +11804,7 @@ fn lowerCheckedSourceToLir(
             .tag_reachability = tagReachabilityForOpt(opt),
             .prove_ranges = proveRangesForOpt(opt),
             .proc_debug_names = proc_debug_names,
+            .post_check_executor = post_check_executor,
             .timing = timing,
         },
     );
@@ -12552,6 +12563,7 @@ fn lowerPlannedTestModule(
         specialization_strategy,
         base.target.TargetUsize.native,
         false,
+        build_env.postCheckExecutor(),
         timing,
     );
     errdefer lowered.deinit();

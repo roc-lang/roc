@@ -78,9 +78,19 @@ pub const LirInspectFn = *const fn (
     layouts: *const layout.Store,
 ) LowerToLirHarnessError!void;
 
+/// Callback type for tests that inspect the whole lowered program. Backend
+/// codegen needs the boxy side tables alongside the store and layout store,
+/// so those tests take the lowering result rather than the two stores.
+pub const LoweredInspectFn = *const fn (
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) LowerToLirHarnessError!void;
+
 /// Options controlling how the harness lowers an app to LIR.
 pub const LirLoweringOptions = struct {
     specialization_strategy: base.SpecializationStrategy = .lss,
+    /// Number of coordinator workers available to post-check specialization.
+    /// The default retains the harness's existing single-threaded behavior.
+    specialization_workers: usize = 1,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     inline_mode: lir.CheckedPipeline.InlineMode = .none,
     consume_dead_boxes: bool = false,
@@ -110,19 +120,30 @@ pub fn expectLowersToLirWithOptions(app_body: []const u8, opts: LirLoweringOptio
 /// Lower an app at `app_path` to LIR. Reaching the end without a panic means
 /// the app checked cleanly and passed ARC certification.
 pub fn expectAppPathLowersToLir(app_path: []const u8) LowerToLirHarnessError!void {
-    try lowerAppPathToLir(std.testing.allocator, app_path, null, .{}, null);
+    try lowerAppPathToLir(std.testing.allocator, app_path, null, .{}, null, null);
 }
 
 /// Lower an app at `app_path` to LIR, then run a focused invariant check
 /// against the actual lowered store and layout store.
 pub fn expectAppPathLirInspection(app_path: []const u8, inspect: LirInspectFn) LowerToLirHarnessError!void {
-    try lowerAppPathToLir(std.testing.allocator, app_path, null, .{}, inspect);
+    try lowerAppPathToLir(std.testing.allocator, app_path, null, .{}, inspect, null);
+}
+
+/// Lower an app at `app_path` to LIR with explicit lowering options, then run
+/// a focused invariant check against the whole lowered program, for tests that
+/// drive a backend over the result.
+pub fn runAppPathLoweredInspection(
+    app_path: []const u8,
+    opts: LirLoweringOptions,
+    inspect: LoweredInspectFn,
+) LowerToLirHarnessError!void {
+    try lowerAppPathToLir(std.testing.allocator, app_path, null, opts, null, inspect);
 }
 
 /// Lower an app at `app_path` to LIR with explicit lowering options, then run
 /// a focused invariant check against the actual lowered store and layout store.
 pub fn runAppPathLirInspection(app_path: []const u8, opts: LirLoweringOptions, inspect: LirInspectFn) LowerToLirHarnessError!void {
-    try lowerAppPathToLir(std.testing.allocator, app_path, null, opts, inspect);
+    try lowerAppPathToLir(std.testing.allocator, app_path, null, opts, inspect, null);
 }
 
 /// Lower an app whose body is `app_body` to LIR, then run a focused invariant
@@ -153,6 +174,29 @@ pub fn expectDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void 
     try runToLir(app_body, &writer_a, .{}, null);
     try runToLir(app_body, &writer_b, .{}, null);
     try std.testing.expectEqualStrings(writer_a.buffered(), writer_b.buffered());
+}
+
+/// Lower `app_body` with one, two, and four specialization workers, comparing
+/// each complete LIR dump with the single-worker result. Run each parallel
+/// configuration twice so this checks both worker-count independence and
+/// repeated scheduling independence without relying on timing.
+pub fn expectSpecializationParallelismDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void {
+    const gpa = std.testing.allocator;
+    const cap = 1 << 22;
+    const reference = try gpa.alloc(u8, cap);
+    defer gpa.free(reference);
+    var reference_writer = std.Io.Writer.fixed(reference);
+    try runToLir(app_body, &reference_writer, .{ .specialization_workers = 1 }, null);
+
+    for ([_]usize{ 2, 4 }) |specialization_workers| {
+        for (0..2) |_| {
+            const candidate = try gpa.alloc(u8, cap);
+            defer gpa.free(candidate);
+            var candidate_writer = std.Io.Writer.fixed(candidate);
+            try runToLir(app_body, &candidate_writer, .{ .specialization_workers = specialization_workers }, null);
+            try std.testing.expectEqualStrings(reference_writer.buffered(), candidate_writer.buffered());
+        }
+    }
 }
 
 /// Lower `app_body` for both pointer widths (with in-place `List.map` reuse
@@ -236,7 +280,7 @@ fn runToLir(
     const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
     defer gpa.free(app_path);
 
-    try lowerAppPathToLir(gpa, app_path, dump, opts, inspect);
+    try lowerAppPathToLir(gpa, app_path, dump, opts, inspect, null);
 }
 
 fn lowerAppPathToLir(
@@ -245,6 +289,7 @@ fn lowerAppPathToLir(
     dump: ?*std.Io.Writer,
     opts: LirLoweringOptions,
     inspect: ?LirInspectFn,
+    inspect_lowered: ?LoweredInspectFn,
 ) LowerToLirHarnessError!void {
     var arena_impl = collections.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
@@ -254,8 +299,8 @@ fn lowerAppPathToLir(
 
     var coord = try Coordinator.init(
         gpa,
-        .single_threaded,
-        1,
+        if (opts.specialization_workers > 1) .multi_threaded else .single_threaded,
+        opts.specialization_workers,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
         build_options.compiler_version,
@@ -300,6 +345,10 @@ fn lowerAppPathToLir(
             .proc_debug_names = opts.proc_debug_names,
             .prove_ranges = opts.prove_ranges,
             .lifted_expr_count_out = opts.lifted_expr_count_out,
+            .post_check_executor = if (opts.specialization_workers > 1)
+                coord.postCheckExecutor()
+            else
+                null,
         },
     );
     defer lowered.deinit();
@@ -314,5 +363,9 @@ fn lowerAppPathToLir(
 
     if (inspect) |inspect_fn| {
         try inspect_fn(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    }
+
+    if (inspect_lowered) |inspect_fn| {
+        try inspect_fn(&lowered);
     }
 }

@@ -16936,11 +16936,16 @@ const EvidencePass = struct {
 
     evidence_nodes: std.ArrayList(static_dispatch.EvidenceNode),
     evidence_refs: std.ArrayList(static_dispatch.CheckedEvidence),
+    constraint_callable_paths: std.ArrayList(static_dispatch.EvidencePathStep),
     site_evidence: std.ArrayList(static_dispatch.SiteEvidenceEntry),
     evidence_params_pool: std.ArrayList(static_dispatch.EvidenceParamRecord),
     evidence_param_paths: std.ArrayList(static_dispatch.EvidencePathStep),
 
     enum_scratch: dispatch_evidence.Scratch,
+    /// Stable copies of enumerated semantic paths. Evidence resolution may
+    /// recursively enumerate another scheme before finishing the current
+    /// vector, so consumers cannot retain aliases into `enum_scratch`.
+    enumerated_path_arena: std.heap.ArenaAllocator,
     /// Canonical evidence params per collected local-function scope,
     /// enumerated on demand (slices owned by the pass).
     scope_params: collections.DenseMap(DispatchScopeId, []EvidenceParam),
@@ -17015,10 +17020,12 @@ const EvidencePass = struct {
             .site_seen = std.AutoHashMap(u32, void).init(allocator),
             .evidence_nodes = .empty,
             .evidence_refs = .empty,
+            .constraint_callable_paths = .empty,
             .site_evidence = .empty,
             .evidence_params_pool = .empty,
             .evidence_param_paths = .empty,
             .enum_scratch = .{},
+            .enumerated_path_arena = std.heap.ArenaAllocator.init(allocator),
             .scope_params = collections.DenseMap(DispatchScopeId, []EvidenceParam).init(allocator),
             .chain_scratch = .empty,
         };
@@ -17041,10 +17048,12 @@ const EvidencePass = struct {
         self.site_seen.deinit();
         self.evidence_nodes.deinit(self.allocator);
         self.evidence_refs.deinit(self.allocator);
+        self.constraint_callable_paths.deinit(self.allocator);
         self.site_evidence.deinit(self.allocator);
         self.evidence_params_pool.deinit(self.allocator);
         self.evidence_param_paths.deinit(self.allocator);
         self.enum_scratch.deinit(self.allocator);
+        self.enumerated_path_arena.deinit();
         var scope_lists = self.scope_params.valueIterator();
         while (scope_lists.next()) |list| {
             for (list.*) |param| self.allocator.free(param.path);
@@ -17280,6 +17289,7 @@ const EvidencePass = struct {
 
         self.plan_table.evidence_nodes = try self.evidence_nodes.toOwnedSlice(self.allocator);
         self.plan_table.evidence_refs = try self.evidence_refs.toOwnedSlice(self.allocator);
+        self.plan_table.constraint_callable_paths = try self.constraint_callable_paths.toOwnedSlice(self.allocator);
         self.plan_table.site_evidence = try self.site_evidence.toOwnedSlice(self.allocator);
     }
 
@@ -17584,7 +17594,11 @@ const EvidencePass = struct {
     }
 
     fn enumerateParams(self: *EvidencePass, root: Var, out: *std.ArrayListUnmanaged(EvidenceParam)) Allocator.Error!void {
+        const out_base = out.items.len;
         try dispatch_evidence.enumerateEvidenceParams(self.allocator, self.types, root, &self.enum_scratch, out);
+        for (out.items[out_base..]) |*param| {
+            param.path = try self.enumerated_path_arena.allocator().dupe(static_dispatch.EvidencePathStep, param.path);
+        }
     }
 
     /// The param chain at `scope_id`: the scope's own params first (depth 0),
@@ -17621,12 +17635,45 @@ const EvidencePass = struct {
         return entry.value_ptr.*;
     }
 
+    fn planIsDefaultRoot(self: *const EvidencePass, plan_id: static_dispatch.StaticDispatchPlanId) bool {
+        const span = self.template_iterator_refs.default_plan_refs;
+        for (self.plan_table.template_refs[span.start .. span.start + span.len]) |default_plan_id| {
+            if (default_plan_id == plan_id) return true;
+        }
+        return false;
+    }
+
     fn appendEvidenceParams(self: *EvidencePass, params: []const EvidenceParam) Allocator.Error!artifact_serialize.Span {
         const idents = self.module.identStoreConst();
         const pool_start: u32 = @intCast(self.evidence_params_pool.items.len);
         for (params) |param| {
+            const source: static_dispatch.EvidenceParamSource = switch (param.source) {
+                .scheme_callable => if (param.path.len == 0) explicit: {
+                    if (self.pathlessDefaultPhaseForParam(param)) |phase| break :explicit .{ .explicit_default = phase };
+                    break :explicit .scheme_callable;
+                } else .scheme_callable,
+                .constraint_callable => |constraint_callable| constraint: {
+                    if (!self.constraintCallableNeedsDefaultProvenance(param)) break :constraint .use_site_only;
+                    // Error-reporting publication can retain a constraint from
+                    // an erroneous expression that produced no dispatch plan.
+                    // No Monotype consumer is reachable from that expression.
+                    const intro_expr = constraint_callable.intro_expr orelse break :constraint .checked_error;
+                    const plan = self.plan_table.lookupByExpr(@enumFromInt(intro_expr)) orelse break :constraint .checked_error;
+                    if (self.planIsDefaultRoot(plan)) break :constraint .use_site_only;
+                    break :constraint .{ .constraint_callable = .{
+                        .plan = plan,
+                        .callable_ty = self.checked_types.rootForSourceVar(self.module, constraint_callable.callable_var) orelse
+                            checkedArtifactInvariant("constraint-callable evidence source type was not published", .{}),
+                    } };
+                },
+                .erased_row_remainder => .erased_row_remainder,
+            };
+            const published_path: []const static_dispatch.EvidencePathStep = switch (source) {
+                .scheme_callable, .constraint_callable => param.path,
+                .use_site_only, .explicit_default, .erased_row_remainder, .checked_error => &.{},
+            };
             const path_start: u32 = @intCast(self.evidence_param_paths.items.len);
-            for (param.path) |path_step| {
+            for (published_path) |path_step| {
                 var converted = path_step;
                 switch (path_step.stepKind()) {
                     .record_field => converted.data = @intFromEnum(try self.names.internRecordFieldIdent(idents, @bitCast(path_step.data))),
@@ -17647,10 +17694,10 @@ const EvidencePass = struct {
                 .method = try self.names.internMethodIdent(idents, param.constraint.fn_name),
                 .dispatcher_ty = self.checked_types.rootForSourceVar(self.module, param.dispatcher_var) orelse
                     checkedArtifactInvariant("checked evidence parameter dispatcher type was not published", .{}),
-                .runtime_dictionary = param.constraint.origin.literalKind() == null,
+                .runtime_dictionary = source == .constraint_callable or param.constraint.origin.literalKind() == null,
                 .structural = self.structuralKindForMethodIdent(param.constraint.fn_name),
-                .pathless_default_phase = if (param.path.len == 0) self.pathlessDefaultPhaseForParam(param) else null,
-                .path = .{ .start = path_start, .len = @intCast(param.path.len) },
+                .source = source,
+                .path = .{ .start = path_start, .len = @intCast(published_path.len) },
             });
         }
         return .{ .start = pool_start, .len = @intCast(params.len) };
@@ -17664,6 +17711,22 @@ const EvidencePass = struct {
             .alias, .field_presence, .structure, .err => return null,
         };
         return numericDefaultPhaseForConstraints(self.module, constraints);
+    }
+
+    fn constraintCallableNeedsDefaultProvenance(self: *EvidencePass, param: EvidenceParam) bool {
+        if (self.pathlessDefaultPhaseForParam(param) == null) return false;
+        const method = param.constraint.fn_name;
+        const idents = self.module.commonIdents();
+        return method == idents.plus or
+            method == idents.minus or
+            method == idents.times or
+            method == idents.div_by or
+            method == idents.div_trunc_by or
+            method == idents.rem_by or
+            method == idents.negate or
+            method == idents.from_numeral or
+            method == idents.from_quote or
+            method == idents.from_interpolation;
     }
 
     /// The canonical `(depth, index)` of one method target in the chain,
@@ -18197,7 +18260,11 @@ const EvidencePass = struct {
         if (params.len == 0) return .none;
         for (params) |param| {
             const path = paths[param.path.start .. param.path.start + param.path.len];
-            if (path.len == 0 and param.pathless_default_phase == null) return .requires_record;
+            switch (param.source) {
+                .scheme_callable => {},
+                .explicit_default => if (path.len != 0) return .requires_record,
+                .constraint_callable, .use_site_only, .erased_row_remainder, .checked_error => return .requires_record,
+            }
         }
         return .from_callable;
     }
@@ -18401,12 +18468,58 @@ const EvidencePass = struct {
         return @as(?artifact_serialize.Span, try self.appendEvidenceRefs(entries.items));
     }
 
+    fn constraintCallableDefaultEvidence(
+        self: *EvidencePass,
+        param: EvidenceParam,
+    ) Allocator.Error!?static_dispatch.CheckedEvidence {
+        // Error-reporting builds can retain an expression-introduced
+        // constraint whose erroneous expression published no dispatch plan.
+        // Those obligations use the ordinary checked-error resolution;
+        // only a producer-published plan authorizes the symbolic recipe.
+        const constraint_callable = switch (param.source) {
+            .constraint_callable => |source| source,
+            .scheme_callable, .erased_row_remainder => return null,
+        };
+        if (!self.constraintCallableNeedsDefaultProvenance(param)) return null;
+        const intro_expr = constraint_callable.intro_expr orelse return null;
+        const source_plan = self.plan_table.lookupByExpr(@enumFromInt(intro_expr)) orelse return null;
+        if (self.planIsDefaultRoot(source_plan)) return null;
+        const dispatcher_ty = self.checked_types.rootForSourceVar(self.module, param.dispatcher_var) orelse
+            checkedArtifactInvariant("constraint-callable evidence dispatcher type was not published", .{});
+        const path_start: u32 = @intCast(self.constraint_callable_paths.items.len);
+        const idents = self.module.identStoreConst();
+        for (param.path) |path_step| {
+            var converted = path_step;
+            const path_kind = path_step.kindOrNull() orelse
+                checkedArtifactInvariant("constraint-callable evidence contained invalid path kind {}", .{path_step.kind});
+            switch (path_kind) {
+                .record_field => converted.data = @intFromEnum(try self.names.internRecordFieldIdent(idents, @bitCast(path_step.data))),
+                .tag_payload_tag => converted.data = @intFromEnum(try self.names.internTagIdent(idents, @bitCast(path_step.data))),
+                .fn_arg, .fn_ret, .alias_arg, .alias_backing, .nominal_arg, .nominal_backing, .tuple_elem, .tag_payload_index => {},
+            }
+            try self.constraint_callable_paths.append(self.allocator, converted);
+        }
+        return .{
+            .dispatcher_ty = dispatcher_ty,
+            .runtime_dictionary = false,
+            .resolution = .{ .from_constraint_callable = .{
+                .plan = source_plan,
+                .callable_ty = self.checked_types.rootForSourceVar(self.module, constraint_callable.callable_var) orelse
+                    checkedArtifactInvariant("constraint-callable evidence source type was not published", .{}),
+                .method = try self.names.internMethodIdent(idents, param.constraint.fn_name),
+                .structural = self.structuralKindForMethodIdent(param.constraint.fn_name),
+                .path = .{ .start = path_start, .len = @intCast(param.path.len) },
+            } },
+        };
+    }
+
     fn evidenceForRecordParam(
         self: *EvidencePass,
         pairs: []const ModuleEnv.SchemeUsePair,
         param: EvidenceParam,
         commit_unpinned: bool,
     ) Allocator.Error!?static_dispatch.CheckedEvidence {
+        if (try self.constraintCallableDefaultEvidence(param)) |evidence| return evidence;
         const dispatcher_root = self.types.resolveVar(param.dispatcher_var).var_;
         const fresh_dispatcher = self.pairForResolved(pairs, dispatcher_root) orelse {
             // The scheme var was not copied at this instantiation (it was
@@ -18431,6 +18544,7 @@ const EvidencePass = struct {
         fresh_fn_var: ?Var,
         commit_unpinned: bool,
     ) Allocator.Error!?static_dispatch.CheckedEvidence {
+        if (try self.constraintCallableDefaultEvidence(param)) |evidence| return evidence;
         const idents = self.module.identStoreConst();
         const method = try self.names.internMethodIdent(idents, param.constraint.fn_name);
         const structural_kind = self.structuralKindForMethodIdent(param.constraint.fn_name);
@@ -18622,6 +18736,10 @@ const EvidencePass = struct {
         defer entries.deinit(self.allocator);
         try entries.ensureTotalCapacity(self.allocator, scope_params.len);
         for (scope_params) |param| {
+            if (try self.constraintCallableDefaultEvidence(param)) |evidence| {
+                entries.appendAssumeCapacity(evidence);
+                continue;
+            }
             if (param.path.len > 0) {
                 const dispatcher_ty = self.checked_types.rootForSourceVar(self.module, param.dispatcher_var) orelse
                     checkedArtifactInvariant("checked nested-procedure evidence dispatcher type was not published", .{});
@@ -18678,6 +18796,7 @@ test "procedure evidence schema positively classifies callable paths and pathles
 
     var pathless_params = params;
     pathless_params[1].path = .{};
+    pathless_params[1].source = .erased_row_remainder;
     const pathless_table = CheckedProcedureTemplateTable{
         .evidence_params_pool = pathless_params[0..],
         .evidence_param_paths = path_steps[0..],
@@ -18688,7 +18807,7 @@ test "procedure evidence schema positively classifies callable paths and pathles
     );
 
     var defaulted_pathless_params = pathless_params;
-    defaulted_pathless_params[1].pathless_default_phase = .mono_specialization;
+    defaulted_pathless_params[1].source = .{ .explicit_default = .mono_specialization };
     const defaulted_pathless_table = CheckedProcedureTemplateTable{
         .evidence_params_pool = defaulted_pathless_params[0..],
         .evidence_param_paths = path_steps[0..],
@@ -21865,7 +21984,7 @@ fn directEvidenceIsClosed(
             states[raw_node] = .parametric;
             return false;
         },
-        .constraint, .from_callable => {
+        .constraint, .from_callable, .from_constraint_callable => {
             states[raw_node] = .parametric;
             return false;
         },
@@ -29412,7 +29531,7 @@ pub const CheckedModuleArtifact = struct {
             // independent of stored data size. The optional-field body tables
             // add three pointers beyond the current-main count, and the
             // record-unset label pool one more.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 213);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 214);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -29619,10 +29738,12 @@ pub const CheckedModuleArtifact = struct {
     // the default-root site (design.md "Defaulted Fields").
     // Version 75 preserves whether forwarded evidence supplies an exact
     // callable relation or only the shared method target.
-    // Version 76 publishes the exact resolution of every generated-codec
-    // call, the selected contract on structural dispatch plans, and that
-    // contract on stored structural function evidence.
-    const serialized_layout_version: u32 = 76;
+    // Version 76 retains callable evidence provenance used by pathless
+    // specialization.
+    // Version 77 additionally publishes the exact resolution of every
+    // generated-codec call, the selected contract on structural dispatch
+    // plans, and that contract on stored structural function evidence.
+    const serialized_layout_version: u32 = 77;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -30308,6 +30429,11 @@ pub const CheckedModuleArtifact = struct {
                     return .{ .kind = .evidence_ref_node_out_of_bounds, .index = @intCast(i) };
                 },
                 .constraint, .structural, .from_callable, .checked_error, .unreachable_value => {},
+                .from_constraint_callable => |source| if (@intFromEnum(source.plan) >= table.plans.len or
+                    @as(u64, source.path.start) + source.path.len > table.constraint_callable_paths.len)
+                {
+                    return .{ .kind = .evidence_ref_node_out_of_bounds, .index = @intCast(i) };
+                },
             }
         }
 
@@ -30528,8 +30654,23 @@ pub const CheckedModuleArtifact = struct {
             const params = templates.evidenceParams(&template);
             for (params, 0..) |param, param_offset| {
                 const path = templates.evidenceParamPath(param);
-                if (path.len == 0) continue;
-                if (!self.checkedEvidencePathResolves(template.checked_fn_root, path)) {
+                const source_root = switch (param.source) {
+                    .scheme_callable => template.checked_fn_root,
+                    .constraint_callable => |source| blk: {
+                        if (@intFromEnum(source.plan) >= table.plans.len) {
+                            return .{ .kind = .evidence_param_path_diverges_from_checked_type, .index = template.evidence_params.start + @as(u32, @intCast(param_offset)), .method = param.method };
+                        }
+                        break :blk source.callable_ty;
+                    },
+                    .checked_error => continue,
+                    .use_site_only, .explicit_default, .erased_row_remainder => {
+                        if (path.len != 0) {
+                            return .{ .kind = .evidence_param_path_diverges_from_checked_type, .index = template.evidence_params.start + @as(u32, @intCast(param_offset)), .method = param.method };
+                        }
+                        continue;
+                    },
+                };
+                if (!self.checkedEvidencePathResolves(source_root, path)) {
                     return .{
                         .kind = .evidence_param_path_diverges_from_checked_type,
                         .index = template.evidence_params.start + @as(u32, @intCast(param_offset)),
@@ -30542,8 +30683,21 @@ pub const CheckedModuleArtifact = struct {
             const params = templates.evidence_params_pool[scope.evidence_params.start .. scope.evidence_params.start + scope.evidence_params.len];
             for (params, 0..) |param, param_offset| {
                 const path = templates.evidenceParamPath(param);
-                if (path.len == 0) continue;
-                if (!self.checkedEvidencePathResolves(scope.scheme_root, path)) {
+                const source_root = switch (param.source) {
+                    .scheme_callable => scope.scheme_root,
+                    .constraint_callable => |source| blk: {
+                        if (@intFromEnum(source.plan) >= table.plans.len) {
+                            return .{ .kind = .evidence_param_path_diverges_from_checked_type, .index = scope.evidence_params.start + @as(u32, @intCast(param_offset)), .method = param.method };
+                        }
+                        break :blk source.callable_ty;
+                    },
+                    .checked_error => continue,
+                    .use_site_only, .explicit_default, .erased_row_remainder => {
+                        if (path.len != 0) return .{ .kind = .evidence_param_path_diverges_from_checked_type, .index = scope.evidence_params.start + @as(u32, @intCast(param_offset)), .method = param.method };
+                        continue;
+                    },
+                };
+                if (!self.checkedEvidencePathResolves(source_root, path)) {
                     return .{
                         .kind = .evidence_param_path_diverges_from_checked_type,
                         .index = scope.evidence_params.start + @as(u32, @intCast(param_offset)),
@@ -35962,8 +36116,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x3A, 0x5F, 0x85, 0xE5, 0xD7, 0x49, 0x95, 0x92, 0x49, 0x4F, 0xD7, 0x7C, 0x2C, 0x6C, 0x9F, 0xC2,
-        0xD1, 0x4B, 0x45, 0x96, 0x1E, 0x3B, 0x11, 0x41, 0xE3, 0x18, 0x5E, 0x44, 0x3F, 0x7B, 0x07, 0xEA,
+        0xC4, 0x00, 0x5B, 0x31, 0x12, 0x96, 0x34, 0x83, 0x85, 0x48, 0x82, 0xF1, 0x68, 0x8D, 0x68, 0x8F,
+        0x71, 0xD8, 0x60, 0x6E, 0x2F, 0x7B, 0x19, 0x57, 0x3A, 0x9D, 0x6A, 0xC4, 0x1F, 0xD0, 0x48, 0x78,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

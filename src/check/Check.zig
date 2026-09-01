@@ -19591,6 +19591,10 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 else
                     try self.unify(decl_pattern_var, decl_expr_var, env);
 
+                if (decl_pattern_result.isProblem()) {
+                    try self.erroneous_value_exprs.put(self.gpa, decl_stmt.expr, {});
+                }
+
                 if (decl_pattern_result.isEstablished()) {
                     const needs_comptime_validation = try self.checkDestructureExhaustiveness(decl_stmt.pattern, decl_stmt.expr, decl_expr_var, env, stmt_region);
                     if (needs_comptime_validation) {

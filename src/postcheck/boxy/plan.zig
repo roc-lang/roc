@@ -7195,7 +7195,12 @@ const Builder = struct {
         }
         const path_view = worker_evidence.view;
         const path = path_view.checked_procedure_templates.evidenceParamPath(param);
-        const source_arg_index = evidencePathSourceArgIndex(path, call_arg_types.len);
+        const call_path: []const static_dispatch.EvidencePathStep = switch (param.source) {
+            .scheme_callable => path,
+            .constraint_callable, .use_site_only, .explicit_default, .erased_row_remainder => &.{},
+            .checked_error => boxyPlanInvariant("checked-error evidence parameter reached worker descriptor planning"),
+        };
+        const source_arg_index = evidencePathSourceArgIndex(call_path, call_arg_types.len);
 
         const source_type = if (maybe_evidence) |evidence| blk: {
             const view = maybe_view orelse
@@ -7210,11 +7215,11 @@ const Builder = struct {
             break :blk typeRef(view, entry.dispatcher_ty);
         } else try self.checkedTypeAtEvidenceCallPath(
             worker_evidence.view,
-            path,
+            call_path,
             call_arg_types,
             ret_type,
         );
-        const rep = try self.evidenceCallRepAtPath(path_view, path, source_type, call_arg_reps, ret_type);
+        const rep = try self.evidenceCallRepAtPath(path_view, call_path, source_type, call_arg_reps, ret_type);
         return .{
             .source_type = source_type,
             .rep = rep,
@@ -8490,7 +8495,7 @@ const Builder = struct {
                         .resolution = resolution,
                     };
                 },
-                .constraint, .from_callable => .{
+                .constraint, .from_callable, .from_constraint_callable => .{
                     .requirement_type = requirement.fn_ty,
                     .callable_type = requirement.fn_ty,
                     .resolution = .constraint,

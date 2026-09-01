@@ -642,6 +642,266 @@ pub const Store = struct {
         return self.declared_fields.borrowSpan(span_.start, span_.len);
     }
 
+    /// Immutable append boundary for every durable type-store backing array.
+    ///
+    /// Construction flags, traversal caches, and interning indexes are excluded
+    /// because they are mutable acceleration state rather than durable type data.
+    pub const EpochBoundary = struct {
+        types: u32,
+        spans: u32,
+        fields: u32,
+        tags: u32,
+        declared_fields: u32,
+    };
+
+    pub fn epochBoundary(self: *const Store) EpochBoundary {
+        return .{
+            .types = @intCast(self.types.len()),
+            .spans = @intCast(self.spans.len()),
+            .fields = @intCast(self.fields.len()),
+            .tags = @intCast(self.tags.len()),
+            .declared_fields = @intCast(self.declared_fields.len()),
+        };
+    }
+
+    /// Result-owned type-store suffix preserving workspace-local dense ids.
+    pub const EpochDelta = struct {
+        allocator: std.mem.Allocator,
+        begin: EpochBoundary,
+        end: EpochBoundary,
+        types: []Content,
+        type_digests: []?names.TypeDigest,
+        specialization_digests: []?names.TypeDigest,
+        equality_digests: []?names.TypeDigest,
+        spans: []TypeId,
+        fields: []Field,
+        tags: []Tag,
+        declared_fields: []DeclaredField,
+
+        pub fn capture(
+            allocator: std.mem.Allocator,
+            source: *const Store,
+            begin: EpochBoundary,
+            end: EpochBoundary,
+        ) std.mem.Allocator.Error!EpochDelta {
+            requireEpochRange(source, begin, end);
+            const types = try allocator.dupe(
+                Content,
+                source.types.unsafeRawItemsForView()[begin.types..end.types],
+            );
+            errdefer allocator.free(types);
+            const type_digests = try allocator.dupe(
+                ?names.TypeDigest,
+                source.type_digests.unsafeRawItemsForView()[begin.types..end.types],
+            );
+            errdefer allocator.free(type_digests);
+            const specialization_digests = try allocator.dupe(
+                ?names.TypeDigest,
+                source.specialization_digests.unsafeRawItemsForView()[begin.types..end.types],
+            );
+            errdefer allocator.free(specialization_digests);
+            const equality_digests = try allocator.dupe(
+                ?names.TypeDigest,
+                source.equality_digests.unsafeRawItemsForView()[begin.types..end.types],
+            );
+            errdefer allocator.free(equality_digests);
+            const spans = try allocator.dupe(
+                TypeId,
+                source.spans.unsafeRawItemsForView()[begin.spans..end.spans],
+            );
+            errdefer allocator.free(spans);
+            const fields = try allocator.dupe(
+                Field,
+                source.fields.unsafeRawItemsForView()[begin.fields..end.fields],
+            );
+            errdefer allocator.free(fields);
+            const tags = try allocator.dupe(
+                Tag,
+                source.tags.unsafeRawItemsForView()[begin.tags..end.tags],
+            );
+            errdefer allocator.free(tags);
+            const declared_fields = try allocator.dupe(
+                DeclaredField,
+                source.declared_fields.unsafeRawItemsForView()[begin.declared_fields..end.declared_fields],
+            );
+            return .{
+                .allocator = allocator,
+                .begin = begin,
+                .end = end,
+                .types = types,
+                .type_digests = type_digests,
+                .specialization_digests = specialization_digests,
+                .equality_digests = equality_digests,
+                .spans = spans,
+                .fields = fields,
+                .tags = tags,
+                .declared_fields = declared_fields,
+            };
+        }
+
+        /// Reserve every allocation needed to append this exact suffix.
+        pub fn prepareAppend(
+            self: *const EpochDelta,
+            destination: *Store,
+        ) std.mem.Allocator.Error!void {
+            std.debug.assert(std.meta.eql(destination.epochBoundary(), self.begin));
+            try destination.spans.ensureTotalCapacity(destination.allocator, self.end.spans);
+            try destination.fields.ensureTotalCapacity(destination.allocator, self.end.fields);
+            try destination.tags.ensureTotalCapacity(destination.allocator, self.end.tags);
+            try destination.declared_fields.ensureTotalCapacity(
+                destination.allocator,
+                self.end.declared_fields,
+            );
+            try destination.types.ensureTotalCapacity(destination.allocator, self.end.types);
+            try destination.type_digests.ensureTotalCapacity(destination.allocator, self.end.types);
+            try destination.specialization_digests.ensureTotalCapacity(
+                destination.allocator,
+                self.end.types,
+            );
+            try destination.equality_digests.ensureTotalCapacity(destination.allocator, self.end.types);
+            try destination.constructing.ensureTotalCapacity(destination.allocator, self.end.types);
+            try destination.iterator_interface_cache.ensureTotalCapacity(
+                destination.allocator,
+                self.end.types,
+            );
+            try destination.iterator_interface_visit_epochs.ensureTotalCapacity(
+                destination.allocator,
+                self.end.types,
+            );
+        }
+
+        /// Append after `prepareAppend`; no durable or index mutation can fail.
+        ///
+        /// Full-digest buckets are intentionally omitted. Copied epoch
+        /// stores are immutable relocation sources, and the digest arrays carry
+        /// every durable cache needed while the destination program remains
+        /// the authoritative interning store.
+        pub fn appendPrepared(
+            self: *const EpochDelta,
+            destination: *Store,
+        ) void {
+            std.debug.assert(std.meta.eql(destination.epochBoundary(), self.begin));
+            destination.spans.appendSlice(destination.allocator, self.spans) catch unreachable;
+            destination.fields.appendSlice(destination.allocator, self.fields) catch unreachable;
+            destination.tags.appendSlice(destination.allocator, self.tags) catch unreachable;
+            destination.declared_fields.appendSlice(
+                destination.allocator,
+                self.declared_fields,
+            ) catch unreachable;
+            for (self.types, 0..) |content, offset| {
+                const expected: TypeId = @enumFromInt(self.begin.types + @as(u32, @intCast(offset)));
+                const added = destination.add(content) catch unreachable;
+                std.debug.assert(added == expected);
+                destination.type_digests.set(@intFromEnum(added), self.type_digests[offset]);
+                destination.specialization_digests.set(
+                    @intFromEnum(added),
+                    self.specialization_digests[offset],
+                );
+                destination.equality_digests.set(
+                    @intFromEnum(added),
+                    self.equality_digests[offset],
+                );
+            }
+            std.debug.assert(std.meta.eql(destination.epochBoundary(), self.end));
+        }
+
+        /// Append this suffix after an identical prefix, preserving local ids.
+        pub fn appendTo(
+            self: *const EpochDelta,
+            destination: *Store,
+        ) std.mem.Allocator.Error!void {
+            try self.prepareAppend(destination);
+            self.appendPrepared(destination);
+        }
+
+        pub fn deinit(self: *EpochDelta) void {
+            self.allocator.free(self.declared_fields);
+            self.allocator.free(self.tags);
+            self.allocator.free(self.fields);
+            self.allocator.free(self.spans);
+            self.allocator.free(self.equality_digests);
+            self.allocator.free(self.specialization_digests);
+            self.allocator.free(self.type_digests);
+            self.allocator.free(self.types);
+            self.* = undefined;
+        }
+    };
+
+    fn requireEpochRange(
+        self: *const Store,
+        begin: EpochBoundary,
+        end: EpochBoundary,
+    ) void {
+        if (self.hasSpeculativeConstruction()) {
+            Common.compilerBug("cannot capture a Monotype type epoch during speculative construction");
+        }
+        std.debug.assert(self.type_digests.len() == self.types.len());
+        std.debug.assert(self.specialization_digests.len() == self.types.len());
+        std.debug.assert(self.equality_digests.len() == self.types.len());
+        std.debug.assert(begin.types <= end.types and end.types <= self.types.len());
+        std.debug.assert(begin.spans <= end.spans and end.spans <= self.spans.len());
+        std.debug.assert(begin.fields <= end.fields and end.fields <= self.fields.len());
+        std.debug.assert(begin.tags <= end.tags and end.tags <= self.tags.len());
+        std.debug.assert(begin.declared_fields <= end.declared_fields and
+            end.declared_fields <= self.declared_fields.len());
+        requireEpochReferences(self, begin, end);
+    }
+
+    fn requireEpochReferences(
+        self: *const Store,
+        begin: EpochBoundary,
+        end: EpochBoundary,
+    ) void {
+        const type_limit = end.types;
+        const span_limit = end.spans;
+        const field_limit = end.fields;
+        const tag_limit = end.tags;
+        const declared_limit = end.declared_fields;
+        for (self.types.unsafeRawItemsForView()[begin.types..end.types]) |content| {
+            switch (content) {
+                .primitive, .erased, .zst => {},
+                .named => |named| {
+                    requireEpochSpan(named.args, span_limit);
+                    requireEpochSpan(named.declared_order, declared_limit);
+                    if (named.backing) |backing| requireEpochType(backing.ty, type_limit);
+                },
+                .record => |span_| requireEpochSpan(span_, field_limit),
+                .tuple => |span_| requireEpochSpan(span_, span_limit),
+                .tag_union => |span_| requireEpochSpan(span_, tag_limit),
+                .list, .box => |ty| requireEpochType(ty, type_limit),
+                .func => |func| {
+                    requireEpochSpan(func.args, span_limit);
+                    requireEpochType(func.ret, type_limit);
+                },
+            }
+        }
+        for (self.spans.unsafeRawItemsForView()[begin.spans..end.spans]) |ty| {
+            requireEpochType(ty, type_limit);
+        }
+        for (self.fields.unsafeRawItemsForView()[begin.fields..end.fields]) |field| {
+            requireEpochType(field.ty, type_limit);
+            if (field.value_ty) |value_ty| requireEpochType(value_ty, type_limit);
+        }
+        for (self.tags.unsafeRawItemsForView()[begin.tags..end.tags]) |tag| {
+            requireEpochSpan(tag.payloads, span_limit);
+        }
+        for (self.declared_fields.unsafeRawItemsForView()[begin.declared_fields..end.declared_fields]) |field| {
+            switch (field) {
+                .named => {},
+                .padding => |ty| requireEpochType(ty, type_limit),
+            }
+        }
+    }
+
+    fn requireEpochType(ty: TypeId, limit: u32) void {
+        std.debug.assert(@intFromEnum(ty) < limit);
+    }
+
+    fn requireEpochSpan(span_: Span, limit: u32) void {
+        std.debug.assert(span_.start <= limit);
+        std.debug.assert(span_.len <= limit - span_.start);
+    }
+
     const Mark = struct {
         types_len: usize,
         type_digests_len: usize,
@@ -3787,6 +4047,125 @@ fn optionalDigestEql(lhs: ?names.TypeDigest, rhs: ?names.TypeDigest) bool {
 
 test "monotype type declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "monotype type epoch deltas own consecutive suffixes" {
+    const gpa = std.testing.allocator;
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const field_name = try name_store.internRecordFieldLabel("value");
+    const tag_name = try name_store.internTagLabel("Value");
+    const module_bytes = [_]u8{21} ** 32;
+    const module = try name_store.internModuleIdentity(&module_bytes);
+    const type_name = try name_store.internTypeName("Model");
+
+    var source = Store.init(gpa);
+    const start = source.epochBoundary();
+    var empty = try Store.EpochDelta.capture(gpa, &source, start, start);
+    defer empty.deinit();
+    try std.testing.expectEqual(@as(usize, 0), empty.types.len);
+    try std.testing.expectEqual(@as(usize, 0), empty.spans.len);
+
+    const primitive = try source.internPrimitive(&name_store, .u64);
+    const unit = try source.internZst(&name_store);
+    const record = try source.internRecord(&name_store, &.{
+        .{
+            .name = field_name,
+            .ty = primitive,
+            .value_ty = unit,
+            .default = null,
+        },
+    });
+    const tag_union = try source.internTagUnion(&name_store, &.{
+        .{
+            .name = tag_name,
+            .checked_name = tag_name,
+            .payloads = &.{record},
+        },
+    });
+    const named = try source.internNamed(&name_store, .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(7) },
+        .def = .{ .module = module, .type_name = type_name },
+        .kind = .nominal,
+        .args = &.{tag_union},
+        .backing = .{ .ty = record, .use = .runtime_layout_only },
+        .declared_order = &.{ .{ .named = field_name }, .{ .padding = unit } },
+    });
+    const middle = source.epochBoundary();
+
+    const list = try source.internList(&name_store, named);
+    const tuple = try source.internTuple(&name_store, &.{ record, tag_union, list });
+    const func = try source.internFunc(&name_store, &.{ tuple, primitive }, named);
+    const expected_type_digest = source.typeDigest(&name_store, func);
+    const expected_specialization_digest = source.specializationDigest(&name_store, func);
+    const expected_equality_digest = source.equalityDigest(&name_store, func);
+    const end = source.epochBoundary();
+
+    var first = try Store.EpochDelta.capture(gpa, &source, start, middle);
+    defer first.deinit();
+    var second = try Store.EpochDelta.capture(gpa, &source, middle, end);
+    defer second.deinit();
+
+    // Force every mutable source backing array to grow after capture. The
+    // segments must continue to own both their main nodes and side pools.
+    var iteration: u32 = 0;
+    while (iteration < 512) : (iteration += 1) {
+        var digest_bytes = [_]u8{0} ** 32;
+        digest_bytes[0] = @truncate(iteration);
+        digest_bytes[1] = @truncate(iteration >> 8);
+        _ = try source.internErased(&name_store, .{ .bytes = digest_bytes });
+        _ = try source.addSpan(&.{primitive});
+        _ = try source.addRecordFields(&name_store, &.{
+            .{ .name = field_name, .ty = primitive, .default = null },
+        });
+        const payloads = try source.addSpan(&.{unit});
+        _ = try source.addTagVariants(&name_store, &.{
+            .{ .name = tag_name, .checked_name = tag_name, .payloads = payloads },
+        });
+        _ = try source.addDeclaredFields(&.{.{ .padding = primitive }});
+    }
+    source.deinit();
+
+    var destination = Store.init(gpa);
+    defer destination.deinit();
+    try empty.appendTo(&destination);
+    try first.appendTo(&destination);
+    try second.appendTo(&destination);
+
+    try std.testing.expect(std.meta.eql(destination.epochBoundary(), end));
+    try std.testing.expect(destination.verify(&name_store) == null);
+    try std.testing.expectEqual(.u64, destination.get(primitive).primitive);
+
+    const destination_fields = destination.fieldSpan(destination.get(record).record);
+    const destination_field = GuardedList.at(destination_fields, 0);
+    try std.testing.expectEqual(field_name, destination_field.name);
+    try std.testing.expectEqual(primitive, destination_field.ty);
+    try std.testing.expectEqual(unit, destination_field.value_ty.?);
+
+    const destination_tags = destination.tagSpan(destination.get(tag_union).tag_union);
+    const destination_tag = GuardedList.at(destination_tags, 0);
+    try std.testing.expectEqual(tag_name, destination_tag.name);
+    try std.testing.expectEqual(record, GuardedList.at(destination.span(destination_tag.payloads), 0));
+
+    const destination_named = destination.get(named).named;
+    try std.testing.expectEqual(module, destination_named.def.module);
+    try std.testing.expectEqual(type_name, destination_named.def.type_name);
+    try std.testing.expectEqual(record, destination_named.backing.?.ty);
+    const declared = destination.declaredFieldSpan(destination_named.declared_order);
+    try std.testing.expectEqual(field_name, GuardedList.at(declared, 0).named);
+    try std.testing.expectEqual(unit, GuardedList.at(declared, 1).padding);
+
+    const destination_func = destination.get(func).func;
+    try std.testing.expectEqual(tuple, GuardedList.at(destination.span(destination_func.args), 0));
+    try std.testing.expectEqual(primitive, GuardedList.at(destination.span(destination_func.args), 1));
+    try std.testing.expectEqual(named, destination_func.ret);
+    try std.testing.expectEqual(expected_type_digest, destination.typeDigest(&name_store, func));
+    try std.testing.expectEqual(
+        expected_specialization_digest,
+        destination.specializationDigest(&name_store, func),
+    );
+    try std.testing.expectEqual(expected_equality_digest, destination.equalityDigest(&name_store, func));
 }
 
 test "monotype cross-store import relocates names, side pools, sharing, and recursive members" {
