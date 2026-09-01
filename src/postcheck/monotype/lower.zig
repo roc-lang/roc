@@ -45650,7 +45650,14 @@ const BodyContext = struct {
                             added = try self.prepareDefaultedFieldValue(boundary_expr, default, field.ty) or added;
                         }
                     }
-                    added = try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, field.ty, boundary_callable_node, seen) or added;
+                    // An optional field's runtime slot is the compiler-owned
+                    // `[#Missing, #Present(value)]` union. Codec methods only
+                    // ever see the field's value: a present slot encodes or
+                    // parses its payload, and a missing one is skipped. So the
+                    // value cell is the shape that needs codec calls, never the
+                    // slot union itself.
+                    const field_value_node = field.value_ty orelse field.ty;
+                    added = try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, field_value_node, boundary_callable_node, seen) or added;
                 }
             },
             .tag_union => {
