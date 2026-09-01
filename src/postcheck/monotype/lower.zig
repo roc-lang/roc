@@ -265,6 +265,8 @@ pub const Options = struct {
     /// ConstStore shape may require runtime storage.
     static_data_literals: bool = false,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
+    /// Optional executor for ordinary specialization batches.
+    post_check_executor: ?base.post_check_task_executor.Executor = null,
     /// Optional phase timings for the work owned by Monotype lowering.
     timing: ?*Timing = null,
 };
@@ -616,7 +618,7 @@ pub fn run(
     if (options.timing) |timing| timing.finish(static_data_started_ns, .static_data_requests);
 
     const finalization_started_ns = if (options.timing) |timing| timing.start() else 0;
-    program.next_symbol = builder.symbols.next;
+    program.next_symbol = builder.symbols.coordinator.next;
     try program.sealRemainingCaptureIdentities();
     program.freeze();
 
@@ -2109,6 +2111,8 @@ const SealedPendingTemplateBody = struct {
 };
 
 const SpecJobEpoch = enum(u64) { _ };
+/// Stable specialization workspace identity used to preserve per-worker epochs.
+pub const SpecJobWorkerId = enum(u32) { serial = std.math.maxInt(u32), _ };
 
 /// Result-owned type/name suffix from one specialization workspace epoch.
 ///
@@ -2133,6 +2137,7 @@ const SpecJobWorkspace = struct {
     allocator: Allocator,
     types: Type.Store,
     name_store: names.NameStore,
+    checked_type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
     captured_types: Type.Store.EpochBoundary,
     captured_names: names.NameStore.EpochBoundary,
     program: ?*Ast.Program = null,
@@ -2150,6 +2155,7 @@ const SpecJobWorkspace = struct {
             .captured_names = name_store.epochBoundary(),
             .types = types,
             .name_store = name_store,
+            .checked_type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
         };
     }
 
@@ -2253,8 +2259,38 @@ const SpecJobWorkspace = struct {
         }
         if (self.workspace_to_program) |*relocation| relocation.deinit();
         if (self.program_to_workspace) |*relocation| relocation.deinit();
+        self.checked_type_cache.deinit();
         self.types.deinit();
         self.name_store.deinit();
+        self.* = undefined;
+    }
+};
+
+/// Lowering-owned persistent state for one executor worker. It is scoped to a
+/// Monotype batch rather than executor opaque state, so no `Program` relocation
+/// capability survives the batch completion barrier.
+pub const SpecJobWorkerState = struct {
+    worker_id: SpecJobWorkerId,
+    allocator: Allocator,
+    workspace: SpecJobWorkspace,
+    builder: ?*Builder = null,
+    counters: SpecializationCounters = .{},
+    diagnostics: Diagnostics = .{},
+
+    pub fn init(allocator: Allocator, worker_id: SpecJobWorkerId) SpecJobWorkerState {
+        return .{
+            .worker_id = worker_id,
+            .allocator = allocator,
+            .workspace = SpecJobWorkspace.init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *SpecJobWorkerState) void {
+        if (self.builder) |builder| {
+            builder.deinit();
+            self.allocator.destroy(builder);
+        }
+        self.workspace.deinit();
         self.* = undefined;
     }
 };
@@ -2277,6 +2313,11 @@ const SpecJobCommitDomain = struct {
     }
 
     fn absorb(self: *SpecJobCommitDomain, epoch: *const SpecJobStoreEpoch) Allocator.Error!void {
+        if (!std.meta.eql(self.name_store.epochBoundary(), epoch.names.begin) or
+            !std.meta.eql(self.types.epochBoundary(), epoch.types.begin))
+        {
+            Common.compilerBug("specialization worker epochs reached ordered commit out of sequence");
+        }
         // Reserve both stores before advancing either durable boundary. An OOM
         // leaves the epoch retryable and preserves exact cross-store continuity.
         try epoch.names.prepareAppend(&self.name_store);
@@ -2319,7 +2360,10 @@ const SpecJobCommitDomain = struct {
 /// One immutable graph-free result handed from ordinary body lowering to
 /// ordered coordinator commit.
 const CompletedSpecJobShard = struct {
+    worker_id: SpecJobWorkerId,
     dispatch_index: u64,
+    worker_local_symbol_count: u32,
+    specialization_counter_delta: ?SpecializationCounters = null,
     store_epoch: SpecJobStoreEpoch,
     body_draft: BodyDraftStore,
     pending: SealedPendingTemplateBody,
@@ -2336,6 +2380,41 @@ const CompletedSpecJobShard = struct {
         }
         self.* = undefined;
     }
+};
+
+/// Immutable coordinator input shared by one frozen ordinary-specialization batch.
+const SpecJobWorkerInputs = struct {
+    modules: Common.CheckedModules,
+    program: *Ast.Program,
+    proc_debug_names: bool,
+    specialization_cache: SpecializationCacheControl,
+    loaded_specialization_shards: []const LoadedSpecializationShard,
+    collect_counters: bool,
+    collect_diagnostics: bool,
+    inline_expects: InlineExpectMode,
+    static_data_literals: bool,
+    target_usize: base.target.TargetUsize,
+    hosted_catalog: []const HostedCatalogEntry,
+    current_loc: base.SourceLoc,
+    current_region: base.Region,
+};
+
+const PreparedSpecJob = struct {
+    job: PendingSpecJob,
+    view: ModuleView,
+    method_scope: ModuleView,
+    template: checked.CheckedProcedureTemplate,
+};
+
+/// Caller-owned task storage. Executor callbacks write only their own element.
+const SpecJobTaskContext = struct {
+    inputs: *const SpecJobWorkerInputs,
+    workers: []?SpecJobWorkerState,
+    prepared: PreparedSpecJob,
+    shard: ?CompletedSpecJobShard = null,
+    failed: bool = false,
+    retry_serial: bool = false,
+    completed: bool = false,
 };
 
 const RootTemplateBatch = struct {
@@ -2582,11 +2661,45 @@ const QualifiedTypeDef = struct {
     def: Type.TypeDef,
 };
 
+const SymbolDomain = enum {
+    coordinator,
+    worker_local,
+};
+
+/// Routes symbol allocation without changing the many lowering sites which
+/// create symbols. Worker-local allocation is reset for each ordinary shard;
+/// coordinator allocation remains the durable program domain.
+const SymbolDomains = struct {
+    coordinator: Common.SymbolGen = .{},
+    worker_local: Common.SymbolGen = .{},
+    active: SymbolDomain = .coordinator,
+
+    fn fresh(self: *SymbolDomains) Common.Symbol {
+        const generator = switch (self.active) {
+            .coordinator => &self.coordinator,
+            .worker_local => &self.worker_local,
+        };
+        if (generator.next == std.math.maxInt(u32)) {
+            Common.compilerBug("Monotype symbol domain overflow");
+        }
+        return generator.fresh();
+    }
+
+    fn freshCoordinator(self: *SymbolDomains) Common.Symbol {
+        if (self.coordinator.next == std.math.maxInt(u32)) {
+            Common.compilerBug("Monotype symbol domain overflow");
+        }
+        return self.coordinator.fresh();
+    }
+};
+
 const Builder = struct {
     allocator: Allocator,
     modules: Common.CheckedModules,
     root_view: checked.ImportedModuleView,
     program: *Ast.Program,
+    current_loc: base.SourceLoc,
+    current_region: base.Region,
     proc_debug_names: bool,
     specialization_cache: SpecializationCacheControl,
     loaded_specialization_shards: []const LoadedSpecializationShard,
@@ -2598,8 +2711,14 @@ const Builder = struct {
     inline_expects: InlineExpectMode,
     static_data_literals: bool,
     target_usize: base.target.TargetUsize,
+    post_check_executor: ?base.post_check_task_executor.Executor,
     timing: ?*Timing,
-    symbols: Common.SymbolGen = .{},
+    /// Executor workers use the existing allocation error channel as a private
+    /// unwind when a representation-sensitive call must re-run on the
+    /// coordinator. No worker result is committed in that case.
+    spec_job_parallel_callback: bool = false,
+    spec_job_requires_serial_retry: bool = false,
+    symbols: SymbolDomains = .{},
     next_instantiation_scope: u64 = 0,
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
     /// Deterministic FIFO of reserved specializations awaiting body lowering.
@@ -2612,13 +2731,16 @@ const Builder = struct {
     /// validates FIFO accounting; later worker results also buffer ordinary
     /// body appends behind this index.
     next_spec_accept_index: u64 = 0,
-    /// Serial precursor to a worker-local workspace: ordinary queued jobs reuse
-    /// one private type domain and one cumulative pair of relocation maps.
-    spec_job_workspace: ?SpecJobWorkspace = null,
+    /// Serial execution uses the same worker-tagged ownership protocol as
+    /// executor callbacks.
+    spec_job_worker: ?SpecJobWorkerState = null,
     /// Coordinator-owned exact-prefix copy of immutable specialization
     /// epochs. It is the concrete source for cumulative workspace-to-program
     /// relocation after worker results stop borrowing the mutable workspace.
     spec_job_commit_domain: ?SpecJobCommitDomain = null,
+    /// Fixed worker-indexed ownership for executor-backed ordinary jobs.
+    spec_job_parallel_workers: []?SpecJobWorkerState = &.{},
+    spec_job_parallel_commit_domains: []SpecJobCommitDomain = &.{},
     spec_store: specialize.SpecBuilder,
     lowered_templates: collections.DenseMap(Ast.FnId, LoweredTemplate),
     /// Nested-fn specialization records keyed by function id; the durable
@@ -2681,7 +2803,32 @@ const Builder = struct {
 
     /// Const restoration must intern names in the destination program.
     fn constNameStore(self: *Builder) *names.NameStore {
+        return self.activeNameStore();
+    }
+
+    fn hasPrivateTypeDestination(self: *const Builder) bool {
+        const draft = self.active_body_draft orelse return false;
+        const workspace = draft.spec_job_workspace orelse return false;
+        if (workspace.active_epoch == null) return false;
+        if (self.active_graph == null) {
+            Common.compilerBug("active specialization workspace has no ordinary body destination");
+        }
+        return true;
+    }
+
+    fn activeTypeStore(self: *Builder) *Type.Store {
+        if (self.hasPrivateTypeDestination()) return &self.active_body_draft.?.spec_job_workspace.?.types;
+        return &self.program.types;
+    }
+
+    fn activeNameStore(self: *Builder) *names.NameStore {
+        if (self.hasPrivateTypeDestination()) return &self.active_body_draft.?.spec_job_workspace.?.name_store;
         return &self.program.names;
+    }
+
+    fn activeCheckedTypeCache(self: *Builder) *std.AutoHashMap(CheckedTypeAddress, Type.TypeId) {
+        if (self.hasPrivateTypeDestination()) return &self.active_body_draft.?.spec_job_workspace.?.checked_type_cache;
+        return &self.type_cache;
     }
 
     /// This scope's expression-data type for restored const values.
@@ -2706,6 +2853,8 @@ const Builder = struct {
             .modules = modules,
             .root_view = checked.importedView(modules.root.module),
             .program = program,
+            .current_loc = program.current_loc,
+            .current_region = program.current_region,
             .proc_debug_names = options.proc_debug_names,
             .specialization_cache = options.specialization_cache,
             .loaded_specialization_shards = options.loaded_specialization_shards,
@@ -2715,6 +2864,7 @@ const Builder = struct {
             .inline_expects = options.inline_expects,
             .static_data_literals = options.static_data_literals,
             .target_usize = options.target_usize,
+            .post_check_executor = options.post_check_executor,
             .timing = options.timing,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
             .spec_store = spec_store,
@@ -2730,6 +2880,34 @@ const Builder = struct {
             .hash_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
             .evidence_arena = std.heap.ArenaAllocator.init(allocator),
         };
+    }
+
+    fn ensureSpecJobWorkerBuilder(
+        worker: *SpecJobWorkerState,
+        inputs: *const SpecJobWorkerInputs,
+    ) Allocator.Error!*Builder {
+        if (worker.builder) |builder| return builder;
+
+        const builder = try worker.allocator.create(Builder);
+        errdefer worker.allocator.destroy(builder);
+        builder.* = Builder.init(worker.allocator, inputs.modules, inputs.program, .{
+            .proc_debug_names = inputs.proc_debug_names,
+            .specialization_cache = inputs.specialization_cache,
+            .loaded_specialization_shards = inputs.loaded_specialization_shards,
+            .specialization_counters = if (inputs.collect_counters) &worker.counters else null,
+            .diagnostics = if (inputs.collect_diagnostics) &worker.diagnostics else null,
+            .inline_expects = inputs.inline_expects,
+            .static_data_literals = inputs.static_data_literals,
+            .target_usize = inputs.target_usize,
+            .post_check_executor = null,
+            .timing = null,
+        });
+        errdefer builder.deinit();
+        builder.hosted_catalog = try worker.allocator.dupe(HostedCatalogEntry, inputs.hosted_catalog);
+        builder.current_loc = inputs.current_loc;
+        builder.current_region = inputs.current_region;
+        worker.builder = builder;
+        return builder;
     }
 
     fn loadCandidateSpecializationShards(self: *Builder) Allocator.Error!void {
@@ -2801,8 +2979,14 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
+        for (self.spec_job_parallel_workers) |*worker| {
+            if (worker.*) |*initialized| initialized.deinit();
+        }
+        for (self.spec_job_parallel_commit_domains) |*domain| domain.deinit();
+        self.allocator.free(self.spec_job_parallel_commit_domains);
+        self.allocator.free(self.spec_job_parallel_workers);
         if (self.spec_job_commit_domain) |*domain| domain.deinit();
-        if (self.spec_job_workspace) |*workspace| workspace.deinit();
+        if (self.spec_job_worker) |*worker| worker.deinit();
         self.scoped_method_targets.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
         self.hash_defs.deinit();
@@ -3195,19 +3379,19 @@ const Builder = struct {
     }
 
     fn typeName(self: *Builder, view: ModuleView, id: names.TypeNameId) Allocator.Error!names.TypeNameId {
-        return self.program.names.internTypeName(view.names.typeNameText(id));
+        return self.activeNameStore().internTypeName(view.names.typeNameText(id));
     }
 
     fn moduleIdentity(self: *Builder, view: ModuleView, id: names.ModuleIdentityId) Allocator.Error!names.ModuleIdentityId {
-        return self.program.names.internModuleIdentity(view.names.moduleIdentityBytes(id));
+        return self.activeNameStore().internModuleIdentity(view.names.moduleIdentityBytes(id));
     }
 
     fn recordFieldName(self: *Builder, view: ModuleView, id: names.RecordFieldNameId) Allocator.Error!names.RecordFieldNameId {
-        return self.program.names.internRecordFieldLabel(view.names.recordFieldLabelText(id));
+        return self.activeNameStore().internRecordFieldLabel(view.names.recordFieldLabelText(id));
     }
 
     fn tagName(self: *Builder, view: ModuleView, id: names.TagNameId) Allocator.Error!names.TagNameId {
-        return self.program.names.internTagLabel(view.names.tagLabelText(id));
+        return self.activeNameStore().internTagLabel(view.names.tagLabelText(id));
     }
 
     fn hostedTryAdapterCapability(
@@ -4042,7 +4226,9 @@ const Builder = struct {
 
         const ReservedSpec = struct { reservation: TemplateReservation, spec: Ast.SpecId };
         const reserved: ReservedSpec = blk: {
-            const symbol = self.symbols.fresh();
+            // This reservation is appended directly to the durable Program even
+            // when an enclosing shard is using the worker-local symbol domain.
+            const symbol = self.symbols.freshCoordinator();
             try self.registerProcDebugNameForTemplate(symbol, view, template_ref);
             const fn_id = try self.program.addFn(fn_template);
             self.promoteFnSignatureRelation(fn_id, signature_relation);
@@ -4055,7 +4241,7 @@ const Builder = struct {
                 .fn_id = fn_id,
                 .args = Ast.Span(Ast.TypedLocal).empty(),
                 .body = .hosted,
-                .ret = self.functionShape(lower_fn_ty, "procedure template root type was not a function").ret,
+                .ret = self.programFunctionShape(lower_fn_ty, "procedure template root type was not a function").ret,
             });
             const spec = try self.addTemplateSpecRecord(
                 template_ref,
@@ -4116,6 +4302,12 @@ const Builder = struct {
             },
         }
 
+        if (self.spec_job_parallel_callback) {
+            Common.compilerBug("parallel specialization worker attempted coordinator-owned immediate completion");
+        }
+        const previous_symbol_domain = self.symbols.active;
+        self.symbols.active = .coordinator;
+        defer self.symbols.active = previous_symbol_domain;
         try self.completeTemplateReservation(
             reservation,
             fn_template,
@@ -4182,7 +4374,7 @@ const Builder = struct {
                 hosted_fn_template.const_evidence = fn_template.const_evidence;
                 hosted_fn_template.const_evidence_frames = fn_template.const_evidence_frames;
                 hosted_fn_template.const_evidence_frame_head = fn_template.const_evidence_frame_head;
-                const fn_data = self.functionShape(lower_fn_ty, "hosted procedure template root type was not a function");
+                const fn_data = self.programFunctionShape(lower_fn_ty, "hosted procedure template root type was not a function");
                 const args = try self.typedLocalsForArgs(self.program.types.span(fn_data.args));
                 const hosted_try = try self.hostedTryAdapterCapability(view, template.hosted_try_adapter);
                 if (try self.hostedTryAdapterSourceType(hosted_try, declared_mono_fn_ty, lower_fn_ty)) |adapter_source_fn_ty| {
@@ -4329,6 +4521,169 @@ const Builder = struct {
     /// drains. Bodies executed here may enqueue further requests; those join
     /// the same FIFO and are reached by this same loop, in enqueue order.
     fn drainPendingSpecJobs(self: *Builder) Allocator.Error!void {
+        const executor = self.post_check_executor orelse {
+            return self.drainPendingSpecJobsSerial();
+        };
+        if (executor.worker_count <= 1) {
+            return self.drainPendingSpecJobsSerial();
+        }
+
+        try self.ensureParallelSpecJobState(executor.worker_count);
+        const prepared = try self.allocator.alloc(PreparedSpecJob, executor.worker_count);
+        defer self.allocator.free(prepared);
+        const contexts = try self.allocator.alloc(SpecJobTaskContext, executor.worker_count);
+        defer self.allocator.free(contexts);
+        const tasks = try self.allocator.alloc(base.post_check_task_executor.Task, executor.worker_count);
+        defer self.allocator.free(tasks);
+        const completions = try self.allocator.alloc(base.post_check_task_executor.Completion, executor.worker_count);
+        defer self.allocator.free(completions);
+
+        const inputs = SpecJobWorkerInputs{
+            .modules = self.modules,
+            .program = self.program,
+            .proc_debug_names = self.proc_debug_names,
+            .specialization_cache = self.specialization_cache,
+            .loaded_specialization_shards = self.loaded_specialization_shards,
+            .collect_counters = self.counters != null,
+            .collect_diagnostics = self.diagnostics != null,
+            .inline_expects = self.inline_expects,
+            .static_data_literals = self.static_data_literals,
+            .target_usize = self.target_usize,
+            .hosted_catalog = self.hosted_catalog,
+            .current_loc = self.current_loc,
+            .current_region = self.current_region,
+        };
+
+        while (self.pending_spec_jobs_head < self.pending_spec_jobs.items.len) {
+            const frontier = self.pending_spec_jobs.items[self.pending_spec_jobs_head];
+            self.requireNextSpecAcceptance(frontier.dispatch_index);
+            if (self.spec_store.recordStatus(frontier.spec) == .ready) {
+                self.pending_spec_jobs_head += 1;
+                try self.executePendingSpecJob(frontier);
+                continue;
+            }
+
+            const frontier_view = self.moduleForDigest(names.procTemplateModuleDigest(frontier.template_ref));
+            const frontier_template = frontier_view.templates.get(frontier.template_ref.template);
+            if (frontier_template.target == .hosted) {
+                self.pending_spec_jobs_head += 1;
+                try self.executePendingSpecJob(frontier);
+                continue;
+            }
+
+            var batch_len: usize = 0;
+            while (batch_len < executor.worker_count and
+                self.pending_spec_jobs_head < self.pending_spec_jobs.items.len)
+            {
+                const job = self.pending_spec_jobs.items[self.pending_spec_jobs_head];
+                const expected_dispatch = self.next_spec_accept_index + batch_len;
+                if (job.dispatch_index != expected_dispatch) {
+                    Common.compilerBug("Monotype specialization batch was not contiguous in dispatch order");
+                }
+                if (self.spec_store.recordStatus(job.spec) != .reserved) break;
+                const view = self.moduleForDigest(names.procTemplateModuleDigest(job.template_ref));
+                const template = view.templates.get(job.template_ref.template);
+                if (template.target == .hosted) break;
+
+                prepared[batch_len] = .{
+                    .job = job,
+                    .view = view,
+                    .method_scope = self.moduleForId(job.method_scope),
+                    .template = template,
+                };
+                self.pending_spec_jobs_head += 1;
+                batch_len += 1;
+            }
+            if (batch_len == 0) {
+                Common.compilerBug("parallel Monotype specialization drain made no progress");
+            }
+
+            for (0..batch_len) |index| {
+                contexts[index] = .{
+                    .inputs = &inputs,
+                    .workers = self.spec_job_parallel_workers,
+                    .prepared = prepared[index],
+                };
+                tasks[index] = .{
+                    .id = index,
+                    .context = &contexts[index],
+                    .run = runSpecJobTask,
+                };
+            }
+
+            var initialized_contexts = batch_len;
+            defer {
+                for (contexts[0..initialized_contexts]) |*context| {
+                    if (context.shard) |*shard| shard.deinit();
+                    context.shard = null;
+                }
+            }
+            try executor.run(tasks[0..batch_len], completions[0..batch_len]);
+            for (completions[0..batch_len]) |completion| {
+                if (completion.id >= batch_len) {
+                    Common.compilerBug("post-check executor returned an unknown specialization task");
+                }
+                const context = &contexts[completion.id];
+                if (context.completed) {
+                    Common.compilerBug("post-check executor completed a specialization task more than once");
+                }
+                if (completion.value != @as(?*anyopaque, @ptrCast(context))) {
+                    Common.compilerBug("post-check executor returned the wrong specialization task context");
+                }
+                context.completed = true;
+                if (context.shard) |*shard| {
+                    if (@intFromEnum(shard.worker_id) != completion.worker_id) {
+                        Common.compilerBug("post-check executor changed specialization worker ownership");
+                    }
+                }
+            }
+            for (contexts[0..batch_len]) |*context| {
+                if (!context.completed) {
+                    Common.compilerBug("post-check executor omitted a specialization completion");
+                }
+                if (context.failed) return error.OutOfMemory;
+                if (context.retry_serial) {
+                    if (context.shard != null) {
+                        Common.compilerBug("serial specialization retry retained a worker shard");
+                    }
+                    try self.executePendingSpecJob(context.prepared.job);
+                    continue;
+                }
+                switch (self.spec_store.recordStatus(context.prepared.job.spec)) {
+                    .ready => {
+                        // A preceding serial retry may have claimed this queued
+                        // reservation immediately. Accept the ready entry and
+                        // discard its independently lowered body. The worker's
+                        // cumulative type/name suffix must still be absorbed so
+                        // later epochs from that worker retain exact ids.
+                        if (context.shard) |*shard| {
+                            const commit_domain = self.specJobCommitDomainFor(shard.worker_id);
+                            try commit_domain.absorb(&shard.store_epoch);
+                            shard.store_epoch_absorbed = true;
+                            shard.deinit();
+                        }
+                        context.shard = null;
+                        try self.executePendingSpecJob(context.prepared.job);
+                        continue;
+                    },
+                    .reserved => {},
+                    .lowering => Common.invariant("parallel Monotype specialization was already lowering at commit"),
+                }
+                self.countCoordinatorBodyDiagnostic("spec_jobs_executed");
+                self.spec_store.markLowering(context.prepared.job.spec);
+                const shard = &context.shard.?;
+                try self.commitCompletedSpecJobShard(shard);
+                shard.deinit();
+                context.shard = null;
+            }
+            initialized_contexts = 0;
+        }
+        self.pending_spec_jobs.clearRetainingCapacity();
+        self.pending_spec_jobs_head = 0;
+        self.requirePendingSpecJobsDrained();
+    }
+
+    fn drainPendingSpecJobsSerial(self: *Builder) Allocator.Error!void {
         while (self.pending_spec_jobs_head < self.pending_spec_jobs.items.len) {
             const job = self.pending_spec_jobs.items[self.pending_spec_jobs_head];
             self.pending_spec_jobs_head += 1;
@@ -4337,6 +4692,65 @@ const Builder = struct {
         self.pending_spec_jobs.clearRetainingCapacity();
         self.pending_spec_jobs_head = 0;
         self.requirePendingSpecJobsDrained();
+    }
+
+    fn runSpecJobTask(
+        opaque_context: *anyopaque,
+        executor_worker: base.post_check_task_executor.Worker,
+    ) ?*anyopaque {
+        const context: *SpecJobTaskContext = @ptrCast(@alignCast(opaque_context));
+        if (executor_worker.id >= context.workers.len or
+            executor_worker.id >= std.math.maxInt(u32))
+        {
+            Common.compilerBug("post-check executor returned an invalid specialization worker id");
+        }
+        const slot = &context.workers[executor_worker.id];
+        if (slot.* == null) {
+            slot.* = SpecJobWorkerState.init(
+                executor_worker.allocator,
+                @enumFromInt(executor_worker.id),
+            );
+        }
+        const worker = &slot.*.?;
+        worker.counters = .{};
+        worker.diagnostics = .{};
+        const builder = Builder.ensureSpecJobWorkerBuilder(worker, context.inputs) catch {
+            context.failed = true;
+            return context;
+        };
+        if (builder.active_graph != null or builder.active_body_draft != null or
+            builder.active_template_root != null or builder.active_spec_job_diagnostics != null)
+        {
+            Common.compilerBug("specialization executor reused a worker with active lowering state");
+        }
+        builder.current_loc = context.inputs.current_loc;
+        builder.current_region = context.inputs.current_region;
+        builder.spec_job_parallel_callback = true;
+        builder.spec_job_requires_serial_retry = false;
+        defer builder.spec_job_parallel_callback = false;
+        var shard = builder.lowerPendingSpecJobToShard(
+            worker,
+            context.prepared.job,
+            context.prepared.view,
+            context.prepared.method_scope,
+            context.prepared.template,
+        ) catch {
+            if (builder.spec_job_requires_serial_retry) {
+                builder.spec_job_requires_serial_retry = false;
+                context.retry_serial = true;
+            } else {
+                context.failed = true;
+            }
+            return context;
+        };
+        if (builder.spec_job_requires_serial_retry) {
+            Common.compilerBug("parallel specialization retry escaped worker lowering");
+        }
+        if (context.inputs.collect_counters) {
+            shard.specialization_counter_delta = worker.counters;
+        }
+        context.shard = shard;
+        return context;
     }
 
     fn requirePendingSpecJobsDrained(self: *Builder) void {
@@ -4398,7 +4812,14 @@ const Builder = struct {
             .entry,
             .comptime_only,
             => {
-                var shard = try self.lowerPendingSpecJobToShard(job, view, template);
+                const worker = self.ensureSerialSpecJobWorker();
+                var shard = try self.lowerPendingSpecJobToShard(
+                    worker,
+                    job,
+                    view,
+                    self.moduleForId(job.method_scope),
+                    template,
+                );
                 defer shard.deinit();
                 try self.commitCompletedSpecJobShard(&shard);
             },
@@ -4416,11 +4837,11 @@ const Builder = struct {
         self.next_spec_accept_index += 1;
     }
 
-    fn ensureSpecJobWorkspace(self: *Builder) *SpecJobWorkspace {
-        if (self.spec_job_workspace == null) {
-            self.spec_job_workspace = SpecJobWorkspace.init(self.allocator);
+    fn ensureSerialSpecJobWorker(self: *Builder) *SpecJobWorkerState {
+        if (self.spec_job_worker == null) {
+            self.spec_job_worker = SpecJobWorkerState.init(self.allocator, .serial);
         }
-        return &self.spec_job_workspace.?;
+        return &self.spec_job_worker.?;
     }
 
     fn ensureSpecJobCommitDomain(self: *Builder) *SpecJobCommitDomain {
@@ -4430,18 +4851,55 @@ const Builder = struct {
         return &self.spec_job_commit_domain.?;
     }
 
+    fn ensureParallelSpecJobState(self: *Builder, worker_count: usize) Allocator.Error!void {
+        if (self.spec_job_parallel_workers.len != 0) {
+            if (self.spec_job_parallel_workers.len != worker_count or
+                self.spec_job_parallel_commit_domains.len != worker_count)
+            {
+                Common.compilerBug("post-check executor changed worker count between specialization waves");
+            }
+            return;
+        }
+        if (worker_count <= 1) {
+            Common.compilerBug("parallel specialization state requested without multiple workers");
+        }
+
+        const workers = try self.allocator.alloc(?SpecJobWorkerState, worker_count);
+        errdefer self.allocator.free(workers);
+        @memset(workers, null);
+        const domains = try self.allocator.alloc(SpecJobCommitDomain, worker_count);
+        errdefer self.allocator.free(domains);
+        for (domains) |*domain| domain.* = SpecJobCommitDomain.init(self.allocator);
+        self.spec_job_parallel_workers = workers;
+        self.spec_job_parallel_commit_domains = domains;
+    }
+
+    fn specJobCommitDomainFor(self: *Builder, worker_id: SpecJobWorkerId) *SpecJobCommitDomain {
+        if (worker_id == .serial) return self.ensureSpecJobCommitDomain();
+        if (self.spec_job_parallel_commit_domains.len == 0) {
+            Common.compilerBug("parallel specialization shard reached a serial commit domain");
+        }
+        const raw: usize = @intFromEnum(worker_id);
+        if (raw >= self.spec_job_parallel_commit_domains.len) {
+            Common.compilerBug("specialization shard referenced an unknown executor worker");
+        }
+        return &self.spec_job_parallel_commit_domains[raw];
+    }
+
     /// Lower one ordinary queued specialization into an owned workspace epoch
     /// and a graph-free sealed draft. The graph is destroyed before the result
     /// crosses the handoff; only ordered program appends happen afterward.
     ///
-    /// Deferred preparation still uses shared Builder coordination, so it
-    /// executes serially here. Representation-sensitive immediate callees also
-    /// complete synchronously until those outputs move into the shard protocol;
-    /// their durable types and names cross the explicit store boundary.
+    /// Deferred preparation executes against the worker's private Builder and
+    /// workspace. A representation-sensitive immediate callee still needs
+    /// coordinator reservation and completion, so executor callbacks unwind and
+    /// retry that uncommon whole job on the existing serial path.
     fn lowerPendingSpecJobToShard(
         self: *Builder,
+        worker: *SpecJobWorkerState,
         job: PendingSpecJob,
         view: ModuleView,
+        method_scope: ModuleView,
         template: checked.CheckedProcedureTemplate,
     ) Allocator.Error!CompletedSpecJobShard {
         switch (template.target) {
@@ -4453,9 +4911,20 @@ const Builder = struct {
             .hosted => Common.compilerBug("hosted specialization entered Roc body shard lowering"),
         }
 
-        const workspace = self.ensureSpecJobWorkspace();
+        if (self.symbols.active != .coordinator) {
+            Common.compilerBug("Monotype specialization shard entered with a worker-local symbol domain active");
+        }
+        self.symbols.worker_local = .{};
+        self.symbols.active = .worker_local;
+        defer self.symbols.active = .coordinator;
+
+        const workspace = &worker.workspace;
         const epoch = workspace.beginEpoch(self.program);
         errdefer workspace.finishEpoch(epoch);
+        const program_types_before = self.program.types.epochBoundary();
+        const program_names_before = self.program.names.epochBoundary();
+        const program_loc_before = self.program.current_loc;
+        const program_region_before = self.program.current_region;
         if (self.active_spec_job_diagnostics != null) {
             Common.compilerBug("Monotype specialization shard began with another shard diagnostic sink active");
         }
@@ -4473,6 +4942,12 @@ const Builder = struct {
         errdefer body_draft.deinit();
         body_draft.spec_job_workspace = workspace;
         body_draft.mutable_graph_names = &workspace.name_store;
+        const saved_graph = self.active_graph;
+        const saved_body_draft = self.active_body_draft;
+        self.active_graph = graph;
+        self.active_body_draft = &body_draft;
+        defer self.active_graph = saved_graph;
+        defer self.active_body_draft = saved_body_draft;
         const final_guard = FinalBodyOutputGuard.begin(self);
         const pending = try self.lowerReservedTemplateBodyIntoDraft(
             graph,
@@ -4481,7 +4956,7 @@ const Builder = struct {
             job.fn_template,
             job.template_ref,
             view,
-            self.moduleForId(job.method_scope),
+            method_scope,
             template,
             job.source_fn_key,
             job.fn_ty,
@@ -4492,13 +4967,30 @@ const Builder = struct {
         const final_end = final_guard.end(self);
         try self.finalizeBodyDraftGraph(graph, &body_draft, final_guard, final_end);
         const sealed_pending = try self.sealOrdinarySpecJobDraft(graph, &body_draft, pending);
+        body_draft.sealWorkerLocalSymbols(self.symbols.worker_local.next);
+        if (self.spec_job_parallel_callback) {
+            const program_types_after = self.program.types.epochBoundary();
+            if (!std.meta.eql(program_types_before, program_types_after)) {
+                Common.compilerBug("parallel specialization lowering mutated the coordinator type store");
+            }
+            if (!std.meta.eql(program_names_before, self.program.names.epochBoundary())) {
+                Common.compilerBug("parallel specialization lowering mutated the coordinator name store");
+            }
+            if (!std.meta.eql(program_loc_before, self.program.current_loc) or
+                !std.meta.eql(program_region_before, self.program.current_region))
+            {
+                Common.compilerBug("parallel specialization lowering mutated coordinator source scratch");
+            }
+        }
         var store_epoch = try workspace.captureStoreEpoch(epoch);
         errdefer store_epoch.deinit();
         self.countBodyDiagnostic("spec_job_shards_lowered");
         graph.destroy();
         workspace.finishEpoch(epoch);
         return .{
+            .worker_id = worker.worker_id,
             .dispatch_index = job.dispatch_index,
+            .worker_local_symbol_count = body_draft.worker_local_symbol_count,
             .store_epoch = store_epoch,
             .body_draft = body_draft,
             .pending = sealed_pending,
@@ -4525,7 +5017,7 @@ const Builder = struct {
         self.active_spec_job_diagnostics = shard.diagnostics;
         defer self.active_spec_job_diagnostics = null;
 
-        const commit_domain = self.ensureSpecJobCommitDomain();
+        const commit_domain = self.specJobCommitDomainFor(shard.worker_id);
         try commit_domain.absorb(&shard.store_epoch);
         shard.store_epoch_absorbed = true;
         const committed_type_relocation = commit_domain.committedTypeRelocation(
@@ -4538,6 +5030,10 @@ const Builder = struct {
             &self.program.names,
             committed_type_relocation,
         );
+        if (shard.worker_local_symbol_count != shard.body_draft.worker_local_symbol_count) {
+            Common.compilerBug("Monotype specialization shard symbol count disagreed with its sealed draft");
+        }
+        shard.body_draft.relocateWorkerLocalSymbols(&self.symbols.coordinator);
         shard.body_draft.assertGraphStateDiscarded();
         const sealed = try self.commitSealedBodyDraft(
             &shard.body_draft,
@@ -4552,6 +5048,11 @@ const Builder = struct {
             const destination = self.diagnostics orelse
                 Common.compilerBug("Monotype specialization shard lost its coordinator diagnostic sink");
             diagnostics.addTo(destination);
+        }
+        if (shard.specialization_counter_delta) |delta| {
+            const destination = self.counters orelse
+                Common.compilerBug("Monotype specialization shard lost its coordinator counter sink");
+            addFlatCounters(SpecializationCounters, destination, delta);
         }
         shard.diagnostics_committed = true;
         self.countCoordinatorBodyDiagnostic("spec_job_shards_committed");
@@ -4595,9 +5096,6 @@ const Builder = struct {
             body_draft,
         );
         body_ctx.evidence = retained_topology orelse rootEvidence(template_ref, spec_evidence);
-        const lowered_template = self.lowered_templates.getPtr(reservation.fn_id) orelse
-            Common.invariant("procedure specialization lost its evidence record before body lowering");
-        lowered_template.evidence = body_ctx.evidence.vector;
         defer body_ctx.deinit();
 
         const graph_fn_ty = try body_ctx.importProgramType(lower_fn_ty);
@@ -4609,6 +5107,7 @@ const Builder = struct {
             .request_fn_node = root_node,
             .initial_request_arg_classes = try graph.snapshotFunctionArgumentClasses(root_node),
             .fn_id = reservation.fn_id,
+            .signature_relation = signature_relation,
         };
         const root_owner = try body_draft.enterOwner(.{ .reserved_fn = reservation.fn_id });
         defer root_owner.leave();
@@ -4625,10 +5124,11 @@ const Builder = struct {
         body_ctx.owner_context_fn_key = source_fn_key;
         body_ctx.current_fn_key = source_fn_key;
         const lowered = try body_ctx.lowerTemplateBodyAtNode(template_ref, template, root_node);
+        const final_signature_relation = self.active_template_root.?.signature_relation;
         const completed_root = blk: {
             var relations_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
             defer relations_timing_scope.end();
-            break :blk switch (signature_relation) {
+            break :blk switch (final_signature_relation) {
                 .exact_graph => root_node,
                 .independent_roots => try body_ctx.completedFunctionNodeForLoweredRet(
                     root_node,
@@ -4640,7 +5140,7 @@ const Builder = struct {
         return .{
             .reservation = reservation,
             .fn_template = fn_template,
-            .signature_relation = signature_relation,
+            .signature_relation = final_signature_relation,
             .root_node = completed_root,
             .lowered = lowered,
         };
@@ -4668,7 +5168,7 @@ const Builder = struct {
             .independent_roots => final_fn_ty,
         };
         self.program.setFnSource(pending.reservation.fn_id, def_template);
-        const sealed_fn_data = self.functionShape(final_fn_ty, "checked procedure template root type was not a function");
+        const sealed_fn_data = self.programFunctionShape(final_fn_ty, "checked procedure template root type was not a function");
         self.program.setDef(pending.reservation.def, .{
             .symbol = pending.reservation.symbol,
             .fn_def = def_template,
@@ -4960,8 +5460,8 @@ const Builder = struct {
                 .source_fn_key = source_fn_key,
                 .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
                 .evidence_digest = evidence_digest,
-                .const_evidence = try self.program.addConstFnEvidence(stored_evidence.nodes),
-                .const_evidence_frames = try self.program.addConstFnEvidenceFrames(stored_evidence.frames),
+                .const_evidence = try source_ctx.draft.addConstFnEvidence(stored_evidence.nodes),
+                .const_evidence_frames = try source_ctx.draft.addConstFnEvidenceFrames(stored_evidence.frames),
                 .const_evidence_frame_head = stored_evidence.head,
             },
             .signature_relation = signature_relation,
@@ -5252,7 +5752,7 @@ const Builder = struct {
         if (!self.proc_debug_names) return;
         const proc_base = view.names.procBase(template.proc_base);
         const export_name = proc_base.export_name orelse return;
-        const name = try self.program.names.internExportName(view.names.exportNameText(export_name));
+        const name = try self.activeNameStore().internExportName(view.names.exportNameText(export_name));
         try draft.proc_debug_names.append(self.allocator, .{ .symbol = symbol, .name = name });
     }
 
@@ -5297,13 +5797,18 @@ const Builder = struct {
         owner_template: names.ProcTemplate,
         checked_ty: checked.CheckedTypeId,
     ) Allocator.Error!Type.TypeId {
-        const graph = try self.createGraph();
+        const destination_types = self.activeTypeStore();
+        const destination_names = self.activeNameStore();
+        const workspace = if (self.active_body_draft) |draft| draft.spec_job_workspace else null;
+        const graph = try self.createGraphForStores(destination_types, destination_names);
         defer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
         self.active_graph = graph;
         defer self.active_graph = saved_graph;
         var body_draft = BodyDraftStore.init(self.allocator);
+        body_draft.spec_job_workspace = workspace;
+        body_draft.mutable_graph_names = destination_names;
         self.active_body_draft = &body_draft;
         defer self.active_body_draft = saved_body_draft;
         defer body_draft.deinit();
@@ -5316,7 +5821,8 @@ const Builder = struct {
 
     fn lowerType(self: *Builder, view: ModuleView, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
         const address = checkedTypeAddress(view, checked_ty);
-        if (self.type_cache.get(address)) |cached| return cached;
+        const cache = self.activeCheckedTypeCache();
+        if (cache.get(address)) |cached| return cached;
         const raw = @intFromEnum(checked_ty);
         if (raw >= view.types.payloadCount()) Common.invariant("checked type id outside checked type store");
 
@@ -5327,11 +5833,11 @@ const Builder = struct {
             checked_ty: checked.CheckedTypeId,
 
             fn fill(context: @This(), reserved: Type.TypeId) Allocator.Error!Type.Content {
-                try context.builder.type_cache.put(context.address, reserved);
+                try context.builder.activeCheckedTypeCache().put(context.address, reserved);
                 return try context.builder.lowerTypePayload(context.view, context.checked_ty, context.view.types.payload(context.checked_ty));
             }
         };
-        return try self.program.types.addRecursive(Context{
+        return try self.activeTypeStore().addRecursive(Context{
             .builder = self,
             .address = address,
             .view = view,
@@ -5352,14 +5858,14 @@ const Builder = struct {
             .tuple => |items| blk: {
                 const lowered = try self.lowerTypeSlice(view, items);
                 defer self.allocator.free(lowered);
-                break :blk .{ .tuple = try self.program.types.addSpan(lowered) };
+                break :blk .{ .tuple = try self.activeTypeStore().addSpan(lowered) };
             },
             .tag_union => |tag_union| try self.lowerTagUnionRow(view, tag_union.tags, tag_union.ext),
             .function => |fn_ty| blk: {
                 const args = try self.lowerTypeSlice(view, fn_ty.args);
                 defer self.allocator.free(args);
                 break :blk .{ .func = .{
-                    .args = try self.program.types.addSpan(args),
+                    .args = try self.activeTypeStore().addSpan(args),
                     .ret = try self.lowerType(view, fn_ty.ret),
                 } };
             },
@@ -5370,7 +5876,7 @@ const Builder = struct {
                     .named_type = .{ .module = self.declaredModuleForAlias(view, alias), .ty = checked_ty },
                     .def = try self.typeDef(view, alias.origin_module, alias.name, alias.source_decl),
                     .kind = .alias,
-                    .args = try self.program.types.addSpan(args),
+                    .args = try self.activeTypeStore().addSpan(args),
                     .backing = .{
                         .ty = try self.lowerType(view, alias.backing),
                         .use = .inspectable,
@@ -5410,13 +5916,13 @@ const Builder = struct {
                 defer self.allocator.free(args);
                 const backing_use: Type.BackingUse = if (nominal.is_opaque) .runtime_layout_only else .inspectable;
                 const def = try self.typeDef(view, nominal.origin_module, nominal.name, nominal.source_decl);
-                self.noteBuiltinTryDef(nominal.builtin, &self.program.names, def);
+                self.noteBuiltinTryDef(nominal.builtin, self.activeNameStore(), def);
                 break :blk .{ .named = .{
                     .named_type = .{ .module = self.declaredModuleForNominal(view, nominal), .ty = checked_ty },
                     .def = def,
                     .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
                     .builtin_owner = builtinOwner(nominal.builtin),
-                    .args = try self.program.types.addSpan(args),
+                    .args = try self.activeTypeStore().addSpan(args),
                     .backing = switch (nominal.representation) {
                         .opaque_without_backing => null,
                         .builtin, .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability => .{
@@ -5449,7 +5955,7 @@ const Builder = struct {
     }
 
     fn namedBackingType(self: *Builder, ty: Type.TypeId) ?Type.TypeId {
-        return switch (self.program.types.get(ty)) {
+        return switch (self.activeTypeStore().get(ty)) {
             .named => |named| if (named.backing) |backing| backing.ty else null,
             .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => null,
         };
@@ -5472,7 +5978,7 @@ const Builder = struct {
     fn nominalConstructionLayer(self: *Builder, ty: Type.TypeId) ?NominalConstructionLayer {
         var current = ty;
         while (true) {
-            switch (self.program.types.get(current)) {
+            switch (self.activeTypeStore().get(current)) {
                 .named => |named| {
                     const backing = named.backing orelse return null;
                     switch (named.kind) {
@@ -5486,29 +5992,33 @@ const Builder = struct {
     }
 
     fn shapeContent(self: *Builder, ty: Type.TypeId) Type.Content {
+        return shapeContentFromStore(self.activeTypeStore(), ty);
+    }
+
+    fn shapeContentFromStore(type_store: *const Type.Store, ty: Type.TypeId) Type.Content {
         var current = ty;
         while (true) {
-            switch (self.program.types.get(current)) {
+            switch (type_store.get(current)) {
                 .named => |named| if (named.backing) |backing| {
                     current = backing.ty;
                     continue;
                 } else {
-                    return self.program.types.get(current);
+                    return type_store.get(current);
                 },
-                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return self.program.types.get(current),
+                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return type_store.get(current),
             }
         }
     }
 
     fn typeHasBuiltinOwner(self: *Builder, ty: Type.TypeId, owner: static_dispatch.BuiltinOwner) bool {
-        return switch (methodOwnerFromType(&self.program.types, ty) orelse return false) {
+        return switch (methodOwnerFromType(self.activeTypeStore(), ty) orelse return false) {
             .builtin => |actual| actual == owner,
             .nominal => false,
         };
     }
 
     fn typeIsBuiltinJsonEncoding(self: *Builder, ty: Type.TypeId) bool {
-        return switch (self.program.types.get(ty)) {
+        return switch (self.activeTypeStore().get(ty)) {
             .named => |named| blk: {
                 if (self.typeDefIsBuiltinJsonEncoding(named.def)) break :blk true;
                 if (named.kind == .alias) {
@@ -5521,13 +6031,13 @@ const Builder = struct {
     }
 
     fn typeDefIsBuiltinJsonEncoding(self: *Builder, def: Type.TypeDef) bool {
-        const type_name = self.program.names.typeNameText(def.type_name);
+        const type_name = self.activeNameStore().typeNameText(def.type_name);
         if (!Ident.textEql(type_name, "JsonEncoding") and !Ident.textEql(type_name, "Builtin.Encoding.JsonEncoding")) return false;
         return self.moduleIdentityIsBuiltin(def.module);
     }
 
     fn moduleIdentityIsBuiltin(self: *Builder, module: names.ModuleIdentityId) bool {
-        const origin_hash = self.program.names.moduleIdentityBytes(module);
+        const origin_hash = self.activeNameStore().moduleIdentityBytes(module);
         if (self.moduleViewHasBuiltinIdentity(moduleView(self.root_view), origin_hash)) return true;
         for (self.modules.imports) |imported| {
             if (self.moduleViewHasBuiltinIdentity(moduleView(imported), origin_hash)) return true;
@@ -5544,13 +6054,13 @@ const Builder = struct {
 
     fn recordFieldByTextOptional(self: *Builder, ty: Type.TypeId, text: []const u8) ?Type.Field {
         const fields = switch (self.shapeContent(ty)) {
-            .record => |span| self.program.types.fieldSpan(span),
+            .record => |span| self.activeTypeStore().fieldSpan(span),
             .zst => return null,
             .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => return null,
         };
         for (0..GuardedList.borrowLen(fields)) |index| {
             const field = GuardedList.at(fields, index);
-            if (Ident.textEql(self.program.names.recordFieldLabelText(field.name), text)) return field;
+            if (Ident.textEql(self.activeNameStore().recordFieldLabelText(field.name), text)) return field;
         }
         return null;
     }
@@ -5574,7 +6084,7 @@ const Builder = struct {
         if (!self.typeHasBuiltinOwner(spec_ty, .parse_tag_union_spec)) return false;
         const backing_ty = self.namedBackingType(spec_ty) orelse return false;
         return switch (self.shapeContent(backing_ty)) {
-            .record => |span| self.program.types.fieldSpan(span).len != 0,
+            .record => |span| self.activeTypeStore().fieldSpan(span).len != 0,
             .zst => false,
             _ => return false,
         };
@@ -5582,6 +6092,13 @@ const Builder = struct {
 
     fn functionShape(self: *Builder, ty: Type.TypeId, comptime message: []const u8) FunctionShape {
         return switch (self.shapeContent(ty)) {
+            .func => |func| .{ .args = func.args, .ret = func.ret },
+            .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst => Common.invariant(message),
+        };
+    }
+
+    fn programFunctionShape(self: *Builder, ty: Type.TypeId, comptime message: []const u8) FunctionShape {
+        return switch (shapeContentFromStore(&self.program.types, ty)) {
             .func => |func| .{ .args = func.args, .ret = func.ret },
             .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst => Common.invariant(message),
         };
@@ -5604,10 +6121,10 @@ const Builder = struct {
     fn tagPayloadSpan(self: *Builder, ty: Type.TypeId, name: names.TagNameId) Type.Span {
         return switch (self.shapeContent(ty)) {
             .tag_union => |tags| {
-                const tag_span = self.program.types.tagSpan(tags);
+                const tag_span = self.activeTypeStore().tagSpan(tags);
                 for (0..GuardedList.borrowLen(tag_span)) |index| {
                     const tag = GuardedList.at(tag_span, index);
-                    if (self.program.names.tagLabelTextEql(tag.name, name)) return tag.payloads;
+                    if (self.activeNameStore().tagLabelTextEql(tag.name, name)) return tag.payloads;
                 }
                 Common.invariant("tag pattern was absent from checked tag-union type");
             },
@@ -5621,13 +6138,18 @@ const Builder = struct {
         nominal: checked.CheckedNominalType,
         mono_args: []const Type.TypeId,
     ) Allocator.Error!Type.TypeId {
-        const graph = try self.createGraph();
+        const destination_types = self.activeTypeStore();
+        const destination_names = self.activeNameStore();
+        const workspace = if (self.active_body_draft) |draft| draft.spec_job_workspace else null;
+        const graph = try self.createGraphForStores(destination_types, destination_names);
         defer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
         self.active_graph = graph;
         defer self.active_graph = saved_graph;
         var body_draft = BodyDraftStore.init(self.allocator);
+        body_draft.spec_job_workspace = workspace;
+        body_draft.mutable_graph_names = destination_names;
         self.active_body_draft = &body_draft;
         defer self.active_body_draft = saved_body_draft;
         defer body_draft.deinit();
@@ -5666,10 +6188,11 @@ const Builder = struct {
         var seen = collections.DenseMap(Type.TypeId, void).init(self.allocator);
         defer seen.deinit();
         var current = backing;
+        const type_store = self.activeTypeStore();
         while (true) {
             if (seen.contains(current)) return current;
             try seen.put(current, {});
-            switch (self.program.types.get(current)) {
+            switch (type_store.get(current)) {
                 .named => |named| {
                     if (named.kind != .alias and (!sameTypeDef(named.def, owner_def) or !self.sameNominalArgs(named.args, mono_args))) {
                         return current;
@@ -5683,27 +6206,29 @@ const Builder = struct {
     }
 
     fn sameNominalArgs(self: *Builder, actual_span: Type.Span, expected: []const Type.TypeId) bool {
-        const actual = self.program.types.span(actual_span);
+        const type_store = self.activeTypeStore();
+        const name_store = self.activeNameStore();
+        const actual = type_store.span(actual_span);
         if (actual.len != expected.len) return false;
         for (expected, 0..) |expected_ty, index| {
             const actual_ty = GuardedList.at(actual, index);
             if (actual_ty == expected_ty) continue;
-            const actual_digest = self.program.types.specializationDigest(&self.program.names, actual_ty);
-            const expected_digest = self.program.types.specializationDigest(&self.program.names, expected_ty);
+            const actual_digest = type_store.specializationDigest(name_store, actual_ty);
+            const expected_digest = type_store.specializationDigest(name_store, expected_ty);
             if (!std.mem.eql(u8, actual_digest.bytes[0..], expected_digest.bytes[0..])) return false;
         }
         return true;
     }
 
     fn tupleItemTypes(self: *Builder, ty: Type.TypeId) Type.StoreSpanBorrow(Type.TypeId, "spans") {
-        return self.program.types.span(self.tupleItemSpan(ty));
+        return self.activeTypeStore().span(self.tupleItemSpan(ty));
     }
 
     fn recordField(self: *Builder, ty: Type.TypeId, name: names.RecordFieldNameId) Type.Field {
-        const fields = self.program.types.fieldSpan(self.recordFieldsSpan(ty));
+        const fields = self.activeTypeStore().fieldSpan(self.recordFieldsSpan(ty));
         for (0..GuardedList.borrowLen(fields)) |index| {
             const field = GuardedList.at(fields, index);
-            if (self.program.names.recordFieldLabelTextEql(field.name, name)) return field;
+            if (self.activeNameStore().recordFieldLabelTextEql(field.name, name)) return field;
         }
         Common.invariant("record pattern field was absent from checked record type");
     }
@@ -5713,7 +6238,7 @@ const Builder = struct {
     }
 
     fn tagPayloadTypes(self: *Builder, ty: Type.TypeId, name: names.TagNameId) Type.StoreSpanBorrow(Type.TypeId, "spans") {
-        return self.program.types.span(self.tagPayloadSpan(ty, name));
+        return self.activeTypeStore().span(self.tagPayloadSpan(ty, name));
     }
 
     /// The closed structural tagged slot of an optional field:
@@ -5722,27 +6247,31 @@ const Builder = struct {
     /// variant 1—the discriminant contract every consumer (construction,
     /// `.?` runtime tests, layout, glue) shares.
     fn optionalSlotType(self: *Builder, payload_ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        const missing = try self.program.names.internTagLabel(optional_slot_missing_tag);
-        const present = try self.program.names.internTagLabel(optional_slot_present_tag);
+        const type_store = self.activeTypeStore();
+        const name_store = self.activeNameStore();
+        const missing = try name_store.internTagLabel(optional_slot_missing_tag);
+        const present = try name_store.internTagLabel(optional_slot_present_tag);
         const tags = [_]Type.Store.TagInput{
             .{ .name = missing, .checked_name = missing, .payloads = &.{} },
             .{ .name = present, .checked_name = present, .payloads = &.{payload_ty} },
         };
-        return try self.program.types.internTagUnion(&self.program.names, &tags);
+        return try type_store.internTagUnion(name_store, &tags);
     }
 
     /// The tags and payload type of an optional field's Monotype tagged slot.
     fn optionalSlotInfo(self: *Builder, slot_ty: Type.TypeId) Allocator.Error!OptionalSlotInfo {
-        const missing_name = try self.program.names.internTagLabel(optional_slot_missing_tag);
-        const present_name = try self.program.names.internTagLabel(optional_slot_present_tag);
+        const type_store = self.activeTypeStore();
+        const name_store = self.activeNameStore();
+        const missing_name = try name_store.internTagLabel(optional_slot_missing_tag);
+        const present_name = try name_store.internTagLabel(optional_slot_present_tag);
         const missing_tag = self.tagByNameOrNull(slot_ty, missing_name) orelse
             Common.invariant("optional field slot type had no Missing tag");
         const present_tag = self.tagByNameOrNull(slot_ty, present_name) orelse
             Common.invariant("optional field slot type had no Present tag");
-        if (self.program.types.span(missing_tag.payloads).len != 0) {
+        if (type_store.span(missing_tag.payloads).len != 0) {
             Common.invariant("optional field slot Missing tag unexpectedly had payloads");
         }
-        const present_payloads = self.program.types.span(present_tag.payloads);
+        const present_payloads = type_store.span(present_tag.payloads);
         if (present_payloads.len != 1) {
             Common.invariant("optional field slot Present tag must carry exactly one payload");
         }
@@ -5756,7 +6285,7 @@ const Builder = struct {
     /// Recognize the compiler-reserved optional-slot encoding when only a
     /// completed Monotype is available (design.md "Field Kinds").
     fn optionalFieldSlot(self: *Builder, slot_ty: Type.TypeId) ?OptionalSlotInfo {
-        return optionalFieldSlotForType(&self.program.types, &self.program.names, slot_ty);
+        return optionalFieldSlotForType(self.activeTypeStore(), self.activeNameStore(), slot_ty);
     }
 
     fn lowerRecordFields(self: *Builder, view: ModuleView, fields: []const checked.CheckedRecordField) Allocator.Error!Type.Content {
@@ -5776,7 +6305,8 @@ const Builder = struct {
                 .default = try self.monoFieldDefault(view, field),
             };
         }
-        return .{ .record = try self.program.types.addRecordFields(&self.program.names, lowered) };
+        const type_store = self.activeTypeStore();
+        return .{ .record = try type_store.addRecordFields(self.activeNameStore(), lowered) };
     }
 
     /// Translate a checked `??` identity into the Monotype name store.
@@ -5784,7 +6314,7 @@ const Builder = struct {
         const default = field.kind.defaultIdentity() orelse return null;
         const origin_module = default.origin() orelse Common.invariant("defaulted checked field carried no default origin module");
         return .{
-            .module = try self.program.names.internModuleIdentity(view.names.moduleIdentityBytes(origin_module)),
+            .module = try self.activeNameStore().internModuleIdentity(view.names.moduleIdentityBytes(origin_module)),
             .expr_node = default.expr_node,
         };
     }
@@ -5827,7 +6357,8 @@ const Builder = struct {
             }
         }
 
-        return .{ .record = try self.program.types.addRecordFields(&self.program.names, fields.items) };
+        const type_store = self.activeTypeStore();
+        return .{ .record = try type_store.addRecordFields(self.activeNameStore(), fields.items) };
     }
 
     fn appendRecordFields(
@@ -5886,7 +6417,8 @@ const Builder = struct {
             }
         }
 
-        return .{ .tag_union = try self.program.types.addTagVariants(&self.program.names, tags.items) };
+        const type_store = self.activeTypeStore();
+        return .{ .tag_union = try type_store.addTagVariants(self.activeNameStore(), tags.items) };
     }
 
     fn appendTags(
@@ -5902,7 +6434,7 @@ const Builder = struct {
             try out.append(self.allocator, .{
                 .name = tag_name,
                 .checked_name = tag_name,
-                .payloads = try self.program.types.addSpan(payloads),
+                .payloads = try self.activeTypeStore().addSpan(payloads),
             });
         }
     }
@@ -6052,7 +6584,7 @@ const Builder = struct {
                 },
             }
         }
-        return try self.program.types.addDeclaredFields(entries);
+        return try self.activeTypeStore().addDeclaredFields(entries);
     }
 
     fn lowerCheckedDeclaredOrder(
@@ -6076,7 +6608,7 @@ const Builder = struct {
                 },
             };
         }
-        return try self.program.types.addDeclaredFields(entries);
+        return try self.activeTypeStore().addDeclaredFields(entries);
     }
 
     fn constNode(self: *Builder, const_locator: checked.ConstLocator, node: ?checked.ConstNodeId) ConstNode {
@@ -6243,7 +6775,7 @@ const Builder = struct {
         owner: static_dispatch.MethodOwner,
         method_name: []const u8,
     ) Allocator.Error!?MethodLookup {
-        const method = try self.program.names.internMethodName(method_name);
+        const method = try self.activeNameStore().internMethodName(method_name);
         const address = ScopedMethodDispatch.init(scope.key, owner, method);
         if (self.scoped_method_targets.get(address)) |resolution| {
             return switch (resolution) {
@@ -6606,6 +7138,12 @@ const Builder = struct {
         requested: Ast.SignatureRelation,
     ) void {
         if (requested != .exact_graph) return;
+        if (self.active_template_root) |*active_root| {
+            if (active_root.fn_id == fn_id and self.hasPrivateTypeDestination()) {
+                active_root.signature_relation = .exact_graph;
+                return;
+            }
+        }
         var fn_ = self.program.getFn(fn_id);
         if (fn_.signature_relation == .exact_graph) return;
         fn_.signature_relation = .exact_graph;
@@ -6914,8 +7452,8 @@ const Builder = struct {
             .source_fn_key = source_fn_key,
             .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
             .evidence_digest = evidence_digest,
-            .const_evidence = try self.program.addConstFnEvidence(stored_evidence.nodes),
-            .const_evidence_frames = try self.program.addConstFnEvidenceFrames(stored_evidence.frames),
+            .const_evidence = try source_ctx.draft.addConstFnEvidence(stored_evidence.nodes),
+            .const_evidence_frames = try source_ctx.draft.addConstFnEvidenceFrames(stored_evidence.frames),
             .const_evidence_frame_head = stored_evidence.head,
         }, .signature_relation = signature_relation });
         const symbol = self.symbols.fresh();
@@ -7259,12 +7797,12 @@ const Builder = struct {
         const owner_scope = try body_draft.enterOwner(boundary.owner);
         defer owner_scope.leave();
 
-        const saved_loc = self.program.current_loc;
-        defer self.program.current_loc = saved_loc;
-        const saved_region = self.program.current_region;
-        defer self.program.current_region = saved_region;
-        self.program.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
-        self.program.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
+        const saved_loc = self.current_loc;
+        defer self.current_loc = saved_loc;
+        const saved_region = self.current_region;
+        defer self.current_region = saved_region;
+        self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
+        self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
         var ctx = try BodyContext.initWithMethodScope(
             self.allocator,
@@ -7418,12 +7956,12 @@ const Builder = struct {
         const owner_scope = try body_draft.enterOwner(boundary.owner);
         defer owner_scope.leave();
 
-        const saved_loc = self.program.current_loc;
-        defer self.program.current_loc = saved_loc;
-        const saved_region = self.program.current_region;
-        defer self.program.current_region = saved_region;
-        self.program.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
-        self.program.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
+        const saved_loc = self.current_loc;
+        defer self.current_loc = saved_loc;
+        const saved_region = self.current_region;
+        defer self.current_region = saved_region;
+        self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
+        self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
         var ctx = try BodyContext.initWithMethodScope(
             self.allocator,
@@ -7604,12 +8142,12 @@ const Builder = struct {
             const owner_scope = try body_draft.enterOwner(boundary.owner);
             defer owner_scope.leave();
 
-            const saved_loc = self.program.current_loc;
-            defer self.program.current_loc = saved_loc;
-            const saved_region = self.program.current_region;
-            defer self.program.current_region = saved_region;
-            self.program.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
-            self.program.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
+            const saved_loc = self.current_loc;
+            defer self.current_loc = saved_loc;
+            const saved_region = self.current_region;
+            defer self.current_region = saved_region;
+            self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
+            self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
             var ctx = try BodyContext.initWithMethodScope(
                 self.allocator,
@@ -7677,12 +8215,12 @@ const Builder = struct {
             const owner_scope = try body_draft.enterOwner(boundary.owner);
             defer owner_scope.leave();
 
-            const saved_loc = self.program.current_loc;
-            defer self.program.current_loc = saved_loc;
-            const saved_region = self.program.current_region;
-            defer self.program.current_region = saved_region;
-            self.program.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
-            self.program.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
+            const saved_loc = self.current_loc;
+            defer self.current_loc = saved_loc;
+            const saved_region = self.current_region;
+            defer self.current_region = saved_region;
+            self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
+            self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
             var ctx = try BodyContext.initWithMethodScope(
                 self.allocator,
@@ -7771,12 +8309,12 @@ const Builder = struct {
             const owner_scope = try body_draft.enterOwner(boundary.owner);
             defer owner_scope.leave();
 
-            const saved_loc = self.program.current_loc;
-            defer self.program.current_loc = saved_loc;
-            const saved_region = self.program.current_region;
-            defer self.program.current_region = saved_region;
-            self.program.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
-            self.program.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
+            const saved_loc = self.current_loc;
+            defer self.current_loc = saved_loc;
+            const saved_region = self.current_region;
+            defer self.current_region = saved_region;
+            self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
+            self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
             var ctx = try BodyContext.initWithMethodScope(
                 self.allocator,
@@ -7823,12 +8361,12 @@ const Builder = struct {
         const owner_scope = try body_draft.enterOwner(boundary.owner);
         defer owner_scope.leave();
 
-        const saved_loc = self.program.current_loc;
-        defer self.program.current_loc = saved_loc;
-        const saved_region = self.program.current_region;
-        defer self.program.current_region = saved_region;
-        self.program.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
-        self.program.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
+        const saved_loc = self.current_loc;
+        defer self.current_loc = saved_loc;
+        const saved_region = self.current_region;
+        defer self.current_region = saved_region;
+        self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
+        self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
         var ctx = try BodyContext.initWithMethodScope(
             self.allocator,
@@ -7926,8 +8464,8 @@ const Builder = struct {
         const signature_relation = draft_fn.signature_relation;
 
         const requested_evidence = StoredConstFnEvidence{
-            .nodes = self.program.constFnEvidence(draft_fn.source.const_evidence),
-            .frames = self.program.constFnEvidenceFrames(draft_fn.source.const_evidence_frames),
+            .nodes = body_draft.constFnEvidence(draft_fn.source.const_evidence),
+            .frames = body_draft.constFnEvidenceFrames(draft_fn.source.const_evidence_frames),
             .head = draft_fn.source.const_evidence_frame_head,
         };
         const request_digest = self.specializationTypeDigest(coordinator_fn_ty);
@@ -8101,13 +8639,14 @@ const Builder = struct {
                 }
             }
 
-            const sealed_template = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source);
+            // Evidence does not participate in the specialization type digest.
+            const sealed_template = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source, 0, 0);
             const fn_ty = sealed_template.mono_fn_ty;
             const digest = self.specializationTypeDigest(fn_ty);
             const requested_evidence = StoredConstFnEvidence{
-                .nodes = self.program.constFnEvidence(sealed_template.const_evidence),
-                .frames = self.program.constFnEvidenceFrames(sealed_template.const_evidence_frames),
-                .head = sealed_template.const_evidence_frame_head,
+                .nodes = body_draft.constFnEvidence(fn_.source.const_evidence),
+                .frames = body_draft.constFnEvidenceFrames(fn_.source.const_evidence_frames),
+                .head = fn_.source.const_evidence_frame_head,
             };
             var identity: ?Ast.SpecIdentity = null;
             var lexical_owner: ?DraftOwner = null;
@@ -8169,8 +8708,8 @@ const Builder = struct {
                         if (try self.draftSpecIdentityEql(existing, wanted)) {
                             const prior_template = body_draft.fns.items[prior].source;
                             const prior_evidence = StoredConstFnEvidence{
-                                .nodes = self.program.constFnEvidence(prior_template.const_evidence),
-                                .frames = self.program.constFnEvidenceFrames(prior_template.const_evidence_frames),
+                                .nodes = body_draft.constFnEvidence(prior_template.const_evidence),
+                                .frames = body_draft.constFnEvidenceFrames(prior_template.const_evidence_frames),
                                 .head = prior_template.const_evidence_frame_head,
                             };
                             if (!storedConstFnEvidenceEql(prior_evidence, requested_evidence)) continue;
@@ -8674,15 +9213,20 @@ const Builder = struct {
         };
     }
 
-    fn constFnTemplateToMono(self: *Builder, fn_value: anytype, mono_fn_ty: Type.TypeId) Allocator.Error!Ast.FnTemplate {
+    fn constFnTemplateToMono(
+        self: *Builder,
+        fn_value: anytype,
+        mono_fn_ty: Type.TypeId,
+        retain_program_evidence: bool,
+    ) Allocator.Error!Ast.FnTemplate {
         return .{
             .fn_def = try self.constFnDefToMono(fn_value.fn_def),
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
             .mono_fn_ty = mono_fn_ty,
-            .const_evidence = try self.program.addConstFnEvidence(fn_value.evidence),
-            .const_evidence_frames = try self.program.addConstFnEvidenceFrames(fn_value.evidence_frames),
-            .const_evidence_frame_head = fn_value.evidence_frame_head,
+            .const_evidence = if (retain_program_evidence) try self.program.addConstFnEvidence(fn_value.evidence) else .empty(),
+            .const_evidence_frames = if (retain_program_evidence) try self.program.addConstFnEvidenceFrames(fn_value.evidence_frames) else .empty(),
+            .const_evidence_frame_head = if (retain_program_evidence) fn_value.evidence_frame_head else null,
         };
     }
 
@@ -8692,8 +9236,9 @@ const Builder = struct {
         fn_id: checked.ConstFnId,
         fn_value: check.ConstStore.ConstFn,
         mono_fn_ty: Type.TypeId,
+        retain_program_evidence: bool,
     ) Allocator.Error!Ast.FnTemplate {
-        var template = try self.constFnTemplateToMono(fn_value, mono_fn_ty);
+        var template = try self.constFnTemplateToMono(fn_value, mono_fn_ty, retain_program_evidence);
         if (fn_value.captures.len == 0) return template;
 
         switch (template.fn_def) {
@@ -9319,7 +9864,7 @@ const Builder = struct {
             return try self.restoreConstEncoderForRuntimeFnExpr(store_view, fn_id, fn_value, ty, static_data_const_locator);
         }
         if (fn_value.captures.len == 0) {
-            const template = try self.restoredConstFnTemplateToMono(store_view, fn_id, fn_value, ty);
+            const template = try self.restoredConstFnTemplateToMono(store_view, fn_id, fn_value, ty, true);
             const mono_fn_id = try self.lowerRestoredConstFnTemplate(template, fn_value);
             return try self.program.addExpr(.{
                 .ty = self.program.fnSource(mono_fn_id).mono_fn_ty,
@@ -9403,7 +9948,7 @@ const Builder = struct {
             else
                 try fn_ctx.restoreConstNodeAtType(store_view, fn_view, capture.value, captures[index].ty);
         }
-        const template = try self.constFnTemplateToMono(fn_value, ty);
+        const template = try self.constFnTemplateToMono(fn_value, ty, true);
         const nested = switch (template.fn_def) {
             .nested => |nested| nested,
             .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => Common.invariant("capturing stored function had no nested function identity"),
@@ -9501,13 +10046,13 @@ const Builder = struct {
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
         const callable_mono_ty = try fn_ctx.resolvedTypeViewForNode(callable_node);
         const fn_data = self.functionShape(callable_mono_ty, "stored parser constructor had a non-function type");
-        const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.program.types.span(fn_data.args));
+        const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.activeTypeStore().span(fn_data.args));
         defer self.allocator.free(arg_tys);
         if (arg_tys.len != 1) Common.invariant("stored parser constructor had an unexpected arity");
         if (!fn_ctx.sameType(fn_data.ret, ty)) Common.invariant("stored parser constructor result type differed from restored function type");
 
         const runtime_fn = self.functionShape(ty, "stored parser runtime value had a non-function type");
-        const runtime_arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.program.types.span(runtime_fn.args));
+        const runtime_arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.activeTypeStore().span(runtime_fn.args));
         defer self.allocator.free(runtime_arg_tys);
         if (runtime_arg_tys.len != 1) Common.invariant("stored parser runtime function had an unexpected arity");
 
@@ -9627,13 +10172,13 @@ const Builder = struct {
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
         const callable_mono_ty = try fn_ctx.resolvedTypeViewForNode(callable_node);
         const fn_data = self.functionShape(callable_mono_ty, "stored encoder_for constructor had a non-function type");
-        const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.program.types.span(fn_data.args));
+        const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.activeTypeStore().span(fn_data.args));
         defer self.allocator.free(arg_tys);
         if (arg_tys.len != 1) Common.invariant("stored encoder_for constructor had an unexpected arity");
         if (!fn_ctx.sameType(fn_data.ret, ty)) Common.invariant("stored encoder_for constructor result type differed from restored function type");
 
         const runtime_fn = self.functionShape(ty, "stored encoder_for runtime value had a non-function type");
-        const runtime_arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.program.types.span(runtime_fn.args));
+        const runtime_arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.activeTypeStore().span(runtime_fn.args));
         defer self.allocator.free(runtime_arg_tys);
         if (runtime_arg_tys.len != 2) Common.invariant("stored encoder_for runtime function had an unexpected arity");
 
@@ -9812,24 +10357,31 @@ const Builder = struct {
     }
 
     fn constRecordFields(self: *Builder, ty: Type.TypeId) Type.StoreSpanBorrow(Type.Field, "fields") {
-        return self.program.types.fieldSpan(self.recordFieldsSpan(ty));
+        return self.activeTypeStore().fieldSpan(self.recordFieldsSpan(ty));
     }
 
     fn primitiveType(self: *Builder, primitive: Type.Primitive) Allocator.Error!Type.TypeId {
+        const type_store = self.activeTypeStore();
+        const name_store = self.activeNameStore();
+        const private_destination = self.hasPrivateTypeDestination();
         return switch (primitive) {
             .u64 => blk: {
-                if (self.u64_ty) |ty| break :blk ty;
-                const ty = try self.program.types.internPrimitive(&self.program.names, .u64);
-                if (!self.program.types.hasSpeculativeConstruction()) self.u64_ty = ty;
+                if (!private_destination) {
+                    if (self.u64_ty) |ty| break :blk ty;
+                }
+                const ty = try type_store.internPrimitive(name_store, .u64);
+                if (!private_destination and !type_store.hasSpeculativeConstruction()) self.u64_ty = ty;
                 break :blk ty;
             },
             .bool => blk: {
-                if (self.bool_ty) |ty| break :blk ty;
-                const ty = try self.program.types.internPrimitive(&self.program.names, .bool);
-                if (!self.program.types.hasSpeculativeConstruction()) self.bool_ty = ty;
+                if (!private_destination) {
+                    if (self.bool_ty) |ty| break :blk ty;
+                }
+                const ty = try type_store.internPrimitive(name_store, .bool);
+                if (!private_destination and !type_store.hasSpeculativeConstruction()) self.bool_ty = ty;
                 break :blk ty;
             },
-            .str, .u8, .i8, .u16, .i16, .u32, .i32, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => try self.program.types.internPrimitive(&self.program.names, primitive),
+            .str, .u8, .i8, .u16, .i16, .u32, .i32, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => try type_store.internPrimitive(name_store, primitive),
         };
     }
 
@@ -9837,11 +10389,11 @@ const Builder = struct {
     /// used during draft finalization, where the active graph remains present
     /// but the supplied TypeIds are durable rather than active snapshots.
     fn closedFunctionType(self: *Builder, arg_tys: []const Type.TypeId, ret_ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        return try self.program.types.internFunc(&self.program.names, arg_tys, ret_ty);
+        return try self.activeTypeStore().internFunc(self.activeNameStore(), arg_tys, ret_ty);
     }
 
     fn singleTypeArg(self: *Builder, span: Type.Span, comptime owner: []const u8) Type.TypeId {
-        const args = self.program.types.span(span);
+        const args = self.activeTypeStore().span(span);
         if (args.len != 1) Common.invariant(owner ++ " type reached Monotype inspect lowering without one type argument");
         return GuardedList.at(args, 0);
     }
@@ -10428,8 +10980,8 @@ const DraftFnTemplate = struct {
     source_fn_key: names.TypeDigest,
     mono_fn_ty: DraftTypeCell,
     evidence_digest: Ast.EvidenceDigest = .{},
-    const_evidence: Ast.Span(check.ConstStore.ConstFnEvidence) = Ast.Span(check.ConstStore.ConstFnEvidence).empty(),
-    const_evidence_frames: Ast.Span(check.ConstStore.ConstFnEvidenceFrame) = Ast.Span(check.ConstStore.ConstFnEvidenceFrame).empty(),
+    const_evidence: DraftSpan(check.ConstStore.ConstFnEvidence) = DraftSpan(check.ConstStore.ConstFnEvidence).empty(),
+    const_evidence_frames: DraftSpan(check.ConstStore.ConstFnEvidenceFrame) = DraftSpan(check.ConstStore.ConstFnEvidenceFrame).empty(),
     const_evidence_frame_head: ?u32 = null,
 };
 
@@ -11143,6 +11695,7 @@ const ActiveTemplateRoot = struct {
     request_fn_node: NodeId,
     initial_request_arg_classes: []const ArgumentClassSnapshot,
     fn_id: Ast.FnId,
+    signature_relation: Ast.SignatureRelation,
 };
 
 const DraftNestedFamilyAddress = struct {
@@ -11975,7 +12528,11 @@ const DraftStaticDataRequest = struct {
 
 const BodyDraftStore = struct {
     allocator: Allocator,
+    symbol_domain: SymbolDomain,
+    worker_local_symbol_count: u32,
     fns: std.ArrayList(DraftFn),
+    const_fn_evidence: std.ArrayList(check.ConstStore.ConstFnEvidence),
+    const_fn_evidence_frames: std.ArrayList(check.ConstStore.ConstFnEvidenceFrame),
     defs: std.ArrayList(DraftDef),
     def_owners: std.ArrayList(DraftOwner),
     nested_defs: std.ArrayList(DraftNestedDef),
@@ -12083,7 +12640,11 @@ const BodyDraftStore = struct {
     fn init(allocator: Allocator) BodyDraftStore {
         return .{
             .allocator = allocator,
+            .symbol_domain = .coordinator,
+            .worker_local_symbol_count = 0,
             .fns = .empty,
+            .const_fn_evidence = .empty,
+            .const_fn_evidence_frames = .empty,
             .defs = .empty,
             .def_owners = .empty,
             .nested_defs = .empty,
@@ -12167,6 +12728,47 @@ const BodyDraftStore = struct {
             .program_type_relocation = null,
             .committed_type_relocation = null,
         };
+    }
+
+    fn sealWorkerLocalSymbols(self: *BodyDraftStore, count: u32) void {
+        if (self.symbol_domain != .coordinator or self.worker_local_symbol_count != 0) {
+            Common.compilerBug("Monotype body draft symbol domain was sealed more than once");
+        }
+        self.symbol_domain = .worker_local;
+        self.worker_local_symbol_count = count;
+    }
+
+    fn relocateWorkerLocalSymbol(self: *const BodyDraftStore, symbol: *Common.Symbol, symbol_base: u32) void {
+        const local: u32 = @intFromEnum(symbol.*);
+        if (local >= self.worker_local_symbol_count) {
+            Common.compilerBug("Monotype body draft retained a symbol outside its worker-local domain");
+        }
+        const relocated = std.math.add(u32, symbol_base, local) catch
+            Common.compilerBug("Monotype worker-local symbol relocation overflow");
+        symbol.* = @enumFromInt(relocated);
+    }
+
+    /// Exhaustive symbol-bearing storage owned by a body draft. Symbols inside
+    /// `DraftFnTemplate.fn_def`, roots, and sealed specialization IDs are
+    /// coordinator reservations and deliberately do not belong to this domain.
+    fn relocateWorkerLocalSymbols(self: *BodyDraftStore, coordinator: *Common.SymbolGen) void {
+        if (self.symbol_domain != .worker_local) {
+            Common.compilerBug("Monotype body draft did not carry a worker-local symbol domain");
+        }
+        const symbol_base = coordinator.next;
+        coordinator.next = std.math.add(u32, symbol_base, self.worker_local_symbol_count) catch
+            Common.compilerBug("Monotype worker-local symbol reservation overflow");
+
+        for (self.locals.items) |*local| self.relocateWorkerLocalSymbol(&local.symbol, symbol_base);
+        for (self.defs.items) |*def| self.relocateWorkerLocalSymbol(&def.symbol, symbol_base);
+        for (self.nested_defs.items) |*def| self.relocateWorkerLocalSymbol(&def.symbol, symbol_base);
+        for (self.proc_debug_names.items) |*debug_name| {
+            self.relocateWorkerLocalSymbol(&debug_name.symbol, symbol_base);
+        }
+        for (self.nested_specs.items) |*spec| self.relocateWorkerLocalSymbol(&spec.symbol, symbol_base);
+
+        self.symbol_domain = .coordinator;
+        self.worker_local_symbol_count = 0;
     }
 
     fn mutableGraphNameStore(
@@ -12346,6 +12948,8 @@ const BodyDraftStore = struct {
         self.sealed_nested_specs.deinit(self.allocator);
         self.def_owners.deinit(self.allocator);
         self.defs.deinit(self.allocator);
+        self.const_fn_evidence_frames.deinit(self.allocator);
+        self.const_fn_evidence.deinit(self.allocator);
         self.fns.deinit(self.allocator);
     }
 
@@ -12592,6 +13196,26 @@ const BodyDraftStore = struct {
         const start: u32 = @intCast(self.expr_ids.items.len);
         try self.expr_ids.appendSlice(self.allocator, ids);
         return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    fn addConstFnEvidence(self: *BodyDraftStore, values: []const check.ConstStore.ConstFnEvidence) Allocator.Error!DraftSpan(check.ConstStore.ConstFnEvidence) {
+        const start: u32 = @intCast(self.const_fn_evidence.items.len);
+        try self.const_fn_evidence.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    fn addConstFnEvidenceFrames(self: *BodyDraftStore, values: []const check.ConstStore.ConstFnEvidenceFrame) Allocator.Error!DraftSpan(check.ConstStore.ConstFnEvidenceFrame) {
+        const start: u32 = @intCast(self.const_fn_evidence_frames.items.len);
+        try self.const_fn_evidence_frames.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    fn constFnEvidence(self: *const BodyDraftStore, span: DraftSpan(check.ConstStore.ConstFnEvidence)) []const check.ConstStore.ConstFnEvidence {
+        return self.const_fn_evidence.items[span.start..][0..span.len];
+    }
+
+    fn constFnEvidenceFrames(self: *const BodyDraftStore, span: DraftSpan(check.ConstStore.ConstFnEvidenceFrame)) []const check.ConstStore.ConstFnEvidenceFrame {
+        return self.const_fn_evidence_frames.items[span.start..][0..span.len];
     }
 
     const ReservedExprSpan = struct {
@@ -13098,6 +13722,9 @@ const BodyDraftStore = struct {
         emit_defs: ?[]const bool,
         emit_nested_defs: ?[]const bool,
     ) Allocator.Error!void {
+        const evidence_span = try program.addConstFnEvidence(self.const_fn_evidence.items);
+        const evidence_frames_span = try program.addConstFnEvidenceFrames(self.const_fn_evidence_frames.items);
+
         for (self.source_files.items, 0..) |file, index| {
             if (!ids.retained(.source_files, index)) continue;
             _ = try program.addSourceFile(.{
@@ -13309,7 +13936,7 @@ const BodyDraftStore = struct {
         for (self.fns.items, 0..) |fn_, index| {
             if (emit_fns) |emit| if (!emit[index]) continue;
             program.fns.appendAssumeCapacity(.{
-                .source = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source),
+                .source = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source, evidence_span.start, evidence_frames_span.start),
                 .signature_relation = fn_.signature_relation,
             });
         }
@@ -13317,7 +13944,7 @@ const BodyDraftStore = struct {
         try program.defs.ensureUnusedCapacity(program.allocator, self.defs.items.len);
         for (self.defs.items, 0..) |def, index| {
             if (emit_defs) |emit| if (!emit[index]) continue;
-            const sealed_fn_def = if (def.fn_def) |template| try BodyDraftStore.sealFnTemplate(committed_types, template) else null;
+            const sealed_fn_def = if (def.fn_def) |template| try BodyDraftStore.sealFnTemplate(committed_types, template, evidence_span.start, evidence_frames_span.start) else null;
             const sealed_fn_id = if (def.fn_id) |fn_id| ids.fnTarget(fn_id) else null;
             if (sealed_fn_def) |template| {
                 if (sealed_fn_id) |fn_id| {
@@ -13337,7 +13964,7 @@ const BodyDraftStore = struct {
         try program.nested_defs.ensureUnusedCapacity(program.allocator, self.nested_defs.items.len);
         for (self.nested_defs.items, 0..) |def, index| {
             if (emit_nested_defs) |emit| if (!emit[index]) continue;
-            const sealed_fn_def = try BodyDraftStore.sealFnTemplate(committed_types, def.fn_def);
+            const sealed_fn_def = try BodyDraftStore.sealFnTemplate(committed_types, def.fn_def, evidence_span.start, evidence_frames_span.start);
             const sealed_fn_id = ids.fnTarget(def.fn_id);
             program.setFnSource(sealed_fn_id, sealed_fn_def);
             program.nested_defs.appendAssumeCapacity(.{
@@ -13409,6 +14036,8 @@ const BodyDraftStore = struct {
     fn sealFnTemplate(
         committed_types: *CommittedGraphTypes,
         template: DraftFnTemplate,
+        evidence_start: u32,
+        evidence_frames_start: u32,
     ) Allocator.Error!Ast.FnTemplate {
         return .{
             .fn_def = template.fn_def,
@@ -13416,8 +14045,8 @@ const BodyDraftStore = struct {
             .source_fn_key = template.source_fn_key,
             .mono_fn_ty = try template.mono_fn_ty.sealCommitted(committed_types),
             .evidence_digest = template.evidence_digest,
-            .const_evidence = template.const_evidence,
-            .const_evidence_frames = template.const_evidence_frames,
+            .const_evidence = .{ .start = evidence_start + template.const_evidence.start, .len = template.const_evidence.len },
+            .const_evidence_frames = .{ .start = evidence_frames_start + template.const_evidence_frames.start, .len = template.const_evidence_frames.len },
             .const_evidence_frame_head = template.const_evidence_frame_head,
         };
     }
@@ -13844,6 +14473,39 @@ const BodyDraftStore = struct {
         return ids.stmtSpan(span);
     }
 };
+
+test "ordered worker-local symbol relocation reserves distinct deterministic domains" {
+    const allocator = std.testing.allocator;
+    var first = BodyDraftStore.init(allocator);
+    defer first.deinit();
+    var second = BodyDraftStore.init(allocator);
+    defer second.deinit();
+
+    var first_symbols: Common.SymbolGen = .{};
+    var second_symbols: Common.SymbolGen = .{};
+    try first.locals.append(allocator, .{
+        .id = @enumFromInt(@as(u32, @intCast(first.locals.items.len))),
+        .symbol = first_symbols.fresh(),
+        .ty = undefined,
+    });
+    try second.locals.append(allocator, .{
+        .id = @enumFromInt(@as(u32, @intCast(second.locals.items.len))),
+        .symbol = second_symbols.fresh(),
+        .ty = undefined,
+    });
+    first.sealWorkerLocalSymbols(1);
+    second.sealWorkerLocalSymbols(1);
+
+    var coordinator = Common.SymbolGen{ .next = 41 };
+    first.relocateWorkerLocalSymbols(&coordinator);
+    second.relocateWorkerLocalSymbols(&coordinator);
+
+    try std.testing.expectEqual(@as(u32, 41), @intFromEnum(first.locals.items[0].symbol));
+    try std.testing.expectEqual(@as(u32, 42), @intFromEnum(second.locals.items[0].symbol));
+    try std.testing.expectEqual(@as(u32, 43), coordinator.next);
+    try std.testing.expectEqual(SymbolDomain.coordinator, first.symbol_domain);
+    try std.testing.expectEqual(SymbolDomain.coordinator, second.symbol_domain);
+}
 
 const FinalIdOffsets = struct {
     const CoreIdMode = union(enum) {
@@ -14828,9 +15490,11 @@ const BodyContext = struct {
         return true;
     }
 
-    /// Crossing into global program type production is centralized here.
+    /// Primitive construction already targets this body's active type domain.
     fn primitiveType(self: *BodyContext, primitive: Type.Primitive) Allocator.Error!Type.TypeId {
-        return self.importProgramType(try self.builder.primitiveType(primitive));
+        const active_ty = try self.builder.primitiveType(primitive);
+        if (self.typeStore() == self.builder.activeTypeStore()) return active_ty;
+        return try self.importProgramType(active_ty);
     }
 
     /// Crossing from checked types into global program type production is centralized here.
@@ -14843,7 +15507,9 @@ const BodyContext = struct {
         view: ModuleView,
         checked_ty: checked.CheckedTypeId,
     ) Allocator.Error!Type.TypeId {
-        return self.importProgramType(try self.builder.lowerType(view, checked_ty));
+        const active_ty = try self.builder.lowerType(view, checked_ty);
+        if (self.typeStore() == self.builder.activeTypeStore()) return active_ty;
+        return try self.importProgramType(active_ty);
     }
 
     /// Import one coordinator-owned type closure into this body's graph domain.
@@ -15778,8 +16444,8 @@ const BodyContext = struct {
         defer timing_scope.end();
         const id = try self.draft.addExprWithSource(
             .{ .ty = try self.draftTypeCell(expr.ty), .data = expr.data },
-            self.builder.program.current_loc,
-            self.builder.program.current_region,
+            self.builder.current_loc,
+            self.builder.current_region,
         );
         self.draft.expr_impossibility_proofs.items[@intFromEnum(id)] = try self.exprDataImpossibilityProof(
             self.draft.exprs.items[@intFromEnum(id)].ty,
@@ -15809,8 +16475,8 @@ const BodyContext = struct {
         defer timing_scope.end();
         const id = try self.draft.addExprWithSource(
             .{ .ty = ty, .data = data },
-            self.builder.program.current_loc,
-            self.builder.program.current_region,
+            self.builder.current_loc,
+            self.builder.current_region,
         );
         self.draft.expr_impossibility_proofs.items[@intFromEnum(id)] = try self.exprDataImpossibilityProof(ty, data);
         return id;
@@ -16103,8 +16769,8 @@ const BodyContext = struct {
                 .source_fn_ty = source.source_fn_ty,
                 .source_fn_key = source.source_fn_key,
                 .mono_fn_ty = try self.draftTypeCell(source.mono_fn_ty),
-                .const_evidence = try self.builder.program.addConstFnEvidence(stored_evidence.nodes),
-                .const_evidence_frames = try self.builder.program.addConstFnEvidenceFrames(stored_evidence.frames),
+                .const_evidence = try self.draft.addConstFnEvidence(stored_evidence.nodes),
+                .const_evidence_frames = try self.draft.addConstFnEvidenceFrames(stored_evidence.frames),
                 .const_evidence_frame_head = stored_evidence.head,
                 .evidence_digest = evidence_digest,
             },
@@ -16144,7 +16810,7 @@ const BodyContext = struct {
     fn addStmt(self: *BodyContext, stmt: DraftStmt) Allocator.Error!DraftStmtId {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
         defer timing_scope.end();
-        const id = try self.draft.addStmtWithSource(stmt, self.builder.program.current_loc, self.builder.program.current_region);
+        const id = try self.draft.addStmtWithSource(stmt, self.builder.current_loc, self.builder.current_region);
         self.draft.stmt_impossibility_proofs.items[@intFromEnum(id)] = try self.stmtDataImpossibilityProof(stmt);
         return id;
     }
@@ -19635,12 +20301,12 @@ const BodyContext = struct {
         fn_nodes: FunctionNodes,
         ret_cell: DraftTypeCell,
     ) Allocator.Error!LoweredTemplateBody {
-        const saved_loc = self.builder.program.current_loc;
-        defer self.builder.program.current_loc = saved_loc;
-        const saved_region = self.builder.program.current_region;
-        defer self.builder.program.current_region = saved_region;
-        self.builder.program.current_loc = try self.sourceLocFor(declaration.region);
-        self.builder.program.current_region = declaration.region;
+        const saved_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_loc;
+        const saved_region = self.builder.current_region;
+        defer self.builder.current_region = saved_region;
+        self.builder.current_loc = try self.sourceLocFor(declaration.region);
+        self.builder.current_region = declaration.region;
 
         const args = try self.allocator.alloc(DraftTypedLocal, fn_nodes.args.len);
         defer self.allocator.free(args);
@@ -19693,14 +20359,14 @@ const BodyContext = struct {
         const saved_return_target = self.current_return_target;
         defer self.current_return_target = saved_return_target;
         self.current_return_target = .{ .lambda = lambda_id, .cell = ret_cell };
-        const saved_loc = self.builder.program.current_loc;
-        defer self.builder.program.current_loc = saved_loc;
-        const saved_region = self.builder.program.current_region;
-        defer self.builder.program.current_region = saved_region;
+        const saved_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_loc;
+        const saved_region = self.builder.current_region;
+        defer self.builder.current_region = saved_region;
         const body_expr = self.view.bodies.expr(checked_body);
         const body_region = self.sourceRegionForExpr(body_expr);
-        self.builder.program.current_loc = try self.sourceLocFor(body_region);
-        self.builder.program.current_region = body_region;
+        self.builder.current_loc = try self.sourceLocFor(body_region);
+        self.builder.current_region = body_region;
 
         const exhaustiveness_scope = self.comptime_exhaustiveness_context.resetForRuntimeFunction();
         defer exhaustiveness_scope.leave();
@@ -19811,12 +20477,12 @@ const BodyContext = struct {
         }
         const body_loc = self.exprLoc(body);
         const body_region_after_lowering = self.exprRegion(body);
-        const saved_body_loc = self.builder.program.current_loc;
-        defer self.builder.program.current_loc = saved_body_loc;
-        const saved_body_region = self.builder.program.current_region;
-        defer self.builder.program.current_region = saved_body_region;
-        self.builder.program.current_loc = body_loc;
-        self.builder.program.current_region = body_region_after_lowering;
+        const saved_body_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_body_loc;
+        const saved_body_region = self.builder.current_region;
+        defer self.builder.current_region = saved_body_region;
+        self.builder.current_loc = body_loc;
+        self.builder.current_region = body_region_after_lowering;
         var remaining = arg_lets.items.len;
         while (remaining > 0) {
             remaining -= 1;
@@ -20002,13 +20668,13 @@ const BodyContext = struct {
 
     fn lowerExprInner(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!DraftExprId {
         const expr = self.view.bodies.expr(expr_id);
-        const saved_loc = self.builder.program.current_loc;
-        defer self.builder.program.current_loc = saved_loc;
-        const saved_region = self.builder.program.current_region;
-        defer self.builder.program.current_region = saved_region;
+        const saved_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_loc;
+        const saved_region = self.builder.current_region;
+        defer self.builder.current_region = saved_region;
         const region = self.sourceRegionForExpr(expr);
-        self.builder.program.current_loc = try self.sourceLocFor(region);
-        self.builder.program.current_region = region;
+        self.builder.current_loc = try self.sourceLocFor(region);
+        self.builder.current_region = region;
         if (try self.lowerDivergentExprInContext(expr_id, .uncontextual)) |lowered| return lowered;
         switch (expr.data) {
             .call => |call| if (try self.lowerInspectOnlyCall(
@@ -20199,12 +20865,12 @@ const BodyContext = struct {
                 if (!self.sameType(ty, stored_ty)) {
                     Common.invariant("stored hoisted const representation differed from its expected Monotype type");
                 }
-                const saved_loc = self.builder.program.current_loc;
-                defer self.builder.program.current_loc = saved_loc;
-                const saved_region = self.builder.program.current_region;
-                defer self.builder.program.current_region = saved_region;
-                self.builder.program.current_loc = try self.sourceLocFor(source_region);
-                self.builder.program.current_region = source_region;
+                const saved_loc = self.builder.current_loc;
+                defer self.builder.current_loc = saved_loc;
+                const saved_region = self.builder.current_region;
+                defer self.builder.current_region = saved_region;
+                self.builder.current_loc = try self.sourceLocFor(source_region);
+                self.builder.current_region = source_region;
                 break :blk try self.restoredStaticDataCandidateNode(
                     self.view,
                     self.view,
@@ -20235,12 +20901,12 @@ const BodyContext = struct {
             .stored_const => |stored| blk: {
                 const stored_node = try self.storedConstRootTypeNode(self.view, stored, entry.checked_type);
                 try relateRequestComponent(self.graph, request_node, stored_node);
-                const saved_loc = self.builder.program.current_loc;
-                defer self.builder.program.current_loc = saved_loc;
-                const saved_region = self.builder.program.current_region;
-                defer self.builder.program.current_region = saved_region;
-                self.builder.program.current_loc = try self.sourceLocFor(source_region);
-                self.builder.program.current_region = source_region;
+                const saved_loc = self.builder.current_loc;
+                defer self.builder.current_loc = saved_loc;
+                const saved_region = self.builder.current_region;
+                defer self.builder.current_region = saved_region;
+                self.builder.current_loc = try self.sourceLocFor(source_region);
+                self.builder.current_region = source_region;
                 break :blk try self.restoredStaticDataCandidateNodeAtNode(
                     self.view,
                     self.view,
@@ -20359,13 +21025,13 @@ const BodyContext = struct {
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const expr = self.view.bodies.expr(expr_id);
-        const saved_loc = self.builder.program.current_loc;
-        defer self.builder.program.current_loc = saved_loc;
-        const saved_region = self.builder.program.current_region;
-        defer self.builder.program.current_region = saved_region;
+        const saved_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_loc;
+        const saved_region = self.builder.current_region;
+        defer self.builder.current_region = saved_region;
         const region = self.sourceRegionForExpr(expr);
-        self.builder.program.current_loc = try self.sourceLocFor(region);
-        self.builder.program.current_region = region;
+        self.builder.current_loc = try self.sourceLocFor(region);
+        self.builder.current_region = region;
         const data: BodyExprData = switch (expr.data) {
             .pending,
             .anno_only,
@@ -29918,12 +30584,12 @@ const BodyContext = struct {
 
         const owner_scope = try self.draft.enterOwner(active.owner);
         defer owner_scope.leave();
-        const saved_loc = self.builder.program.current_loc;
-        defer self.builder.program.current_loc = saved_loc;
-        const saved_region = self.builder.program.current_region;
-        defer self.builder.program.current_region = saved_region;
-        self.builder.program.current_loc = self.draft.expr_locs.items[@intFromEnum(source)];
-        self.builder.program.current_region = self.draft.expr_regions.items[@intFromEnum(source)];
+        const saved_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_loc;
+        const saved_region = self.builder.current_region;
+        defer self.builder.current_region = saved_region;
+        self.builder.current_loc = self.draft.expr_locs.items[@intFromEnum(source)];
+        self.builder.current_region = self.draft.expr_regions.items[@intFromEnum(source)];
 
         const wrapped = try self.wrapRecursiveConstLocalAtTypeCell(active.local, active.cell, source);
         self.copyActiveConstReservation(active.reservation, wrapped);
@@ -30526,6 +31192,14 @@ const BodyContext = struct {
         if (!try self.graph.typeIsResolved(spec.request_fn_node)) return current_node;
 
         const request_fn_ty = try self.activeTypeFromNode(spec.request_fn_node);
+        if (self.builder.spec_job_parallel_callback) {
+            // This path consumes a callee's solved private iterator
+            // representation immediately and still performs coordinator-owned
+            // reservation/body completion. Leave the frozen worker result
+            // unpublished and re-run this uncommon job on the serial executor.
+            self.builder.spec_job_requires_serial_retry = true;
+            return error.OutOfMemory;
+        }
         const coordinator_request_fn_ty = try self.commitGraphType(request_fn_ty);
         // Iterator-inline completion consumes the callee's solved private
         // representation, so the body must lower now rather than queue.
@@ -30670,12 +31344,12 @@ const BodyContext = struct {
             },
             .unimplemented => |declaration| blk: {
                 try self.constrainTypeToMono(requested_ty, ty);
-                const saved_loc = self.builder.program.current_loc;
-                defer self.builder.program.current_loc = saved_loc;
-                const saved_region = self.builder.program.current_region;
-                defer self.builder.program.current_region = saved_region;
-                self.builder.program.current_loc = try self.sourceLocFor(declaration.region);
-                self.builder.program.current_region = declaration.region;
+                const saved_loc = self.builder.current_loc;
+                defer self.builder.current_loc = saved_loc;
+                const saved_region = self.builder.current_region;
+                defer self.builder.current_region = saved_region;
+                self.builder.current_loc = try self.sourceLocFor(declaration.region);
+                self.builder.current_region = declaration.region;
                 break :blk try self.runtimeCrashExpr(ty, Common.unimplemented_declaration_crash);
             },
         };
@@ -30737,12 +31411,12 @@ const BodyContext = struct {
             },
             .unimplemented => |declaration| blk: {
                 try self.graph.unify(try self.instNode(requested_ty), request_node);
-                const saved_loc = self.builder.program.current_loc;
-                defer self.builder.program.current_loc = saved_loc;
-                const saved_region = self.builder.program.current_region;
-                defer self.builder.program.current_region = saved_region;
-                self.builder.program.current_loc = try self.sourceLocFor(declaration.region);
-                self.builder.program.current_region = declaration.region;
+                const saved_loc = self.builder.current_loc;
+                defer self.builder.current_loc = saved_loc;
+                const saved_region = self.builder.current_region;
+                defer self.builder.current_region = saved_region;
+                self.builder.current_loc = try self.sourceLocFor(declaration.region);
+                self.builder.current_region = declaration.region;
                 break :blk try self.runtimeCrashExprAtCell(
                     DraftTypeCell.fromGraphNode(request_node),
                     Common.unimplemented_declaration_crash,
@@ -31926,7 +32600,7 @@ const BodyContext = struct {
         if (fn_value.fn_def == .encoder_for_runtime) {
             return try self.restoreConstEncoderForRuntimeFn(store_view, fn_id, fn_value, ty, static_data_const_locator);
         }
-        const template = try self.builder.restoredConstFnTemplateToMono(store_view, fn_id, fn_value, ty);
+        const template = try self.builder.restoredConstFnTemplateToMono(store_view, fn_id, fn_value, ty, false);
         if (fn_value.evidence_frames.len == 0 or fn_value.evidence_frame_head == null) {
             Common.invariant("stored checked function did not contain an explicit evidence root frame");
         }
@@ -32365,8 +33039,8 @@ const BodyContext = struct {
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
             .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
-            .const_evidence = try self.builder.program.addConstFnEvidence(stored_evidence.nodes),
-            .const_evidence_frames = try self.builder.program.addConstFnEvidenceFrames(stored_evidence.frames),
+            .const_evidence = try fn_ctx.draft.addConstFnEvidence(stored_evidence.nodes),
+            .const_evidence_frames = try fn_ctx.draft.addConstFnEvidenceFrames(stored_evidence.frames),
             .const_evidence_frame_head = stored_evidence.head,
             .evidence_digest = evidence_digest,
         } });
@@ -32725,8 +33399,8 @@ const BodyContext = struct {
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
             .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
-            .const_evidence = try self.builder.program.addConstFnEvidence(stored_evidence.nodes),
-            .const_evidence_frames = try self.builder.program.addConstFnEvidenceFrames(stored_evidence.frames),
+            .const_evidence = try fn_ctx.draft.addConstFnEvidence(stored_evidence.nodes),
+            .const_evidence_frames = try fn_ctx.draft.addConstFnEvidenceFrames(stored_evidence.frames),
             .const_evidence_frame_head = stored_evidence.head,
             .evidence_digest = evidence_digest,
         } });
@@ -33598,13 +34272,13 @@ const BodyContext = struct {
         expr_diverges: bool,
     ) Allocator.Error!DraftExprId {
         const expr = self.view.bodies.expr(checked_expr);
-        const saved_loc = self.builder.program.current_loc;
-        defer self.builder.program.current_loc = saved_loc;
-        const saved_region = self.builder.program.current_region;
-        defer self.builder.program.current_region = saved_region;
+        const saved_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_loc;
+        const saved_region = self.builder.current_region;
+        defer self.builder.current_region = saved_region;
         const region = self.sourceRegionForExpr(expr);
-        self.builder.program.current_loc = try self.sourceLocFor(region);
-        self.builder.program.current_region = region;
+        self.builder.current_loc = try self.sourceLocFor(region);
+        self.builder.current_region = region;
         return switch (cell) {
             .sealed => |ty| blk: {
                 const lowered = if (expr_diverges)
@@ -47974,12 +48648,12 @@ const BodyContext = struct {
         lowered: *LoweredStatements,
     ) Allocator.Error!bool {
         const statement = self.view.bodies.statement(statement_id);
-        const saved_loc = self.builder.program.current_loc;
-        defer self.builder.program.current_loc = saved_loc;
-        const saved_region = self.builder.program.current_region;
-        defer self.builder.program.current_region = saved_region;
-        self.builder.program.current_loc = try self.sourceLocFor(statement.source_region);
-        self.builder.program.current_region = statement.source_region;
+        const saved_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_loc;
+        const saved_region = self.builder.current_region;
+        defer self.builder.current_region = saved_region;
+        self.builder.current_loc = try self.sourceLocFor(statement.source_region);
+        self.builder.current_region = statement.source_region;
         const pattern, const expr = switch (statement.data) {
             .decl => |decl| blk: {
                 if (self.statementDeclIsLocalProc(decl.pattern, decl.expr)) return false;
@@ -49609,12 +50283,12 @@ const BodyContext = struct {
         statement_diverges: bool,
     ) Allocator.Error!LoweredStatement {
         const statement = self.view.bodies.statement(statement_id);
-        const saved_loc = self.builder.program.current_loc;
-        defer self.builder.program.current_loc = saved_loc;
-        const saved_region = self.builder.program.current_region;
-        defer self.builder.program.current_region = saved_region;
-        self.builder.program.current_loc = try self.sourceLocFor(statement.source_region);
-        self.builder.program.current_region = statement.source_region;
+        const saved_loc = self.builder.current_loc;
+        defer self.builder.current_loc = saved_loc;
+        const saved_region = self.builder.current_region;
+        defer self.builder.current_region = saved_region;
+        self.builder.current_loc = try self.sourceLocFor(statement.source_region);
+        self.builder.current_region = statement.source_region;
         var termination: StatementTermination = .none;
         const stmt: DraftStmt = switch (statement.data) {
             .pending,
@@ -51228,6 +51902,8 @@ test "queued specialization skips a body claimed immediately before dispatch" {
     var diagnostics: Diagnostics = .{};
     var builder: Builder = undefined;
     builder.active_graph = null;
+    builder.active_body_draft = null;
+    builder.post_check_executor = null;
     builder.pending_spec_jobs = .empty;
     defer builder.pending_spec_jobs.deinit(allocator);
     builder.pending_spec_jobs_head = 0;
@@ -51592,6 +52268,7 @@ test "monotype sameType keeps failed alias alternatives out of recursion stack" 
 
     var builder: Builder = undefined;
     builder.program = &program;
+    builder.active_body_draft = null;
     var ctx: BodyContext = undefined;
     ctx.allocator = std.testing.allocator;
     ctx.builder = &builder;
@@ -51621,6 +52298,7 @@ test "body context inspects graph-owned types despite program TypeId collisions"
     defer draft.deinit();
     var builder: Builder = undefined;
     builder.program = &program;
+    builder.active_body_draft = null;
     builder.bool_ty = program_ty;
     builder.timing = null;
     var ctx: BodyContext = undefined;
@@ -52994,6 +53672,7 @@ test "hosted Try adapter narrows requested private representations by declared l
     var builder: Builder = undefined;
     builder.allocator = allocator;
     builder.program = &program;
+    builder.active_body_draft = null;
 
     const module_identity = try program.names.internModuleIdentity(&([_]u8{0xA7} ** 32));
     const opaque_def = Type.TypeDef{
@@ -53130,6 +53809,7 @@ test "hosted Try info accepts alias-wrapped nominal arguments over unwrapped bac
     var builder: Builder = undefined;
     builder.allocator = allocator;
     builder.program = &program;
+    builder.active_body_draft = null;
 
     const module_identity = try program.names.internModuleIdentity(&([_]u8{0xB2} ** 32));
     const try_def = Type.TypeDef{
@@ -53240,6 +53920,7 @@ test "hosted extern boundary admits only the declared host ABI type" {
     var builder: Builder = undefined;
     builder.allocator = allocator;
     builder.program = &program;
+    builder.active_body_draft = null;
 
     const module_identity = try program.names.internModuleIdentity(&([_]u8{0xC3} ** 32));
     const try_def = Type.TypeDef{

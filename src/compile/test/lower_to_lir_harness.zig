@@ -88,6 +88,9 @@ pub const LoweredInspectFn = *const fn (
 /// Options controlling how the harness lowers an app to LIR.
 pub const LirLoweringOptions = struct {
     specialization_strategy: base.SpecializationStrategy = .lss,
+    /// Number of coordinator workers available to post-check specialization.
+    /// The default retains the harness's existing single-threaded behavior.
+    specialization_workers: usize = 1,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     inline_mode: lir.CheckedPipeline.InlineMode = .none,
     consume_dead_boxes: bool = false,
@@ -171,6 +174,29 @@ pub fn expectDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void 
     try runToLir(app_body, &writer_a, .{}, null);
     try runToLir(app_body, &writer_b, .{}, null);
     try std.testing.expectEqualStrings(writer_a.buffered(), writer_b.buffered());
+}
+
+/// Lower `app_body` with one, two, and four specialization workers, comparing
+/// each complete LIR dump with the single-worker result. Run each parallel
+/// configuration twice so this checks both worker-count independence and
+/// repeated scheduling independence without relying on timing.
+pub fn expectSpecializationParallelismDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void {
+    const gpa = std.testing.allocator;
+    const cap = 1 << 22;
+    const reference = try gpa.alloc(u8, cap);
+    defer gpa.free(reference);
+    var reference_writer = std.Io.Writer.fixed(reference);
+    try runToLir(app_body, &reference_writer, .{ .specialization_workers = 1 }, null);
+
+    for ([_]usize{ 2, 4 }) |specialization_workers| {
+        for (0..2) |_| {
+            const candidate = try gpa.alloc(u8, cap);
+            defer gpa.free(candidate);
+            var candidate_writer = std.Io.Writer.fixed(candidate);
+            try runToLir(app_body, &candidate_writer, .{ .specialization_workers = specialization_workers }, null);
+            try std.testing.expectEqualStrings(reference_writer.buffered(), candidate_writer.buffered());
+        }
+    }
 }
 
 /// Lower `app_body` for both pointer widths (with in-place `List.map` reuse
@@ -273,8 +299,8 @@ fn lowerAppPathToLir(
 
     var coord = try Coordinator.init(
         gpa,
-        .single_threaded,
-        1,
+        if (opts.specialization_workers > 1) .multi_threaded else .single_threaded,
+        opts.specialization_workers,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
         build_options.compiler_version,
@@ -319,6 +345,10 @@ fn lowerAppPathToLir(
             .proc_debug_names = opts.proc_debug_names,
             .prove_ranges = opts.prove_ranges,
             .lifted_expr_count_out = opts.lifted_expr_count_out,
+            .post_check_executor = if (opts.specialization_workers > 1)
+                coord.postCheckExecutor()
+            else
+                null,
         },
     );
     defer lowered.deinit();
