@@ -522,7 +522,28 @@ invalid declarations to the same worklist, which is then propagated incrementall
 before value checking without rebuilding the dependency graph. Every invalid
 type declaration has its declaration root and backing template poisoned to the
 error type, and invalid nominal declarations are also marked invalid in the
-declaration table. CheckedModule construction enforces this invariant: a nominal
+declaration table.
+
+Recursion shape is not the only declaration-level validity rule: a nominal
+declaration group must also admit a finite set of instantiations, because
+monomorphization instantiates a declaration's backing at every distinct
+argument tuple. Argument-growth validation runs immediately after
+nominal-recursion validation, over the same local declarations. It classifies
+every nominal mention inside each backing template on the formal-flow graph: a
+mention argument that is a formal passed straight through adds a plain edge
+from that formal to the mentioned declaration's formal, and one that embeds a
+formal inside a composite (or behind a transparent alias) adds a growing edge.
+A declaration is invalid exactly when one of its growing edges lies inside a
+formal-flow cycle—growth that never returns to its origin stays finite—or
+when a mention on a declaration cycle carries a variable that is no formal of
+the mentioning declaration, which every expansion would mint fresh. Rejected
+declarations report `invalid_nominal_decl_recursion` with the `growing_args`
+kind and are poisoned exactly like the recursion-shape kinds. Everything this
+rule admits terminates in Monotype backing instantiation: formal arguments
+resolve to the enclosing instance's own cells, closed arguments memoize once
+per instantiation context, and growing edges descend the formal-flow
+condensation, so the argument tuples reachable from any application form a
+finite set. CheckedModule construction enforces this invariant: a nominal
 declaration marked valid always has an error-free checked template, and
 encountering malformed template data for one is an invariant violation.
 `CheckedTypeStore` construction and public-API dependency collection both omit
@@ -5794,6 +5815,10 @@ Other solved-graph mutations:
 - `finalizeTypeDeclarationValidity` and occurs-check poisoning
   (`setVarContent(.err)`)—policy: Type Declaration Template Validity (above)
   and diagnostic recovery after an already reported problem.
+- `validateNominalDeclArgumentGrowth` (`setVarContent(.err)`)—policy:
+  argument-growth validation in Type Declaration Template Validity (above). A
+  declaration whose recursion admits no finite instantiation set is poisoned
+  at the declaration, exactly like the recursion-shape kinds.
 - `finalizeFunctionEffectsAtBoundary`—policy: directed-effect
   materialization at generalization boundaries, the rule declared in
   Checking Effects And Const Roots.

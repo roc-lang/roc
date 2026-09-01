@@ -18938,32 +18938,43 @@ const BodyContext = struct {
         return try self.instNode(checked_ty);
     }
 
+    /// Resolve a checked type's memoized instantiation node. A closed checked
+    /// type (no identity variables anywhere, field kinds included) means the
+    /// same thing under every declaration scope, so it memoizes at the
+    /// instantiation-context level; an open type's meaning depends on the
+    /// innermost declaration scope's formal bindings, so it memoizes there
+    /// and only there. An outer declaration scope must never answer an open
+    /// lookup: the same open checked type mentioned at two nesting levels of
+    /// a recursive declaration expansion binds the formals differently, and
+    /// an outer answer would collapse those distinct types into one node.
     fn scopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) ?NodeId {
-        var index = self.instantiation.decl_scopes.items.len;
-        while (index > 0) {
-            index -= 1;
-            if (self.instantiation.decl_scopes.items[index].get(checked_ty)) |existing| return existing;
+        const scopes = self.instantiation.decl_scopes.items;
+        if (scopes.len == 0 or self.checkedTypeIsClosed(checked_ty)) {
+            return self.instantiation.node_map.get(checked_ty);
         }
-        if (self.instantiation.decl_scopes.items.len != 0) return null;
-        return self.instantiation.node_map.get(checked_ty);
+        return scopes[scopes.len - 1].get(checked_ty);
     }
 
     fn putScopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId, node: NodeId) Allocator.Error!void {
-        if (self.instantiation.decl_scopes.items.len != 0) {
-            try self.instantiation.decl_scopes.items[self.instantiation.decl_scopes.items.len - 1].put(checked_ty, node);
+        const scopes = self.instantiation.decl_scopes.items;
+        if (scopes.len == 0 or self.checkedTypeIsClosed(checked_ty)) {
+            try self.instantiation.node_map.put(checked_ty, node);
             return;
         }
-        try self.instantiation.node_map.put(checked_ty, node);
+        try scopes[scopes.len - 1].put(checked_ty, node);
     }
 
+    /// Field-kind memoization scopes exactly like `scopedNode`. A kind cell
+    /// is looked up by its undetermined variable's checked type, and a
+    /// variable is always open, so inside a declaration expansion this
+    /// resolves in the innermost scope; the closed branch exists only to
+    /// keep the routing rule identical to `scopedNode`'s.
     fn scopedFieldKind(self: *BodyContext, checked_ty: checked.CheckedTypeId) ?InstantiatedFieldKind {
-        var index = self.instantiation.field_kind_decl_scopes.items.len;
-        while (index > 0) {
-            index -= 1;
-            if (self.instantiation.field_kind_decl_scopes.items[index].get(checked_ty)) |existing| return existing;
+        const scopes = self.instantiation.field_kind_decl_scopes.items;
+        if (scopes.len == 0 or self.checkedTypeIsClosed(checked_ty)) {
+            return self.instantiation.field_kind_map.get(checked_ty);
         }
-        if (self.instantiation.field_kind_decl_scopes.items.len != 0) return null;
-        return self.instantiation.field_kind_map.get(checked_ty);
+        return scopes[scopes.len - 1].get(checked_ty);
     }
 
     fn putScopedFieldKind(
@@ -18971,11 +18982,12 @@ const BodyContext = struct {
         checked_ty: checked.CheckedTypeId,
         field_kind: InstantiatedFieldKind,
     ) Allocator.Error!void {
-        if (self.instantiation.field_kind_decl_scopes.items.len != 0) {
-            try self.instantiation.field_kind_decl_scopes.items[self.instantiation.field_kind_decl_scopes.items.len - 1].put(checked_ty, field_kind);
+        const scopes = self.instantiation.field_kind_decl_scopes.items;
+        if (scopes.len == 0 or self.checkedTypeIsClosed(checked_ty)) {
+            try self.instantiation.field_kind_map.put(checked_ty, field_kind);
             return;
         }
-        try self.instantiation.field_kind_map.put(checked_ty, field_kind);
+        try scopes[scopes.len - 1].put(checked_ty, field_kind);
     }
 
     fn instNodeSlice(self: *BodyContext, checked_tys: []const checked.CheckedTypeId) Allocator.Error![]NodeId {
@@ -19212,8 +19224,19 @@ const BodyContext = struct {
     /// formals and backing share one set of checked roots across every instance
     /// of the nominal, so the backing instantiates inside a fresh scope seeded
     /// with this instance's argument nodes: two instances of the same nominal at
-    /// different arguments stay independent, and the recursive uses inside the
-    /// backing resolve through the scope chain.
+    /// different arguments stay independent.
+    ///
+    /// Termination: the checker's `validateNominalDeclArgumentGrowth` rejects
+    /// any declaration group whose formal-flow graph carries a growing edge
+    /// inside a cycle, and any recursive mention argument holding a variable
+    /// that is no formal of the mentioning declaration. What remains keeps
+    /// the reachable argument tuples finite here: a formal argument resolves
+    /// in the innermost scope to this instance's own argument cell, so the
+    /// recursive lookup hits the placeholder registered below before the
+    /// backing expands; a closed argument memoizes once per instantiation
+    /// context, so nested expansions present the same cell; and a
+    /// formal-wrapping argument only occurs on acyclic flow edges, so the
+    /// fresh cells it mints never feed back into their own declaration.
     fn instNominalBackingNode(
         self: *BodyContext,
         nominal: checked.CheckedNominalType,
