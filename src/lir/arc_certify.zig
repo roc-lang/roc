@@ -1409,9 +1409,23 @@ const State = struct {
             self.outcome_discriminants.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
         }
 
+        try copyBitSet(&self.maybe_uninitialized_unresolved, &source.maybe_uninitialized_unresolved, self.allocator);
+        try copyBitSet(&self.maybe_uninitialized_released, &source.maybe_uninitialized_released, self.allocator);
+
         self.local_dense = source.local_dense;
         self.pool = source.pool;
         self.result_discriminant = source.result_discriminant;
+    }
+
+    fn copyBitSet(
+        destination: *std.bit_set.DynamicBitSetUnmanaged,
+        source: *const std.bit_set.DynamicBitSetUnmanaged,
+        allocator: Allocator,
+    ) Allocator.Error!void {
+        try destination.resize(allocator, source.bit_length, false);
+        const mask_bits = @bitSizeOf(std.bit_set.DynamicBitSetUnmanaged.MaskInt);
+        const mask_count = (source.bit_length + mask_bits - 1) / mask_bits;
+        @memcpy(destination.masks[0..mask_count], source.masks[0..mask_count]);
     }
 
     fn copyList(
