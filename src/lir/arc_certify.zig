@@ -1396,6 +1396,8 @@ const State = struct {
         try copyList(ValueId, &self.holder, &source.holder, self.allocator);
         try copyList(u32, &self.conditional_condition, &source.conditional_condition, self.allocator);
         try copyList(u64, &self.conditional_condition_mask, &source.conditional_condition_mask, self.allocator);
+        try copyBitSet(&self.maybe_uninitialized_unresolved, &source.maybe_uninitialized_unresolved, self.allocator);
+        try copyBitSet(&self.maybe_uninitialized_released, &source.maybe_uninitialized_released, self.allocator);
 
         self.claims.clearRetainingCapacity();
         try self.claims.ensureTotalCapacity(self.allocator, source.claims.count());
@@ -1422,6 +1424,16 @@ const State = struct {
     ) Allocator.Error!void {
         destination.clearRetainingCapacity();
         try destination.appendSlice(allocator, source.items);
+    }
+
+    fn copyBitSet(
+        destination: *std.bit_set.DynamicBitSetUnmanaged,
+        source: *const std.bit_set.DynamicBitSetUnmanaged,
+        allocator: Allocator,
+    ) Allocator.Error!void {
+        try destination.resize(allocator, source.capacity(), false);
+        destination.unsetAll();
+        destination.setUnion(source.*);
     }
 
     fn claimsOf(self: *const State, value: ValueId) u64 {
@@ -1514,6 +1526,32 @@ const State = struct {
         self.conditional_condition_mask.items[value] = 0;
     }
 };
+
+test "recycled state copies maybe-uninitialized facts" {
+    var source = try State.init(testing.allocator, &.{}, 4);
+    defer source.deinit();
+    source.maybe_uninitialized_unresolved.set(1);
+    source.maybe_uninitialized_released.set(2);
+
+    var recycled = try State.init(testing.allocator, &.{}, 6);
+    defer recycled.deinit();
+    recycled.maybe_uninitialized_unresolved.set(0);
+    recycled.maybe_uninitialized_unresolved.set(3);
+    recycled.maybe_uninitialized_released.set(0);
+    recycled.maybe_uninitialized_released.set(3);
+
+    try recycled.refillFrom(&source);
+
+    try testing.expectEqual(@as(usize, 4), recycled.maybe_uninitialized_unresolved.capacity());
+    try testing.expect(!recycled.maybe_uninitialized_unresolved.isSet(0));
+    try testing.expect(recycled.maybe_uninitialized_unresolved.isSet(1));
+    try testing.expect(!recycled.maybe_uninitialized_unresolved.isSet(2));
+    try testing.expect(!recycled.maybe_uninitialized_unresolved.isSet(3));
+    try testing.expect(!recycled.maybe_uninitialized_released.isSet(0));
+    try testing.expect(!recycled.maybe_uninitialized_released.isSet(1));
+    try testing.expect(recycled.maybe_uninitialized_released.isSet(2));
+    try testing.expect(!recycled.maybe_uninitialized_released.isSet(3));
+}
 
 /// Sparse lifetime provenance for one alias-class representative. Ownership
 /// balance is deliberately absent: a value can carry an explicit unit while
