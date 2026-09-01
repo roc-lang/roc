@@ -6511,6 +6511,13 @@ independent of worker scheduling without locking coordinator state. Root kinds
 that reserve durable identities or write directly to the final program remain
 serial barriers until they have the same sealed-draft boundary.
 
+Post-check timing keeps two distinct measures for this boundary. Monotype wall
+time is the elapsed coordinator interval, including worker waits and ordered
+commit. Aggregate worker work is the sum of executor callback intervals and can
+exceed wall time when callbacks overlap; it is diagnostic work, not another
+sequential phase. Task, lane, retry, and discard counts explain the relationship
+without using scheduling-dependent values for compiler behavior.
+
 Instantiation graph node ids are dense, append-only indexes for the lifetime of
 the graph. Per-node optional attributes such as a row root's current extension
 and a generated-private request's source interface are therefore dense parallel

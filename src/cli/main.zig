@@ -15581,7 +15581,7 @@ fn compileTimeEvaluationBreakdown(timing: anytype) [8]progress.SubTiming {
 
 const post_check_lowering_phase_name = "Post-Check Lowering";
 
-fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [24]progress.SubTiming {
+fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [25]progress.SubTiming {
     const classified_body_ns = timing.monotype_procedure_body_type_graph_ns +|
         timing.monotype_procedure_body_call_dispatch_ns +|
         timing.monotype_procedure_body_draft_ir_ns +|
@@ -15603,6 +15603,7 @@ fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [24]pr
         .{ .name = "Body Local Procedure Context", .ns = timing.monotype_procedure_body_local_proc_context_ns },
         .{ .name = "Body Sealing + Commit", .ns = timing.monotype_procedure_body_finalization_ns },
         .{ .name = "Procedure Completion", .ns = timing.monotype_procedure_completion_ns },
+        .{ .name = "Parallel Worker Wait", .ns = timing.monotype_procedure_parallel_wait_ns },
         .{ .name = "Layout Requests", .ns = timing.monotype_layout_requests_ns },
         .{ .name = "Static Data Requests", .ns = timing.monotype_static_data_requests_ns },
         .{ .name = "Monotype Finalization", .ns = timing.monotype_finalization_ns },
@@ -15622,6 +15623,7 @@ fn finishPostCheckLowering(reporter: *progress.Reporter, timing: *const lir.Chec
     reporter.recordCounters("Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
     reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
     reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
+    reporter.recordCounters("Monotype parallel execution", &monotypeParallelCounters(snapshot.monotype_parallel));
 }
 
 fn postCheckLoweringTotalNs(timing: lir.CheckedPipeline.TimingSnapshot) u64 {
@@ -15646,6 +15648,7 @@ fn recordPostCheckLowering(reporter: *progress.Reporter, timing: *const lir.Chec
     reporter.recordCounters("Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
     reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
     reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
+    reporter.recordCounters("Monotype parallel execution", &monotypeParallelCounters(snapshot.monotype_parallel));
 }
 
 fn devTestExecutionBreakdown(timing: eval.test_helpers.DevBoolRootTimingSnapshot) [6]progress.SubTiming {
@@ -15752,6 +15755,24 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [20]p
     };
 }
 
+fn monotypeParallelCounters(parallel: postcheck.Monotype.Lower.ParallelMetricsSnapshot) [13]progress.Counter {
+    return .{
+        .{ .name = "Aggregate worker work (ns)", .count = parallel.worker_work_ns },
+        .{ .name = "Coordinator commit work (ns)", .count = parallel.coordinator_commit_work_ns },
+        .{ .name = "Root tasks submitted", .count = parallel.root_tasks_submitted },
+        .{ .name = "Root tasks committed", .count = parallel.root_tasks_committed },
+        .{ .name = "Root tasks retried serially", .count = parallel.root_tasks_retried_serial },
+        .{ .name = "Specialization tasks submitted", .count = parallel.specialization_tasks_submitted },
+        .{ .name = "Specialization tasks committed", .count = parallel.specialization_tasks_committed },
+        .{ .name = "Specialization tasks retried serially", .count = parallel.specialization_tasks_retried_serial },
+        .{ .name = "Specialization tasks discarded ready", .count = parallel.specialization_tasks_discarded_ready },
+        .{ .name = "Parallel task waves", .count = parallel.task_waves },
+        .{ .name = "Worker lanes available", .count = parallel.worker_lanes_available },
+        .{ .name = "Worker lanes used", .count = parallel.worker_lanes_used },
+        .{ .name = "Worker lane reuse tasks", .count = parallel.worker_lane_reuse_tasks },
+    };
+}
+
 test "post-check timing names distinct work and keep inlining separate from SpecConstr" {
     const rows = postCheckLoweringBreakdown(.{
         .monotype_setup_ns = 1,
@@ -15769,6 +15790,7 @@ test "post-check timing names distinct work and keep inlining separate from Spec
         .monotype_procedure_body_local_proc_context_ns = 6,
         .monotype_procedure_body_finalization_ns = 7,
         .monotype_procedure_completion_ns = 8,
+        .monotype_procedure_parallel_wait_ns = 19,
         .monotype_layout_requests_ns = 9,
         .monotype_static_data_requests_ns = 10,
         .monotype_finalization_ns = 11,
@@ -15794,12 +15816,14 @@ test "post-check timing names distinct work and keep inlining separate from Spec
     try std.testing.expectEqualStrings("Body Local Procedure Context", rows[11].name);
     try std.testing.expectEqualStrings("Body Sealing + Commit", rows[12].name);
     try std.testing.expectEqualStrings("Procedure Completion", rows[13].name);
+    try std.testing.expectEqualStrings("Parallel Worker Wait", rows[14].name);
+    try std.testing.expectEqual(@as(u64, 19), rows[14].ns);
     const expected_body_ns = [_]u64{ 6, 1, 2, 3, 4, 5, 6 };
     for (rows[5..12], expected_body_ns) |row, expected_ns| try std.testing.expectEqual(expected_ns, row.ns);
-    try std.testing.expectEqualStrings("SpecConstr", rows[18].name);
-    try std.testing.expectEqualStrings("Inline Planning", rows[20].name);
-    try std.testing.expectEqual(@as(u64, 13), rows[18].ns);
-    try std.testing.expectEqual(@as(u64, 15), rows[20].ns);
+    try std.testing.expectEqualStrings("SpecConstr", rows[19].name);
+    try std.testing.expectEqualStrings("Inline Planning", rows[21].name);
+    try std.testing.expectEqual(@as(u64, 13), rows[19].ns);
+    try std.testing.expectEqual(@as(u64, 15), rows[21].ns);
     for (rows) |row| {
         try std.testing.expect(!std.mem.eql(u8, post_check_lowering_phase_name, row.name));
     }
@@ -15837,6 +15861,30 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 305), body[10].count);
     try std.testing.expectEqualStrings("Nested closures prepared", body[19].name);
     try std.testing.expectEqual(@as(u64, 302), body[19].count);
+
+    const parallel = monotypeParallelCounters(.{
+        .worker_work_ns = 401,
+        .coordinator_commit_work_ns = 402,
+        .root_tasks_submitted = 403,
+        .specialization_tasks_discarded_ready = 404,
+        .worker_lanes_available = 8,
+        .worker_lanes_used = 4,
+        .worker_lane_reuse_tasks = 405,
+    });
+    try std.testing.expectEqualStrings("Aggregate worker work (ns)", parallel[0].name);
+    try std.testing.expectEqual(@as(u64, 401), parallel[0].count);
+    try std.testing.expectEqualStrings("Coordinator commit work (ns)", parallel[1].name);
+    try std.testing.expectEqual(@as(u64, 402), parallel[1].count);
+    try std.testing.expectEqualStrings("Root tasks submitted", parallel[2].name);
+    try std.testing.expectEqual(@as(u64, 403), parallel[2].count);
+    try std.testing.expectEqualStrings("Specialization tasks discarded ready", parallel[8].name);
+    try std.testing.expectEqual(@as(u64, 404), parallel[8].count);
+    try std.testing.expectEqualStrings("Worker lanes available", parallel[10].name);
+    try std.testing.expectEqual(@as(u64, 8), parallel[10].count);
+    try std.testing.expectEqualStrings("Worker lanes used", parallel[11].name);
+    try std.testing.expectEqual(@as(u64, 4), parallel[11].count);
+    try std.testing.expectEqualStrings("Worker lane reuse tasks", parallel[12].name);
+    try std.testing.expectEqual(@as(u64, 405), parallel[12].count);
 }
 
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {

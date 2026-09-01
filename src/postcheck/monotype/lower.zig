@@ -273,7 +273,44 @@ pub const Options = struct {
     timing: ?*Timing = null,
 };
 
-/// Timings for the sequential phases owned by Monotype lowering.
+/// Aggregate execution measurements for executor-backed Monotype work.
+///
+/// Worker work is the sum of task callback elapsed times, not process or thread
+/// CPU time, so it may exceed Monotype wall time when callbacks overlap.
+pub const ParallelMetricsSnapshot = struct {
+    worker_work_ns: u64 = 0,
+    coordinator_commit_work_ns: u64 = 0,
+    root_tasks_submitted: u64 = 0,
+    root_tasks_committed: u64 = 0,
+    root_tasks_retried_serial: u64 = 0,
+    specialization_tasks_submitted: u64 = 0,
+    specialization_tasks_committed: u64 = 0,
+    specialization_tasks_retried_serial: u64 = 0,
+    specialization_tasks_discarded_ready: u64 = 0,
+    task_waves: u64 = 0,
+    worker_lanes_available: u64 = 0,
+    worker_lanes_used: u64 = 0,
+    worker_lane_reuse_tasks: u64 = 0,
+
+    pub fn add(self: *ParallelMetricsSnapshot, other: ParallelMetricsSnapshot) void {
+        self.worker_work_ns +%= other.worker_work_ns;
+        self.coordinator_commit_work_ns +%= other.coordinator_commit_work_ns;
+        self.root_tasks_submitted +%= other.root_tasks_submitted;
+        self.root_tasks_committed +%= other.root_tasks_committed;
+        self.root_tasks_retried_serial +%= other.root_tasks_retried_serial;
+        self.specialization_tasks_submitted +%= other.specialization_tasks_submitted;
+        self.specialization_tasks_committed +%= other.specialization_tasks_committed;
+        self.specialization_tasks_retried_serial +%= other.specialization_tasks_retried_serial;
+        self.specialization_tasks_discarded_ready +%= other.specialization_tasks_discarded_ready;
+        self.task_waves +%= other.task_waves;
+        self.worker_lanes_available = @max(self.worker_lanes_available, other.worker_lanes_available);
+        self.worker_lanes_used = @max(self.worker_lanes_used, other.worker_lanes_used);
+        self.worker_lane_reuse_tasks +%= other.worker_lane_reuse_tasks;
+    }
+};
+
+/// Timings for coordinator wall phases and aggregate executor work owned by
+/// Monotype lowering.
 pub const Timing = struct {
     std_io: std.Io,
     setup_ns: u64 = 0,
@@ -291,9 +328,11 @@ pub const Timing = struct {
     procedure_body_local_proc_context_ns: u64 = 0,
     procedure_body_finalization_ns: u64 = 0,
     procedure_completion_ns: u64 = 0,
+    procedure_parallel_wait_ns: u64 = 0,
     layout_requests_ns: u64 = 0,
     static_data_requests_ns: u64 = 0,
     finalization_ns: u64 = 0,
+    parallel: ParallelMetricsSnapshot = .{},
     body_work_timing_enabled: bool = false,
     active_procedure_phase: ?ProcedureTimingPhase = null,
     active_procedure_phase_started_ns: i64 = 0,
@@ -321,14 +360,16 @@ pub const Timing = struct {
             .procedure_body_local_proc_context_ns = self.procedure_body_local_proc_context_ns,
             .procedure_body_finalization_ns = self.procedure_body_finalization_ns,
             .procedure_completion_ns = self.procedure_completion_ns,
+            .procedure_parallel_wait_ns = self.procedure_parallel_wait_ns,
             .layout_requests_ns = self.layout_requests_ns,
             .static_data_requests_ns = self.static_data_requests_ns,
             .finalization_ns = self.finalization_ns,
+            .parallel = self.parallel,
         };
     }
 
     fn start(self: *const Timing) i64 {
-        return @intCast(@max(0, std.Io.Timestamp.now(self.std_io, .awake).nanoseconds));
+        return timingNowNs(self.std_io);
     }
 
     fn finish(self: *Timing, started_ns: i64, phase: TimingPhase) void {
@@ -368,6 +409,7 @@ pub const Timing = struct {
             .body_lowering => self.procedure_body_lowering_ns +%= elapsed_ns,
             .body_finalization => self.procedure_body_finalization_ns +%= elapsed_ns,
             .completion => self.procedure_completion_ns +%= elapsed_ns,
+            .parallel_wait => self.procedure_parallel_wait_ns +%= elapsed_ns,
         }
         self.active_procedure_phase = next;
         self.active_procedure_phase_started_ns = now;
@@ -391,6 +433,10 @@ pub const Timing = struct {
     }
 };
 
+fn timingNowNs(std_io: std.Io) i64 {
+    return @intCast(@max(0, std.Io.Timestamp.now(std_io, .awake).nanoseconds));
+}
+
 /// Immutable Monotype phase timings consumed by checked-pipeline reporting.
 pub const TimingSnapshot = struct {
     setup_ns: u64 = 0,
@@ -408,9 +454,11 @@ pub const TimingSnapshot = struct {
     procedure_body_local_proc_context_ns: u64 = 0,
     procedure_body_finalization_ns: u64 = 0,
     procedure_completion_ns: u64 = 0,
+    procedure_parallel_wait_ns: u64 = 0,
     layout_requests_ns: u64 = 0,
     static_data_requests_ns: u64 = 0,
     finalization_ns: u64 = 0,
+    parallel: ParallelMetricsSnapshot = .{},
 };
 
 const TimingPhase = enum {
@@ -421,6 +469,27 @@ const TimingPhase = enum {
     finalization,
 };
 
+const TimingPhaseScope = struct {
+    timing: ?*Timing = null,
+    started_ns: i64 = 0,
+    phase: TimingPhase = undefined,
+
+    fn begin(timing: ?*Timing, phase: TimingPhase) TimingPhaseScope {
+        const active = timing orelse return .{};
+        return .{
+            .timing = active,
+            .started_ns = active.start(),
+            .phase = phase,
+        };
+    }
+
+    fn end(self: *TimingPhaseScope) void {
+        const timing = self.timing orelse return;
+        timing.finish(self.started_ns, self.phase);
+        self.timing = null;
+    }
+};
+
 const ProcedureTimingPhase = enum {
     root_wrapper,
     lookup_reservation,
@@ -429,6 +498,7 @@ const ProcedureTimingPhase = enum {
     body_lowering,
     body_finalization,
     completion,
+    parallel_wait,
 };
 
 const ProcedureTimingScope = struct {
@@ -445,6 +515,27 @@ const ProcedureTimingScope = struct {
     fn end(self: *ProcedureTimingScope) void {
         const timing = self.timing orelse return;
         timing.switchProcedurePhase(self.previous);
+        self.timing = null;
+    }
+};
+
+/// Aggregate elapsed coordinator work after an executor batch has completed.
+/// This overlaps the coordinator's procedure wall-time classification and is
+/// therefore reported as work rather than as another sequential phase.
+const ParallelCoordinatorTimingScope = struct {
+    timing: ?*Timing = null,
+    started_ns: i64 = 0,
+
+    fn begin(timing: ?*Timing) ParallelCoordinatorTimingScope {
+        const active = timing orelse return .{};
+        return .{ .timing = active, .started_ns = active.start() };
+    }
+
+    fn end(self: *ParallelCoordinatorTimingScope) void {
+        const timing = self.timing orelse return;
+        const finished_ns = timing.start();
+        const elapsed_ns: u64 = @intCast(@max(0, finished_ns - self.started_ns));
+        timing.parallel.coordinator_commit_work_ns +%= elapsed_ns;
         self.timing = null;
     }
 };
@@ -561,58 +652,69 @@ pub fn run(
         Common.invariant("Monotype lowering requires explicit roots, layout requests, or static data requests");
     }
 
-    const setup_started_ns = if (options.timing) |timing| timing.start() else 0;
     var program = Ast.Program.init(allocator);
     errdefer program.deinit();
 
     var builder = Builder.init(allocator, modules, &program, options);
     defer builder.deinit();
-    try builder.initHostedCatalog();
-    try builder.loadCandidateSpecializationShards();
-    if (options.timing) |timing| timing.finish(setup_started_ns, .setup);
+    defer builder.recordParallelLaneMetrics();
+    {
+        var setup_timing_scope = TimingPhaseScope.begin(options.timing, .setup);
+        defer setup_timing_scope.end();
+        try builder.initHostedCatalog();
+        try builder.loadCandidateSpecializationShards();
+    }
 
     // Wave 1: roots in listed order, then the specialization queue. Each
     // root remains a distinct job whose result lands in root order; symbolic
     // requests discovered while roots seal are reserved immediately and their
     // bodies drain afterward in deterministic dispatch order.
-    const procedures_started_ns = if (options.timing) |timing| timing.start() else 0;
-    if (options.timing) |timing| timing.startProcedureBreakdown();
-    try builder.lowerIsolatedRoots(roots.requests);
-    try builder.drainPendingSpecJobs();
-    if (options.timing) |timing| timing.finishProcedureBreakdown();
-    if (options.timing) |timing| timing.finish(procedures_started_ns, .procedure_specialization);
+    {
+        var procedure_timing_scope = TimingPhaseScope.begin(options.timing, .procedure_specialization);
+        defer procedure_timing_scope.end();
+        if (options.timing) |timing| timing.startProcedureBreakdown();
+        defer if (options.timing) |timing| timing.finishProcedureBreakdown();
+        try builder.lowerIsolatedRoots(roots.requests);
+        try builder.drainPendingSpecJobs();
+    }
 
     // Wave 2: layout requests lower types serially and discover no
     // specializations, so the queue must still be empty afterward.
-    const layouts_started_ns = if (options.timing) |timing| timing.start() else 0;
-    for (roots.layout_requests) |checked_ty| {
-        try builder.lowerLayoutRequest(checked_ty);
+    {
+        var layout_timing_scope = TimingPhaseScope.begin(options.timing, .layout_requests);
+        defer layout_timing_scope.end();
+        for (roots.layout_requests) |checked_ty| {
+            try builder.lowerLayoutRequest(checked_ty);
+        }
+        builder.requirePendingSpecJobsDrained();
     }
-    builder.requirePendingSpecJobsDrained();
-    if (options.timing) |timing| timing.finish(layouts_started_ns, .layout_requests);
 
     // Wave 3: static-data restoration in listed order, then a second
     // specialization queue drain for the template bodies it discovered.
-    const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
-    for (roots.static_data_requests) |request| {
-        try builder.lowerStaticDataRequest(request);
+    {
+        var static_data_timing_scope = TimingPhaseScope.begin(options.timing, .static_data_requests);
+        defer static_data_timing_scope.end();
+        for (roots.static_data_requests) |request| {
+            try builder.lowerStaticDataRequest(request);
+        }
+        try builder.drainPendingSpecJobs();
     }
-    try builder.drainPendingSpecJobs();
-    if (options.timing) |timing| timing.finish(static_data_started_ns, .static_data_requests);
 
-    const finalization_started_ns = if (options.timing) |timing| timing.start() else 0;
-    program.next_symbol = builder.symbols.coordinator.next;
-    try program.sealRemainingCaptureIdentities();
-    program.freeze();
+    {
+        var finalization_timing_scope = TimingPhaseScope.begin(options.timing, .finalization);
+        defer finalization_timing_scope.end();
+        program.next_symbol = builder.symbols.coordinator.next;
+        try program.sealRemainingCaptureIdentities();
+        program.freeze();
 
-    if (@import("builtin").mode == .Debug) {
-        verifyMonotypeTypeStore(&program);
-        verifyMonotypeCompletedTypeIds(&program);
-        verifyMonotypeCallTargets(&program);
-        builder.spec_store.validateLookupIntegrity();
-        verifyMonotypeSpecsReady(&program);
+        if (@import("builtin").mode == .Debug) {
+            verifyMonotypeTypeStore(&program);
+            verifyMonotypeCompletedTypeIds(&program);
+            verifyMonotypeCallTargets(&program);
+            builder.spec_store.validateLookupIntegrity();
+            verifyMonotypeSpecsReady(&program);
+        }
     }
-    if (options.timing) |timing| timing.finish(finalization_started_ns, .finalization);
 
     return program;
 }
@@ -2318,6 +2420,7 @@ pub const SpecJobWorkerState = struct {
     allocator: Allocator,
     workspace: SpecJobWorkspace,
     builder: ?*Builder = null,
+    tasks_started: u64 = 0,
     counters: SpecializationCounters = .{},
     diagnostics: Diagnostics = .{},
 
@@ -2464,6 +2567,7 @@ const SpecJobWorkerInputs = struct {
     hosted_catalog: []const HostedCatalogEntry,
     current_loc: base.SourceLoc,
     current_region: base.Region,
+    timing_std_io: ?std.Io,
 };
 
 const PreparedSpecJob = struct {
@@ -2482,6 +2586,7 @@ const SpecJobTaskContext = struct {
     failed: bool = false,
     retry_serial: bool = false,
     completed: bool = false,
+    worker_work_ns: u64 = 0,
 };
 
 /// Caller-owned root task storage lets unordered executor completion be
@@ -2494,6 +2599,7 @@ const ProcedureRootTaskContext = struct {
     failed: bool = false,
     retry_serial: bool = false,
     completed: bool = false,
+    worker_work_ns: u64 = 0,
 };
 
 const FinalBodyOutputCounts = struct {
@@ -3577,6 +3683,7 @@ const Builder = struct {
             .hosted_catalog = self.hosted_catalog,
             .current_loc = self.current_loc,
             .current_region = self.current_region,
+            .timing_std_io = if (self.timing) |timing| timing.std_io else null,
         };
         for (requests, 0..) |request, task_id| {
             contexts[task_id] = .{
@@ -3589,7 +3696,27 @@ const Builder = struct {
         defer for (contexts) |*context| {
             if (context.shard) |*shard| shard.deinit();
         };
-        try executor.run(tasks, completions);
+        if (self.timing) |timing| {
+            timing.parallel.root_tasks_submitted +%= @intCast(requests.len);
+            timing.parallel.task_waves +%= 1;
+            timing.parallel.worker_lanes_available = @max(
+                timing.parallel.worker_lanes_available,
+                @as(u64, @intCast(executor.worker_count)),
+            );
+        }
+        var run_error: ?Allocator.Error = null;
+        {
+            var wait_timing_scope = ProcedureTimingScope.begin(self.timing, .parallel_wait);
+            defer wait_timing_scope.end();
+            executor.run(tasks, completions) catch |err| {
+                run_error = err;
+            };
+        }
+        self.recordParallelWorkerWork(contexts);
+        if (run_error) |err| return err;
+
+        var commit_timing_scope = ParallelCoordinatorTimingScope.begin(self.timing);
+        defer commit_timing_scope.end();
         for (completions) |completion| {
             if (completion.id >= contexts.len) Common.compilerBug("post-check executor returned an unknown root task");
             const context = &contexts[completion.id];
@@ -3610,11 +3737,13 @@ const Builder = struct {
         }
         for (contexts) |*context| {
             if (context.retry_serial) {
+                if (self.timing) |timing| timing.parallel.root_tasks_retried_serial +%= 1;
                 try self.lowerRoot(context.request);
             } else {
                 const def = try self.commitCompletedProcedureRootShard(&context.shard.?);
                 try self.appendRuntimeSchemaRequestsForDef(def);
                 try self.program.addRoot(.{ .def = def, .request = context.request });
+                if (self.timing) |timing| timing.parallel.root_tasks_committed +%= 1;
                 context.shard.?.deinit();
                 context.shard = null;
             }
@@ -4701,6 +4830,7 @@ const Builder = struct {
             .hosted_catalog = self.hosted_catalog,
             .current_loc = self.current_loc,
             .current_region = self.current_region,
+            .timing_std_io = if (self.timing) |timing| timing.std_io else null,
         };
 
         while (self.pending_spec_jobs_head < self.pending_spec_jobs.items.len) {
@@ -4767,7 +4897,27 @@ const Builder = struct {
                     context.shard = null;
                 }
             }
-            try executor.run(tasks[0..batch_len], completions[0..batch_len]);
+            if (self.timing) |timing| {
+                timing.parallel.specialization_tasks_submitted +%= @intCast(batch_len);
+                timing.parallel.task_waves +%= 1;
+                timing.parallel.worker_lanes_available = @max(
+                    timing.parallel.worker_lanes_available,
+                    @as(u64, @intCast(executor.worker_count)),
+                );
+            }
+            var run_error: ?Allocator.Error = null;
+            {
+                var wait_timing_scope = ProcedureTimingScope.begin(self.timing, .parallel_wait);
+                defer wait_timing_scope.end();
+                executor.run(tasks[0..batch_len], completions[0..batch_len]) catch |err| {
+                    run_error = err;
+                };
+            }
+            self.recordParallelWorkerWork(contexts[0..batch_len]);
+            if (run_error) |err| return err;
+
+            var commit_timing_scope = ParallelCoordinatorTimingScope.begin(self.timing);
+            defer commit_timing_scope.end();
             for (completions[0..batch_len]) |completion| {
                 if (completion.id >= batch_len) {
                     Common.compilerBug("post-check executor returned an unknown specialization task");
@@ -4795,6 +4945,7 @@ const Builder = struct {
                     if (context.shard != null) {
                         Common.compilerBug("serial specialization retry retained a worker shard");
                     }
+                    if (self.timing) |timing| timing.parallel.specialization_tasks_retried_serial +%= 1;
                     try self.executePendingSpecJob(context.prepared.job);
                     continue;
                 }
@@ -4810,6 +4961,7 @@ const Builder = struct {
                             try commit_domain.absorb(&shard.store_epoch);
                             shard.store_epoch_absorbed = true;
                             shard.deinit();
+                            if (self.timing) |timing| timing.parallel.specialization_tasks_discarded_ready +%= 1;
                         }
                         context.shard = null;
                         try self.executePendingSpecJob(context.prepared.job);
@@ -4822,6 +4974,7 @@ const Builder = struct {
                 self.spec_store.markLowering(context.prepared.job.spec);
                 const shard = &context.shard.?;
                 try self.commitCompletedSpecJobShard(shard);
+                if (self.timing) |timing| timing.parallel.specialization_tasks_committed +%= 1;
                 shard.deinit();
                 context.shard = null;
             }
@@ -4848,6 +5001,11 @@ const Builder = struct {
         executor_worker: base.post_check_task_executor.Worker,
     ) ?*anyopaque {
         const context: *SpecJobTaskContext = @ptrCast(@alignCast(opaque_context));
+        const task_started_ns = if (context.inputs.timing_std_io) |std_io| timingNowNs(std_io) else 0;
+        defer if (context.inputs.timing_std_io) |std_io| {
+            const finished_ns = timingNowNs(std_io);
+            context.worker_work_ns = @intCast(@max(0, finished_ns - task_started_ns));
+        };
         if (executor_worker.id >= context.workers.len or
             executor_worker.id >= std.math.maxInt(u32))
         {
@@ -4861,6 +5019,7 @@ const Builder = struct {
             );
         }
         const worker = &slot.*.?;
+        worker.tasks_started +%= 1;
         worker.counters = .{};
         worker.diagnostics = .{};
         const builder = Builder.ensureSpecJobWorkerBuilder(worker, context.inputs) catch {
@@ -4907,6 +5066,11 @@ const Builder = struct {
         executor_worker: base.post_check_task_executor.Worker,
     ) ?*anyopaque {
         const context: *ProcedureRootTaskContext = @ptrCast(@alignCast(opaque_context));
+        const task_started_ns = if (context.inputs.timing_std_io) |std_io| timingNowNs(std_io) else 0;
+        defer if (context.inputs.timing_std_io) |std_io| {
+            const finished_ns = timingNowNs(std_io);
+            context.worker_work_ns = @intCast(@max(0, finished_ns - task_started_ns));
+        };
         if (executor_worker.id >= context.workers.len or executor_worker.id >= std.math.maxInt(u32)) {
             Common.compilerBug("post-check executor returned an invalid root worker id");
         }
@@ -4915,6 +5079,7 @@ const Builder = struct {
             slot.* = SpecJobWorkerState.init(executor_worker.allocator, @enumFromInt(executor_worker.id));
         }
         const worker = &slot.*.?;
+        worker.tasks_started +%= 1;
         worker.counters = .{};
         worker.diagnostics = .{};
         const builder = Builder.ensureSpecJobWorkerBuilder(worker, context.inputs) catch {
@@ -5040,6 +5205,27 @@ const Builder = struct {
             self.spec_job_commit_domain = SpecJobCommitDomain.init(self.allocator);
         }
         return &self.spec_job_commit_domain.?;
+    }
+
+    fn recordParallelWorkerWork(self: *Builder, contexts: anytype) void {
+        const timing = self.timing orelse return;
+        for (contexts) |*context| {
+            timing.parallel.worker_work_ns +%= context.worker_work_ns;
+            context.worker_work_ns = 0;
+        }
+    }
+
+    fn recordParallelLaneMetrics(self: *Builder) void {
+        const timing = self.timing orelse return;
+        var lanes_used: u64 = 0;
+        var lane_reuse_tasks: u64 = 0;
+        for (self.spec_job_parallel_workers) |worker| {
+            const initialized = worker orelse continue;
+            lanes_used += 1;
+            lane_reuse_tasks +%= initialized.tasks_started -| 1;
+        }
+        timing.parallel.worker_lanes_used = @max(timing.parallel.worker_lanes_used, lanes_used);
+        timing.parallel.worker_lane_reuse_tasks +%= lane_reuse_tasks;
     }
 
     fn ensureParallelSpecJobState(self: *Builder, worker_count: usize) Allocator.Error!void {

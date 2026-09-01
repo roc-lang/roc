@@ -135,9 +135,23 @@ pub const Timing = struct {
     monotype_procedure_body_local_proc_context_ns: TimingCounter = .{},
     monotype_procedure_body_finalization_ns: TimingCounter = .{},
     monotype_procedure_completion_ns: TimingCounter = .{},
+    monotype_procedure_parallel_wait_ns: TimingCounter = .{},
     monotype_layout_requests_ns: TimingCounter = .{},
     monotype_static_data_requests_ns: TimingCounter = .{},
     monotype_finalization_ns: TimingCounter = .{},
+    monotype_parallel_worker_work_ns: TimingCounter = .{},
+    monotype_parallel_coordinator_commit_work_ns: TimingCounter = .{},
+    monotype_parallel_root_tasks_submitted: TimingCounter = .{},
+    monotype_parallel_root_tasks_committed: TimingCounter = .{},
+    monotype_parallel_root_tasks_retried_serial: TimingCounter = .{},
+    monotype_parallel_specialization_tasks_submitted: TimingCounter = .{},
+    monotype_parallel_specialization_tasks_committed: TimingCounter = .{},
+    monotype_parallel_specialization_tasks_retried_serial: TimingCounter = .{},
+    monotype_parallel_specialization_tasks_discarded_ready: TimingCounter = .{},
+    monotype_parallel_task_waves: TimingCounter = .{},
+    monotype_parallel_worker_lanes_available: TimingCounter = .{},
+    monotype_parallel_worker_lanes_used: TimingCounter = .{},
+    monotype_parallel_worker_lane_reuse_tasks: TimingCounter = .{},
     lift_ns: TimingCounter = .{},
     spec_constr_ns: TimingCounter = .{},
     lambda_solve_ns: TimingCounter = .{},
@@ -175,9 +189,25 @@ pub const Timing = struct {
             .monotype_procedure_body_local_proc_context_ns = self.monotype_procedure_body_local_proc_context_ns.load(),
             .monotype_procedure_body_finalization_ns = self.monotype_procedure_body_finalization_ns.load(),
             .monotype_procedure_completion_ns = self.monotype_procedure_completion_ns.load(),
+            .monotype_procedure_parallel_wait_ns = self.monotype_procedure_parallel_wait_ns.load(),
             .monotype_layout_requests_ns = self.monotype_layout_requests_ns.load(),
             .monotype_static_data_requests_ns = self.monotype_static_data_requests_ns.load(),
             .monotype_finalization_ns = self.monotype_finalization_ns.load(),
+            .monotype_parallel = .{
+                .worker_work_ns = self.monotype_parallel_worker_work_ns.load(),
+                .coordinator_commit_work_ns = self.monotype_parallel_coordinator_commit_work_ns.load(),
+                .root_tasks_submitted = self.monotype_parallel_root_tasks_submitted.load(),
+                .root_tasks_committed = self.monotype_parallel_root_tasks_committed.load(),
+                .root_tasks_retried_serial = self.monotype_parallel_root_tasks_retried_serial.load(),
+                .specialization_tasks_submitted = self.monotype_parallel_specialization_tasks_submitted.load(),
+                .specialization_tasks_committed = self.monotype_parallel_specialization_tasks_committed.load(),
+                .specialization_tasks_retried_serial = self.monotype_parallel_specialization_tasks_retried_serial.load(),
+                .specialization_tasks_discarded_ready = self.monotype_parallel_specialization_tasks_discarded_ready.load(),
+                .task_waves = self.monotype_parallel_task_waves.load(),
+                .worker_lanes_available = self.monotype_parallel_worker_lanes_available.load(),
+                .worker_lanes_used = self.monotype_parallel_worker_lanes_used.load(),
+                .worker_lane_reuse_tasks = self.monotype_parallel_worker_lane_reuse_tasks.load(),
+            },
             .lift_ns = self.lift_ns.load(),
             .spec_constr_ns = self.spec_constr_ns.load(),
             .lambda_solve_ns = self.lambda_solve_ns.load(),
@@ -206,9 +236,11 @@ pub const Timing = struct {
         self.monotype_procedure_body_local_proc_context_ns.add(snapshot_value.monotype_procedure_body_local_proc_context_ns);
         self.monotype_procedure_body_finalization_ns.add(snapshot_value.monotype_procedure_body_finalization_ns);
         self.monotype_procedure_completion_ns.add(snapshot_value.monotype_procedure_completion_ns);
+        self.monotype_procedure_parallel_wait_ns.add(snapshot_value.monotype_procedure_parallel_wait_ns);
         self.monotype_layout_requests_ns.add(snapshot_value.monotype_layout_requests_ns);
         self.monotype_static_data_requests_ns.add(snapshot_value.monotype_static_data_requests_ns);
         self.monotype_finalization_ns.add(snapshot_value.monotype_finalization_ns);
+        self.addMonotypeParallel(snapshot_value.monotype_parallel);
         self.lift_ns.add(snapshot_value.lift_ns);
         self.spec_constr_ns.add(snapshot_value.spec_constr_ns);
         self.lambda_solve_ns.add(snapshot_value.lambda_solve_ns);
@@ -254,9 +286,27 @@ pub const Timing = struct {
         self.monotype_procedure_body_local_proc_context_ns.add(snapshot_value.procedure_body_local_proc_context_ns);
         self.monotype_procedure_body_finalization_ns.add(snapshot_value.procedure_body_finalization_ns);
         self.monotype_procedure_completion_ns.add(snapshot_value.procedure_completion_ns);
+        self.monotype_procedure_parallel_wait_ns.add(snapshot_value.procedure_parallel_wait_ns);
         self.monotype_layout_requests_ns.add(snapshot_value.layout_requests_ns);
         self.monotype_static_data_requests_ns.add(snapshot_value.static_data_requests_ns);
         self.monotype_finalization_ns.add(snapshot_value.finalization_ns);
+        self.addMonotypeParallel(snapshot_value.parallel);
+    }
+
+    fn addMonotypeParallel(self: *Timing, parallel: postcheck.Monotype.Lower.ParallelMetricsSnapshot) void {
+        self.monotype_parallel_worker_work_ns.add(parallel.worker_work_ns);
+        self.monotype_parallel_coordinator_commit_work_ns.add(parallel.coordinator_commit_work_ns);
+        self.monotype_parallel_root_tasks_submitted.add(parallel.root_tasks_submitted);
+        self.monotype_parallel_root_tasks_committed.add(parallel.root_tasks_committed);
+        self.monotype_parallel_root_tasks_retried_serial.add(parallel.root_tasks_retried_serial);
+        self.monotype_parallel_specialization_tasks_submitted.add(parallel.specialization_tasks_submitted);
+        self.monotype_parallel_specialization_tasks_committed.add(parallel.specialization_tasks_committed);
+        self.monotype_parallel_specialization_tasks_retried_serial.add(parallel.specialization_tasks_retried_serial);
+        self.monotype_parallel_specialization_tasks_discarded_ready.add(parallel.specialization_tasks_discarded_ready);
+        self.monotype_parallel_task_waves.add(parallel.task_waves);
+        self.monotype_parallel_worker_lanes_available.max(parallel.worker_lanes_available);
+        self.monotype_parallel_worker_lanes_used.max(parallel.worker_lanes_used);
+        self.monotype_parallel_worker_lane_reuse_tasks.add(parallel.worker_lane_reuse_tasks);
     }
 
     fn addMonotypeDiagnostics(self: *Timing, diagnostics: postcheck.Monotype.Lower.Diagnostics) void {
@@ -293,9 +343,11 @@ pub const TimingSnapshot = struct {
     monotype_procedure_body_local_proc_context_ns: u64 = 0,
     monotype_procedure_body_finalization_ns: u64 = 0,
     monotype_procedure_completion_ns: u64 = 0,
+    monotype_procedure_parallel_wait_ns: u64 = 0,
     monotype_layout_requests_ns: u64 = 0,
     monotype_static_data_requests_ns: u64 = 0,
     monotype_finalization_ns: u64 = 0,
+    monotype_parallel: postcheck.Monotype.Lower.ParallelMetricsSnapshot = .{},
     lift_ns: u64 = 0,
     spec_constr_ns: u64 = 0,
     lambda_solve_ns: u64 = 0,
@@ -339,6 +391,58 @@ test "pipeline timing aggregates Monotype diagnostics" {
     try std.testing.expectEqual(@as(u64, 14), diagnostics.specialization.template_requests);
     try std.testing.expectEqual(@as(u64, 18), diagnostics.graph.nodes_created);
     try std.testing.expectEqual(@as(u64, 24), diagnostics.body.call_expressions);
+}
+
+test "pipeline timing keeps aggregate Monotype worker work separate from wall time" {
+    var timing = Timing.init(std.testing.io);
+    timing.monotype_ns.add(97);
+    timing.addMonotypeParallel(.{
+        .worker_work_ns = 11,
+        .coordinator_commit_work_ns = 12,
+        .root_tasks_submitted = 13,
+        .root_tasks_committed = 14,
+        .root_tasks_retried_serial = 15,
+        .specialization_tasks_submitted = 16,
+        .specialization_tasks_committed = 17,
+        .specialization_tasks_retried_serial = 18,
+        .specialization_tasks_discarded_ready = 19,
+        .task_waves = 20,
+        .worker_lanes_available = 4,
+        .worker_lanes_used = 3,
+        .worker_lane_reuse_tasks = 21,
+    });
+    timing.addMonotypeParallel(.{
+        .worker_work_ns = 31,
+        .coordinator_commit_work_ns = 32,
+        .root_tasks_submitted = 33,
+        .root_tasks_committed = 34,
+        .root_tasks_retried_serial = 35,
+        .specialization_tasks_submitted = 36,
+        .specialization_tasks_committed = 37,
+        .specialization_tasks_retried_serial = 38,
+        .specialization_tasks_discarded_ready = 39,
+        .task_waves = 40,
+        .worker_lanes_available = 8,
+        .worker_lanes_used = 5,
+        .worker_lane_reuse_tasks = 41,
+    });
+
+    const snapshot_value = timing.snapshot();
+    const parallel = snapshot_value.monotype_parallel;
+    try std.testing.expectEqual(@as(u64, 97), snapshot_value.monotype_ns);
+    try std.testing.expectEqual(@as(u64, 42), parallel.worker_work_ns);
+    try std.testing.expectEqual(@as(u64, 44), parallel.coordinator_commit_work_ns);
+    try std.testing.expectEqual(@as(u64, 46), parallel.root_tasks_submitted);
+    try std.testing.expectEqual(@as(u64, 48), parallel.root_tasks_committed);
+    try std.testing.expectEqual(@as(u64, 50), parallel.root_tasks_retried_serial);
+    try std.testing.expectEqual(@as(u64, 52), parallel.specialization_tasks_submitted);
+    try std.testing.expectEqual(@as(u64, 54), parallel.specialization_tasks_committed);
+    try std.testing.expectEqual(@as(u64, 56), parallel.specialization_tasks_retried_serial);
+    try std.testing.expectEqual(@as(u64, 58), parallel.specialization_tasks_discarded_ready);
+    try std.testing.expectEqual(@as(u64, 60), parallel.task_waves);
+    try std.testing.expectEqual(@as(u64, 8), parallel.worker_lanes_available);
+    try std.testing.expectEqual(@as(u64, 5), parallel.worker_lanes_used);
+    try std.testing.expectEqual(@as(u64, 62), parallel.worker_lane_reuse_tasks);
 }
 
 /// Whether the root checked module is complete or inside checking finalization.
@@ -519,29 +623,31 @@ pub fn lowerCheckedModulesToLir(
     if (monotype_timing) |*detail| {
         detail.body_work_timing_enabled = target.timing.?.detailed_monotype_body;
     }
-    var mono = try postcheck.Monotype.Lower.run(
-        allocator,
-        checkedModules(modules),
-        rootRequests(roots, layout_requests, static_data_requests),
-        .{
-            .proc_debug_names = target.proc_debug_names or LirDump.filter() != null,
-            .specialization_cache = target.monotype_cache,
-            .post_check_executor = target.post_check_executor,
-            .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
-            .target_usize = target.target_usize,
-            .inline_expects = switch (target.inline_expects) {
-                .run => .run,
-                .omit => .omit,
+    var mono = monotype: {
+        defer if (target.timing) |timing| {
+            timing.finish(monotype_started_ns, .monotype);
+            if (monotype_timing) |*detail| timing.addMonotypeSnapshot(detail.snapshot());
+            if (monotype_diagnostics) |diagnostics| timing.addMonotypeDiagnostics(diagnostics);
+        };
+        break :monotype try postcheck.Monotype.Lower.run(
+            allocator,
+            checkedModules(modules),
+            rootRequests(roots, layout_requests, static_data_requests),
+            .{
+                .proc_debug_names = target.proc_debug_names or LirDump.filter() != null,
+                .specialization_cache = target.monotype_cache,
+                .post_check_executor = target.post_check_executor,
+                .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
+                .target_usize = target.target_usize,
+                .inline_expects = switch (target.inline_expects) {
+                    .run => .run,
+                    .omit => .omit,
+                },
+                .timing = if (monotype_timing) |*timing| timing else null,
+                .diagnostics = if (monotype_diagnostics) |*diagnostics| diagnostics else null,
             },
-            .timing = if (monotype_timing) |*timing| timing else null,
-            .diagnostics = if (monotype_diagnostics) |*diagnostics| diagnostics else null,
-        },
-    );
-    if (target.timing) |timing| {
-        timing.finish(monotype_started_ns, .monotype);
-        if (monotype_timing) |*detail| timing.addMonotypeSnapshot(detail.snapshot());
-        if (monotype_diagnostics) |diagnostics| timing.addMonotypeDiagnostics(diagnostics);
-    }
+        );
+    };
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
 
