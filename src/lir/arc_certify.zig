@@ -522,6 +522,12 @@ pub fn certifyStoreOrPanic(
                     extra_locals[index] = link.origin;
                 }
                 writeFailureContext(&context, store, layouts, sigs, proc_id, diag.context_stmt, diag.context_local, extra_locals[0..diag.chain_len]);
+                // Say what went wrong before dumping the procedure. The dump
+                // runs to thousands of lines, and a reader whose output is
+                // truncated -- a CI log, a test harness capturing a child --
+                // otherwise keeps the part they cannot use and loses the part
+                // they need.
+                std.debug.print("\nARC: {s}{s}\n", .{ diag.message(), context.text() });
                 var buffer: std.Io.Writer.Allocating = .init(allocator);
                 defer buffer.deinit();
                 debug_print.writeProc(allocator, store, layouts, proc_id, &buffer.writer) catch {};
