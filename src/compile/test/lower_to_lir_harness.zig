@@ -88,9 +88,12 @@ pub const LoweredInspectFn = *const fn (
 /// Options controlling how the harness lowers an app to LIR.
 pub const LirLoweringOptions = struct {
     specialization_strategy: base.SpecializationStrategy = .lss,
-    /// Number of coordinator workers available to post-check specialization.
+    /// Number of coordinator workers available to post-check lowering.
     /// The default retains the harness's existing single-threaded behavior.
     specialization_workers: usize = 1,
+    /// Add a second platform-required procedure so root lowering has a parallel
+    /// batch rather than only the ordinary single-entrypoint workload.
+    parallel_procedure_root_fixture: bool = false,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     inline_mode: lir.CheckedPipeline.InlineMode = .none,
     consume_dead_boxes: bool = false,
@@ -176,24 +179,43 @@ pub fn expectDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void 
     try std.testing.expectEqualStrings(writer_a.buffered(), writer_b.buffered());
 }
 
-/// Lower `app_body` with one, two, and four specialization workers, comparing
+/// Lower `app_body` with one, two, and four post-check workers, comparing
 /// each complete LIR dump with the single-worker result. Run each parallel
 /// configuration twice so this checks both worker-count independence and
 /// repeated scheduling independence without relying on timing.
 pub fn expectSpecializationParallelismDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void {
+    try expectPostCheckParallelismDeterministicLir(app_body, false);
+}
+
+/// Lower an app with two independent platform-required procedure roots and
+/// compare complete LIR output across one, two, and four post-check workers.
+pub fn expectProcedureRootParallelismDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void {
+    try expectPostCheckParallelismDeterministicLir(app_body, true);
+}
+
+fn expectPostCheckParallelismDeterministicLir(
+    app_body: []const u8,
+    parallel_procedure_root_fixture: bool,
+) LowerToLirHarnessError!void {
     const gpa = std.testing.allocator;
     const cap = 1 << 22;
     const reference = try gpa.alloc(u8, cap);
     defer gpa.free(reference);
     var reference_writer = std.Io.Writer.fixed(reference);
-    try runToLir(app_body, &reference_writer, .{ .specialization_workers = 1 }, null);
+    try runToLir(app_body, &reference_writer, .{
+        .specialization_workers = 1,
+        .parallel_procedure_root_fixture = parallel_procedure_root_fixture,
+    }, null);
 
     for ([_]usize{ 2, 4 }) |specialization_workers| {
         for (0..2) |_| {
             const candidate = try gpa.alloc(u8, cap);
             defer gpa.free(candidate);
             var candidate_writer = std.Io.Writer.fixed(candidate);
-            try runToLir(app_body, &candidate_writer, .{ .specialization_workers = specialization_workers }, null);
+            try runToLir(app_body, &candidate_writer, .{
+                .specialization_workers = specialization_workers,
+                .parallel_procedure_root_fixture = parallel_procedure_root_fixture,
+            }, null);
             try std.testing.expectEqualStrings(reference_writer.buffered(), candidate_writer.buffered());
         }
     }
@@ -232,22 +254,51 @@ fn runToLir(
     defer tmp_dir.cleanup();
 
     try tmp_dir.dir.createDirPath(std.testing.io, ".roc_echo_platform");
+    const app_exports = if (opts.parallel_procedure_root_fixture) "main!, auxiliary!" else "main!";
+    const auxiliary_source = if (opts.parallel_procedure_root_fixture)
+        "\nauxiliary! = |msg| Echo.line!(msg)\n"
+    else
+        "";
     const synthetic_source = try std.fmt.allocPrint(
         gpa,
-        "app [main!] {{ pf: platform \"./.roc_echo_platform/main.roc\" }}\n\n" ++
+        "app [{s}] {{ pf: platform \"./.roc_echo_platform/main.roc\" }}\n\n" ++
             "import pf.Echo\n\n" ++
             "echo! = |msg| Echo.line!(msg)\n\n" ++
+            "{s}\n" ++
             "{s}",
-        .{app_body},
+        .{ app_exports, auxiliary_source, app_body },
     );
     defer gpa.free(synthetic_source);
     try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "main.roc",
         .data = synthetic_source,
     });
-    try tmp_dir.dir.writeFile(std.testing.io, .{
-        .sub_path = ".roc_echo_platform/main.roc",
-        .data =
+    const platform_source: []const u8 = if (opts.parallel_procedure_root_fixture)
+        \\platform ""
+        \\    requires {} {
+        \\        main! : List(Str) => Try({}, [Exit(I8), ..]),
+        \\        auxiliary! : Str => {},
+        \\    }
+        \\    exposes [Echo]
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host! }
+        \\    hosted { "roc_echo_line": Echo.line! }
+        \\
+        \\import Echo
+        \\
+        \\main_for_host! : List(Str) => I8
+        \\main_for_host! = |args| {
+        \\    auxiliary!("starting")
+        \\    match main!(args) {
+        \\        Ok({}) => 0
+        \\        Err(Exit(code)) => code
+        \\        Err(other) => {
+        \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+        \\            1
+        \\        }
+        \\    }
+        \\}
+    else
         \\platform ""
         \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
         \\    exposes [Echo]
@@ -267,7 +318,10 @@ fn runToLir(
         \\            1
         \\        }
         \\    }
-        ,
+    ;
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_echo_platform/main.roc",
+        .data = platform_source,
     });
     try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = ".roc_echo_platform/Echo.roc",
@@ -328,6 +382,13 @@ fn lowerAppPathToLir(
 
     const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
     defer gpa.free(lir_roots);
+    if (opts.parallel_procedure_root_fixture) {
+        var procedure_use_roots: usize = 0;
+        for (lir_roots) |request| {
+            if (request.procedure_use != null) procedure_use_roots += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 2), procedure_use_roots);
+    }
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,

@@ -425,6 +425,16 @@ explicit checked proof that doing so preserves compile-time observables.
 
 ### Checker Implementation Contract
 
+Directly nested conditionals use explicit continuation storage. This includes
+conditionals produced when canonicalization lowers `and` and `or`; valid source
+depth must not become compiler thread call depth. Each nested conditional owns
+an ordinary checker expression frame, so rank, generalization, dispatch,
+call-position, and hoist state enter and finish in exactly the same order as any
+other expression. The conditional state and expression-frame payloads live in
+separate typed arrays backed first by local storage and then by the general
+allocator. Checking must not flatten CIR later or infer that a
+conditional came from a particular source operator.
+
 The checker has one authoritative state for effect propagation and compile-time
 root selection. This state is owned by checking, updated during the existing
 `checkExpr` traversal, finalized before checked module output, and exported as
@@ -522,7 +532,28 @@ invalid declarations to the same worklist, which is then propagated incrementall
 before value checking without rebuilding the dependency graph. Every invalid
 type declaration has its declaration root and backing template poisoned to the
 error type, and invalid nominal declarations are also marked invalid in the
-declaration table. CheckedModule construction enforces this invariant: a nominal
+declaration table.
+
+Recursion shape is not the only declaration-level validity rule: a nominal
+declaration group must also admit a finite set of instantiations, because
+monomorphization instantiates a declaration's backing at every distinct
+argument tuple. Argument-growth validation runs immediately after
+nominal-recursion validation, over the same local declarations. It classifies
+every nominal mention inside each backing template on the formal-flow graph: a
+mention argument that is a formal passed straight through adds a plain edge
+from that formal to the mentioned declaration's formal, and one that embeds a
+formal inside a composite (or behind a transparent alias) adds a growing edge.
+A declaration is invalid exactly when one of its growing edges lies inside a
+formal-flow cycle—growth that never returns to its origin stays finite—or
+when a mention on a declaration cycle carries a variable that is no formal of
+the mentioning declaration, which every expansion would mint fresh. Rejected
+declarations report `invalid_nominal_decl_recursion` with the `growing_args`
+kind and are poisoned exactly like the recursion-shape kinds. Everything this
+rule admits terminates in Monotype backing instantiation: formal arguments
+resolve to the enclosing instance's own cells, closed arguments memoize once
+per instantiation context, and growing edges descend the formal-flow
+condensation, so the argument tuples reachable from any application form a
+finite set. CheckedModule construction enforces this invariant: a nominal
 declaration marked valid always has an error-free checked template, and
 encountering malformed template data for one is an invariant violation.
 `CheckedTypeStore` construction and public-API dependency collection both omit
@@ -3364,6 +3395,64 @@ operations. The record loop and field dispatch are compiler-generated for the
 concrete shape; tag spec operations are compiler primitives specialized for the
 concrete tag-union shape and lower to direct code.
 
+The compiler representation of a generated record parser is a linear typed
+control-flow plan, not a tree that copies a field parser into every event route.
+Monotype commits that plan as one loop plus explicit shared continuations:
+
+- `Field`, `TryField`, and `TryFieldCaseless` dispatch to the same per-field
+  continuation, so each concrete field parser call exists exactly once;
+- every successfully parsed or skipped entry transfers to one shared
+  after-field continuation before re-entering the loop; and
+- fallible operations inside the initialized record loop transfer their error
+  payload to one typed error continuation, which constructs the outer `Err`
+  exactly once.
+
+The continuation targets are producer-authored Monotype data. Lifting,
+specialization, lambda solving, and direct LIR lowering preserve and consume
+those targets explicitly; no pass may discover equivalent branches and merge
+them after Monotype generation. LIR jumps update only the parameters named by
+the edge.
+For a matched field, payload replacement precedes setting its presence bit, so
+ARC observes the old bit while retiring an overwritten payload. The shared
+entry and error continuations carry an explicit zero-ABI `retained` ownership
+environment. A retained loop payload keeps the initialization condition from
+its producer-authored `uninitialized_payload` loop initializer; direct LIR
+lowering indexes those conditions once by local id and records them on the
+join. ARC seeds that environment on the shared body node once, preserves exact
+conditional ownership across every incoming jump, and emits one presence-
+guarded cleanup epilogue instead of copying it at every fallible call site.
+Retained-environment joins are one-shot continuations and have no recursive
+back edge; repeated control state belongs in explicit loop parameters.
+
+For a record with `N` fields, the committed Monotype expression volume, every
+post-check traversal, ownership-neutral LIR, and inserted ARC must therefore be
+`O(N)` (plus the chosen exact field-name dispatch structure). This is compile-
+time control data only. It introduces no runtime descriptor interpreter, field
+map, callback table, boxing, or parser allocation.
+
+Compiler consumers must preserve that bound as well: generated jumps name
+sparse loop updates, loop-parameter lookup is a dense local-id index, and the
+two shared ownership environments are each recorded once. A consumer must not
+expand either an unchanged loop state or a retained environment at every
+field/error edge. At runtime the plan remains shape-specialized direct code:
+field recognition goes straight to the concrete parser, successful updates
+write the fixed payload slot and presence word, and the only `O(N)` error work
+is destruction of payload slots whose presence words prove they are initialized.
+
+The debug ARC certifier indexes the join-authored payload/condition relation
+once by `LocalId`. Encountering the declaring join marks those conditional
+cells unresolved in the exact path state; nested join summaries represent each
+unresolved cell as one symbolic `conditional_owned(condition, mask)` mode
+instead of splitting into initialized and uninitialized groups. An explicit
+initialized-payload switch resolves that mode on both successors. The declaring
+join can establish the symbolic mode again on a loop edge. A guarded release
+spends and unbinds the named cell while preserving aliases; summaries union a
+"may already be released" state bit so a repeated guarded use is rejected
+without splitting initialized and uninitialized paths. These scope and
+refinement transitions are part of the certifier summary, so unrelated joins
+cannot manufacture optional ownership and certifier work remains linear in the
+generated field chain.
+
 Input formats return seamless slices whenever the value being produced is a
 slice of the original input. Parsing a `Str` from a larger `Str` or validated
 byte buffer returns a slice into that buffer when the format can do so. The
@@ -5736,6 +5825,10 @@ Other solved-graph mutations:
 - `finalizeTypeDeclarationValidity` and occurs-check poisoning
   (`setVarContent(.err)`)—policy: Type Declaration Template Validity (above)
   and diagnostic recovery after an already reported problem.
+- `validateNominalDeclArgumentGrowth` (`setVarContent(.err)`)—policy:
+  argument-growth validation in Type Declaration Template Validity (above). A
+  declaration whose recursion admits no finite instantiation set is poisoned
+  at the declaration, exactly like the recursion-shape kinds.
 - `finalizeFunctionEffectsAtBoundary`—policy: directed-effect
   materialization at generalization boundaries, the rule declared in
   Checking Effects And Const Roots.
@@ -6494,20 +6587,22 @@ that checked module. The same checked function template may therefore produce
 many Monotype bodies, and the same checked nested lambda site may produce many
 nested Monotype functions, each with a different monomorphic function type.
 
-Each independently sealed specialization group owns an instantiation graph:
-union-find nodes with explicit row-extension links, created by instantiating
-checked types on first touch. An ordinary procedure body begins a group by
-itself. The root producer may explicitly mark adjacent procedure-template roots
-as one shared group so a callee request proven equivalent under the complete
-graph-local specialization identity is reused before a second root replays that
-request. Test plans select this grouping; ordinary build and platform roots are
-independently sealed. Every root still uses a fresh instantiation scope, owns
-its own body and durable specialization record, and contributes its own checked
-relations; sharing the graph never authorizes importing a checked node from
-another scope. The reuse key includes callable family, method scope, checked
-source-function key, exact evidence topology, lexical context, and the exact
-function request interface. A different or still-unproven request remains
-independent.
+Each root owns an independently sealed instantiation graph: union-find nodes
+with explicit row-extension links, created by instantiating checked types on
+first touch. Every root uses a fresh instantiation scope, owns its own body and
+durable specialization record, and contributes its own checked relations.
+Specialization body scheduling may deduplicate global deferred work, but never
+authorizes importing a checked node or root-owned graph state from another
+root.
+
+Procedure-use roots and ordinary specialization bodies can lower concurrently
+because their results cross the worker boundary as sealed, graph-free drafts.
+Each executor lane owns a private cumulative type/name domain; after a frozen
+batch completes, the coordinator absorbs each immutable suffix and assigns
+program identities strictly in request order. This keeps global identity
+independent of worker scheduling without locking coordinator state. Root kinds
+that reserve durable identities or write directly to the final program remain
+serial barriers until they have the same sealed-draft boundary.
 
 Instantiation graph node ids are dense, append-only indexes for the lifetime of
 the graph. Per-node optional attributes such as a row root's current extension
@@ -7019,6 +7114,16 @@ from the loop body supplies exactly one value for every loop parameter, in the
 same order and with the same types. Loops with no carried state use empty spans.
 `break_` carries the loop result when the loop is value-producing and carries no
 expression when the loop result is unit/control-only.
+
+Monotype normally preserves source control structure, but compiler-generated
+algorithms may introduce typed `join_point` and `jump` expressions when their
+sharing is part of the producer's correctness or complexity contract. A join's
+parameter types and every jump's ordered argument types are explicit. Generated
+`try_sequence` and `try_record_sequence` nodes may name an enclosing one-
+parameter error join; on `Err`, the payload transfers to that join instead of
+constructing an equivalent propagated `Err` at the call site. An absent target
+retains ordinary inline propagation. These targets are lexical and typed, and
+later stages must not infer them from result types or branch similarity.
 
 Monotype IR has no:
 
