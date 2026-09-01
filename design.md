@@ -3128,10 +3128,11 @@ encoding and state types for exactly the methods needed by that shape:
 - named nominal values call that nominal type's explicit method. If the method
   is missing, checking reports the missing static-dispatch requirement.
 
-The checked artifact publishes each parser/encoder derivation as an explicit
-generated-codec contract. It records every generated call's method, concrete
-dispatcher and callable types, optional subject role, and exact resolution to
-either checked callable evidence or another generated-codec contract. A
+`StaticDispatchPlanTable.generated_codec_derivations` stores each parser/encoder
+derivation as an explicit generated-codec contract. It records every generated
+call's method, concrete dispatcher and callable types, optional subject role,
+and exact resolution to either checked callable evidence or another
+generated-codec contract. A
 structural dispatch plan and any stored generated runtime name that contract by
 identity. Boxy and Monotype consume the identity directly; they must not find a
 derivation by comparing runtime types or resolve one of its calls by looking up
@@ -3153,9 +3154,10 @@ invariant violation rather than choosing one. Phase B performs no method
 lookup and its structural comparison is bounded to the normally-single-entry
 digest bucket. After relation freeze, generated bodies may consume only that
 frozen prepared-call plan. They do not repeat method lookup, synthesize another
-specialization request, or interpret the shape to recover a call the checker
-did not publish. Debug compiler builds audit that every producer-required call
-was consumed and that repeated roles have exactly equal checked type graphs;
+specialization request, or interpret the shape to recover a call absent from
+`StaticDispatchPlanTable.generated_codec_derivations`. Debug compiler builds
+audit that every producer-required call was consumed and that repeated roles
+have exactly equal checked type graphs;
 these audits and their consumption bits are absent from release compiler
 builds.
 

@@ -12494,8 +12494,8 @@ const CodecKind = enum {
 };
 
 /// Durable checker-owned grounding for a codec method body. The selected call
-/// is the bridge between that procedure's checked root and the complete
-/// generated-codec contract that justified calling it.
+/// links that procedure's checked callable type to the complete generated-codec
+/// contract that justified calling it.
 const CheckedCodecContractAnchor = struct {
     view: ModuleView,
     derivation: static_dispatch.GeneratedCodecDerivationId,
