@@ -416,6 +416,9 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         defer emission_arena.deinit();
         inserter.emission_allocator = emission_arena.allocator();
         inserter.solve_allocator = inserter.emission_allocator;
+        inserter.place_query_seen = .{};
+        inserter.place_query_visited = .empty;
+        inserter.place_query_stack = .empty;
         var death_scratch = std.ArrayList(ReleaseDecision).empty;
         var transfer_position_scratch = std.ArrayList(u32).empty;
         var retain_arg_scratch = std.ArrayList(LIR.LocalId).empty;
@@ -1380,6 +1383,12 @@ const Inserter = struct {
     switch_summaries: []?*SwitchSummary = &.{},
     /// Arena backing one emission's solver structures.
     solve_allocator: Allocator = undefined,
+    /// Per-emission scratch for `ownershipPlaceUsedInPath`: the visited
+    /// statement set plus the indices to clear afterwards, so one query
+    /// costs the statements it visits rather than a store-wide reset.
+    place_query_seen: std.bit_set.DynamicBitSetUnmanaged = .{},
+    place_query_visited: std.ArrayList(u32) = .empty,
+    place_query_stack: std.ArrayList(LIR.CFStmtId) = .empty,
     /// Arena backing all non-output state for the current proc emission.
     emission_allocator: Allocator = undefined,
     arc_plans: *ArcPlans = undefined,
@@ -4999,6 +5008,24 @@ const Inserter = struct {
         }
     }
 
+    /// The root unit a complete projection read moved into the argument at
+    /// `position` under this refinement's restoring outcomes, if that read
+    /// registered one. The registered resource names the root's unit local,
+    /// never the argument's own unit.
+    fn rootUnitReceipt(
+        self: *const Inserter,
+        refinement: OutcomeRefinement,
+        position: usize,
+        local: LIR.LocalId,
+    ) ?LIR.LocalId {
+        const entry = self.restitution_switches.getPtr(refinement.stmt) orelse return null;
+        const resource = entry.position_resources[position] orelse return null;
+        return switch (resource) {
+            .unit => |unit| if (unit != self.unitOf(local)) unit else null,
+            .field => null,
+        };
+    }
+
     fn clearOutcomeRestoration(
         self: *Inserter,
         refinement: OutcomeRefinement,
@@ -5071,138 +5098,155 @@ const Inserter = struct {
         }
     }
 
-    fn isAliasOfOwnershipPlace(self: *const Inserter, local: LIR.LocalId, root: LIR.LocalId) bool {
-        var cursor = @intFromEnum(local);
-        var steps: usize = 0;
-        while (true) {
-            if (cursor == @intFromEnum(root)) return true;
-            if (cursor >= self.solution.alias_source.len) return false;
-            const source = self.solution.alias_source[cursor];
-            if (source == no_arc_bit) return false;
-            cursor = source;
-            steps += 1;
-            if (steps > self.solution.alias_source.len) arcInvariant("ARC ownership-place alias chain contained a cycle");
-        }
+    /// Whether a local's value lives in the ownership place anchored on
+    /// `place`: the place's unit local itself, or any binding the solver
+    /// anchored on it as a borrow (pure aliases, complete and partial
+    /// projections, lent call results, and their transitive borrows). Every
+    /// such binding reads the place's stored allocation without holding a
+    /// unit of its own, so its RC-bearing use needs that allocation alive.
+    /// An owned binding holds its own retained unit and is its own leader,
+    /// so its later uses never depend on the place.
+    fn localInOwnershipPlace(self: *const Inserter, local: LIR.LocalId, place: LIR.LocalId) bool {
+        return self.solution.leaderOf(local) == place;
     }
 
-    fn spanUsesOwnershipPlace(self: *const Inserter, span: LIR.LocalSpan, root: LIR.LocalId) bool {
+    fn spanUsesOwnershipPlace(self: *const Inserter, span: LIR.LocalSpan, place: LIR.LocalId) bool {
         const locals = self.store.getLocalSpan(span);
         for (0..GuardedList.borrowLen(locals)) |index| {
-            if (self.isAliasOfOwnershipPlace(GuardedList.at(locals, index), root)) return true;
+            if (self.localInOwnershipPlace(GuardedList.at(locals, index), place)) return true;
         }
         return false;
     }
 
-    /// Exact use query for one complete ownership place. Pure container
-    /// aliases and non-RC field/discriminant reads do not use its stored unit;
-    /// whole-value operands and RC-bearing projections do.
+    /// Exact use query for one complete ownership place, keyed by the unit
+    /// local `root`. Borrowed pure aliases, discriminant reads, and non-RC
+    /// field reads only touch the inline representation and do not use the
+    /// stored unit; whole-value operands and RC-bearing projections of any
+    /// place member do. An owned pure alias of a member retains through the
+    /// place at its bind, so that bind is a use even though the alias itself
+    /// then carries its own unit.
     fn ownershipPlaceUsedInPath(
         self: *Inserter,
         start: LIR.CFStmtId,
         root: LIR.LocalId,
     ) ResourceError!bool {
-        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(self.emission_allocator, self.store.cfStmtCount());
-        var stack = std.ArrayList(LIR.CFStmtId).empty;
+        const place = self.solution.leaderOf(root);
+        const seen = &self.place_query_seen;
+        const visited = &self.place_query_visited;
+        const stack = &self.place_query_stack;
+        defer {
+            for (visited.items) |index| seen.unset(index);
+            visited.clearRetainingCapacity();
+            stack.clearRetainingCapacity();
+        }
         try stack.append(self.emission_allocator, start);
         while (stack.pop()) |current| {
             const stmt_index = @intFromEnum(current);
+            if (stmt_index >= seen.bit_length) {
+                try seen.resize(self.emission_allocator, @max(self.store.cfStmtCount(), stmt_index + 1), false);
+            }
             if (seen.isSet(stmt_index)) continue;
             seen.set(stmt_index);
+            try visited.append(self.emission_allocator, @intCast(stmt_index));
             switch (self.store.getCFStmt(current)) {
                 .assign_ref => |assign| {
                     switch (assign.op) {
-                        .local => {},
+                        .local => |source| if (source != assign.target and
+                            self.localInOwnershipPlace(source, place) and
+                            !self.isBindingBorrowed(assign.target)) return true,
                         .discriminant => {},
-                        .field => |op| if (self.isAliasOfOwnershipPlace(op.source, root) and self.localContainsRefcounted(assign.target)) return true,
-                        .tag_payload => |op| if (self.isAliasOfOwnershipPlace(op.source, root) and self.localContainsRefcounted(assign.target)) return true,
-                        .tag_payload_struct => |op| if (self.isAliasOfOwnershipPlace(op.source, root) and self.localContainsRefcounted(assign.target)) return true,
-                        .list_reinterpret => {},
-                        .nominal => {},
+                        .field => |op| if (self.localInOwnershipPlace(op.source, place) and self.localContainsRefcounted(assign.target)) return true,
+                        .tag_payload => |op| if (self.localInOwnershipPlace(op.source, place) and self.localContainsRefcounted(assign.target)) return true,
+                        .tag_payload_struct => |op| if (self.localInOwnershipPlace(op.source, place) and self.localContainsRefcounted(assign.target)) return true,
+                        .list_reinterpret => |op| if (self.localInOwnershipPlace(op.backing_ref, place) and
+                            !self.isBindingBorrowed(assign.target)) return true,
+                        .nominal => |op| if (self.localInOwnershipPlace(op.backing_ref, place) and
+                            !self.isBindingBorrowed(assign.target)) return true,
                     }
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_literal => |assign| try stack.append(self.emission_allocator, assign.next),
                 .init_uninitialized => |assign| try stack.append(self.emission_allocator, assign.next),
                 .assign_call => |assign| {
-                    if (self.spanUsesOwnershipPlace(assign.args, root)) return true;
+                    if (self.spanUsesOwnershipPlace(assign.args, place)) return true;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_call_erased => |assign| {
-                    if (self.isAliasOfOwnershipPlace(assign.closure, root) or
-                        (assign.reuse_source != null and self.isAliasOfOwnershipPlace(assign.reuse_source.?, root)) or
-                        self.spanUsesOwnershipPlace(assign.args, root)) return true;
+                    if (self.localInOwnershipPlace(assign.closure, place) or
+                        (assign.reuse_source != null and self.localInOwnershipPlace(assign.reuse_source.?, place)) or
+                        self.spanUsesOwnershipPlace(assign.args, place)) return true;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_packed_erased_fn => |assign| {
-                    if ((assign.capture != null and self.isAliasOfOwnershipPlace(assign.capture.?, root)) or
-                        (assign.reuse != null and self.isAliasOfOwnershipPlace(assign.reuse.?, root))) return true;
+                    if ((assign.capture != null and self.localInOwnershipPlace(assign.capture.?, place)) or
+                        (assign.reuse != null and self.localInOwnershipPlace(assign.reuse.?, place))) return true;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_boxy_desc_ref => |assign| try stack.append(self.emission_allocator, assign.next),
                 .assign_boxy_dict_ref => |assign| try stack.append(self.emission_allocator, assign.next),
                 .assign_boxy_box => |assign| {
-                    if (self.isAliasOfOwnershipPlace(assign.payload, root)) return true;
+                    if (self.localInOwnershipPlace(assign.payload, place)) return true;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_boxy_reuse_box => |assign| {
-                    if (self.isAliasOfOwnershipPlace(assign.source, root)) return true;
+                    if (self.localInOwnershipPlace(assign.source, place)) return true;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_boxy_unbox => |assign| {
-                    if (self.isAliasOfOwnershipPlace(assign.source, root)) return true;
+                    if (self.localInOwnershipPlace(assign.source, place)) return true;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_boxy_adapt => |assign| {
-                    if (self.isAliasOfOwnershipPlace(assign.source, root)) return true;
+                    if (self.localInOwnershipPlace(assign.source, place)) return true;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_boxy_inspect => |assign| {
-                    if (self.isAliasOfOwnershipPlace(assign.source, root)) return true;
+                    if (self.localInOwnershipPlace(assign.source, place)) return true;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_boxy_eq => |assign| {
-                    if (self.isAliasOfOwnershipPlace(assign.lhs, root) or self.isAliasOfOwnershipPlace(assign.rhs, root)) return true;
+                    if (self.localInOwnershipPlace(assign.lhs, place) or self.localInOwnershipPlace(assign.rhs, place)) return true;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_boxy_tag => |assign| {
-                    if (assign.payload != null and self.isAliasOfOwnershipPlace(assign.payload.?, root)) return true;
+                    if (assign.payload != null and self.localInOwnershipPlace(assign.payload.?, place)) return true;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_boxy_tag_payload => |assign| {
-                    if (self.isAliasOfOwnershipPlace(assign.source, root)) return true;
+                    if (self.localInOwnershipPlace(assign.source, place)) return true;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_call_dict => |assign| {
-                    if (self.spanUsesOwnershipPlace(assign.args, root) or self.spanUsesOwnershipPlace(assign.hidden_args, root)) return true;
+                    if (self.spanUsesOwnershipPlace(assign.args, place) or self.spanUsesOwnershipPlace(assign.hidden_args, place)) return true;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_low_level => |assign| {
-                    if (self.spanUsesOwnershipPlace(assign.args, root)) return true;
+                    if (self.spanUsesOwnershipPlace(assign.args, place)) return true;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_list => |assign| {
-                    if (self.spanUsesOwnershipPlace(assign.elems, root)) return true;
+                    if (self.spanUsesOwnershipPlace(assign.elems, place)) return true;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_struct => |assign| {
-                    if (self.spanUsesOwnershipPlace(assign.fields, root)) return true;
+                    if (self.spanUsesOwnershipPlace(assign.fields, place)) return true;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_tag => |assign| {
-                    if (assign.payload != null and self.isAliasOfOwnershipPlace(assign.payload.?, root)) return true;
+                    if (assign.payload != null and self.localInOwnershipPlace(assign.payload.?, place)) return true;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .store_struct => |assign| {
-                    if (self.isAliasOfOwnershipPlace(assign.dest, root) or self.spanUsesOwnershipPlace(assign.fields, root)) return true;
+                    if (self.localInOwnershipPlace(assign.dest, place) or self.spanUsesOwnershipPlace(assign.fields, place)) return true;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .store_tag => |assign| {
-                    if (self.isAliasOfOwnershipPlace(assign.dest, root) or
-                        (assign.payload != null and self.isAliasOfOwnershipPlace(assign.payload.?, root))) return true;
+                    if (self.localInOwnershipPlace(assign.dest, place) or
+                        (assign.payload != null and self.localInOwnershipPlace(assign.payload.?, place))) return true;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .set_local => |assign| {
-                    if (self.isAliasOfOwnershipPlace(assign.value, root)) return true;
+                    if (self.localInOwnershipPlace(assign.value, place)) return true;
                     // Rebinding the place ends this definition. Uses reached
                     // through the following jump belong to the newly written
                     // join value, not to the value whose projection is being
@@ -5211,28 +5255,28 @@ const Inserter = struct {
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .debug => |stmt| {
-                    if (self.isAliasOfOwnershipPlace(stmt.message, root)) return true;
+                    if (self.localInOwnershipPlace(stmt.message, place)) return true;
                     try stack.append(self.emission_allocator, stmt.next);
                 },
                 .expect => |stmt| {
-                    if (self.isAliasOfOwnershipPlace(stmt.condition, root)) return true;
+                    if (self.localInOwnershipPlace(stmt.condition, place)) return true;
                     try stack.append(self.emission_allocator, stmt.next);
                 },
                 .comptime_branch_taken => |stmt| try stack.append(self.emission_allocator, stmt.next),
                 .incref => |stmt| {
-                    if (self.isAliasOfOwnershipPlace(stmt.value, root)) return true;
+                    if (self.localInOwnershipPlace(stmt.value, place)) return true;
                     try stack.append(self.emission_allocator, stmt.next);
                 },
                 .decref, .decref_if_initialized, .free => return true,
                 .switch_stmt => |stmt| {
-                    if (self.isAliasOfOwnershipPlace(stmt.cond, root)) return true;
+                    if (self.localInOwnershipPlace(stmt.cond, place)) return true;
                     if (stmt.continuation) |continuation| try stack.append(self.emission_allocator, continuation);
                     const branches = self.store.getCFSwitchBranches(stmt.branches);
                     for (0..GuardedList.borrowLen(branches)) |index| try stack.append(self.emission_allocator, GuardedList.at(branches, index).body);
                     try stack.append(self.emission_allocator, stmt.default_branch);
                 },
                 .switch_initialized_payload => |stmt| {
-                    if (self.isAliasOfOwnershipPlace(stmt.cond, root) or self.isAliasOfOwnershipPlace(stmt.payload, root)) return true;
+                    if (self.localInOwnershipPlace(stmt.cond, place) or self.localInOwnershipPlace(stmt.payload, place)) return true;
                     try stack.append(self.emission_allocator, stmt.initialized_branch);
                     try stack.append(self.emission_allocator, stmt.uninitialized_branch);
                 },
@@ -5244,7 +5288,7 @@ const Inserter = struct {
                     if (join_index >= joins.len) arcInvariant("ARC ownership-place use query exceeded its join table");
                     try stack.append(self.emission_allocator, joins[join_index].body);
                 },
-                .ret => |stmt| if (self.isAliasOfOwnershipPlace(stmt.value, root)) return true,
+                .ret => |stmt| if (self.localInOwnershipPlace(stmt.value, place)) return true,
                 .crash, .expect_err => return true,
                 // An implicit loop boundary hands the kept value to either
                 // the next iteration or the code after the loop. A root
@@ -5338,7 +5382,19 @@ const Inserter = struct {
         var outcome_required = false;
         var outcome_admissible = outcome_refinement != null and outcome_mask != 0;
         var unchecked_outcome_positions = outcome_mask;
+        // A complete projection read whose root stays live may already have
+        // moved the root's unit into one of these arguments, registering that
+        // root unit as the resource this refinement returns on its restoring
+        // outcomes. Such a root receipt makes the outcome convention mandatory
+        // for its position: the argument carries the root's only unit and the
+        // root is read again on the restoring paths.
+        var root_receipts = [_]?LIR.LocalId{null} ** arc_sig.tracked_param_count;
+        var any_root_receipt = false;
         if (outcome_refinement) |refinement| {
+            for (0..@min(GuardedList.borrowLen(locals), arc_sig.tracked_param_count)) |position| {
+                root_receipts[position] = self.rootUnitReceipt(refinement, position, GuardedList.at(locals, position));
+                any_root_receipt = any_root_receipt or root_receipts[position] != null;
+            }
             for (0..arc_sig.tracked_param_count) |position| {
                 self.clearOutcomeRestoration(refinement, position);
             }
@@ -5357,13 +5413,16 @@ const Inserter = struct {
                 self.fieldRestitutionForEmission(stmt_id, position)
             else
                 null;
-            const used_after_call = field_receipt != null or
+            const root_receipt = root_receipts[position];
+            const used_after_call = field_receipt != null or root_receipt != null or
                 (local != target and try self.groupUsedInPath(next, local, loop_keep));
             const restored_resource: RestoredResource = if (field_receipt) |receipt|
                 if (owned.contains(receipt.place.root))
                     .{ .field = receipt.place }
                 else
                     .{ .unit = owner }
+            else if (root_receipt) |root|
+                .{ .unit = root }
             else
                 .{ .unit = owner };
             const restitution: ?OutcomeRestitution = if (field_receipt) |receipt| blk: {
@@ -5375,7 +5434,7 @@ const Inserter = struct {
                     .resource = restored_resource,
                 };
             } else try self.outcomeRestitutionGuard(
-                local,
+                root_receipt orelse local,
                 restored_resource,
                 position,
                 target,
@@ -5391,6 +5450,9 @@ const Inserter = struct {
             if (restitution == null or !can_transfer) outcome_admissible = false;
         }
         outcome_admissible = outcome_admissible and outcome_required and unchecked_outcome_positions == 0;
+        if (any_root_receipt and !outcome_admissible) {
+            arcInvariant("ARC complete projection moved a live root unit into a call that did not admit its outcome convention");
+        }
         if (outcome_admissible) demanded.outcomes = outcome_sig.outcomes;
 
         for (0..GuardedList.borrowLen(locals)) |position| {
@@ -5446,7 +5508,8 @@ const Inserter = struct {
                 self.fieldRestitutionForEmission(stmt_id, position)
             else
                 null;
-            const used_after_call = field_receipt != null or
+            const root_receipt = if (position < arc_sig.tracked_param_count) root_receipts[position] else null;
+            const used_after_call = field_receipt != null or root_receipt != null or
                 (local != target and try self.groupUsedInPath(next, local, loop_keep));
             const restored_resource: RestoredResource = if (field_receipt) |receipt| blk: {
                 // A live residual shell can receive its field back. Once the
@@ -5457,7 +5520,10 @@ const Inserter = struct {
                     .{ .field = receipt.place }
                 else
                     .{ .unit = owner };
-            } else .{ .unit = owner };
+            } else if (root_receipt) |root|
+                .{ .unit = root }
+            else
+                .{ .unit = owner };
             const restitution: ?OutcomeRestitution = if (!outcome_admissible)
                 null
             else if (field_receipt) |receipt| blk: {
@@ -5470,7 +5536,7 @@ const Inserter = struct {
             } else if (callee != null and outcome_places_distinct and
                 (outcome_mask & (arc_sig.paramBit(position) orelse 0)) != 0)
                 try self.outcomeRestitutionGuard(
-                    local,
+                    root_receipt orelse local,
                     restored_resource,
                     position,
                     target,
@@ -9547,6 +9613,82 @@ test "RC tag_payload_access: complete payload retains when parent remains live" 
 
     try f.expectRc(tag_value, 0, 1, 0);
     try testing.expect(f.countRc(extracted, .incref) >= 1);
+}
+
+test "RC complete take keeps the root live for a later RC read through a borrowed alias of its payload projection" {
+    // The shape from issue 10968: a `Try` payload record is bound as a
+    // borrowed complete projection of the tag, aliased, and its sole
+    // refcounted field is read twice into owned bindings that separate calls
+    // consume. The second read reaches the root's stored unit through the
+    // projection alias, not through a pure alias of the root, so the first
+    // read must retain instead of moving the root unit away.
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = .str },
+    });
+    const tag_record = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        record_layout,
+    });
+    const payload = try f.local(.str);
+    const record = try f.local(record_layout);
+    const tag_value = try f.local(tag_record);
+    const projection = try f.local(record_layout);
+    const first_alias = try f.local(record_layout);
+    const first = try f.local(.str);
+    const first_result = try f.local(.i64);
+    const second_alias = try f.local(record_layout);
+    const second = try f.local(.str);
+    const second_result = try f.local(.i64);
+
+    const ret = try f.ret(second_result);
+    const consume_second = try f.assignCall(second_result, &.{second}, ret);
+    const read_second = try f.assignRefField(second, second_alias, 0, consume_second);
+    const alias_second = try f.assignRefLocal(second_alias, projection, read_second);
+    const consume_first = try f.assignCall(first_result, &.{first}, alias_second);
+    const read_first = try f.assignRefField(first, first_alias, 0, consume_first);
+    const alias_first = try f.assignRefLocal(first_alias, projection, read_first);
+    const project = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = projection,
+        .op = .{ .tag_payload_struct = .{ .source = tag_value, .variant_index = 1, .tag_discriminant = 1 } },
+        .next = alias_first,
+    } });
+    const make_tag = try f.assignTag(tag_value, 1, record, project);
+    const make_record = try f.assignStruct(record, &.{payload}, make_tag);
+    const body = try f.assignStr(payload, "guid", make_record);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+
+    // The first read retains because the second read still needs the root's
+    // stored unit; the second read has no later use and moves that unit.
+    try testing.expect(f.countRc(first, .incref) >= 1);
+    try testing.expectEqual(@as(usize, 0), f.countRc(second, .incref));
+}
+
+test "RC partial field take keeps a retain when a borrowed read of that field outlives the take" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const left = try f.local(.str);
+    const right = try f.local(.str);
+    const pair = try f.local(f.pair_str);
+    const borrowed = try f.local(.str);
+    const taken = try f.local(.str);
+    const call_result = try f.local(.i64);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const use_borrowed = try f.expectStmt(borrowed, result_assign);
+    const consume_taken = try f.assignCall(call_result, &.{taken}, use_borrowed);
+    const read_taken = try f.assignRefField(taken, pair, 0, consume_taken);
+    const read_borrowed = try f.assignRefField(borrowed, pair, 0, read_taken);
+    const make_pair = try f.assignStruct(pair, &.{ left, right }, read_borrowed);
+    const make_right = try f.assignStr(right, "right", make_pair);
+    const body = try f.assignStr(left, "left", make_right);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+    try testing.expect(f.countRc(taken, .incref) >= 1);
 }
 
 test "RC complete payload moves while parent representation has a later scalar field read" {
