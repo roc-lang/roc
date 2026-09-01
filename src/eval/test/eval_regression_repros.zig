@@ -5,6 +5,23 @@ const TestCase = @import("parallel_runner.zig").TestCase;
 /// Eval regression cases.
 pub const tests = [_]TestCase{
     .{
+        // `Str.from_utf8_lossy` returns independently owned storage. The Wasm
+        // lowering must not reinterpret the consumed List allocation as the
+        // returned Str, because ARC releases the List independently.
+        .name = "wasm Str.from_utf8_lossy result remains owned after its input is released",
+        .source_kind = .module,
+        .source =
+        \\main : U64
+        \\main = {
+        \\    bytes = List.repeat(97.U8, 64)
+        \\    decoded = Str.from_utf8_lossy(bytes)
+        \\    copies = [decoded, decoded]
+        \\    Str.count_utf8_bytes(decoded) + List.len(copies)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "66" },
+    },
+    .{
         // One statement consuming the same list in two argument positions.
         // Both consumes happen whenever the statement runs, so the value has
         // two live references and the write must not land in place: doing so

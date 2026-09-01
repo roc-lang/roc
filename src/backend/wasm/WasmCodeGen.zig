@@ -18377,22 +18377,32 @@ fn emitStrFromUtf8Lossy(self: *Self, list_arg: ProcLocalId) Allocator.Error!void
     self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
     {
         const data_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        const list_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
 
         try self.emitLocalGet(list_ptr);
         try self.emitLoadOp(.i32, 0);
         try self.emitLocalSet(data_ptr);
 
-        try self.emitLocalGet(list_ptr);
-        try self.emitLoadOp(.i32, 8);
-        try self.emitLocalSet(list_cap);
+        // `str_from_utf8_lossy` is an allocating primitive in LIR. Keep the
+        // Wasm lowering faithful to that contract instead of reinterpreting
+        // the input List allocation as the returned Str. ARC releases the
+        // input independently after this operation.
+        try self.emitHeapAllocWithRefcount(len, 1, false);
+        const result_data = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitLocalSet(result_data);
+
+        const zero = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitI32Const(0);
+        try self.emitLocalSet(zero);
+        try self.emitMemCopyLoop(result_data, zero, data_ptr, len);
 
         try self.emitLocalGet(result_ptr);
-        try self.emitLocalGet(data_ptr);
+        try self.emitLocalGet(result_data);
         try self.emitStoreOp(.i32, 0);
 
         try self.emitLocalGet(result_ptr);
-        try self.emitLocalGet(list_cap);
+        try self.emitLocalGet(len);
+        try self.emitI32Const(1);
+        self.currentCode().append(self.allocator, Op.i32_shl) catch return error.OutOfMemory;
         try self.emitStoreOp(.i32, 4);
 
         try self.emitLocalGet(result_ptr);
