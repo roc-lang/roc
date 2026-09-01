@@ -551,17 +551,76 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         stmt_map: collections.DenseMap(CFStmtId, CFStmtId),
         /// Every local created by this clone, in creation order.
         new_locals: std.ArrayList(LocalId),
+        /// Optional virtual frame under which cloned source scopes are rebased.
+        inline_scope_outer: LIR.InlineScopeId,
+        inline_scope_map: []?LIR.InlineScopeId,
+        /// Which join identities must be alpha-renamed. Whole-procedure
+        /// inlining owns every jump target and remaps all of them. A cloned
+        /// subtree remaps only declarations structurally contained in that
+        /// subtree, preserving jumps to lexically enclosing joins.
+        join_remap: enum { none, all, declared },
+        declared_joins: collections.DenseMap(LIR.JoinPointId, void),
+        join_map: collections.DenseMap(LIR.JoinPointId, LIR.JoinPointId),
+        next_join_point: u32,
 
         /// Allocate the clone state sized for the store's current locals.
         pub fn init(store: *LirStore, rewriter: Rewriter) Allocator.Error!Self {
+            return initInternal(store, rewriter, LIR.InlineScopeId.none, .none);
+        }
+
+        /// Allocate clone state and rebase every cloned source location below
+        /// `outer`. Procedure variants pass `.none`; true call-site inlining
+        /// supplies the virtual frame representing the removed call.
+        pub fn initWithInlineScopeOuter(
+            store: *LirStore,
+            rewriter: Rewriter,
+            outer: LIR.InlineScopeId,
+        ) Allocator.Error!Self {
+            return initInternal(store, rewriter, outer, .all);
+        }
+
+        /// Clone a control-flow subtree within its current procedure. Join
+        /// declarations owned by the subtree receive fresh identities, while
+        /// jumps to lexically enclosing declarations retain their targets.
+        pub fn initWithFreshDeclaredJoins(
+            store: *LirStore,
+            rewriter: Rewriter,
+            body: CFStmtId,
+        ) Allocator.Error!Self {
+            var self = try initInternal(store, rewriter, LIR.InlineScopeId.none, .declared);
+            errdefer self.deinit();
+            var walk = try ReachableStmts.init(store, body);
+            defer walk.deinit();
+            while (try walk.next()) |stmt_id| {
+                const stmt = store.getCFStmt(stmt_id);
+                if (stmt == .join) try self.declared_joins.put(stmt.join.id, {});
+            }
+            return self;
+        }
+
+        fn initInternal(
+            store: *LirStore,
+            rewriter: Rewriter,
+            outer: LIR.InlineScopeId,
+            join_remap: @FieldType(Self, "join_remap"),
+        ) Allocator.Error!Self {
             const local_map = try store.allocator.alloc(?LocalId, store.localCount());
+            errdefer store.allocator.free(local_map);
             @memset(local_map, null);
+            const inline_scope_map = try store.allocator.alloc(?LIR.InlineScopeId, store.inlineScopeCount());
+            @memset(inline_scope_map, null);
             return .{
                 .store = store,
                 .rewriter = rewriter,
                 .local_map = local_map,
                 .stmt_map = collections.DenseMap(CFStmtId, CFStmtId).init(store.allocator),
                 .new_locals = .empty,
+                .inline_scope_outer = outer,
+                .inline_scope_map = inline_scope_map,
+                .join_remap = join_remap,
+                .declared_joins = collections.DenseMap(LIR.JoinPointId, void).init(store.allocator),
+                .join_map = collections.DenseMap(LIR.JoinPointId, LIR.JoinPointId).init(store.allocator),
+                .next_join_point = if (join_remap != .none) nextJoinPointRaw(store) else 0,
             };
         }
 
@@ -569,6 +628,9 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         pub fn deinit(self: *Self) void {
             self.new_locals.deinit(self.store.allocator);
             self.stmt_map.deinit();
+            self.join_map.deinit();
+            self.declared_joins.deinit();
+            self.store.allocator.free(self.inline_scope_map);
             self.store.allocator.free(self.local_map);
         }
 
@@ -585,7 +647,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             defer self.store.current_inline_scope = saved_inline_scope;
             self.store.current_loc = self.store.stmtLoc(old_id);
             self.store.current_region = self.store.stmtRegion(old_id);
-            self.store.current_inline_scope = self.store.stmtInlineScope(old_id);
+            self.store.current_inline_scope = try self.mapInlineScope(self.store.stmtInlineScope(old_id));
 
             const stmt = self.store.getCFStmt(old_id);
             if (@hasDecl(Rewriter, "interceptStmt")) {
@@ -863,7 +925,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .loop_continue => try self.store.addCFStmt(.loop_continue),
                 .loop_break => try self.store.addCFStmt(.loop_break),
                 .join => |s| try self.store.addCFStmt(.{ .join = .{
-                    .id = s.id,
+                    .id = try self.mapJoinPoint(s.id),
                     .params = try self.mapLocalSpan(s.params),
                     .maybe_uninitialized_params = try self.mapLocalSpan(s.maybe_uninitialized_params),
                     .maybe_uninitialized_conditions = try self.mapLocalSpan(s.maybe_uninitialized_conditions),
@@ -871,7 +933,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .body = try self.cloneStmt(s.body),
                     .remainder = try self.cloneStmt(s.remainder),
                 } }),
-                .jump => |s| try self.store.addCFStmt(.{ .jump = .{ .target = s.target } }),
+                .jump => |s| try self.store.addCFStmt(.{ .jump = .{ .target = try self.mapJoinPoint(s.target) } }),
                 .ret => |s| try self.rewriter.cloneRet(self, s.value),
                 .crash => |s| try self.store.addCFStmt(.{ .crash = .{ .msg = switch (s.msg) {
                     .literal => |literal| .{ .literal = literal },
@@ -891,11 +953,19 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         }
 
         fn cloneSwitch(self: *Self, s: anytype) Allocator.Error!CFStmtId {
-            const old_branches = self.store.getCFSwitchBranches(s.branches);
+            // Recursive body cloning appends switch branches and can therefore
+            // invalidate a guarded borrow of this same backing list. Own the
+            // source descriptors before cloning any branch body.
+            const old_branches = try GuardedList.dupe(
+                self.store.allocator,
+                LIR.CFSwitchBranch,
+                self.store.getCFSwitchBranches(s.branches),
+            );
+            defer self.store.allocator.free(old_branches);
             const branches = try self.store.allocator.alloc(LIR.CFSwitchBranch, old_branches.len);
             defer self.store.allocator.free(branches);
             for (0..old_branches.len) |index| {
-                const old = GuardedList.at(old_branches, index);
+                const old = old_branches[index];
                 const new = &branches[index];
                 new.* = .{
                     .value = old.value,
@@ -912,11 +982,18 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         }
 
         fn cloneStrMatchSet(self: *Self, s: anytype) Allocator.Error!CFStmtId {
-            const old_arms = self.store.getStrMatchArms(s.arms);
+            // Cloning an arm can append nested string-match arms. Snapshot the
+            // source descriptors so those appends cannot invalidate the input.
+            const old_arms = try GuardedList.dupe(
+                self.store.allocator,
+                LIR.StrMatchArm,
+                self.store.getStrMatchArms(s.arms),
+            );
+            defer self.store.allocator.free(old_arms);
             const arms = try self.store.allocator.alloc(LIR.StrMatchArm, old_arms.len);
             defer self.store.allocator.free(arms);
             for (0..old_arms.len) |index| {
-                const old = GuardedList.at(old_arms, index);
+                const old = old_arms[index];
                 const new = &arms[index];
                 new.* = .{
                     .prefix = old.prefix,
@@ -1031,7 +1108,53 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             try self.new_locals.append(self.store.allocator, local);
             return local;
         }
+
+        fn mapInlineScope(self: *Self, old: LIR.InlineScopeId) Allocator.Error!LIR.InlineScopeId {
+            if (self.inline_scope_outer == LIR.InlineScopeId.none) return old;
+            if (old == LIR.InlineScopeId.none) return self.inline_scope_outer;
+
+            const index = @intFromEnum(old);
+            if (index >= self.inline_scope_map.len) unreachable;
+            if (self.inline_scope_map[index]) |existing| return existing;
+
+            const source = self.store.inlineScope(old);
+            const mapped = try self.store.addInlineScope(.{
+                .source_symbol = source.source_symbol,
+                .source_name = source.source_name,
+                .source_loc = source.source_loc,
+                .call_site = source.call_site,
+                .parent = try self.mapInlineScope(source.parent),
+            });
+            self.inline_scope_map[index] = mapped;
+            return mapped;
+        }
+
+        fn mapJoinPoint(self: *Self, old: LIR.JoinPointId) Allocator.Error!LIR.JoinPointId {
+            switch (self.join_remap) {
+                .none => return old,
+                .all => {},
+                .declared => if (!self.declared_joins.contains(old)) return old,
+            }
+            const entry = try self.join_map.getOrPut(old);
+            if (!entry.found_existing) {
+                if (self.next_join_point == std.math.maxInt(u32)) @panic("join-point id space exhausted");
+                entry.value_ptr.* = @enumFromInt(self.next_join_point);
+                self.next_join_point += 1;
+            }
+            return entry.value_ptr.*;
+        }
     };
+}
+
+fn nextJoinPointRaw(store: *const LirStore) u32 {
+    var next: u32 = 0;
+    for (store.getCFStmts()) |stmt| {
+        if (stmt != .join) continue;
+        const raw = @intFromEnum(stmt.join.id);
+        if (raw == std.math.maxInt(u32)) @panic("join-point id space exhausted");
+        next = @max(next, raw + 1);
+    }
+    return next;
 }
 
 test "chainIsSingleUse rejects an extra read of any link" {

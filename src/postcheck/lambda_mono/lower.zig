@@ -662,6 +662,9 @@ const Lowerer = struct {
                 .static_data = candidate.static_data,
                 .runtime_expr = try self.lowerExpr(candidate.runtime_expr),
             } },
+            .typed_boundary => |boundary| .{ .typed_boundary = .{
+                .value = try self.lowerExpr(boundary.value),
+            } },
             .@"unreachable" => .@"unreachable",
             .uninitialized => .uninitialized,
             .uninitialized_payload => |payload| .{ .uninitialized_payload = .{

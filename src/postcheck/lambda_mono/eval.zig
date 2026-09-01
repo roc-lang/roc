@@ -324,6 +324,7 @@ pub const Evaluator = struct {
                 return .{ .list = elems };
             },
             .static_data_candidate => |cand| return self.evalExpr(frame, cand.runtime_expr),
+            .typed_boundary => |boundary| return self.evalExpr(frame, boundary.value),
             .list => |span| return .{ .list = try self.evalExprSpan(frame, span) },
             .tuple => |span| return .{ .tuple = try self.evalExprSpan(frame, span) },
             .record => |span| return try self.evalRecord(frame, expr.ty, span),

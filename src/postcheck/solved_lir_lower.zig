@@ -1266,6 +1266,7 @@ const Lowerer = struct {
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(entry.symbol),
             .args = args_span,
+            .iterator_fusion_scope = source_fn.iterator_fusion_scope,
             .erased_reuse_arg = erased_reuse_arg,
             .erased_call_args = if (spec.abi == .erased)
                 try self.erasedCallArgsPlan(arg_locals[0..lifted_args.len])
@@ -2865,6 +2866,7 @@ const Lowerer = struct {
             .@"unreachable" => Common.invariant("unreachable marker escaped its terminated block-final position during direct LIR lowering"),
             .uninitialized, .uninitialized_payload => next,
             .static_data_candidate => |candidate| try self.lowerStaticDataCandidateInto(target, candidate, expr_ty, next),
+            .typed_boundary => |boundary| try self.lowerTypedBoundaryInto(target, expr_ty, boundary, next),
             .list => |items| try self.lowerListIntoAtType(target, expr_ty, items, next),
             .tuple => |items| try self.lowerTupleIntoAtType(target, expr_ty, items, next),
             .record => |fields| try self.lowerRecordInto(target, expr_ty, fields, next),
@@ -2990,6 +2992,7 @@ const Lowerer = struct {
             .nominal => |backing| try self.lowerNominalInto(target, ty, backing, next),
             .let_ => |let_| try self.lowerLetIntoAtType(target, ty, let_, next),
             .static_data_candidate => |candidate| try self.lowerStaticDataCandidateInto(target, candidate, ty, next),
+            .typed_boundary => |boundary| try self.lowerTypedBoundaryInto(target, ty, boundary, next),
             .field_access => |field| try self.lowerFieldAccessInto(target, field.receiver, field.segments, next),
             .call_value => |call| try self.lowerValueCallInto(target, ty, call.callee, self.solved.lifted.exprSpan(call.args), next),
             .match_ => |match_| try self.lowerMatchInto(target, ty, match_.scrutinee, match_.branches, match_.comptime_site, next),
@@ -3033,6 +3036,19 @@ const Lowerer = struct {
             .expect,
             => try self.lowerExprInto(target, expr_id, next),
         };
+    }
+
+    fn lowerTypedBoundaryInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        target_ty: Type.TypeId,
+        boundary: Lifted.TypedBoundary,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const source_ty = try self.lowerExprContextTy(boundary.value);
+        const source = try self.addTemp(source_ty);
+        const after_source = try self.assignTypedBoundary(target, target_ty, source, source_ty, next);
+        return try self.lowerExprIntoAtType(source, boundary.value, source_ty, after_source);
     }
 
     fn lowerListIntoAtType(

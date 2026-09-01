@@ -652,6 +652,10 @@ const Solver = struct {
             .comptime_exhaustiveness_failed,
             => {},
             .static_data_candidate => |candidate| _ = try self.expectExpr(candidate.runtime_expr, expected),
+            .typed_boundary => |boundary| {
+                const producer = try self.inferExpr(boundary.value);
+                try self.unify(expected, producer);
+            },
             .list => |items| {
                 const elem_ty = try self.listElem(expected);
                 for (self.lifted.exprSpan(items)) |child| {

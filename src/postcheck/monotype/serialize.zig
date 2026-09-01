@@ -691,6 +691,7 @@ pub const MappedProgramView = struct {
             => true,
             .static_data_candidate => |candidate| self.staticDataRefInBounds(candidate.static_data) and
                 self.exprRefInBounds(candidate.runtime_expr),
+            .typed_boundary => |boundary| self.exprRefInBounds(boundary.value),
             .list, .tuple => |span| self.exprIdSpanInBounds(span),
             .record => |span| self.fieldExprSpanInBounds(span),
             .record_update => |update| self.exprRefInBounds(update.base) and self.fieldExprSpanInBounds(update.fields),

@@ -12577,6 +12577,7 @@ const BodyDraftStore = struct {
             .str_lit,
             .bytes_lit,
             .static_data_candidate,
+            .typed_boundary,
             .list,
             .record_update,
             .nominal,

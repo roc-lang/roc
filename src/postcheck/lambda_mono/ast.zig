@@ -224,6 +224,11 @@ pub const StaticDataCandidate = struct {
     runtime_expr: ExprId,
 };
 
+/// Explicit producer-to-consumer result relation preserved after Lambda Solved.
+pub const TypedBoundary = struct {
+    value: ExprId,
+};
+
 /// Lambda Mono expression forms.
 pub const ExprData = union(enum) {
     local: LocalId,
@@ -238,6 +243,7 @@ pub const ExprData = union(enum) {
     str_lit: StringLiteralId,
     bytes_lit: PackedListLiteral,
     static_data_candidate: StaticDataCandidate,
+    typed_boundary: TypedBoundary,
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),

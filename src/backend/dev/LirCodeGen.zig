@@ -10336,10 +10336,140 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             try self.collectStmtLocals(stmt_id, &locals, &visited);
 
+            // Immutable scalar aliases may share their source's authoritative
+            // location. Prove immutability from the complete reachable
+            // definition inventory: mutable destinations, join parameters,
+            // and multiply-defined locals always retain independent slots.
+            var definition_counts = std.AutoHashMap(u32, u32).init(self.allocator);
+            defer definition_counts.deinit();
+            var alias_sources = std.AutoHashMap(u32, LocalId).init(self.allocator);
+            defer alias_sources.deinit();
+            var mutable = std.AutoHashMap(u32, void).init(self.allocator);
+            defer mutable.deinit();
+
+            var stmt_it = visited.keyIterator();
+            while (stmt_it.next()) |raw_stmt| {
+                const reachable: CFStmtId = @enumFromInt(raw_stmt.*);
+                switch (self.store.getCFStmt(reachable)) {
+                    .assign_ref => |assign| {
+                        try noteDefinition(&definition_counts, assign.target);
+                        if (assign.op == .local) try alias_sources.put(localKey(assign.target), assign.op.local);
+                    },
+                    .assign_literal => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_call => |assign| {
+                        try noteDefinition(&definition_counts, assign.target);
+                        if (assign.out_desc) |local| try mutable.put(localKey(local), {});
+                    },
+                    .assign_call_erased => |assign| {
+                        try noteDefinition(&definition_counts, assign.target);
+                        if (assign.out_desc) |local| try mutable.put(localKey(local), {});
+                    },
+                    .assign_packed_erased_fn => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_boxy_desc_ref => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_boxy_dict_ref => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_boxy_box => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_boxy_reuse_box => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_boxy_unbox => |assign| {
+                        try noteDefinition(&definition_counts, assign.target);
+                        if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try mutable.put(localKey(local), {});
+                    },
+                    .assign_boxy_adapt => |assign| {
+                        try noteDefinition(&definition_counts, assign.target);
+                        if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try mutable.put(localKey(local), {});
+                    },
+                    .assign_boxy_inspect => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_boxy_eq => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_boxy_tag => |assign| {
+                        try noteDefinition(&definition_counts, assign.target);
+                        if (assign.target_desc.localOrNull()) |local| try mutable.put(localKey(local), {});
+                    },
+                    .assign_boxy_tag_payload => |assign| {
+                        try noteDefinition(&definition_counts, assign.target);
+                        if (assign.target_desc) |local| try mutable.put(localKey(local), {});
+                    },
+                    .assign_call_dict => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_low_level => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_list => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_struct => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .assign_tag => |assign| try noteDefinition(&definition_counts, assign.target),
+                    .init_uninitialized => |uninit| try mutable.put(localKey(uninit.target), {}),
+                    .set_local => |assign| try mutable.put(localKey(assign.target), {}),
+                    .store_struct => |assign| try mutable.put(localKey(assign.dest), {}),
+                    .store_tag => |assign| try mutable.put(localKey(assign.dest), {}),
+                    .str_match => |str_match| {
+                        const steps = self.store.getStrMatchSteps(str_match.steps);
+                        for (0..steps.len) |step_index| switch (GuardedList.at(steps, step_index).capture) {
+                            .discard => {},
+                            .view => |local| try mutable.put(localKey(local), {}),
+                        };
+                    },
+                    .str_match_set => |str_match_set| {
+                        const arms = self.store.getStrMatchArms(str_match_set.arms);
+                        for (0..arms.len) |arm_index| {
+                            const steps = self.store.getStrMatchSteps(GuardedList.at(arms, arm_index).steps);
+                            for (0..steps.len) |step_index| switch (GuardedList.at(steps, step_index).capture) {
+                                .discard => {},
+                                .view => |local| try mutable.put(localKey(local), {}),
+                            };
+                        }
+                    },
+                    .join => |join| {
+                        const params = self.store.getLocalSpan(join.params);
+                        for (0..params.len) |param_index| {
+                            try mutable.put(localKey(GuardedList.at(params, param_index)), {});
+                        }
+                    },
+                    .boxy_tag_match,
+                    .debug,
+                    .expect_err,
+                    .expect,
+                    .comptime_branch_taken,
+                    .runtime_error,
+                    .comptime_exhaustiveness_failed,
+                    .incref,
+                    .decref,
+                    .decref_if_initialized,
+                    .free,
+                    .switch_stmt,
+                    .switch_initialized_payload,
+                    .jump,
+                    .ret,
+                    .crash,
+                    .loop_continue,
+                    .loop_break,
+                    => {},
+                }
+            }
+
+            var alias_it = alias_sources.iterator();
+            while (alias_it.next()) |entry| {
+                const target_key = entry.key_ptr.*;
+                const source = entry.value_ptr.*;
+                const source_key = localKey(source);
+                if ((definition_counts.get(target_key) orelse 0) != 1) continue;
+                if (definition_counts.get(source_key)) |count| if (count > 1) continue;
+                if (mutable.contains(target_key) or mutable.contains(source_key)) continue;
+
+                const alias_local: LocalId = @enumFromInt(target_key);
+                const target_layout = self.localLayout(alias_local);
+                const source_layout = self.localLayout(source);
+                const target_rep = self.runtimeRepresentationLayoutIdx(target_layout);
+                if (target_rep != self.runtimeRepresentationLayoutIdx(source_layout)) continue;
+                if (target_rep == .f32 or target_rep == .f64) continue;
+                if (self.simdKindForLayout(target_rep) != null) continue;
+                _ = locals.remove(localKey(alias_local));
+            }
+
             var it = locals.valueIterator();
             while (it.next()) |local| {
                 try self.ensureStableLocationForLocal(local.*);
             }
+        }
+
+        fn noteDefinition(counts: *std.AutoHashMap(u32, u32), local: LocalId) Allocator.Error!void {
+            const entry = try counts.getOrPut(localKey(local));
+            if (!entry.found_existing) entry.value_ptr.* = 0;
+            entry.value_ptr.* += 1;
         }
 
         fn generateRefOp(self: *Self, op: lir.RefOp, target_layout: layout.Idx) Allocator.Error!ValueLocation {
@@ -25701,6 +25831,80 @@ test "proc params and mutable list cells use distinct stack slots" {
     try std.testing.expect(answer_slot != end_slot);
     try std.testing.expect(appended_slot != end_slot);
     try std.testing.expect(appended_slot != answer_slot);
+}
+
+test "immutable aliases share storage but aliases of mutable locals do not" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const source = try addLocal(&store, .u64);
+    const alias1 = try addLocal(&store, .u64);
+    const alias2 = try addLocal(&store, .u64);
+    const mutable_source = try addLocal(&store, .u64);
+    const mutable_alias = try addLocal(&store, .u64);
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = alias2 } });
+    const mutate = try store.addCFStmt(.{ .set_local = .{
+        .target = mutable_source,
+        .value = source,
+        .mode = .initialize_join_param,
+        .next = ret,
+    } });
+    const mutable_alias_stmt = try store.addCFStmt(.{ .assign_ref = .{
+        .target = mutable_alias,
+        .op = .{ .local = mutable_source },
+        .next = mutate,
+    } });
+    const mutable_source_stmt = try store.addCFStmt(.{ .assign_literal = .{
+        .target = mutable_source,
+        .value = .{ .i64_literal = .{ .value = 2, .layout_idx = .u64 } },
+        .next = mutable_alias_stmt,
+    } });
+    const alias2_stmt = try store.addCFStmt(.{ .assign_ref = .{
+        .target = alias2,
+        .op = .{ .local = alias1 },
+        .next = mutable_source_stmt,
+    } });
+    const alias1_stmt = try store.addCFStmt(.{ .assign_ref = .{
+        .target = alias1,
+        .op = .{ .local = source },
+        .next = alias2_stmt,
+    } });
+    const source_stmt = try store.addCFStmt(.{ .assign_literal = .{
+        .target = source,
+        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+        .next = alias1_stmt,
+    } });
+
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    defer codegen.deinit();
+    const HostCodeGen = @TypeOf(codegen.codegen);
+    if (comptime builtin.cpu.arch == .aarch64) {
+        codegen.codegen.stack_offset = 16 + HostCodeGen.CALLEE_SAVED_AREA_SIZE;
+    } else {
+        codegen.codegen.stack_offset = -HostCodeGen.CALLEE_SAVED_AREA_SIZE;
+    }
+
+    try codegen.ensureStableLocationsForStmtLocals(source_stmt);
+    const source_loc = codegen.local_locations.get(@intFromEnum(source)).?;
+    try std.testing.expect(codegen.local_locations.get(@intFromEnum(alias1)) == null);
+    try std.testing.expect(codegen.local_locations.get(@intFromEnum(alias2)) == null);
+    const mutable_source_loc = codegen.local_locations.get(@intFromEnum(mutable_source)).?;
+    const mutable_alias_loc = codegen.local_locations.get(@intFromEnum(mutable_alias)).?;
+    try std.testing.expect(!std.meta.eql(mutable_source_loc, mutable_alias_loc));
+
+    try codegen.bindAssignedLocal(source, .{ .immediate_i64 = 1 });
+    try codegen.bindAssignedLocal(alias1, try codegen.generateLookup(source));
+    try codegen.bindAssignedLocal(alias2, try codegen.generateLookup(alias1));
+    try std.testing.expect(std.meta.eql(source_loc, codegen.local_locations.get(@intFromEnum(alias1)).?));
+    try std.testing.expect(std.meta.eql(source_loc, codegen.local_locations.get(@intFromEnum(alias2)).?));
 }
 
 test "Windows internal proc ABI reads stack arguments after shadow space" {

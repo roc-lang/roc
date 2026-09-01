@@ -1098,6 +1098,10 @@ pub fn erasedCallReuseFieldsMatch(assign: anytype) bool {
 pub const LirProcSpec = struct {
     name: Symbol,
     args: LocalSpan,
+    /// Producer-authored provenance for a function normalized from an
+    /// iterator pipeline. Dev-only structural fusion consumes this bit; it
+    /// must never infer the scope from symbols or LIR body shape.
+    iterator_fusion_scope: bool = false,
     /// Hidden erased-callable ownership input. Every erased-callable ABI proc
     /// records its final argument here, regardless of whether its result can
     /// reuse the allocation. Its local has erased-callable layout so ARC always
