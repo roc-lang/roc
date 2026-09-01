@@ -5684,8 +5684,8 @@ const Lowerer = struct {
 
         const param_span = try self.result.store.addLocalSpan(param_locals);
         const retained = self.solved.lifted.typedLocalSpan(join_point.retained);
-        const retained_locals = try self.allocator.alloc(LIR.LocalId, retained.len);
-        defer self.allocator.free(retained_locals);
+        var retained_locals: std.ArrayList(LIR.LocalId) = .empty;
+        defer retained_locals.deinit(self.allocator);
         var maybe_uninitialized_retained: std.ArrayList(LIR.LocalId) = .empty;
         defer maybe_uninitialized_retained.deinit(self.allocator);
         var maybe_uninitialized_conditions: std.ArrayList(LIR.LocalId) = .empty;
@@ -5694,15 +5694,27 @@ const Lowerer = struct {
         defer maybe_uninitialized_condition_masks.deinit(self.allocator);
         for (0..retained.len) |index| {
             const retained_local = GuardedList.at(retained, index);
+            const local_index = @intFromEnum(retained_local.local);
+            const has_lexical_binding = self.local_map[local_index] != null or
+                self.typed_local_map.contains(.{
+                    .local = retained_local.local,
+                    .ty = try self.lowerLocalTy(retained_local.local),
+                }) or
+                (try self.mappedLocalForMatchingLocal(retained_local.local)) != null;
+            // A captured value is borrowed from its capture storage rather than
+            // owned by an independent local in this procedure. Its operational
+            // reads keep that storage live; materializing a retained local here
+            // would create an uninitialized alias with no lexical producer.
+            if (!has_lexical_binding and try self.captureBindingForLocal(retained_local.local) != null) continue;
             const lir_local = try self.localFor(retained_local.local);
-            retained_locals[index] = lir_local;
+            try retained_locals.append(self.allocator, lir_local);
             if (self.payload_conditions[@intFromEnum(retained_local.local)]) |payload| {
                 try maybe_uninitialized_retained.append(self.allocator, lir_local);
                 try maybe_uninitialized_conditions.append(self.allocator, try self.localFor(payload.condition));
                 try maybe_uninitialized_condition_masks.append(self.allocator, payload.mask);
             }
         }
-        const retained_span = try self.result.store.addLocalSpan(retained_locals);
+        const retained_span = try self.result.store.addLocalSpan(retained_locals.items);
         const maybe_uninitialized_span = try self.result.store.addLocalSpan(maybe_uninitialized_retained.items);
         const maybe_uninitialized_conditions_span = try self.result.store.addLocalSpan(maybe_uninitialized_conditions.items);
         const maybe_uninitialized_condition_masks_span = try self.result.store.addU64Span(maybe_uninitialized_condition_masks.items);

@@ -3349,7 +3349,8 @@ Monotype commits that plan as one loop plus explicit shared continuations:
 The continuation targets are producer-authored Monotype data. Lifting,
 specialization, lambda solving, and direct LIR lowering preserve and consume
 those targets explicitly; no pass may discover equivalent branches and merge
-them after the fact. LIR jumps update only the parameters named by the edge.
+them after Monotype generation. LIR jumps update only the parameters named by
+the edge.
 For a matched field, payload replacement precedes setting its presence bit, so
 ARC observes the old bit while retiring an overwritten payload. The shared
 entry and error continuations carry an explicit zero-ABI `retained` ownership
@@ -3375,7 +3376,7 @@ expand either an unchanged loop state or a retained environment at every
 field/error edge. At runtime the plan remains shape-specialized direct code:
 field recognition goes straight to the concrete parser, successful updates
 write the fixed payload slot and presence word, and the only `O(N)` error work
-is the semantically necessary destruction of initialized fields.
+is destruction of payload slots whose presence words prove they are initialized.
 
 Input formats return seamless slices whenever the value being produced is a
 slice of the original input. Parsing a `Str` from a larger `Str` or validated

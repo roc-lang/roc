@@ -384,8 +384,8 @@ pub const Evaluator = struct {
                 self.jump_values = try self.evalExprSpan(frame, jump.args);
                 const update_params = self.program.typedLocalSpan(jump.loop_params);
                 if (update_params.len != update_values.len) return self.unsupported_("jump loop-update arity mismatch");
-                for (update_params, update_values) |param, value| {
-                    frame.put(param.local, value) catch return error.OutOfMemory;
+                for (0..update_params.len) |index| {
+                    frame.put(GuardedList.at(update_params, index).local, update_values[index]) catch return error.OutOfMemory;
                 }
                 return error.Jumped;
             },

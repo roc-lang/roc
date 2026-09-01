@@ -1709,10 +1709,9 @@ const Pass = struct {
                 for (0..values.len) |index| try self.markArgUsesInExpr(fn_id, GuardedList.at(values, index), changed);
             },
             .join_point => |join_point| {
-                const retained = self.program.typedLocalSpan(join_point.retained);
-                for (0..retained.len) |index| {
-                    self.markArgUseIfLocalId(fn_id, GuardedList.at(retained, index).local, changed);
-                }
+                // Retained locals describe ownership liveness, not value-shape
+                // demand. They follow any substitution selected by operational
+                // consumers, but must never cause argument specialization.
                 try self.markArgUsesInExpr(fn_id, join_point.body, changed);
                 try self.markArgUsesInExpr(fn_id, join_point.remainder, changed);
             },
@@ -1752,10 +1751,6 @@ const Pass = struct {
 
     fn markArgUseIfLocal(self: *Pass, fn_id: Ast.FnId, expr_id: Ast.ExprId, changed: *bool) void {
         const local = localExpr(self.program, expr_id) orelse return;
-        self.markArgUseIfLocalId(fn_id, local, changed);
-    }
-
-    fn markArgUseIfLocalId(self: *Pass, fn_id: Ast.FnId, local: Ast.LocalId, changed: *bool) void {
         const args = self.program.typedLocalSpan(self.program.getFn(fn_id).args);
         for (0..args.len) |index| {
             const arg = GuardedList.at(args, index);
