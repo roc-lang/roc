@@ -6826,6 +6826,7 @@ fn lowerLirWithBuildEnv(
         specialization_strategy,
         base.target.TargetUsize.native,
         false,
+        build_env.postCheckExecutor(),
         &spec_timing,
     );
     errdefer lowered.deinit();
@@ -9874,6 +9875,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         specialization_strategy,
         target_usize,
         args.synthetic_default_platform,
+        build_env.postCheckExecutor(),
         &spec_timing,
     );
     defer lowered.deinit();
@@ -10241,6 +10243,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         specialization_strategy,
         target_usize,
         args.synthetic_default_platform,
+        build_env.postCheckExecutor(),
         &spec_timing,
     );
     defer lowered.deinit();
@@ -10607,6 +10610,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         specialization_strategy,
         base.target.TargetUsize.native,
         false,
+        build_env.postCheckExecutor(),
         &spec_timing,
     );
     defer lowered.deinit();
@@ -11731,6 +11735,7 @@ fn lowerCheckedSourceToLir(
     specialization_strategy: base.SpecializationStrategy,
     target_usize: base.target.TargetUsize,
     proc_debug_names: bool,
+    post_check_executor: ?base.post_check_task_executor.Executor,
     timing: ?*lir.CheckedPipeline.Timing,
 ) lir.CheckedPipeline.LowerResourceError!lir.CheckedPipeline.LoweredProgram {
     const selected_roots: []const check.CheckedArtifact.RootRequest = switch (roots) {
@@ -11794,6 +11799,7 @@ fn lowerCheckedSourceToLir(
             .tag_reachability = tagReachabilityForOpt(opt),
             .prove_ranges = proveRangesForOpt(opt),
             .proc_debug_names = proc_debug_names,
+            .post_check_executor = post_check_executor,
             .timing = timing,
         },
     );
@@ -12552,6 +12558,7 @@ fn lowerPlannedTestModule(
         specialization_strategy,
         base.target.TargetUsize.native,
         false,
+        build_env.postCheckExecutor(),
         timing,
     );
     errdefer lowered.deinit();

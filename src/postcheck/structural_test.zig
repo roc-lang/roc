@@ -862,8 +862,8 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
     );
     try expectContains(cell_boundary, "self.lowerExprAtTypeCellWithDemand(checked_expr, cell, .runtime_value)");
     try expectContains(cell_boundary, "const region = self.sourceRegionForExpr(expr)");
-    try expectContains(cell_boundary, "self.builder.program.current_loc = try self.sourceLocFor(region)");
-    try expectContains(cell_boundary, "self.builder.program.current_region = region");
+    try expectContains(cell_boundary, "self.builder.current_loc = try self.sourceLocFor(region)");
+    try expectContains(cell_boundary, "self.builder.current_region = region");
     try expectContains(cell_boundary, "return switch (cell)");
     try expectContains(cell_boundary, ".sealed => |ty|");
     try expectContains(cell_boundary, "self.requireLoweredExprAtCell(expr, cell, demand, lowered)");
