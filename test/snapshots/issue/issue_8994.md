@@ -133,7 +133,7 @@ result = duplicate(["a", "b", "c"])
 												(p-assign (ident "rest"))))))
 								(value
 									(e-block
-										(e-call (constraint-fn-var 272)
+										(e-call (constraint-fn-var 276)
 											(e-lookup-external
 												(builtin))
 											(e-list
@@ -142,7 +142,7 @@ result = duplicate(["a", "b", "c"])
 														(p-assign (ident "e")))
 													(e-lookup-local
 														(p-assign (ident "e")))))
-											(e-call (constraint-fn-var 271)
+											(e-call (constraint-fn-var 275)
 												(e-lookup-local
 													(p-assign (ident "duplicate")))
 												(e-lookup-local
@@ -155,7 +155,7 @@ result = duplicate(["a", "b", "c"])
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 301)
+		(e-call (constraint-fn-var 309)
 			(e-lookup-local
 				(p-assign (ident "duplicate")))
 			(e-list

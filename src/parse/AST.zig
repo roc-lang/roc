@@ -514,7 +514,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .var_only_allowed_in_a_body => reportParseProblem(ctx, "Var Outside Body", "I was parsing a statement, and `var` appeared outside a function or block body.", "Mutable variables are local body statements. Move this `var` into a body, or use an ordinary top-level declaration.", .{ .example = "main = {\n    var count = 0\n    count\n}" }),
         .var_must_have_ident => reportParseProblem(ctx, "Expected Var Name", "I was parsing a `var` statement, and I expected a lowercase name.", "A mutable variable declaration starts with `var`, followed by the variable name.", .{ .example = "var count = 0" }),
         .var_expected_equals => reportParseProblem(ctx, "Expected Var Initializer", "I was parsing a `var` statement, and I expected `=` before the initial value.", "Mutable variables must be initialized when they are declared.", .{ .example = "var count = 0" }),
-        .var_type_anno_needs_var_keyword => reportParseProblem(ctx, "Var Annotation Needs Keyword", "I was parsing a type annotation for a mutable variable, and I expected the `var` keyword.", "Dollar-prefixed mutable names must be introduced with `var` when they have a type annotation.", .{ .example = "var $count : U64" }),
+        .var_type_anno_needs_var_keyword => reportParseProblem(ctx, "Expected Var Keyword", "I was parsing a mutable variable declaration, and I expected the `var` keyword.", "Dollar-prefixed mutable names must be introduced with `var` when they have a type annotation.", .{ .example = "var $count : U64" }),
         .for_expected_in => reportParseProblem(ctx, "Expected In", "I was parsing a `for` expression or statement, and I expected `in` after the pattern.", "A `for` loop writes the pattern first, then `in`, then the collection being iterated.", .{ .example = "for item in items {\n    item\n}" }),
         .match_branch_wrong_arrow => reportParseProblem(ctx, "Wrong Match Arrow", "I was parsing a match branch, and I found `->` where Roc uses `=>`.", "Match branches use a fat arrow between the pattern and the branch body.", .{ .example = "Ok(value) => value", .show_found = false }),
         .match_branch_missing_arrow => reportParseProblem(ctx, "Missing Match Arrow", "I was parsing a match branch, and I expected `=>` before the branch body.", "Add `=>` after the pattern or guard.", .{ .example = "Err(msg) => crash msg" }),
@@ -752,8 +752,8 @@ pub fn resolve(self: *const AST, token: Token.Idx) []const u8 {
 /// pin at all rather than guessing at what was meant.
 pub fn rocVersionText(self: *const AST, field_idx: RecordField.Idx) ?[]const u8 {
     const field = self.store.getRecordField(field_idx);
-    const value = field.value orelse return null;
-    const token = self.store.singleStringPartToken(value) orelse return null;
+    if (field.value != .supplied) return null;
+    const token = self.store.singleStringPartToken(field.value.supplied) orelse return null;
     return self.resolve(token);
 }
 
@@ -3197,9 +3197,10 @@ pub const Expr = union(enum) {
                     const field_node = tree.beginNode();
                     try tree.pushStaticAtom("field");
                     try tree.pushStringPair("field", ast.resolve(record_field.name));
+                    if (record_field.value == .unset) try tree.pushBoolPair("unset", true);
                     const attrs2 = tree.beginNode();
-                    if (record_field.value) |value_id| {
-                        try ast.store.getExpr(value_id).pushToSExprTree(gpa, env, ast, tree);
+                    if (record_field.value == .supplied) {
+                        try ast.store.getExpr(record_field.value.supplied).pushToSExprTree(gpa, env, ast, tree);
                     }
                     try tree.endNode(field_node, attrs2);
                 }
@@ -3359,9 +3360,10 @@ pub const Expr = union(enum) {
                     const field_node = tree.beginNode();
                     try tree.pushStaticAtom("field");
                     try tree.pushStringPair("field", ast.resolve(record_field.name));
+                    if (record_field.value == .unset) try tree.pushBoolPair("unset", true);
                     const attrs2 = tree.beginNode();
-                    if (record_field.value) |value_id| {
-                        try ast.store.getExpr(value_id).pushToSExprTree(gpa, env, ast, tree);
+                    if (record_field.value == .supplied) {
+                        try ast.store.getExpr(record_field.value.supplied).pushToSExprTree(gpa, env, ast, tree);
                     }
                     try tree.endNode(field_node, attrs2);
                 }
@@ -3564,11 +3566,27 @@ pub const PatternRecordField = struct {
     pub const Span = struct { span: base.DataSpan };
 };
 
-/// TODO
+/// One field in an expression record. A field's value is exactly one of:
+/// supplied (`x: expr`), punned (`x` alone), or unset (`x: _`)—unset marks
+/// the field Missing in a construction or update rather than carrying a
+/// value expression.
 pub const RecordField = struct {
     name: Token.Idx,
-    value: ?Expr.Idx,
+    value: Value,
     region: TokenizedRegion,
+
+    pub const Value = union(enum) {
+        supplied: Expr.Idx,
+        punned,
+        unset,
+
+        pub fn asSupplied(self: Value) ?Expr.Idx {
+            return switch (self) {
+                .supplied => |idx| idx,
+                .punned, .unset => null,
+            };
+        }
+    };
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -3582,10 +3600,16 @@ pub const RecordField = struct {
         try tree.pushString(ast.resolve(self.name));
         const attrs2 = tree.beginNode();
         try tree.endNode(name, attrs2);
+        // No unset rendering here: only header paths (an app header's
+        // platform entry and package lists) call this method, and header
+        // record fields are always `name: value`—never unset. Expression
+        // records render their own field shape inline (the `.record` and
+        // `.record_builder` arms of Expr.pushToSExprTree), including the
+        // unset flag.
         const attrs = tree.beginNode();
 
-        if (self.value) |idx| {
-            const value = ast.store.getExpr(idx);
+        if (self.value == .supplied) {
+            const value = ast.store.getExpr(self.value.supplied);
             try value.pushToSExprTree(gpa, env, ast, tree);
         }
 

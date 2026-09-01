@@ -1168,6 +1168,164 @@ pub fn declarationNameRegion(module_env: *ModuleEnv, target_pattern: CIR.Pattern
     return null;
 }
 
+/// A binding whose type is inferred rather than written down.
+pub const UnannotatedBinding = struct {
+    pattern: CIR.Pattern.Idx,
+    /// Where the inferred type belongs: immediately after the bound name.
+    after: LspPosition,
+};
+
+/// Context for collecting the patterns that carry a written type annotation.
+const CollectAnnotatedContext = struct {
+    allocator: std.mem.Allocator,
+    results: *std.ArrayList(CIR.Pattern.Idx),
+    oom: ?std.mem.Allocator.Error = null,
+
+    fn visitStmtPre(ctx: *CollectAnnotatedContext, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
+        if (statementAnnotation(stmt) == null) return .continue_traversal;
+        const pattern_idx = statementPattern(stmt) orelse return .continue_traversal;
+        ctx.results.append(ctx.allocator, pattern_idx) catch |err| {
+            ctx.oom = err;
+            return .stop;
+        };
+        return .continue_traversal;
+    }
+};
+
+/// Context for collecting `assign` patterns inside a byte range.
+const CollectBindingsContext = struct {
+    store: *const NodeStore,
+    module_env: *const ModuleEnv,
+    start_offset: u32,
+    end_offset: u32,
+    allocator: std.mem.Allocator,
+    results: *std.ArrayList(UnannotatedBinding),
+    oom: ?std.mem.Allocator.Error = null,
+
+    fn visitPatternPre(ctx: *CollectBindingsContext, pattern_idx: CIR.Pattern.Idx, pattern: CIR.Pattern) VisitAction {
+        if (std.meta.activeTag(pattern) != .assign) return .continue_traversal;
+
+        // A leading `_` marks a binding the author deliberately ignores.
+        // Annotating what someone said they do not care about is noise.
+        const name = ctx.module_env.common.idents.getText(pattern.assign.ident);
+        if (base.Ident.Attributes.fromString(name).ignored) return .continue_traversal;
+
+        const region = ctx.store.getPatternRegion(pattern_idx);
+
+        // The hint is drawn just past the pattern, so it only reads correctly
+        // where the source spells exactly the name and nothing else. Two kinds
+        // of pattern fail that: bindings the compiler synthesizes, which have
+        // no name in the source at all, and forms like `import … as name : Str`
+        // whose pattern spans a type the author already wrote.
+        const source = ctx.module_env.common.source;
+        if (region.end.offset > source.len or region.start.offset > region.end.offset) {
+            return .continue_traversal;
+        }
+        if (!std.mem.eql(u8, source[region.start.offset..region.end.offset], name)) {
+            return .continue_traversal;
+        }
+        if (region.end.offset < ctx.start_offset or region.start.offset > ctx.end_offset) {
+            return .continue_traversal;
+        }
+
+        const range = regionToRange(ctx.module_env, region) orelse return .continue_traversal;
+        ctx.results.append(ctx.allocator, .{
+            .pattern = pattern_idx,
+            .after = .{ .line = range.end_line, .character = range.end_col },
+        }) catch |err| {
+            ctx.oom = err;
+            return .stop;
+        };
+        return .continue_traversal;
+    }
+};
+
+/// Collect the bindings between two byte offsets whose type is inferred.
+///
+/// Only plain `assign` patterns qualify: they bind exactly one name, so an
+/// inferred type can be shown against that name. Bindings that already carry a
+/// written annotation are skipped—their type is on screen already.
+///
+/// Caller owns the returned list.
+pub fn collectUnannotatedBindings(
+    module_env: *ModuleEnv,
+    start_offset: u32,
+    end_offset: u32,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!std.ArrayList(UnannotatedBinding) {
+    // Which patterns already say their type. Annotations are few even in large
+    // files, so this stays a list that is scanned rather than a keyed map.
+    var annotated: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer annotated.deinit(allocator);
+
+    var annotated_ctx = CollectAnnotatedContext{
+        .allocator = allocator,
+        .results = &annotated,
+    };
+    var annotated_visitor = CirVisitor(CollectAnnotatedContext).init(&annotated_ctx, .{
+        .visit_stmt_pre = CollectAnnotatedContext.visitStmtPre,
+    });
+
+    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        if (def.annotation != null) {
+            try annotated.append(allocator, def.pattern);
+        }
+        annotated_visitor.walkExpr(&module_env.store, def.expr);
+        if (annotated_visitor.stopped) break;
+    }
+    if (!annotated_visitor.stopped) {
+        annotated_visitor.walkModule(&module_env.store, module_env.all_statements);
+    }
+    if (annotated_ctx.oom) |err| return err;
+
+    var results: std.ArrayList(UnannotatedBinding) = .empty;
+    errdefer results.deinit(allocator);
+
+    var ctx = CollectBindingsContext{
+        .store = &module_env.store,
+        .module_env = module_env,
+        .start_offset = start_offset,
+        .end_offset = end_offset,
+        .allocator = allocator,
+        .results = &results,
+    };
+    var visitor = CirVisitor(CollectBindingsContext).init(&ctx, .{
+        .visit_pattern_pre = CollectBindingsContext.visitPatternPre,
+    });
+
+    for (defs_slice) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        visitor.walkPattern(&module_env.store, def.pattern);
+        if (visitor.stopped) break;
+        visitor.walkExpr(&module_env.store, def.expr);
+        if (visitor.stopped) break;
+    }
+    if (!visitor.stopped) {
+        visitor.walkModule(&module_env.store, module_env.all_statements);
+    }
+    if (ctx.oom) |err| return err;
+
+    // Drop the annotated ones now that both walks are done.
+    var kept: usize = 0;
+    for (results.items) |binding| {
+        var is_annotated = false;
+        for (annotated.items) |annotated_pattern| {
+            if (@intFromEnum(annotated_pattern) == @intFromEnum(binding.pattern)) {
+                is_annotated = true;
+                break;
+            }
+        }
+        if (is_annotated) continue;
+        results.items[kept] = binding;
+        kept += 1;
+    }
+    results.shrinkRetainingCapacity(kept);
+
+    return results;
+}
+
 /// Collect the places that declare `target_pattern`.
 ///
 /// That is the binding itself and, when it is annotated, the name written on

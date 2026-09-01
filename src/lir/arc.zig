@@ -7,10 +7,12 @@
 //! decisions: borrowed bindings emit nothing, owned final occurrences move,
 //! and lifetime-ending releases land right after the last use of a binding's
 //! borrow group. Optimized builds also emit
-//! mode-specialized proc variants for call sites that can move arguments into
-//! positions the solved signature borrows, or that prove a dying argument
-//! statically unique so the variant elides the runtime uniqueness checks
-//! that parameter reaches. Debug builds re-check the output
+//! optional mode-specialized proc variants for call sites that can move
+//! arguments into positions the solved signature borrows, or that prove a
+//! dying argument statically unique so the variant elides the runtime
+//! uniqueness checks that parameter reaches. Same-SCC tail edges select
+//! mandatory mode variants when frame replacement requires an ownership
+//! transfer. Debug builds re-check the output
 //! with the borrow certifier (`arc_certify`). Backends consume explicit RC
 //! statements without doing reference-counting analysis.
 
@@ -42,8 +44,9 @@ pub const InsertOptions = struct {
     roots: []const LIR.LirProcSpecId = &.{},
     /// Emit mode-specialized proc variants for call sites that demand more
     /// ownership than a callee's solved signature provides. Optimized builds
-    /// enable this; dev builds and compile-time evaluation use the solved
-    /// single variant per proc.
+    /// enable this; dev builds and compile-time evaluation otherwise use the
+    /// solved single variant per proc. Exact tail-call and field-take
+    /// ownership schedules can still require mandatory variants.
     specialize: bool = false,
     /// Select consuming Box.unbox when its lender is dead. Compiled backends
     /// enable this; the value-model interpreter keeps an explicit borrow.
@@ -451,6 +454,18 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             }
             if ((emit_sig.unique_params & bit) != 0) {
                 unique_param_override.set(param);
+            }
+        }
+        // A recursive tail argument can borrow across frame replacement only
+        // from a borrowed entry parameter of this exact emission. Otherwise
+        // its solved carrier must materialize a unit for the mandatory owned
+        // callee variant. Re-evaluate the recorded anchor against `emit_sig`
+        // so an owned variant recursively calls the matching owned variant.
+        for (solution.tailCallsOf(source_proc)) |*tail_call| {
+            for (0..arc_sig.tracked_param_count) |position| {
+                const carrier = tail_call.carrier(position) orelse continue;
+                if (tail_call.argumentOutlivesScc(position, emit_sig)) continue;
+                owned_binding_override.set(carrier);
             }
         }
         for (domain.frame_locals) |local| {
@@ -2316,21 +2331,31 @@ const Inserter = struct {
                 .assign_call => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     const unique_demand = self.variants.enabled and !self.solution.isPinnedProc(assign.proc);
-                    const transfer = try self.transferForCall(&segment.owned, segment.cursor, assign.proc, self.solution.sigOf(assign.proc), unique_demand, assign.args, assign.next, assign.target, null, segment.ctx.loop_keep);
+                    const tail_call = self.solution.tailCallAt(self.current_source_proc, segment.cursor);
+                    const transfer = try self.transferForCall(&segment.owned, segment.cursor, tail_call, assign.proc, self.solution.sigOf(assign.proc), unique_demand, assign.args, assign.next, assign.target, null, segment.ctx.loop_keep);
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     try step.pre_retain.appendSlice(self.solve_allocator, transfer.args.retain_args);
                     step.retain_call_result = transfer.retain_call_result;
                     step.call_callee = assign.proc;
                     step.call_demanded = transfer.args.demanded;
                     self.death_scratch.clearRetainingCapacity();
-                    try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, transfer.args.demanded.ret_mode, assign.next, segment.ctx.loop_keep, self.death_scratch);
-                    try self.postStmtDeaths(&segment.owned, &.{}, assign.args, assign.next, segment.ctx.loop_keep, self.death_scratch);
-                    try self.copyDeathScratchToStep(step);
+                    if (tail_call != null) {
+                        // The recursive frame is replaced at this call. The
+                        // call result is not produced until afterwards; every
+                        // other unit still in the exact state belongs to the
+                        // disappearing caller frame and must end first.
+                        try self.releaseTailCallerFrame(&segment.owned, assign.target, self.death_scratch);
+                        try step.pre_release_extra.appendSlice(self.solve_allocator, self.death_scratch.items);
+                    } else {
+                        try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, transfer.args.demanded.ret_mode, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                        try self.postStmtDeaths(&segment.owned, &.{}, assign.args, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                        try self.copyDeathScratchToStep(step);
+                    }
                     segment.cursor = assign.next;
                 },
                 .assign_call_erased => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const transfer = try self.transferForCall(&segment.owned, null, null, arc_sig.RcSig.all_owned, false, assign.args, assign.next, assign.target, assign.closure, segment.ctx.loop_keep);
+                    const transfer = try self.transferForCall(&segment.owned, null, null, null, arc_sig.RcSig.all_owned, false, assign.args, assign.next, assign.target, assign.closure, segment.ctx.loop_keep);
                     var preserve_reuse_source = false;
                     if (assign.reuse_closure) {
                         if (assign.closure == assign.target) arcInvariant("owned erased call cannot consume and rebind the same local");
@@ -2975,6 +3000,28 @@ const Inserter = struct {
             const local = owned.domain.resourceLocalAt(bit);
             try releases.append(self.solve_allocator, self.releaseDecisionFrom(owned, local));
         }
+    }
+
+    /// Ends the exact ownership state of a caller frame before a same-SCC
+    /// tail call replaces it. `result` is the fresh unit produced by the call,
+    /// so it remains in the state for the immediately following return.
+    fn releaseTailCallerFrame(
+        self: *Inserter,
+        owned: *OwnedSet,
+        result: LIR.LocalId,
+        releases: *std.ArrayList(ReleaseDecision),
+    ) ResourceError!void {
+        const result_bit = owned.domain.resourceBitOf(result);
+        const keep_result = if (result_bit) |bit| owned.bits.isSet(bit) else false;
+        var iter = owned.bits.iterator(.{ .direction = .reverse });
+        while (iter.next()) |bit| {
+            if (result_bit != null and bit == result_bit.?) continue;
+            const local = owned.domain.resourceLocalAt(bit);
+            try releases.append(self.emission_allocator, self.releaseDecisionFrom(owned, local));
+            owned.residual_masks[bit] = 0;
+        }
+        owned.bits.unsetAll();
+        if (keep_result) owned.bits.set(result_bit.?);
     }
 
     fn addRestitutionKeep(
@@ -4236,6 +4283,7 @@ const Inserter = struct {
         self: *Inserter,
         owned: *OwnedSet,
         call_stmt: ?LIR.CFStmtId,
+        tail_call: ?*const arc_solve.TailCallLifetime,
         callee: ?LIR.LirProcSpecId,
         callee_sig: arc_sig.RcSig,
         unique_demand: bool,
@@ -4245,7 +4293,7 @@ const Inserter = struct {
         extra_use: ?LIR.LocalId,
         loop_keep: ?LoopKeep,
     ) ResourceError!CallTransfer {
-        const arg_ownership = try self.callArgOwnership(call_stmt, callee, owned, callee_sig, unique_demand, args, next, target, loop_keep);
+        const arg_ownership = try self.callArgOwnership(call_stmt, tail_call, callee, owned, callee_sig, unique_demand, args, next, target, loop_keep);
         const target_feeds_call = self.spanUsesLocal(args, target) or
             (extra_use != null and extra_use.? == target);
         const release_old_target = if (target_feeds_call)
@@ -5071,13 +5119,17 @@ const Inserter = struct {
                         .list_reinterpret => {},
                         .nominal => {},
                     }
+                    if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .assign_literal => |assign| {
                     if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
-                .init_uninitialized => |assign| try stack.append(self.emission_allocator, assign.next),
+                .init_uninitialized => |assign| {
+                    if (assign.target == root) continue;
+                    try stack.append(self.emission_allocator, assign.next);
+                },
                 .assign_call => |assign| {
                     if (self.spanUsesOwnershipPlace(assign.args, root)) return true;
                     if (assign.target == root) continue;
@@ -5183,13 +5235,9 @@ const Inserter = struct {
                     // Rebinding the place ends this definition. Uses reached
                     // through the following jump belong to the newly written
                     // join value, not to the value whose projection is being
-                    // considered here. Every statement that writes a fresh
-                    // value into the place ends it the same way, which is what
-                    // stops this walk when it follows a loop edge back to the
-                    // definition. `assign_ref` is deliberately not one of them:
-                    // it aliases or projects an existing place rather than
-                    // defining a new value in it, so a matching target there
-                    // does not end anything.
+                    // considered here. Every statement that writes the place
+                    // ends it the same way, which is what stops this walk
+                    // when it follows a loop edge back to the definition.
                     if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
@@ -5283,6 +5331,7 @@ const Inserter = struct {
     fn callArgOwnership(
         self: *Inserter,
         call_stmt: ?LIR.CFStmtId,
+        tail_call: ?*const arc_solve.TailCallLifetime,
         callee: ?LIR.LirProcSpecId,
         owned: *OwnedSet,
         callee_sig: arc_sig.RcSig,
@@ -5295,6 +5344,13 @@ const Inserter = struct {
         self.retain_arg_scratch.clearRetainingCapacity();
         var demanded = callee_sig;
         const locals = self.store.getLocalSpan(span);
+        if (tail_call != null and self.current_sig.ret_mode == .owned and demanded.ret_mode == .borrowed) {
+            // A recursive tail edge must use the caller's return ABI. Asking
+            // an owned-return caller to forward a borrowed result would put a
+            // retain after the call and destroy tail position.
+            demanded.ret_mode = .owned;
+            demanded.ret_lenders = 0;
+        }
         var outcome_sig = callee_sig;
         if (callee) |direct| outcome_sig.outcomes = self.solution.availableOutcomeSpanOf(direct);
         const outcome_places_distinct = !outcome_sig.outcomes.isEmpty() and
@@ -5373,33 +5429,30 @@ const Inserter = struct {
             if (!self.localContainsRefcounted(local)) continue;
             if (callee_sig.paramMode(position) == .borrowed) {
                 // Borrowed positions keep the caller's ownership untouched.
-                // With specialization enabled, a final-use argument only
-                // moves into an owned-demanding variant when that changes
-                // runtime work inside the callee. Merely moving the caller's
-                // post-call release into a clone preserves the same RC work
-                // while growing live code.
                 const bit = arc_sig.paramBit(position) orelse continue;
+                const requires_tail_transfer = if (tail_call) |fact|
+                    !fact.argumentOutlivesScc(position, self.current_sig)
+                else
+                    false;
                 const enables_field_take = if (callee) |direct|
                     (self.dismantles.ownedOnlyParamBenefits(direct) & bit) != 0
                 else
                     false;
-                // Field-take variants are a correctness-preserving ownership
-                // schedule, not optional optimization work: without
-                // them a complete payload move is forced to manufacture a
-                // second unit and defeats runtime uniqueness. General return
-                // and born-unique variants remain opt-in.
-                if (!self.variants.enabled and !enables_field_take) continue;
+                // Recursive tail transfer and field takes are exact ownership
+                // schedules, so their variants are mandatory. General return
+                // and born-unique specialization remains opt-in.
+                if (!self.variants.enabled and !enables_field_take and !requires_tail_transfer) continue;
                 const used_after_call = local != target and try self.groupUsedInPath(next, local, loop_keep);
                 const owner = self.unitOf(local);
                 const projected_alias_conflict = self.dismantles.projectionUnitOf(local) != null and
                     self.groupSharesOtherOperand(locals, position, local);
                 const can_transfer = owned.contains(owner) and !used_after_call and !projected_alias_conflict;
-                if (!can_transfer) continue;
                 const return_borrows_param = callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0;
                 const seed_can_reach_check = if (callee) |direct| self.procParamCanUseUniqueSeed(direct, position) else false;
-                const seeds_unique_param = unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local) and
+                const seeds_unique_param = can_transfer and unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local) and
                     !self.groupSharesOtherOperand(locals, position, local);
-                if (!return_borrows_param and !seeds_unique_param and !enables_field_take) continue;
+                if (!can_transfer and !requires_tail_transfer) continue;
+                if (!return_borrows_param and !seeds_unique_param and !enables_field_take and !requires_tail_transfer) continue;
                 demanded.borrowed_params &= ~bit;
                 if (return_borrows_param) {
                     demanded.ret_mode = .owned;
@@ -5408,7 +5461,14 @@ const Inserter = struct {
                 if (seeds_unique_param) {
                     demanded.unique_params |= bit;
                 }
-                owned.unset(owner);
+                if (can_transfer) {
+                    owned.unset(owner);
+                } else {
+                    // The original carrier cannot move (for example, two
+                    // positions name it). Manufacture the callee's unit, then
+                    // the tail boundary releases the carrier before the call.
+                    try self.retain_arg_scratch.append(self.emission_allocator, local);
+                }
                 continue;
             }
 
@@ -5473,6 +5533,10 @@ const Inserter = struct {
             } else {
                 try self.retain_arg_scratch.append(self.emission_allocator, local);
             }
+        }
+
+        if (tail_call != null and demanded.ret_mode != self.current_sig.ret_mode) {
+            arcInvariant("ARC recursive tail edge could not match the caller return ownership mode");
         }
 
         return .{
@@ -7360,6 +7424,19 @@ const ArcTest = struct {
     }
 
     fn addProc(self: *ArcTest, args: []const LIR.LocalId, body: LIR.CFStmtId, ret_layout: layout_mod.Idx) Allocator.Error!LIR.LirProcSpecId {
+        return try self.addProcWithBody(args, body, ret_layout);
+    }
+
+    /// Registers a proc whose body is installed afterwards with
+    /// `LirStore.setProcSpecBody`. A recursive fixture needs this ordering:
+    /// the call statement in the body names the proc the body belongs to.
+    /// Allocate the proc's locals before calling this, since the frame
+    /// inventory covers every local allocated so far.
+    fn addProcPendingBody(self: *ArcTest, args: []const LIR.LocalId, ret_layout: layout_mod.Idx) Allocator.Error!LIR.LirProcSpecId {
+        return try self.addProcWithBody(args, null, ret_layout);
+    }
+
+    fn addProcWithBody(self: *ArcTest, args: []const LIR.LocalId, body: ?LIR.CFStmtId, ret_layout: layout_mod.Idx) Allocator.Error!LIR.LirProcSpecId {
         // Fixtures build the body before registering its proc. Supplying all
         // locals allocated so far keeps the inventory explicitly complete;
         // production lowering supplies the exact per-proc subset.
@@ -7646,6 +7723,64 @@ const ArcTest = struct {
             }
         }
         arcInvariant("ARC test fixture cycled while walking to a switch_stmt");
+    }
+
+    /// Follows a linear fixture path to its first direct call.
+    fn walkToDirectCall(self: *const ArcTest, start: LIR.CFStmtId) @FieldType(LIR.CFStmt, "assign_call") {
+        var cursor = start;
+        var remaining: usize = self.store.cfStmtCount() + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            switch (self.store.getCFStmt(cursor)) {
+                .assign_call => |assign| return assign,
+                inline .assign_ref,
+                .assign_literal,
+                .init_uninitialized,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                => |linear| cursor = linear.next,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .comptime_branch_taken,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .loop_continue,
+                .loop_break,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => arcInvariant("ARC test fixture expected a direct call on the linear path"),
+            }
+        }
+        arcInvariant("ARC test fixture cycled while walking to a direct call");
     }
 
     fn procBody(self: *const ArcTest) LIR.CFStmtId {
@@ -12930,6 +13065,323 @@ test "RC interprocedural: borrowed return borrows the argument in the caller" {
     try f.expectRc(alias, 0, 0, 0);
     try f.expectRc(value, 0, 1, 0);
 }
+
+// Repro for https://github.com/roc-lang/roc/issues/10920
+test "RC interprocedural: tail self-call keeps a read-only parameter borrowed" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Recursive proc: reads its string parameter in the base case and passes
+    // it along unchanged in a tail self-call. Nothing consumes the string, so
+    // position 0 admits a borrow.
+    const text = try f.local(.str);
+    const counter = try f.local(.i64);
+    const base_result = try f.local(.i64);
+    const next_counter = try f.local(.i64);
+    const tail_result = try f.local(.i64);
+    const recurse = try f.addProcPendingBody(&.{ text, counter }, .i64);
+
+    const base_ret = try f.ret(base_result);
+    const base_assign = try f.assignI64(base_result, 0, base_ret);
+    const base_body = try f.expectStmt(text, base_assign);
+
+    // The call result is returned directly, which is what puts the self-call
+    // in tail position.
+    const tail_ret = try f.ret(tail_result);
+    const tail_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = tail_result,
+        .proc = recurse,
+        .args = try f.span(&.{ text, next_counter }),
+        .next = tail_ret,
+    } });
+    const recursive_body = try f.assignI64(next_counter, 0, tail_call);
+    f.store.setProcSpecBody(recurse, try f.switchStmt(counter, base_body, recursive_body, null));
+
+    // Caller outside the recursive group: it owns the string, lends it to the
+    // recursion, and reads it again afterwards.
+    const value = try f.local(.str);
+    const start = try f.local(.i64);
+    const call_result = try f.local(.i64);
+    const caller_ret = try f.ret(call_result);
+    const use_after_call = try f.expectStmt(value, caller_ret);
+    const caller_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = call_result,
+        .proc = recurse,
+        .args = try f.span(&.{ value, start }),
+        .next = use_after_call,
+    } });
+    const start_assign = try f.assignI64(start, 3, caller_call);
+    const caller_body = try f.assignStr(value, "outside-the-scc", start_assign);
+    _ = try f.addProc(&.{}, caller_body, .i64);
+
+    try f.run();
+
+    // The tail call requires the argument to stay live across the call, which
+    // a lender outside the recursive group already guarantees. That liveness
+    // requirement is not an ownership requirement, so position 0 stays
+    // borrowed and the parameter's read-only uses emit nothing.
+    const solved: arc_sig.RcSig = .{
+        .borrowed_params = @intCast(f.store.getProcSpec(recurse).rc_borrowed_params),
+    };
+    try testing.expectEqual(arc_sig.Mode.borrowed, solved.paramMode(0));
+    try f.expectRc(text, 0, 0, 0);
+    // The caller lends its string rather than handing over a unit, so it pays
+    // no retain for the call and releases after its own last use.
+    try f.expectRc(value, 0, 1, 0);
+}
+
+test "RC interprocedural: tail self-call transfers an SCC-local argument" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const id_param = try f.local(.str);
+    const id_ret = try f.ret(id_param);
+    const identity = try f.addProc(&.{id_param}, id_ret, .str);
+
+    const text = try f.local(.str);
+    const counter = try f.local(.i64);
+    const base_result = try f.local(.i64);
+    const local_lender = try f.local(.str);
+    const next_text = try f.local(.str);
+    const next_counter = try f.local(.i64);
+    const tail_result = try f.local(.i64);
+    const recurse = try f.addProcPendingBody(&.{ text, counter }, .i64);
+
+    const base_ret = try f.ret(base_result);
+    const base_assign = try f.assignI64(base_result, 0, base_ret);
+    const base_body = try f.expectStmt(text, base_assign);
+    const tail_ret = try f.ret(tail_result);
+    const tail_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = tail_result,
+        .proc = recurse,
+        .args = try f.span(&.{ next_text, next_counter }),
+        .next = tail_ret,
+    } });
+    const borrow_local = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = next_text,
+        .proc = identity,
+        .args = try f.span(&.{local_lender}),
+        .next = tail_call,
+    } });
+    const make_local_lender = try f.assignStr(local_lender, "inside-the-scc", borrow_local);
+    const recursive_body = try f.assignI64(next_counter, 0, make_local_lender);
+    f.store.setProcSpecBody(recurse, try f.switchStmt(counter, base_body, recursive_body, null));
+
+    const value = try f.local(.str);
+    const start = try f.local(.i64);
+    const call_result = try f.local(.i64);
+    const caller_ret = try f.ret(call_result);
+    const use_after_call = try f.expectStmt(value, caller_ret);
+    const caller_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = call_result,
+        .proc = recurse,
+        .args = try f.span(&.{ value, start }),
+        .next = use_after_call,
+    } });
+    const start_assign = try f.assignI64(start, 1, caller_call);
+    const caller_body = try f.assignStr(value, "outside-the-scc", start_assign);
+    _ = try f.addProc(&.{}, caller_body, .i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    try f.run();
+
+    // The public recursive entry still borrows its external argument. The
+    // borrowed result backed by a locally created lender instead materializes
+    // a unit and moves it into one mandatory owned variant, whose recursive
+    // edge targets itself with no cleanup after the call.
+    try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
+    const owned_variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
+    const base_switch = f.walkToSwitch(f.store.getProcSpec(recurse).body.?);
+    const base_borrow_call = f.walkToDirectCall(base_switch.default_branch);
+    try testing.expectEqual(identity, base_borrow_call.proc);
+    const base_call = f.walkToDirectCall(base_borrow_call.next);
+    try testing.expectEqual(owned_variant, base_call.proc);
+    const variant_switch = f.walkToSwitch(f.store.getProcSpec(owned_variant).body.?);
+    const variant_borrow_call = f.walkToDirectCall(variant_switch.default_branch);
+    try testing.expectEqual(identity, variant_borrow_call.proc);
+    const variant_call = f.walkToDirectCall(variant_borrow_call.next);
+    try testing.expectEqual(owned_variant, variant_call.proc);
+    const after_variant_call = f.store.getCFStmt(variant_call.next);
+    try testing.expect(after_variant_call == .ret and after_variant_call.ret.value == variant_call.target);
+    try f.expectReachableRcBefore(variant_switch.default_branch, .decref, text, .ret);
+    // The owned variant releases its entry value on either branch: at the
+    // base return, or before the recursive tail edge replaces its frame.
+    try f.expectRc(text, 0, 2, 0);
+    // Both emitted recursive bodies retain the borrowed identity result into
+    // its tail-call unit and release the SCC-local lender before the edge.
+    try f.expectRc(next_text, 2, 0, 0);
+    try f.expectRc(local_lender, 0, 2, 0);
+    try f.expectRc(value, 0, 1, 0);
+}
+
+test "RC interprocedural: mutual tail calls preserve an SCC-entry borrow" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const left_text = try f.local(.str);
+    const left_counter = try f.local(.i64);
+    const left_result = try f.local(.i64);
+    const left_next = try f.local(.i64);
+    const right_text = try f.local(.str);
+    const right_counter = try f.local(.i64);
+    const right_result = try f.local(.i64);
+    const right_next = try f.local(.i64);
+    const left = try f.addProcPendingBody(&.{ left_text, left_counter }, .i64);
+    const right = try f.addProcPendingBody(&.{ right_text, right_counter }, .i64);
+
+    const left_ret = try f.ret(left_result);
+    const left_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = left_result,
+        .proc = right,
+        .args = try f.span(&.{ left_text, left_next }),
+        .next = left_ret,
+    } });
+    const left_recursive = try f.assignI64(left_next, 0, left_call);
+    const left_base_result = try f.assignI64(left_result, 0, left_ret);
+    const left_base = try f.expectStmt(left_text, left_base_result);
+    f.store.setProcSpecBody(left, try f.switchStmt(left_counter, left_base, left_recursive, null));
+
+    const right_ret = try f.ret(right_result);
+    const right_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = right_result,
+        .proc = left,
+        .args = try f.span(&.{ right_text, right_next }),
+        .next = right_ret,
+    } });
+    const right_recursive = try f.assignI64(right_next, 0, right_call);
+    const right_base_result = try f.assignI64(right_result, 0, right_ret);
+    const right_base = try f.expectStmt(right_text, right_base_result);
+    f.store.setProcSpecBody(right, try f.switchStmt(right_counter, right_base, right_recursive, null));
+
+    const value = try f.local(.str);
+    const start = try f.local(.i64);
+    const result = try f.local(.i64);
+    const caller_ret = try f.ret(result);
+    const use_after = try f.expectStmt(value, caller_ret);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = left,
+        .args = try f.span(&.{ value, start }),
+        .next = use_after,
+    } });
+    const start_assign = try f.assignI64(start, 2, call);
+    const caller_body = try f.assignStr(value, "outside-the-mutual-scc", start_assign);
+    _ = try f.addProc(&.{}, caller_body, .i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    try f.run();
+
+    try testing.expectEqual(base_proc_count, f.store.procSpecCount());
+    const left_sig: arc_sig.RcSig = .{ .borrowed_params = @intCast(f.store.getProcSpec(left).rc_borrowed_params) };
+    const right_sig: arc_sig.RcSig = .{ .borrowed_params = @intCast(f.store.getProcSpec(right).rc_borrowed_params) };
+    try testing.expectEqual(arc_sig.Mode.borrowed, left_sig.paramMode(0));
+    try testing.expectEqual(arc_sig.Mode.borrowed, right_sig.paramMode(0));
+    try f.expectRc(left_text, 0, 0, 0);
+    try f.expectRc(right_text, 0, 0, 0);
+    try f.expectRc(value, 0, 1, 0);
+}
+
+test "RC interprocedural: tail call matches the caller return ownership" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const caller_text = try f.local(.str);
+    const caller_counter = try f.local(.i64);
+    const owned_base = try f.local(.str);
+    const caller_next = try f.local(.i64);
+    const caller_result = try f.local(.str);
+    const lender_text = try f.local(.str);
+    const lender_counter = try f.local(.i64);
+    const ignored_owned = try f.local(.str);
+    const caller = try f.addProcPendingBody(&.{ caller_text, caller_counter }, .str);
+    const lender = try f.addProcPendingBody(&.{ lender_text, lender_counter }, .str);
+
+    // The caller has an owned return because one path creates a fresh string.
+    // Its recursive path tail-calls a proc whose ordinary return borrows its
+    // parameter, so that edge needs an owned-return variant even though the
+    // argument itself can remain borrowed from outside the SCC.
+    const caller_ret = try f.ret(caller_result);
+    const caller_tail_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = caller_result,
+        .proc = lender,
+        .args = try f.span(&.{ caller_text, caller_next }),
+        .next = caller_ret,
+    } });
+    const caller_recursive = try f.assignI64(caller_next, 0, caller_tail_call);
+    const owned_base_ret = try f.ret(owned_base);
+    const caller_base = try f.assignStr(owned_base, "owned-base", owned_base_ret);
+    f.store.setProcSpecBody(caller, try f.switchStmt(caller_counter, caller_base, caller_recursive, null));
+
+    // This non-tail edge closes the call-graph SCC, then the proc returns its
+    // borrowed entry parameter. Its owned-return variant retains at its own
+    // return boundary, before the caller's tail edge begins.
+    const lender_ret = try f.ret(lender_text);
+    const lender_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = ignored_owned,
+        .proc = caller,
+        .args = try f.span(&.{ lender_text, lender_counter }),
+        .next = lender_ret,
+    } });
+    f.store.setProcSpecBody(lender, lender_call);
+
+    const base_proc_count = f.store.procSpecCount();
+    try f.run();
+
+    try testing.expect(!f.store.getProcSpec(caller).rc_ret_borrowed);
+    try testing.expect(f.store.getProcSpec(lender).rc_ret_borrowed);
+    try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
+    const owned_return_variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
+    try testing.expect(!f.store.getProcSpec(owned_return_variant).rc_ret_borrowed);
+    const caller_switch = f.walkToSwitch(f.store.getProcSpec(caller).body.?);
+    const rewritten_tail_call = f.walkToDirectCall(caller_switch.default_branch);
+    try testing.expectEqual(owned_return_variant, rewritten_tail_call.proc);
+    const after_tail_call = f.store.getCFStmt(rewritten_tail_call.next);
+    try testing.expect(after_tail_call == .ret and after_tail_call.ret.value == rewritten_tail_call.target);
+    try f.expectRc(caller_text, 0, 0, 0);
+}
+
+test "RC interprocedural: borrowed call result anchors a recursive tail argument" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const id_param = try f.local(.str);
+    const id_ret = try f.ret(id_param);
+    const identity = try f.addProc(&.{id_param}, id_ret, .str);
+
+    const text = try f.local(.str);
+    const counter = try f.local(.i64);
+    const borrowed_result = try f.local(.str);
+    const base_result = try f.local(.i64);
+    const next_counter = try f.local(.i64);
+    const tail_result = try f.local(.i64);
+    const recurse = try f.addProcPendingBody(&.{ text, counter }, .i64);
+    const base_ret = try f.ret(base_result);
+    const base_assign = try f.assignI64(base_result, 0, base_ret);
+    const base_body = try f.expectStmt(text, base_assign);
+    const tail_ret = try f.ret(tail_result);
+    const tail_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = tail_result,
+        .proc = recurse,
+        .args = try f.span(&.{ borrowed_result, next_counter }),
+        .next = tail_ret,
+    } });
+    const borrow_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = borrowed_result,
+        .proc = identity,
+        .args = try f.span(&.{text}),
+        .next = tail_call,
+    } });
+    const recursive_body = try f.assignI64(next_counter, 0, borrow_call);
+    f.store.setProcSpecBody(recurse, try f.switchStmt(counter, base_body, recursive_body, null));
+
+    try f.run();
+
+    const recurse_sig: arc_sig.RcSig = .{ .borrowed_params = @intCast(f.store.getProcSpec(recurse).rc_borrowed_params) };
+    try testing.expectEqual(arc_sig.Mode.borrowed, recurse_sig.paramMode(0));
+    try f.expectRc(text, 0, 0, 0);
+    try f.expectRc(borrowed_result, 0, 0, 0);
+}
+
 test "RC borrow survives the lender moving into an aggregate" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();

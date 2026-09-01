@@ -61,15 +61,14 @@ pub const RootRequestSet = struct {
     /// Restore eligible stored constants as internal readonly static values.
     include_internal_static_data: bool = false,
     test_plan_metadata: []const postcheck.Common.RootTestPlanMetadata = &.{},
-    /// Explicitly select whether adjacent procedure-template roots share one
-    /// Monotype instantiation graph.
-    procedure_template_root_grouping: postcheck.Common.ProcedureTemplateRootGrouping = .isolated,
 };
 
 /// Target settings and checked module state for the checked-to-LIR pipeline.
 pub const TargetConfig = struct {
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     specialization_strategy: SpecializationStrategy = .lss,
+    /// Reuse checking workers for generic post-check tasks when available.
+    post_check_executor: ?base.post_check_task_executor.Executor = null,
     checked_module_state: CheckedModuleState = .complete,
     inline_mode: InlineMode = .none,
     inline_expects: InlineExpectMode = .run,
@@ -527,6 +526,7 @@ pub fn lowerCheckedModulesToLir(
         .{
             .proc_debug_names = target.proc_debug_names or LirDump.filter() != null,
             .specialization_cache = target.monotype_cache,
+            .post_check_executor = target.post_check_executor,
             .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
             .target_usize = target.target_usize,
             .inline_expects = switch (target.inline_expects) {
@@ -821,7 +821,6 @@ fn rootRequests(
         .layout_requests = layout_requests,
         .static_data_requests = static_data_requests,
         .test_plan_metadata = roots.test_plan_metadata,
-        .procedure_template_root_grouping = roots.procedure_template_root_grouping,
     };
 }
 

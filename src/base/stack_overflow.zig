@@ -184,6 +184,22 @@ test "worker thread installs stack overflow handler" {
     try testCrashInChildProcess("thread-stack-overflow", "overflowed its stack memory", 134);
 }
 
+test "registered recovery survives a stack overflow" {
+    if (comptime builtin.os.tag == .freestanding) {
+        return error.SkipZigTest;
+    }
+
+    try testCrashInChildProcess("recovered-stack-overflow", "recovered from stack overflow", 0);
+}
+
+test "registered recovery survives a stack overflow on a worker thread" {
+    if (comptime builtin.os.tag == .freestanding) {
+        return error.SkipZigTest;
+    }
+
+    try testCrashInChildProcess("thread-recovered-stack-overflow", "recovered from stack overflow on worker thread", 0);
+}
+
 const StackOverflowTestError = std.process.RunError || error{ TestUnexpectedResult, SkipZigTest };
 
 fn testCrashInChildProcess(mode: []const u8, expected: []const u8, expected_code: u8) StackOverflowTestError!void {
@@ -224,7 +240,8 @@ fn verifyHandlerOutput(term: std.process.Child.Term, stderr_output: []const u8, 
             // uncaught SIGSEGV skip below instead of failing this portability
             // check.
             if (comptime builtin.os.tag != .windows and builtin.os.tag != .freestanding and builtin.abi == .musl) {
-                const expected_stack_overflow = std.mem.eql(u8, expected, "overflowed its stack memory");
+                const expected_stack_overflow = std.mem.eql(u8, expected, "overflowed its stack memory") or
+                    std.mem.startsWith(u8, expected, "recovered from stack overflow");
                 const fell_back_to_access_violation = code == 139 and
                     std.mem.find(u8, stderr_output, "Segmentation fault") != null;
 

@@ -52,7 +52,12 @@
 //!   real in-edges disagree about, so every group is witnessed by at least one real jump
 //!   and a group-walk finding always corresponds to a real entry state. In
 //!   the worst case this degenerates to one group per distinct summary—
-//!   the pre-fixpoint exact behavior—but with no cap and no skip path.
+//!   the pre-fixpoint exact behavior—which is exponential in the number of
+//!   relevant names, so it is capped: past `max_join_groups` a join stops
+//!   splitting on lifetime provenance and absorbs into a group whose
+//!   provenance drops to what both members prove. Provenance is proof, so
+//!   dropping it only makes later checks demand more; the cap can report a
+//!   finding exactness would not, never hide one. Nothing is skipped.
 //!
 //! Why one walk under the group's meet partition covers every member
 //! (soundness of the join): a member's entry state is the group state with
@@ -522,6 +527,12 @@ pub fn certifyStoreOrPanic(
                     extra_locals[index] = link.origin;
                 }
                 writeFailureContext(&context, store, layouts, sigs, proc_id, diag.context_stmt, diag.context_local, extra_locals[0..diag.chain_len]);
+                // Say what went wrong before dumping the procedure. The dump
+                // runs to thousands of lines, and a reader whose output is
+                // truncated -- a CI log, a test harness capturing a child --
+                // otherwise keeps the part they cannot use and loses the part
+                // they need.
+                std.debug.print("\nARC: {s}{s}\n", .{ diag.message(), context.text() });
                 var buffer: std.Io.Writer.Allocating = .init(allocator);
                 defer buffer.deinit();
                 debug_print.writeProc(allocator, store, layouts, proc_id, &buffer.writer) catch {};
@@ -1132,8 +1143,22 @@ const ValueInfo = struct {
 };
 
 /// One forked ownership state along a control-flow path.
+/// Retired certifier states, kept so a fork can refill one instead of
+/// allocating a fresh set of buffers.
+///
+/// A state holds one array per refcounted local plus four indexed by value,
+/// and every branch clones the whole thing. On a wide derived codec that is
+/// tens of thousands of clone/free pairs of multi-kilobyte buffers, which in
+/// a Debug build means the same number of trips through the page allocator.
+/// Reusing them keeps the buffers hot and the allocator out of the loop.
+/// Entries are sized for one procedure, so the pool is drained between
+/// procedures.
+const StatePool = std.ArrayList(State);
+
 const State = struct {
     allocator: Allocator,
+    /// Where this state's buffers go when it dies, or null to free them.
+    pool: ?*StatePool = null,
     /// Dense proc-local position per store local, owned by the certifier and
     /// stable for the lifetime of every state for the current proc.
     local_dense: []const u32,
@@ -1183,6 +1208,26 @@ const State = struct {
     }
 
     fn deinit(self: *State) void {
+        if (self.pool) |pool| {
+            self.balance.clearRetainingCapacity();
+            self.holder.clearRetainingCapacity();
+            self.conditional_condition.clearRetainingCapacity();
+            self.conditional_condition_mask.clearRetainingCapacity();
+            self.claims.clearRetainingCapacity();
+            self.outcome_discriminants.clearRetainingCapacity();
+            // Recycling is an optimization; if the pool cannot grow, fall
+            // through and free the buffers as usual.
+            pool.append(self.allocator, self.*) catch {
+                self.freeBuffers();
+                return;
+            };
+            self.* = undefined;
+            return;
+        }
+        self.freeBuffers();
+    }
+
+    fn freeBuffers(self: *State) void {
         self.allocator.free(self.local_value);
         self.balance.deinit(self.allocator);
         self.holder.deinit(self.allocator);
@@ -1193,6 +1238,15 @@ const State = struct {
     }
 
     fn clone(self: *const State) Allocator.Error!State {
+        if (self.pool) |pool| {
+            if (pool.pop()) |recycled| {
+                var reused = recycled;
+                errdefer reused.freeBuffers();
+                try reused.refillFrom(self);
+                return reused;
+            }
+        }
+
         const local_value = try self.allocator.dupe(ValueId, self.local_value);
         errdefer self.allocator.free(local_value);
         var balance = try self.balance.clone(self.allocator);
@@ -1208,6 +1262,7 @@ const State = struct {
         const outcome_discriminants = try self.outcome_discriminants.clone(self.allocator);
         return .{
             .allocator = self.allocator,
+            .pool = self.pool,
             .local_dense = self.local_dense,
             .local_value = local_value,
             .balance = balance,
@@ -1218,6 +1273,46 @@ const State = struct {
             .outcome_discriminants = outcome_discriminants,
             .result_discriminant = self.result_discriminant,
         };
+    }
+
+    /// Overwrites a recycled state with `source`, keeping the buffers it
+    /// already owns. Every field a fresh clone would set is set here too.
+    fn refillFrom(self: *State, source: *const State) Allocator.Error!void {
+        if (self.local_value.len != source.local_value.len) {
+            self.local_value = try self.allocator.realloc(self.local_value, source.local_value.len);
+        }
+        @memcpy(self.local_value, source.local_value);
+
+        try copyList(i32, &self.balance, &source.balance, self.allocator);
+        try copyList(ValueId, &self.holder, &source.holder, self.allocator);
+        try copyList(u32, &self.conditional_condition, &source.conditional_condition, self.allocator);
+        try copyList(u64, &self.conditional_condition_mask, &source.conditional_condition_mask, self.allocator);
+
+        self.claims.clearRetainingCapacity();
+        try self.claims.ensureTotalCapacity(self.allocator, source.claims.count());
+        var claim_it = source.claims.iterator();
+        while (claim_it.next()) |entry| self.claims.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+
+        self.outcome_discriminants.clearRetainingCapacity();
+        try self.outcome_discriminants.ensureTotalCapacity(self.allocator, source.outcome_discriminants.count());
+        var discriminant_it = source.outcome_discriminants.iterator();
+        while (discriminant_it.next()) |entry| {
+            self.outcome_discriminants.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+        }
+
+        self.local_dense = source.local_dense;
+        self.pool = source.pool;
+        self.result_discriminant = source.result_discriminant;
+    }
+
+    fn copyList(
+        comptime T: type,
+        destination: *std.ArrayList(T),
+        source: *const std.ArrayList(T),
+        allocator: Allocator,
+    ) Allocator.Error!void {
+        destination.clearRetainingCapacity();
+        try destination.appendSlice(allocator, source.items);
     }
 
     fn claimsOf(self: *const State, value: ValueId) u64 {
@@ -1303,6 +1398,78 @@ const State = struct {
     }
 };
 
+/// Sparse lifetime provenance for one alias-class representative. Ownership
+/// balance is deliberately absent: a value can carry an explicit unit while
+/// these dormant sources remain available after that unit is spent.
+const SummaryProvenance = struct {
+    /// Every lender in this normalized conjunction must remain live.
+    lender_reprs: []const u32 = &.{},
+    /// Alternative proof supplied by a live aggregate holder. Multiple
+    /// entries are the normalized conjunction that keeps that holder live.
+    holder_reprs: []const u32 = &.{},
+    /// Immediate container and projection retained for a deferred field take.
+    payload_source: u32 = no_dense,
+    payload_projection: u64 = arc_dismantle.no_projection,
+};
+
+/// Cap on the number of entry-state groups kept for one join.
+///
+/// Below the cap the abstraction is exact: a summary no group accepts starts
+/// its own group. That is unbounded on its own (mode vectors are finite but
+/// exponential in the number of relevant names), and a derived codec for a
+/// wide record reaches thousands of groups, which is a build that does not
+/// finish rather than one that reports something.
+///
+/// At the cap, summaries that differ only in lifetime provenance stop
+/// splitting: they are absorbed into an existing group whose provenance is
+/// weakened to what both agree on. Every provenance component is a *proof*
+/// that a value stays live (a lender conjunction, a live holder, a deferred
+/// field take), so dropping one only makes later checks demand more. Widening
+/// can therefore report a finding that exactness would not, but it can never
+/// hide one.
+///
+/// Real procedures stay far below this: the busiest join in a 117k-statement
+/// module keeps two groups.
+const max_join_groups: usize = 8;
+
+fn summaryProvenanceEql(a: ?*const SummaryProvenance, b: ?*const SummaryProvenance) bool {
+    if (a == b) return true;
+    if (a == null or b == null) return a == b;
+    return std.mem.eql(u32, a.?.lender_reprs, b.?.lender_reprs) and
+        std.mem.eql(u32, a.?.holder_reprs, b.?.holder_reprs) and
+        a.?.payload_source == b.?.payload_source and
+        a.?.payload_projection == b.?.payload_projection;
+}
+
+const SummaryProvenanceContext = struct {
+    pub fn hash(_: SummaryProvenanceContext, provenance: SummaryProvenance) u64 {
+        var hasher = std.hash.Wyhash.init(0x6172635f70726f76);
+        const lender_count: u32 = @intCast(provenance.lender_reprs.len);
+        hasher.update(std.mem.asBytes(&lender_count));
+        hasher.update(std.mem.sliceAsBytes(provenance.lender_reprs));
+        const holder_count: u32 = @intCast(provenance.holder_reprs.len);
+        hasher.update(std.mem.asBytes(&holder_count));
+        hasher.update(std.mem.sliceAsBytes(provenance.holder_reprs));
+        hasher.update(std.mem.asBytes(&provenance.payload_source));
+        hasher.update(std.mem.asBytes(&provenance.payload_projection));
+        return hasher.final();
+    }
+
+    pub fn eql(_: SummaryProvenanceContext, a: SummaryProvenance, b: SummaryProvenance) bool {
+        return std.mem.eql(u32, a.lender_reprs, b.lender_reprs) and
+            std.mem.eql(u32, a.holder_reprs, b.holder_reprs) and
+            a.payload_source == b.payload_source and
+            a.payload_projection == b.payload_projection;
+    }
+};
+
+const SummaryProvenanceInterner = std.HashMapUnmanaged(
+    SummaryProvenance,
+    *const SummaryProvenance,
+    SummaryProvenanceContext,
+    80,
+);
+
 /// Per-proc-local quotient-state entry used to compare states at join points
 /// and to deduplicate walks of shared statement chains. Indices are dense
 /// proc-local positions, not store local ids.
@@ -1312,10 +1479,9 @@ const LocalSummary = struct {
     repr: u32,
     /// Ownership units on the value (owned class only).
     balance: u32,
-    /// For borrowed locals: dense positions of the locals anchoring every
-    /// normalized live lender. A single entry equal to `repr` represents an
-    /// ABI-borrowed parameter, which is self-anchored.
-    lender_reprs: []const u32 = &.{},
+    /// Allocated only for an alias class with lender, holder, or payload
+    /// provenance. Aliases share their representative's pointer.
+    provenance: ?*const SummaryProvenance = null,
     /// True when the summarized value is a borrowed proc parameter's value:
     /// live for the whole call by ABI even while it transiently carries an
     /// ownership unit, so rebuilt states must keep it readable after the
@@ -1328,12 +1494,6 @@ const LocalSummary = struct {
     /// For owned locals: fields of the value already claimed by field takes.
     /// Set identically on every member of the alias set.
     claims: u64 = 0,
-    /// For borrowed locals born from a field read: dense position of the
-    /// container local the read's later claim would target, or `no_dense`.
-    /// Set identically on every member of the alias set.
-    payload_source: u32 = no_dense,
-    /// Aggregate projection read from `payload_source`.
-    payload_projection: u64 = arc_dismantle.no_projection,
 };
 
 const LocalClass = enum(u8) {
@@ -1369,13 +1529,14 @@ const JoinRecord = struct {
 /// mode-compatible jump summary absorbed into it.
 ///
 /// The group state is itself a summary vector: per dense proc-local, the
-/// per-name ownership mode (`class`, `condition`/`condition_mask`,
-/// `lender_reprs`) is identical across all absorbed summaries, `repr` encodes
-/// the *meet* (common refinement) of their must-alias partitions, and
-/// `balance` carries the per-fine-class attributed units. Walking the body
-/// under this state certifies every absorbed summary at once—see the
-/// module doc comment for why a walk under the finer partition covers the
-/// coarser member states.
+/// per-name ownership mode (`class`, `condition`/`condition_mask`, sparse
+/// `provenance`) is identical across all absorbed summaries, `repr` encodes
+/// the *meet* (common refinement) of their must-alias partitions, `balance`
+/// carries the per-fine-class attributed units, and sparse `provenance`
+/// retains any dormant liveness proof independently of ownership. Walking
+/// the body under this state certifies every absorbed summary at once—see
+/// the module doc comment for why a walk under the finer partition covers
+/// the coarser member states.
 const JoinGroup = struct {
     summary: []LocalSummary,
     /// A body walk with the group's current state is queued on the work
@@ -1446,6 +1607,17 @@ const Certifier = struct {
     memo_points: std.bit_set.DynamicBitSetUnmanaged = .{},
     summary_scratch: std.ArrayList(LocalSummary) = .empty,
     repr_scratch: collections.DenseMap(ValueId, u32),
+    /// Hash-conses sparse descriptors within one proc so join comparisons
+    /// usually reduce to pointer equality and repeated walks retain no copies.
+    provenance_interner: SummaryProvenanceInterner = .empty,
+    /// Retired states for the procedure being certified. Sized per procedure,
+    /// so `certifyProc` drains it before moving on.
+    state_pool: StatePool = .empty,
+    /// Reused while normalizing sparse provenance for one summary entry.
+    provenance_value_scratch: std.ArrayList(ValueId) = .empty,
+    provenance_lender_scratch: std.ArrayList(u32) = .empty,
+    provenance_holder_scratch: std.ArrayList(u32) = .empty,
+    provenance_relevant_work: std.ArrayList(u32) = .empty,
     /// Dense position per reference-counted store local used by the proc
     /// being certified, or `no_dense` otherwise.
     local_dense: std.ArrayList(u32) = .empty,
@@ -1492,6 +1664,13 @@ const Certifier = struct {
         self.memo_points.deinit(self.allocator);
         self.summary_scratch.deinit(self.allocator);
         self.repr_scratch.deinit();
+        self.provenance_interner.deinit(self.allocator);
+        self.drainStatePool();
+        self.state_pool.deinit(self.allocator);
+        self.provenance_value_scratch.deinit(self.allocator);
+        self.provenance_lender_scratch.deinit(self.allocator);
+        self.provenance_holder_scratch.deinit(self.allocator);
+        self.provenance_relevant_work.deinit(self.allocator);
         self.local_dense.deinit(self.allocator);
         self.proc_locals.deinit(self.allocator);
         self.join_bodies.deinit();
@@ -2123,7 +2302,7 @@ const Certifier = struct {
         }
 
         for (0..self.proc_locals.items.len) |dense| {
-            var summary = LocalSummary{ .class = .unbound, .repr = 0, .balance = 0, .lender_reprs = &.{}, .condition = no_dense, .condition_mask = 0 };
+            var summary = LocalSummary{ .class = .unbound, .repr = 0, .balance = 0, .condition = no_dense, .condition_mask = 0 };
             const value = state.valueAtDense(dense);
             if (value != no_value) {
                 const repr = self.repr_scratch.get(value) orelse 0;
@@ -2134,54 +2313,41 @@ const Certifier = struct {
                             .class = .conditional_owned,
                             .repr = repr,
                             .balance = @intCast(units),
-                            .lender_reprs = &.{},
                             .condition = @intFromEnum(condition.local),
                             .condition_mask = condition.mask,
                         };
                     } else {
-                        summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .lender_reprs = &.{}, .condition = no_dense, .condition_mask = 0, .claims = state.claimsOf(value) };
+                        summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .condition = no_dense, .condition_mask = 0, .claims = state.claimsOf(value) };
                     }
                 } else if (try self.valueIsLive(state, value)) {
                     summary = .{
                         .class = .borrowed,
                         .repr = repr,
                         .balance = 0,
-                        .lender_reprs = try self.borrowSummaryAnchorReprs(state, value),
                         .condition = no_dense,
                         .condition_mask = 0,
                     };
-                    self.addPayloadOriginToSummary(value, &summary);
                 } else if (self.isInlineStructRepresentation(self.proc_locals.items[dense])) {
                     summary = .{
                         .class = .representation,
                         .repr = repr,
                         .balance = 0,
-                        .lender_reprs = &.{},
                         .condition = no_dense,
                         .condition_mask = 0,
                     };
                 }
                 summary.abi_live = self.values.items[value].always_live;
+                if (summary.class != .unbound and summary.class != .representation) {
+                    summary.provenance = if (repr == dense)
+                        try self.makeSummaryProvenance(state, value)
+                    else
+                        self.summary_scratch.items[repr].provenance;
+                }
             }
             self.summary_scratch.appendAssumeCapacity(summary);
         }
 
         return self.summary_scratch.items;
-    }
-
-    /// Carries a borrowed projection value's claim target across a state
-    /// quotient: the container's dense representative and the projection,
-    /// when the container is still bound in this state. Unit-less nested
-    /// containers are retained here so their chain can ultimately reach an
-    /// owned root. Requires `repr_scratch` to hold the current summary's value
-    /// representatives.
-    fn addPayloadOriginToSummary(self: *Certifier, value: ValueId, summary: *LocalSummary) void {
-        if (value >= self.values.items.len) return;
-        const info = self.values.items[value];
-        if (info.payload_source == no_value) return;
-        const source_repr = self.repr_scratch.get(info.payload_source) orelse return;
-        summary.payload_source = source_repr;
-        summary.payload_projection = info.payload_projection;
     }
 
     /// Collects every normalized value that anchors a borrowed value in a join
@@ -2252,22 +2418,141 @@ const Certifier = struct {
         return false;
     }
 
-    fn borrowSummaryAnchorReprs(self: *Certifier, state: *const State, value: ValueId) Allocator.Error![]const u32 {
-        var anchor_values = std.ArrayList(ValueId).empty;
-        defer anchor_values.deinit(self.allocator);
-        if (!try self.collectBorrowSummaryAnchorValues(state, value, &anchor_values)) return &.{};
-
-        var anchor_reprs = std.ArrayList(u32).empty;
-        defer anchor_reprs.deinit(self.allocator);
-        for (anchor_values.items) |anchor| {
-            const repr = self.repr_scratch.get(anchor) orelse self.denseOf(self.values.items[anchor].origin);
-            try appendUniqueU32(&anchor_reprs, self.allocator, repr);
+    /// Adds one lifetime dependency to a normalized representative list. A
+    /// directly carried dependency stays as that representative so its own
+    /// sparse provenance remains available. An unbound intermediate is
+    /// reduced to the live carriers the existing certifier proof uses.
+    fn appendSummaryDependencyReprs(
+        self: *Certifier,
+        state: *const State,
+        dependency: ValueId,
+        reprs: *std.ArrayList(u32),
+    ) Allocator.Error!void {
+        if (self.repr_scratch.get(dependency)) |repr| {
+            try appendUniqueU32(reprs, self.allocator, repr);
+            return;
         }
-        std.mem.sort(u32, anchor_reprs.items, {}, comptime std.sort.asc(u32));
 
-        const stored = try self.lender_arena.allocator().alloc(u32, anchor_reprs.items.len);
-        @memcpy(stored, anchor_reprs.items);
-        return stored;
+        if (!try self.collectBorrowSummaryAnchorValues(state, dependency, &self.provenance_value_scratch)) return;
+        for (self.provenance_value_scratch.items) |anchor| {
+            const repr = self.repr_scratch.get(anchor) orelse self.denseOf(self.values.items[anchor].origin);
+            try appendUniqueU32(reprs, self.allocator, repr);
+        }
+    }
+
+    /// Builds the sparse provenance attached to one alias-class
+    /// representative. Positive ownership balance does not suppress these
+    /// edges: they become active if later statements spend the explicit unit.
+    fn makeSummaryProvenance(
+        self: *Certifier,
+        state: *const State,
+        value: ValueId,
+    ) Allocator.Error!?*const SummaryProvenance {
+        const info = self.values.items[value];
+        self.provenance_lender_scratch.clearRetainingCapacity();
+        self.provenance_holder_scratch.clearRetainingCapacity();
+
+        // Preserve only currently valid proof alternatives. A dead lender is
+        // irrelevant while an explicit unit exists and cannot make the value
+        // live after that unit is spent.
+        var lenders_live = info.lenders.len != 0;
+        for (info.lenders) |lender| {
+            if (!try self.valueIsLive(state, lender)) {
+                lenders_live = false;
+                break;
+            }
+        }
+        if (lenders_live) {
+            for (info.lenders) |lender| {
+                try self.appendSummaryDependencyReprs(state, lender, &self.provenance_lender_scratch);
+            }
+        }
+        const holder = state.holderOf(value);
+        if (holder != no_value and try self.valueIsLive(state, holder)) {
+            try self.appendSummaryDependencyReprs(state, holder, &self.provenance_holder_scratch);
+        }
+
+        const payload_source = if (info.payload_source == no_value or !try self.valueIsLive(state, info.payload_source))
+            no_dense
+        else
+            self.repr_scratch.get(info.payload_source) orelse no_dense;
+        if (self.provenance_lender_scratch.items.len == 0 and
+            self.provenance_holder_scratch.items.len == 0 and
+            payload_source == no_dense)
+        {
+            return null;
+        }
+
+        std.mem.sort(u32, self.provenance_lender_scratch.items, {}, comptime std.sort.asc(u32));
+        std.mem.sort(u32, self.provenance_holder_scratch.items, {}, comptime std.sort.asc(u32));
+        const candidate = SummaryProvenance{
+            .lender_reprs = self.provenance_lender_scratch.items,
+            .holder_reprs = self.provenance_holder_scratch.items,
+            .payload_source = payload_source,
+            .payload_projection = if (payload_source == no_dense)
+                arc_dismantle.no_projection
+            else
+                info.payload_projection,
+        };
+        const interned = try self.provenance_interner.getOrPutContext(
+            self.allocator,
+            candidate,
+            .{},
+        );
+        if (interned.found_existing) return interned.value_ptr.*;
+        errdefer _ = self.provenance_interner.removeContext(candidate, .{});
+
+        const arena = self.lender_arena.allocator();
+        const provenance = try arena.create(SummaryProvenance);
+        provenance.* = .{
+            .lender_reprs = if (self.provenance_lender_scratch.items.len == 0)
+                &.{}
+            else
+                try arena.dupe(u32, self.provenance_lender_scratch.items),
+            .holder_reprs = if (self.provenance_holder_scratch.items.len == 0)
+                &.{}
+            else
+                try arena.dupe(u32, self.provenance_holder_scratch.items),
+            .payload_source = candidate.payload_source,
+            .payload_projection = candidate.payload_projection,
+        };
+        interned.key_ptr.* = provenance.*;
+        interned.value_ptr.* = provenance;
+        return provenance;
+    }
+
+    /// The provenance both states prove, for widening a group at the cap.
+    ///
+    /// Each component is an independent proof, so a component survives only
+    /// when the two agree on it exactly; a conjunction that differs proves
+    /// nothing in common and is dropped whole. Losing every component leaves
+    /// no provenance, which is the strictest state and always safe.
+    fn meetProvenance(
+        a: ?*const SummaryProvenance,
+        b: ?*const SummaryProvenance,
+    ) ?*const SummaryProvenance {
+        // Names that agree keep what they prove. A name the two disagree
+        // about drops to no provenance at all rather than to the components
+        // they happen to share: dropping everything is a fixed point, so a
+        // later summary that disagrees again finds the group already at the
+        // bottom and is simply covered, which is what stops widening from
+        // re-walking the body once per arriving edge.
+        return if (summaryProvenanceEql(a, b)) a else null;
+    }
+
+    /// Weakens a group's provenance to what it and `summary` both prove.
+    /// Reports whether anything moved, so a group whose state is unchanged is
+    /// not re-walked.
+    fn widenGroupProvenance(group: *JoinGroup, summary: []const LocalSummary) bool {
+        var changed = false;
+        for (group.summary, summary) |*ge, se| {
+            const met = meetProvenance(ge.provenance, se.provenance);
+            if (met != ge.provenance) {
+                ge.provenance = met;
+                changed = true;
+            }
+        }
+        return changed;
     }
 
     fn summaryDigest(cursor: LIR.CFStmtId, summary: []const LocalSummary) u64 {
@@ -2280,19 +2565,38 @@ const Certifier = struct {
             hasher.update(std.mem.asBytes(&entry.class));
             hasher.update(std.mem.asBytes(&entry.repr));
             hasher.update(std.mem.asBytes(&entry.balance));
-            const lender_count: u32 = @intCast(entry.lender_reprs.len);
-            hasher.update(std.mem.asBytes(&lender_count));
-            for (entry.lender_reprs) |lender_repr| {
-                hasher.update(std.mem.asBytes(&lender_repr));
+            const has_provenance: u8 = @intFromBool(entry.provenance != null);
+            hasher.update(std.mem.asBytes(&has_provenance));
+            if (entry.provenance) |provenance| {
+                const lender_count: u32 = @intCast(provenance.lender_reprs.len);
+                hasher.update(std.mem.asBytes(&lender_count));
+                for (provenance.lender_reprs) |lender_repr| {
+                    hasher.update(std.mem.asBytes(&lender_repr));
+                }
+                const holder_count: u32 = @intCast(provenance.holder_reprs.len);
+                hasher.update(std.mem.asBytes(&holder_count));
+                for (provenance.holder_reprs) |holder_repr| {
+                    hasher.update(std.mem.asBytes(&holder_repr));
+                }
+                hasher.update(std.mem.asBytes(&provenance.payload_source));
+                hasher.update(std.mem.asBytes(&provenance.payload_projection));
             }
             hasher.update(std.mem.asBytes(&entry.abi_live));
             hasher.update(std.mem.asBytes(&entry.condition));
             hasher.update(std.mem.asBytes(&entry.condition_mask));
             hasher.update(std.mem.asBytes(&entry.claims));
-            hasher.update(std.mem.asBytes(&entry.payload_source));
-            hasher.update(std.mem.asBytes(&entry.payload_projection));
         }
         return hasher.final();
+    }
+
+    /// Frees every recycled state. Buffers are sized for one procedure's
+    /// local count, so they must not outlive it.
+    fn drainStatePool(self: *Certifier) void {
+        while (self.state_pool.pop()) |retired| {
+            var state = retired;
+            state.pool = null;
+            state.freeBuffers();
+        }
     }
 
     /// Rebuilds a fresh state from an agreed join-entry summary. Alias sets
@@ -2300,89 +2604,100 @@ const Certifier = struct {
     /// locals their liveness anchors on.
     fn stateFromSummary(self: *Certifier, summary: []const LocalSummary) CertifyError!State {
         var state = try State.init(self.allocator, self.local_dense.items, self.proc_locals.items.len);
+        state.pool = &self.state_pool;
         errdefer state.deinit();
 
+        // Allocate every representative before attaching provenance. Lender,
+        // holder, and payload edges may point forward in dense-local order.
         for (summary, 0..) |entry, dense| {
-            if (entry.class != .owned or entry.repr != dense) continue;
+            if (entry.class == .unbound or entry.repr != dense) continue;
             const local = self.proc_locals.items[dense];
-            const value = try self.bindFresh(&state, local, @intCast(entry.balance), &.{});
+            const value = switch (entry.class) {
+                .owned => try self.bindFresh(&state, local, @intCast(entry.balance), &.{}),
+                .conditional_owned => blk: {
+                    const conditional = try self.bindFresh(&state, local, 1, &.{});
+                    try state.setConditional(conditional, .{ .local = @enumFromInt(entry.condition), .mask = entry.condition_mask });
+                    break :blk conditional;
+                },
+                .borrowed, .representation => try self.bindFresh(&state, local, 0, &.{}),
+                .unbound => unreachable,
+            };
             if (entry.abi_live) self.values.items[value].always_live = true;
             if (entry.claims != 0) try state.setClaims(value, entry.claims);
         }
+
         for (summary, 0..) |entry, dense| {
-            if (entry.class != .conditional_owned or entry.repr != dense) continue;
-            const local = self.proc_locals.items[dense];
-            const value = try self.bindFresh(&state, local, 1, &.{});
-            if (entry.abi_live) self.values.items[value].always_live = true;
-            try state.setConditional(value, .{ .local = @enumFromInt(entry.condition), .mask = entry.condition_mask });
-        }
-        for (summary, 0..) |entry, dense| {
-            if (entry.class != .owned or entry.repr == dense) continue;
-            const local = self.proc_locals.items[dense];
-            state.bindValue(local, state.valueAtDense(entry.repr));
-        }
-        for (summary, 0..) |entry, dense| {
-            if (entry.class != .conditional_owned or entry.repr == dense) continue;
-            const local = self.proc_locals.items[dense];
-            state.bindValue(local, state.valueAtDense(entry.repr));
-        }
-        for (summary, 0..) |entry, dense| {
-            if (entry.class != .representation or entry.repr != dense) continue;
-            const local = self.proc_locals.items[dense];
-            _ = try self.bindFresh(&state, local, 0, &.{});
-        }
-        for (summary, 0..) |entry, dense| {
-            if (entry.class != .representation or entry.repr == dense) continue;
-            const local = self.proc_locals.items[dense];
-            state.bindValue(local, state.valueAtDense(entry.repr));
-        }
-        for (summary, 0..) |entry, dense| {
-            if (entry.class != .borrowed or entry.repr != dense) continue;
-            if (entry.lender_reprs.len != 1 or entry.lender_reprs[0] != dense) continue;
-            const local = self.proc_locals.items[dense];
-            const value = try self.newValue(local, &.{}, true);
-            try state.growToValue(value);
-            state.bindValue(local, value);
-        }
-        for (summary, 0..) |entry, dense| {
-            if (entry.class != .borrowed or entry.repr != dense) continue;
-            if (entry.lender_reprs.len == 1 and entry.lender_reprs[0] == dense) continue;
-            const local = self.proc_locals.items[dense];
-            if (entry.lender_reprs.len == 0) {
-                return self.fail("borrowed local {d} crossed a join without a live owner local", .{@intFromEnum(local)});
+            if (entry.class == .unbound or entry.repr == dense) continue;
+            const representative = state.valueAtDense(entry.repr);
+            if (representative == no_value) {
+                return self.fail("join summary alias at dense local {d} had no representative", .{dense});
             }
-            var lenders = std.ArrayList(ValueId).empty;
-            defer lenders.deinit(self.allocator);
-            for (entry.lender_reprs) |anchor_dense| {
-                if (anchor_dense >= self.proc_locals.items.len) {
-                    return self.fail("borrowed local {d} crossed a join without a live owner local", .{@intFromEnum(local)});
-                }
-                const lender = state.valueAtDense(anchor_dense);
-                if (lender == no_value) {
-                    return self.fail("borrowed local {d} crossed a join without a live owner local", .{@intFromEnum(local)});
-                }
-                try lenders.append(self.allocator, lender);
-            }
-            _ = try self.bindFresh(&state, local, 0, lenders.items);
+            state.bindValue(self.proc_locals.items[dense], representative);
         }
-        // Restore projection chains only after every representative has been
-        // rebuilt. A nested container's representative may sort after its
-        // child, so restoring during the construction loop would make the
-        // result depend on local numbering.
+
+        var dependency_values = std.ArrayList(ValueId).empty;
+        defer dependency_values.deinit(self.allocator);
         for (summary, 0..) |entry, dense| {
-            if (entry.class != .borrowed or entry.repr != dense) continue;
-            if (entry.payload_source == no_dense or entry.payload_source >= self.proc_locals.items.len) continue;
+            if (entry.class == .unbound or entry.repr != dense) continue;
+            const provenance = entry.provenance orelse continue;
             const value = state.valueAtDense(dense);
-            const container = state.valueAtDense(entry.payload_source);
-            if (value == no_value or container == no_value) continue;
-            const info = &self.values.items[value];
-            info.payload_source = container;
-            info.payload_projection = entry.payload_projection;
+            const origin = self.values.items[value].origin;
+
+            dependency_values.clearRetainingCapacity();
+            for (provenance.lender_reprs) |lender_dense| {
+                if (lender_dense >= self.proc_locals.items.len) {
+                    return self.fail("local {d} crossed a join with an invalid lender", .{@intFromEnum(origin)});
+                }
+                const lender = state.valueAtDense(lender_dense);
+                if (lender == no_value) {
+                    return self.fail("local {d} crossed a join without a live lender local", .{@intFromEnum(origin)});
+                }
+                try dependency_values.append(self.allocator, lender);
+            }
+            if (dependency_values.items.len != 0) {
+                self.values.items[value].lenders = try self.lender_arena.allocator().dupe(ValueId, dependency_values.items);
+            }
+
+            dependency_values.clearRetainingCapacity();
+            for (provenance.holder_reprs) |holder_dense| {
+                if (holder_dense >= self.proc_locals.items.len) {
+                    return self.fail("local {d} crossed a join with an invalid holder", .{@intFromEnum(origin)});
+                }
+                const holder_anchor = state.valueAtDense(holder_dense);
+                if (holder_anchor == no_value) {
+                    return self.fail("local {d} crossed a join without a live holder local", .{@intFromEnum(origin)});
+                }
+                try dependency_values.append(self.allocator, holder_anchor);
+            }
+            if (dependency_values.items.len == 1) {
+                try state.setHolder(value, dependency_values.items[0]);
+            } else if (dependency_values.items.len > 1) {
+                const synthetic_holder = try self.newValue(origin, dependency_values.items, false);
+                try state.growToValue(synthetic_holder);
+                try state.setHolder(value, synthetic_holder);
+            }
+
+            if (provenance.payload_source != no_dense) {
+                if (provenance.payload_source >= self.proc_locals.items.len) {
+                    return self.fail("local {d} crossed a join with an invalid payload source", .{@intFromEnum(origin)});
+                }
+                const container = state.valueAtDense(provenance.payload_source);
+                if (container == no_value) {
+                    return self.fail("local {d} crossed a join without its payload source", .{@intFromEnum(origin)});
+                }
+                self.values.items[value].payload_source = container;
+                self.values.items[value].payload_projection = provenance.payload_projection;
+            }
         }
+
+        // Validate only after every provenance edge is restored: an anchor's
+        // own sparse provenance may appear later in dense-local order.
         for (summary, 0..) |entry, dense| {
-            if (entry.class != .borrowed or entry.repr == dense) continue;
-            const local = self.proc_locals.items[dense];
-            state.bindValue(local, state.valueAtDense(entry.repr));
+            if (entry.class != .borrowed or entry.repr != dense) continue;
+            const value = state.valueAtDense(dense);
+            if (!try self.valueIsLive(&state, value)) {
+                return self.fail("borrowed local {d} crossed a join without a live owner local", .{@intFromEnum(self.proc_locals.items[dense])});
+            }
         }
         return state;
     }
@@ -2437,6 +2752,20 @@ const Certifier = struct {
                 },
             }
         }
+        // At the cap, stop splitting on provenance: absorb into a group that
+        // agrees on every other mode component and weaken its provenance to
+        // what both prove. See `max_join_groups`.
+        if (record.groups.items.len >= max_join_groups) {
+            for (record.groups.items, 0..) |*group, group_index| {
+                if (!modesCompatibleWith(group.summary, summary, .ignore_provenance)) continue;
+                const widened = widenGroupProvenance(group, summary);
+                return switch (try self.meetGroupSummary(group, summary)) {
+                    .unchanged => if (widened) .{ .walk = group_index } else .covered,
+                    .refined, .conflict => .{ .walk = group_index },
+                };
+            }
+        }
+
         const copy = try self.allocator.dupe(LocalSummary, summary);
         errdefer self.allocator.free(copy);
         try record.groups.append(self.allocator, .{ .summary = copy, .queued = false });
@@ -2445,9 +2774,20 @@ const Certifier = struct {
 
     /// True when the two summaries assign every name the same ownership
     /// mode: same class, same presence condition for conditional ownership,
-    /// and the same borrow anchor. Partition (`repr`) and balances are the
+    /// and the same sparse provenance. Partition (`repr`) and balances are the
     /// joinable components and are deliberately not compared here.
     fn modesCompatible(a: []const LocalSummary, b: []const LocalSummary) bool {
+        return modesCompatibleWith(a, b, .compare_provenance);
+    }
+
+    /// Whether provenance participates in mode compatibility. Ignoring it is
+    /// what lets a join at `max_join_groups` absorb instead of split; the
+    /// group's provenance is then weakened to the meet, so the walk assumes
+    /// only what both members prove.
+    const ProvenanceMatch = enum { compare_provenance, ignore_provenance };
+
+    fn modesCompatibleWith(a: []const LocalSummary, b: []const LocalSummary, provenance: ProvenanceMatch) bool {
+        const compare = provenance == .compare_provenance;
         for (a, b) |ga, sb| {
             if (ga.class != sb.class) return false;
             if (ga.abi_live != sb.abi_live) return false;
@@ -2455,11 +2795,12 @@ const Certifier = struct {
                 .unbound => {},
                 // Claims are per-field spend records, not attributable
                 // balances; states disagreeing on them walk separately.
-                .owned => if (ga.claims != sb.claims) return false,
-                .conditional_owned => if (ga.condition != sb.condition or ga.condition_mask != sb.condition_mask) return false,
-                .borrowed => if (!std.mem.eql(u32, ga.lender_reprs, sb.lender_reprs) or
-                    ga.payload_source != sb.payload_source or
-                    ga.payload_projection != sb.payload_projection) return false,
+                .owned => if (ga.claims != sb.claims or
+                    (compare and !summaryProvenanceEql(ga.provenance, sb.provenance))) return false,
+                .conditional_owned => if (ga.condition != sb.condition or
+                    ga.condition_mask != sb.condition_mask or
+                    (compare and !summaryProvenanceEql(ga.provenance, sb.provenance))) return false,
+                .borrowed => if (compare and !summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
                 .representation => {},
             }
         }
@@ -3660,6 +4001,34 @@ const Certifier = struct {
         return null;
     }
 
+    /// Adds every local carrier needed to restore one dependency. The
+    /// direct value is preferred because its own sparse provenance preserves
+    /// the exact liveness alternatives; unnamed intermediates are reduced to
+    /// the live anchors that can actually cross the join.
+    fn markSummaryDependencyRelevant(
+        self: *Certifier,
+        state: *const State,
+        dependency: ValueId,
+        work: *std.ArrayList(u32),
+    ) Allocator.Error!void {
+        if (self.repr_scratch.get(dependency)) |carrier| {
+            const carrier_index: usize = @intCast(carrier);
+            if (self.relevant_scratch.isSet(carrier_index)) return;
+            self.relevant_scratch.set(carrier_index);
+            try work.append(self.allocator, carrier);
+            return;
+        }
+
+        if (!try self.collectBorrowSummaryAnchorValues(state, dependency, &self.provenance_value_scratch)) return;
+        for (self.provenance_value_scratch.items) |anchor| {
+            const carrier = self.repr_scratch.get(anchor) orelse continue;
+            const carrier_index: usize = @intCast(carrier);
+            if (self.relevant_scratch.isSet(carrier_index)) continue;
+            self.relevant_scratch.set(carrier_index);
+            try work.append(self.allocator, carrier);
+        }
+    }
+
     /// Builds the jump-state summary restricted to the join's relevant
     /// locals, extending relevance through the lender anchors of relevant
     /// borrows, and verifies every outstanding ownership unit is carried into
@@ -3706,51 +4075,60 @@ const Certifier = struct {
         // negative balance failing below.
         try self.settleNegativeClaims(state);
 
-        // Seed the working relevant set from the record.
+        // Seed the working relevant set from the record. First index every
+        // bound value, then extend through a worklist so each carrier is
+        // processed once without rescanning all locals per dependency.
         self.relevant_scratch.unsetAll();
         self.relevant_scratch.setUnion(record.relevant);
+        self.provenance_relevant_work.clearRetainingCapacity();
+        self.repr_scratch.clearRetainingCapacity();
+        for (0..self.proc_locals.items.len) |dense| {
+            if (record.relevant.isSet(dense)) {
+                try self.provenance_relevant_work.append(self.allocator, @intCast(dense));
+            }
+            const value = state.valueAtDense(dense);
+            if (value == no_value) continue;
+            const entry = try self.repr_scratch.getOrPut(value);
+            if (!entry.found_existing) entry.value_ptr.* = @intCast(dense);
+        }
 
-        // Extend through borrow anchors: a relevant borrowed local keeps its
-        // lender's carrier local live, so the carrier joins the agreement.
-        var changed = true;
-        var anchor_values = std.ArrayList(ValueId).empty;
-        defer anchor_values.deinit(self.allocator);
-        while (changed) {
-            changed = false;
-            for (0..self.proc_locals.items.len) |dense| {
-                if (!self.relevant_scratch.isSet(dense)) continue;
-                const value = state.valueAtDense(dense);
-                if (value == no_value) continue;
-                if (state.balanceOf(value) > 0) continue;
-                const info = self.values.items[value];
-                if (info.payload_source != no_value) {
-                    // Preserve each immediate link of a nested projection
-                    // chain, not only its ultimate ownership lender.
-                    for (0..self.proc_locals.items.len) |candidate_dense| {
-                        if (state.valueAtDense(candidate_dense) != info.payload_source) continue;
-                        if (!self.relevant_scratch.isSet(candidate_dense)) {
-                            self.relevant_scratch.set(candidate_dense);
-                            changed = true;
-                        }
-                        break;
-                    }
+        // Extend through every dormant provenance edge, even while the value
+        // has positive balance. The edge becomes observable if the join body
+        // spends that unit, which is precisely the issue #10935 shape.
+        while (self.provenance_relevant_work.pop()) |dense| {
+            const value = state.valueAtDense(dense);
+            if (value == no_value) continue;
+            const info = self.values.items[value];
+            if (info.payload_source != no_value and try self.valueIsLive(state, info.payload_source)) {
+                try self.markSummaryDependencyRelevant(
+                    state,
+                    info.payload_source,
+                    &self.provenance_relevant_work,
+                );
+            }
+            var lenders_live = info.lenders.len != 0;
+            for (info.lenders) |lender| {
+                if (!try self.valueIsLive(state, lender)) {
+                    lenders_live = false;
+                    break;
                 }
-                if (!try self.collectBorrowSummaryAnchorValues(state, value, &anchor_values)) continue;
-                for (anchor_values.items) |anchor| {
-                    // Find a carrier local for the anchor value.
-                    var carrier: u32 = no_dense;
-                    for (0..self.proc_locals.items.len) |candidate_dense| {
-                        if (state.valueAtDense(candidate_dense) == anchor) {
-                            carrier = @intCast(candidate_dense);
-                            break;
-                        }
-                    }
-                    if (carrier == no_dense) continue;
-                    if (!self.relevant_scratch.isSet(carrier)) {
-                        self.relevant_scratch.set(carrier);
-                        changed = true;
-                    }
+            }
+            if (lenders_live) {
+                for (info.lenders) |lender| {
+                    try self.markSummaryDependencyRelevant(
+                        state,
+                        lender,
+                        &self.provenance_relevant_work,
+                    );
                 }
+            }
+            const holder = state.holderOf(value);
+            if (holder != no_value and try self.valueIsLive(state, holder)) {
+                try self.markSummaryDependencyRelevant(
+                    state,
+                    holder,
+                    &self.provenance_relevant_work,
+                );
             }
         }
 
@@ -3768,14 +4146,13 @@ const Certifier = struct {
         }
 
         for (self.proc_locals.items, 0..) |local, dense| {
-            var summary = LocalSummary{ .class = .unbound, .repr = 0, .balance = 0, .lender_reprs = &.{}, .condition = no_dense, .condition_mask = 0 };
+            var summary = LocalSummary{ .class = .unbound, .repr = 0, .balance = 0, .condition = no_dense, .condition_mask = 0 };
             if (self.relevant_scratch.isSet(dense)) {
                 if (maybeUninitializedCondition(record, self.store, local)) |condition| {
                     summary = .{
                         .class = .conditional_owned,
                         .repr = self.denseOf(local),
                         .balance = 1,
-                        .lender_reprs = &.{},
                         .condition = @intFromEnum(condition.local),
                         .condition_mask = condition.mask,
                     };
@@ -3791,37 +4168,39 @@ const Certifier = struct {
                                     .class = .conditional_owned,
                                     .repr = repr,
                                     .balance = @intCast(units),
-                                    .lender_reprs = &.{},
                                     .abi_live = abi_live,
                                     .condition = @intFromEnum(condition.local),
                                     .condition_mask = condition.mask,
                                 };
                             } else {
-                                summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .lender_reprs = &.{}, .abi_live = abi_live, .condition = no_dense, .condition_mask = 0, .claims = state.claimsOf(value) };
+                                summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .abi_live = abi_live, .condition = no_dense, .condition_mask = 0, .claims = state.claimsOf(value) };
                             }
                         } else if (try self.valueIsLive(state, value)) {
                             summary = .{
                                 .class = .borrowed,
                                 .repr = repr,
                                 .balance = 0,
-                                .lender_reprs = try self.borrowSummaryAnchorReprs(state, value),
                                 .abi_live = abi_live,
                                 .condition = no_dense,
                                 .condition_mask = 0,
                             };
-                            self.addPayloadOriginToSummary(value, &summary);
                         } else if (self.isInlineStructRepresentation(local)) {
                             summary = .{
                                 .class = .representation,
                                 .repr = repr,
                                 .balance = 0,
-                                .lender_reprs = &.{},
                                 .abi_live = abi_live,
                                 .condition = no_dense,
                                 .condition_mask = 0,
                             };
                         }
                         summary.abi_live = self.values.items[value].always_live;
+                        if (summary.class != .unbound and summary.class != .representation) {
+                            summary.provenance = if (repr == dense)
+                                try self.makeSummaryProvenance(state, value)
+                            else
+                                self.summary_scratch.items[repr].provenance;
+                        }
                     }
                 }
             }
@@ -3881,8 +4260,11 @@ const Certifier = struct {
         self.current_proc = proc_id;
         self.current_sig = self.sigs.get(proc_id);
         self.current_proc_body = body;
+        // Recycled buffers are sized for this procedure's local count.
+        defer self.drainStatePool();
         self.current_return_local = null;
         self.values.clearRetainingCapacity();
+        self.provenance_interner.clearRetainingCapacity();
         _ = self.lender_arena.reset(.retain_capacity);
         self.clearRecords();
         self.memo.clearRetainingCapacity();
@@ -3939,6 +4321,7 @@ const Certifier = struct {
         try self.relevant_scratch.resize(self.allocator, self.proc_locals.items.len, false);
 
         var state = try State.init(self.allocator, self.local_dense.items, self.proc_locals.items.len);
+        state.pool = &self.state_pool;
         {
             errdefer state.deinit();
             const proc_args = self.store.getLocalSpan(proc.args);
@@ -3971,7 +4354,21 @@ const Certifier = struct {
         }
 
         try work.append(self.allocator, .{ .segment = .{ .cursor = body, .state = state } });
+        // Companion to the bound inside `runSegment`: that one catches a single
+        // walk that never ends, this one catches a worklist that keeps growing.
+        // The busiest procedure in a 117k-statement module queues 1572 segments
+        // against a limit of 29k, so a procedure that passes this is not
+        // converging.
+        const item_limit = @max(@as(usize, 1) << 16, self.store.cfStmtCount());
+        var items: usize = 0;
         while (work.pop()) |item| {
+            items += 1;
+            if (items > item_limit) {
+                return self.fail(
+                    "certifying this procedure queued more than {d} segments without settling",
+                    .{item_limit},
+                );
+            }
             if (self.work_stats) |stats| stats.work_items += 1;
             switch (item) {
                 .segment => |segment| try self.runSegment(&work, segment),
@@ -4007,8 +4404,24 @@ const Certifier = struct {
         defer state.deinit();
         var cursor = segment.cursor;
         self.current_origin_join = segment.origin_join;
+        // A segment walk ends by reaching a terminator or by meeting a state it
+        // has already memoized. Nothing else bounds it, so a walk whose state
+        // never repeats runs forever, and the only symptom is a build that
+        // never finishes. Bound it instead: the limit is far above any real
+        // walk (the largest segment in a 117k-statement module takes 154
+        // steps), so crossing it means the memo is not converging, and saying
+        // so with the proc and statement is worth more than hanging.
+        const step_limit = @max(@as(usize, 1) << 16, self.store.cfStmtCount() * 2);
+        var walk_steps: usize = 0;
 
         while (true) {
+            walk_steps += 1;
+            if (walk_steps > step_limit) {
+                return self.fail(
+                    "segment walk passed {d} statements without reaching a terminator or a repeated state",
+                    .{step_limit},
+                );
+            }
             self.current_stmt = cursor;
 
             if (self.memo_points.isSet(@intFromEnum(cursor))) {
@@ -6363,6 +6776,155 @@ test "certify preserves payload lender when retained holder crosses join" {
 
     const sigs = [_]arc_sig.RcSig{arc_sig.RcSig.all_owned.withBorrowedParam(0)};
     try f.certifyWith(.{ .sigs = &sigs });
+}
+
+test "certify preserves an owned payload's dormant lender across a join" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const owner = try f.local(f.pair_str);
+    const field = try f.local(.str);
+    const result = try f.local(.i64);
+
+    const join_id = f.freshJoinPointId();
+    const ret = try f.ret(result);
+    const release_owner = try f.decrefStmt(owner, f.pair_str, ret);
+    const result_assign = try f.assignI64(result, release_owner);
+    const use_field = try f.store.addCFStmt(.{ .expect = .{
+        .condition = field,
+        .next = result_assign,
+    } });
+    const release_surplus = try f.decrefStmt(field, .str, use_field);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const join_stmt = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = LIR.LocalSpan.empty(),
+        .body = release_surplus,
+        .remainder = jump,
+    } });
+    const retain_field = try f.increfStmt(field, .str, join_stmt);
+    const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = field,
+        .op = .{ .field = .{ .source = owner, .field_idx = 0 } },
+        .next = retain_field,
+    } });
+    _ = try f.addProc(&.{owner}, field_read, .i64);
+
+    try f.certify();
+}
+
+test "certify preserves a holder alternative to a payload lender across a join" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const owner = try f.local(f.pair_str);
+    const field = try f.local(.str);
+    const holder = try f.local(f.pair_str);
+    const holder_other = try f.local(.str);
+    const result = try f.local(.i64);
+
+    const join_id = f.freshJoinPointId();
+    const ret = try f.ret(result);
+    const release_holder = try f.decrefStmt(holder, f.pair_str, ret);
+    const result_assign = try f.assignI64(result, release_holder);
+    const use_field = try f.store.addCFStmt(.{ .expect = .{
+        .condition = field,
+        .next = result_assign,
+    } });
+    const release_owner = try f.decrefStmt(owner, f.pair_str, use_field);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const join_stmt = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = LIR.LocalSpan.empty(),
+        .body = release_owner,
+        .remainder = jump,
+    } });
+    const holder_assign = try f.store.addCFStmt(.{ .assign_struct = .{
+        .target = holder,
+        .fields = try f.store.addLocalSpan(&.{ field, holder_other }),
+        .next = join_stmt,
+    } });
+    const assign_holder_other = try f.assignStr(holder_other, holder_assign);
+    const retain_field = try f.increfStmt(field, .str, assign_holder_other);
+    const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = field,
+        .op = .{ .field = .{ .source = owner, .field_idx = 0 } },
+        .next = retain_field,
+    } });
+    _ = try f.addProc(&.{owner}, field_read, .i64);
+
+    try f.certify();
+}
+
+test "certify drops a dead dormant lender from an owned join value" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const owner = try f.local(f.pair_str);
+    const field = try f.local(.str);
+    const result = try f.local(.i64);
+
+    const join_id = f.freshJoinPointId();
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, ret);
+    const release_field = try f.decrefStmt(field, .str, result_assign);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const join_stmt = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = LIR.LocalSpan.empty(),
+        .body = release_field,
+        .remainder = jump,
+    } });
+    const release_owner = try f.decrefStmt(owner, f.pair_str, join_stmt);
+    const retain_field = try f.increfStmt(field, .str, release_owner);
+    const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = field,
+        .op = .{ .field = .{ .source = owner, .field_idx = 0 } },
+        .next = retain_field,
+    } });
+    _ = try f.addProc(&.{owner}, field_read, .i64);
+
+    try f.certify();
+}
+
+test "certify rejects a join value after every dormant lifetime alternative dies" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const owner = try f.local(f.pair_str);
+    const field = try f.local(.str);
+    const holder = try f.local(f.pair_str);
+    const holder_other = try f.local(.str);
+    const result = try f.local(.i64);
+
+    const join_id = f.freshJoinPointId();
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, ret);
+    const use_field = try f.store.addCFStmt(.{ .expect = .{
+        .condition = field,
+        .next = result_assign,
+    } });
+    const release_holder = try f.decrefStmt(holder, f.pair_str, use_field);
+    const release_owner = try f.decrefStmt(owner, f.pair_str, release_holder);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const join_stmt = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = LIR.LocalSpan.empty(),
+        .body = release_owner,
+        .remainder = jump,
+    } });
+    const holder_assign = try f.store.addCFStmt(.{ .assign_struct = .{
+        .target = holder,
+        .fields = try f.store.addLocalSpan(&.{ field, holder_other }),
+        .next = join_stmt,
+    } });
+    const assign_holder_other = try f.assignStr(holder_other, holder_assign);
+    const retain_field = try f.increfStmt(field, .str, assign_holder_other);
+    const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = field,
+        .op = .{ .field = .{ .source = owner, .field_idx = 0 } },
+        .next = retain_field,
+    } });
+    _ = try f.addProc(&.{owner}, field_read, .i64);
+
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "dead") != null);
 }
 
 test "certify preserves deep ABI lender when join body releases retained intermediate" {
