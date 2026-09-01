@@ -123,6 +123,7 @@ comptime {
         std.testing.refAllDecls(@import("test/platform_config.zig"));
         std.testing.refAllDecls(@import("ReplLine.zig"));
         std.testing.refAllDecls(@import("ReplSession.zig"));
+        std.testing.refAllDecls(@import("macho/DyldExportStrip.zig"));
     }
 }
 const linker = @import("linker.zig");
@@ -1659,6 +1660,7 @@ fn generatePlatformHostShimFromLirData(
     var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(
         ctx.gpa,
         store,
+        &.{},
         &.{},
         &.{},
         std_target,
@@ -6376,6 +6378,7 @@ fn writeDevRunImageToSharedMemory(
             static_strings.entries,
             lowered.lir_result.boxy_erased_arg_desc_offsets.items,
             lowered.lir_result.boxy_erased_arg_desc_params.items,
+            lowered.lir_result.boxy_worker_procs.items,
             .preserve,
             roc_target.host_cpu.level(),
         );
@@ -6826,6 +6829,7 @@ fn lowerLirWithBuildEnv(
         specialization_strategy,
         base.target.TargetUsize.native,
         false,
+        build_env.postCheckExecutor(),
         &spec_timing,
     );
     errdefer lowered.deinit();
@@ -9128,6 +9132,7 @@ fn writeDevWasmObject(
         &lowered.lir_result.layouts,
         lowered.lir_result.boxy_erased_arg_desc_offsets.items,
         lowered.lir_result.boxy_erased_arg_desc_params.items,
+        lowered.lir_result.boxy_worker_procs.items,
         &wasm_module,
         cpu_level,
     );
@@ -9472,6 +9477,7 @@ fn compileLlvmAppObject(
         &lowered.lir_result.store,
         lowered.lir_result.boxy_erased_arg_desc_offsets.items,
         lowered.lir_result.boxy_erased_arg_desc_params.items,
+        lowered.lir_result.boxy_worker_procs.items,
         std_target,
     );
     codegen.layout_store = &lowered.lir_result.layouts;
@@ -9874,6 +9880,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         specialization_strategy,
         target_usize,
         args.synthetic_default_platform,
+        build_env.postCheckExecutor(),
         &spec_timing,
     );
     defer lowered.deinit();
@@ -10241,6 +10248,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         specialization_strategy,
         target_usize,
         args.synthetic_default_platform,
+        build_env.postCheckExecutor(),
         &spec_timing,
     );
     defer lowered.deinit();
@@ -10327,6 +10335,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         lowered.lir_result.store.getProcSpecs(),
         lowered.lir_result.boxy_erased_arg_desc_offsets.items,
         lowered.lir_result.boxy_erased_arg_desc_params.items,
+        lowered.lir_result.boxy_worker_procs.items,
         target,
         obj_path,
         ctx.coreCtx(),
@@ -10607,6 +10616,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         specialization_strategy,
         base.target.TargetUsize.native,
         false,
+        build_env.postCheckExecutor(),
         &spec_timing,
     );
     defer lowered.deinit();
@@ -11753,6 +11763,7 @@ fn lowerCheckedSourceToLir(
     specialization_strategy: base.SpecializationStrategy,
     target_usize: base.target.TargetUsize,
     proc_debug_names: bool,
+    post_check_executor: ?base.post_check_task_executor.Executor,
     timing: ?*lir.CheckedPipeline.Timing,
 ) lir.CheckedPipeline.LowerResourceError!lir.CheckedPipeline.LoweredProgram {
     const selected_roots: []const check.CheckedArtifact.RootRequest = switch (roots) {
@@ -11792,10 +11803,6 @@ fn lowerCheckedSourceToLir(
                 .test_plan => |plan| plan.metadata,
                 .platform_entrypoints, .linked_output => &.{},
             },
-            .procedure_template_root_grouping = switch (roots) {
-                .test_plan => .shared_adjacent,
-                .platform_entrypoints, .linked_output => .isolated,
-            },
         },
         .{
             .target_usize = target_usize,
@@ -11817,6 +11824,7 @@ fn lowerCheckedSourceToLir(
             .tag_reachability = tagReachabilityForOpt(opt),
             .prove_ranges = proveRangesForOpt(opt),
             .proc_debug_names = proc_debug_names,
+            .post_check_executor = post_check_executor,
             .timing = timing,
         },
     );
@@ -12373,6 +12381,7 @@ fn runCompiledTestRoots(
     results: *std.ArrayList(CliTestResultItem),
     summary: *CliTestRunSummary,
     dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
+    max_workers: ?usize,
 ) Allocator.Error!void {
     var bool_roots = try ctx.gpa.alloc(eval.Inspected.BoolRoot, root_runs.len);
     defer ctx.gpa.free(bool_roots);
@@ -12387,13 +12396,14 @@ fn runCompiledTestRoots(
     }
 
     const eval_results = switch (mode) {
-        .dev => eval.Inspected.devEvalBoolRootsWithTiming(
+        .dev => eval.Inspected.devEvalBoolRootsWithTimingAndMaxWorkers(
             ctx.gpa,
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
             eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
             bool_roots,
             dev_timing,
+            max_workers,
         ),
         .llvm_size => eval.Inspected.llvmEvalBoolRoots(
             ctx.gpa,
@@ -12573,6 +12583,7 @@ fn lowerPlannedTestModule(
         specialization_strategy,
         base.target.TargetUsize.native,
         false,
+        build_env.postCheckExecutor(),
         timing,
     );
     errdefer lowered.deinit();
@@ -12598,6 +12609,7 @@ fn runCheckedArtifactTests(
     module_results: *std.ArrayList(CliModuleTestResult),
     timing: ?*lir.CheckedPipeline.Timing,
     dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
+    max_workers: ?usize,
 ) (Allocator.Error || lir.CheckedPipeline.HostedBindingError || error{NoHomeDirectory})!CliTestRunSummary {
     const module = planned.module;
     const artifact = planned.artifact;
@@ -12614,7 +12626,7 @@ fn runCheckedArtifactTests(
     const mode = cliTestExecutionMode(opt);
     switch (mode) {
         .interpreter => try runInterpreterTestRoots(ctx, &lowered_module.lowered, lowered_module.root_runs, &results, &summary),
-        .dev => try runCompiledTestRoots(ctx, mode, &lowered_module.lowered, lowered_module.root_runs, &results, &summary, dev_timing),
+        .dev => try runCompiledTestRoots(ctx, mode, &lowered_module.lowered, lowered_module.root_runs, &results, &summary, dev_timing, max_workers),
         .llvm_size, .llvm_speed => unreachable,
     }
     summary.modules_with_tests = 1;
@@ -14319,6 +14331,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
                     &module_results,
                     &spec_timing,
                     &dev_timing,
+                    args.max_threads,
                 );
                 total.passed += summary.passed;
                 total.failed += summary.failed;
@@ -15709,7 +15722,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [19]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [22]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
@@ -15731,10 +15744,13 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [19]
         .{ .name = "Generated-private nodes visited", .count = graph.generated_private_nodes_visited },
         .{ .name = "Finished-Monotype scans", .count = graph.finished_mono_scans },
         .{ .name = "Finished-Monotype nodes visited", .count = graph.finished_mono_nodes_visited },
+        .{ .name = "Nominal backing lookups", .count = graph.nominal_backing_lookups },
+        .{ .name = "Nominal backing instances scanned", .count = graph.nominal_backing_instances_scanned },
+        .{ .name = "Union-find resolutions", .count = graph.union_find_resolutions },
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [21]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [20]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Body contexts created", .count = body.body_contexts_created },
@@ -15746,7 +15762,6 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [21]p
         .{ .name = "Call expressions", .count = body.call_expressions },
         .{ .name = "Dispatch expressions", .count = body.dispatch_expressions },
         .{ .name = "Deferred template requests", .count = body.deferred_template_requests },
-        .{ .name = "Cross-root template reuses", .count = body.cross_root_template_reuses },
         .{ .name = "Caller-owned template bodies lowered", .count = body.caller_owned_template_bodies_lowered },
         .{ .name = "Deferred template reuses", .count = body.deferred_template_reuses },
         .{ .name = "Deferred template bodies lowered", .count = body.deferred_template_bodies_lowered },
@@ -15823,7 +15838,6 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
     diagnostics.body.deferred_template_reuses = 305;
-    diagnostics.body.cross_root_template_reuses = 306;
     diagnostics.body.nested_closures_prepared = 302;
 
     const specialization = monotypeSpecializationCounters(diagnostics);
@@ -15843,12 +15857,10 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 303), body[1].count);
     try std.testing.expectEqualStrings("Checked node cache hits", body[3].name);
     try std.testing.expectEqual(@as(u64, 301), body[3].count);
-    try std.testing.expectEqualStrings("Cross-root template reuses", body[9].name);
-    try std.testing.expectEqual(@as(u64, 306), body[9].count);
-    try std.testing.expectEqualStrings("Deferred template reuses", body[11].name);
-    try std.testing.expectEqual(@as(u64, 305), body[11].count);
-    try std.testing.expectEqualStrings("Nested closures prepared", body[20].name);
-    try std.testing.expectEqual(@as(u64, 302), body[20].count);
+    try std.testing.expectEqualStrings("Deferred template reuses", body[10].name);
+    try std.testing.expectEqual(@as(u64, 305), body[10].count);
+    try std.testing.expectEqualStrings("Nested closures prepared", body[19].name);
+    try std.testing.expectEqual(@as(u64, 302), body[19].count);
 }
 
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {

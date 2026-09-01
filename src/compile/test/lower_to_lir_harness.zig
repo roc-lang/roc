@@ -78,9 +78,22 @@ pub const LirInspectFn = *const fn (
     layouts: *const layout.Store,
 ) LowerToLirHarnessError!void;
 
+/// Callback type for tests that inspect the whole lowered program. Backend
+/// codegen needs the boxy side tables alongside the store and layout store,
+/// so those tests take the lowering result rather than the two stores.
+pub const LoweredInspectFn = *const fn (
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) LowerToLirHarnessError!void;
+
 /// Options controlling how the harness lowers an app to LIR.
 pub const LirLoweringOptions = struct {
     specialization_strategy: base.SpecializationStrategy = .lss,
+    /// Number of coordinator workers available to post-check lowering.
+    /// The default retains the harness's existing single-threaded behavior.
+    specialization_workers: usize = 1,
+    /// Add a second platform-required procedure so root lowering has a parallel
+    /// batch rather than only the ordinary single-entrypoint workload.
+    parallel_procedure_root_fixture: bool = false,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     inline_mode: lir.CheckedPipeline.InlineMode = .none,
     spec_constr_clone_inlining: lir.CheckedPipeline.SpecConstrCloneInlining = .all_calls,
@@ -111,19 +124,30 @@ pub fn expectLowersToLirWithOptions(app_body: []const u8, opts: LirLoweringOptio
 /// Lower an app at `app_path` to LIR. Reaching the end without a panic means
 /// the app checked cleanly and passed ARC certification.
 pub fn expectAppPathLowersToLir(app_path: []const u8) LowerToLirHarnessError!void {
-    try lowerAppPathToLir(std.testing.allocator, app_path, null, .{}, null);
+    try lowerAppPathToLir(std.testing.allocator, app_path, null, .{}, null, null);
 }
 
 /// Lower an app at `app_path` to LIR, then run a focused invariant check
 /// against the actual lowered store and layout store.
 pub fn expectAppPathLirInspection(app_path: []const u8, inspect: LirInspectFn) LowerToLirHarnessError!void {
-    try lowerAppPathToLir(std.testing.allocator, app_path, null, .{}, inspect);
+    try lowerAppPathToLir(std.testing.allocator, app_path, null, .{}, inspect, null);
+}
+
+/// Lower an app at `app_path` to LIR with explicit lowering options, then run
+/// a focused invariant check against the whole lowered program, for tests that
+/// drive a backend over the result.
+pub fn runAppPathLoweredInspection(
+    app_path: []const u8,
+    opts: LirLoweringOptions,
+    inspect: LoweredInspectFn,
+) LowerToLirHarnessError!void {
+    try lowerAppPathToLir(std.testing.allocator, app_path, null, opts, null, inspect);
 }
 
 /// Lower an app at `app_path` to LIR with explicit lowering options, then run
 /// a focused invariant check against the actual lowered store and layout store.
 pub fn runAppPathLirInspection(app_path: []const u8, opts: LirLoweringOptions, inspect: LirInspectFn) LowerToLirHarnessError!void {
-    try lowerAppPathToLir(std.testing.allocator, app_path, null, opts, inspect);
+    try lowerAppPathToLir(std.testing.allocator, app_path, null, opts, inspect, null);
 }
 
 /// Lower an app whose body is `app_body` to LIR, then run a focused invariant
@@ -154,6 +178,48 @@ pub fn expectDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void 
     try runToLir(app_body, &writer_a, .{}, null);
     try runToLir(app_body, &writer_b, .{}, null);
     try std.testing.expectEqualStrings(writer_a.buffered(), writer_b.buffered());
+}
+
+/// Lower `app_body` with one, two, and four post-check workers, comparing
+/// each complete LIR dump with the single-worker result. Run each parallel
+/// configuration twice so this checks both worker-count independence and
+/// repeated scheduling independence without relying on timing.
+pub fn expectSpecializationParallelismDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void {
+    try expectPostCheckParallelismDeterministicLir(app_body, false);
+}
+
+/// Lower an app with two independent platform-required procedure roots and
+/// compare complete LIR output across one, two, and four post-check workers.
+pub fn expectProcedureRootParallelismDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void {
+    try expectPostCheckParallelismDeterministicLir(app_body, true);
+}
+
+fn expectPostCheckParallelismDeterministicLir(
+    app_body: []const u8,
+    parallel_procedure_root_fixture: bool,
+) LowerToLirHarnessError!void {
+    const gpa = std.testing.allocator;
+    const cap = 1 << 22;
+    const reference = try gpa.alloc(u8, cap);
+    defer gpa.free(reference);
+    var reference_writer = std.Io.Writer.fixed(reference);
+    try runToLir(app_body, &reference_writer, .{
+        .specialization_workers = 1,
+        .parallel_procedure_root_fixture = parallel_procedure_root_fixture,
+    }, null);
+
+    for ([_]usize{ 2, 4 }) |specialization_workers| {
+        for (0..2) |_| {
+            const candidate = try gpa.alloc(u8, cap);
+            defer gpa.free(candidate);
+            var candidate_writer = std.Io.Writer.fixed(candidate);
+            try runToLir(app_body, &candidate_writer, .{
+                .specialization_workers = specialization_workers,
+                .parallel_procedure_root_fixture = parallel_procedure_root_fixture,
+            }, null);
+            try std.testing.expectEqualStrings(reference_writer.buffered(), candidate_writer.buffered());
+        }
+    }
 }
 
 /// Lower `app_body` for both pointer widths (with in-place `List.map` reuse
@@ -189,22 +255,51 @@ fn runToLir(
     defer tmp_dir.cleanup();
 
     try tmp_dir.dir.createDirPath(std.testing.io, ".roc_echo_platform");
+    const app_exports = if (opts.parallel_procedure_root_fixture) "main!, auxiliary!" else "main!";
+    const auxiliary_source = if (opts.parallel_procedure_root_fixture)
+        "\nauxiliary! = |msg| Echo.line!(msg)\n"
+    else
+        "";
     const synthetic_source = try std.fmt.allocPrint(
         gpa,
-        "app [main!] {{ pf: platform \"./.roc_echo_platform/main.roc\" }}\n\n" ++
+        "app [{s}] {{ pf: platform \"./.roc_echo_platform/main.roc\" }}\n\n" ++
             "import pf.Echo\n\n" ++
             "echo! = |msg| Echo.line!(msg)\n\n" ++
+            "{s}\n" ++
             "{s}",
-        .{app_body},
+        .{ app_exports, auxiliary_source, app_body },
     );
     defer gpa.free(synthetic_source);
     try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "main.roc",
         .data = synthetic_source,
     });
-    try tmp_dir.dir.writeFile(std.testing.io, .{
-        .sub_path = ".roc_echo_platform/main.roc",
-        .data =
+    const platform_source: []const u8 = if (opts.parallel_procedure_root_fixture)
+        \\platform ""
+        \\    requires {} {
+        \\        main! : List(Str) => Try({}, [Exit(I8), ..]),
+        \\        auxiliary! : Str => {},
+        \\    }
+        \\    exposes [Echo]
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host! }
+        \\    hosted { "roc_echo_line": Echo.line! }
+        \\
+        \\import Echo
+        \\
+        \\main_for_host! : List(Str) => I8
+        \\main_for_host! = |args| {
+        \\    auxiliary!("starting")
+        \\    match main!(args) {
+        \\        Ok({}) => 0
+        \\        Err(Exit(code)) => code
+        \\        Err(other) => {
+        \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+        \\            1
+        \\        }
+        \\    }
+        \\}
+    else
         \\platform ""
         \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
         \\    exposes [Echo]
@@ -224,7 +319,10 @@ fn runToLir(
         \\            1
         \\        }
         \\    }
-        ,
+    ;
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = ".roc_echo_platform/main.roc",
+        .data = platform_source,
     });
     try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = ".roc_echo_platform/Echo.roc",
@@ -237,7 +335,7 @@ fn runToLir(
     const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
     defer gpa.free(app_path);
 
-    try lowerAppPathToLir(gpa, app_path, dump, opts, inspect);
+    try lowerAppPathToLir(gpa, app_path, dump, opts, inspect, null);
 }
 
 fn lowerAppPathToLir(
@@ -246,6 +344,7 @@ fn lowerAppPathToLir(
     dump: ?*std.Io.Writer,
     opts: LirLoweringOptions,
     inspect: ?LirInspectFn,
+    inspect_lowered: ?LoweredInspectFn,
 ) LowerToLirHarnessError!void {
     var arena_impl = collections.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
@@ -255,8 +354,8 @@ fn lowerAppPathToLir(
 
     var coord = try Coordinator.init(
         gpa,
-        .single_threaded,
-        1,
+        if (opts.specialization_workers > 1) .multi_threaded else .single_threaded,
+        opts.specialization_workers,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
         build_options.compiler_version,
@@ -284,6 +383,13 @@ fn lowerAppPathToLir(
 
     const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
     defer gpa.free(lir_roots);
+    if (opts.parallel_procedure_root_fixture) {
+        var procedure_use_roots: usize = 0;
+        for (lir_roots) |request| {
+            if (request.procedure_use != null) procedure_use_roots += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 2), procedure_use_roots);
+    }
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
@@ -302,6 +408,10 @@ fn lowerAppPathToLir(
             .proc_debug_names = opts.proc_debug_names,
             .prove_ranges = opts.prove_ranges,
             .lifted_expr_count_out = opts.lifted_expr_count_out,
+            .post_check_executor = if (opts.specialization_workers > 1)
+                coord.postCheckExecutor()
+            else
+                null,
         },
     );
     defer lowered.deinit();
@@ -316,5 +426,9 @@ fn lowerAppPathToLir(
 
     if (inspect) |inspect_fn| {
         try inspect_fn(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    }
+
+    if (inspect_lowered) |inspect_fn| {
+        try inspect_fn(&lowered);
     }
 }

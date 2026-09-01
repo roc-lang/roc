@@ -25,6 +25,7 @@ pub const TestSyntaxDriver = struct {
     rename_calls: usize = 0,
     prepare_rename_calls: usize = 0,
     references_calls: usize = 0,
+    inlay_hint_calls: usize = 0,
 
     pub const CheckError = syntax.SyntaxChecker.CheckError;
     pub const QueryError = syntax.SyntaxChecker.QueryError;
@@ -171,6 +172,17 @@ pub const TestSyntaxDriver = struct {
         _: bool,
     ) QueryError!?syntax.SyntaxChecker.ReferencesResult {
         self.references_calls += 1;
+        return null;
+    }
+
+    pub fn getInlayHints(
+        self: *TestSyntaxDriver,
+        _: []const u8,
+        _: ?[]const u8,
+        _: u32,
+        _: u32,
+    ) QueryError!?syntax.SyntaxChecker.InlayHintsResult {
+        self.inlay_hint_calls += 1;
         return null;
     }
 };

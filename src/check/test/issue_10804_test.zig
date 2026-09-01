@@ -166,10 +166,10 @@ test "issue 10804: derived encoder_for reaches through a nested application of t
 }
 
 // A declaration that applies itself at an argument built from its own formal
-// has no last level, so its codec would need a different shape at each one.
-// That is a property of the declaration, and the walk has to report it rather
-// than follow the applications forever.
-test "issue 10804: derived encoder_for rejects a declaration that grows its own formal" {
+// has no last level, so no application of it can be monomorphized at all.
+// Declaration validation reports that before any codec walk runs, so the
+// declaration is rejected outright rather than merely missing a method.
+test "issue 10804: a declaration that grows its own formal is rejected before codec derivation" {
     const source =
         \\Nest(a) := [Done, More(Nest(List(a)))].{
         \\  encoder_for : _
@@ -181,7 +181,7 @@ test "issue 10804: derived encoder_for rejects a declaration that grows its own 
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneTypeError("Missing Method");
+    try test_env.assertOneTypeError("Invalid Recursive Type");
 }
 
 // A formal passed straight through leaves the application the same size, so
