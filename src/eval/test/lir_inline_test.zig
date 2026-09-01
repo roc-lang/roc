@@ -9218,3 +9218,91 @@ test "wide loop-carried state scalarizes into flat join params" {
 // the loop. Its binding must survive into the loop body from the entry
 // edges alone; the fact-free first walk of the back edge can never
 // re-derive it, or the dominating length guard proves nothing.
+
+fn issue10978ViewModuleSource(allocator: Allocator, constructions: usize) Allocator.Error![]u8 {
+    var source: std.ArrayList(u8) = .empty;
+    errdefer source.deinit(allocator);
+    try source.appendSlice(allocator,
+        \\Node(msg) := [Text(Str), Element(Str, List(Node(msg)))].{
+        \\    text : Str -> Node(msg)
+        \\    text = |s| Text(s)
+        \\
+        \\    el : Str, List(Node(msg)) -> Node(msg)
+        \\    el = |tag, kids| Element(tag, kids)
+        \\}
+        \\
+        \\view : Str -> List(Node(Str))
+        \\view = |title| [
+        \\
+    );
+    for (0..constructions) |_| {
+        try source.appendSlice(allocator, "    Node.el(\"p\", [Node.el(\"span\", [Node.text(title)])]),\n");
+    }
+    try source.appendSlice(allocator,
+        \\]
+        \\
+        \\main = view("hi")
+        \\
+    );
+    return source.toOwnedSlice(allocator);
+}
+
+fn issue10978ClassLookups(allocator: Allocator, constructions: usize) TestError!u64 {
+    const source = try issue10978ViewModuleSource(allocator, constructions);
+    defer allocator.free(source);
+    var diagnostics = MonoLower.Diagnostics{};
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{ .diagnostics = &diagnostics });
+    defer lowered.deinit(allocator);
+    return diagnostics.graph.class_lookups;
+}
+
+// Issue 10978: one function body constructing a parameterized recursive
+// nominal N times must not make nominal-backing cache maintenance scan all
+// prior instances per lookup. Union-find lookups witness that work: linear
+// lowering doubles the lookup growth between construction-count doublings,
+// while a per-instance scan quadruples it.
+test "issue 10978: repeated parameterized nominal construction keeps graph lookups linear" {
+    const allocator = std.testing.allocator;
+    const lookups_64 = try issue10978ClassLookups(allocator, 64);
+    const lookups_128 = try issue10978ClassLookups(allocator, 128);
+    const lookups_256 = try issue10978ClassLookups(allocator, 256);
+    const first_growth = lookups_128 - lookups_64;
+    const second_growth = lookups_256 - lookups_128;
+    if (second_growth > 3 * first_growth) {
+        std.debug.print(
+            "Monotype graph performed {d}, {d} and {d} class lookups at 64, 128 and 256 constructions\n",
+            .{ lookups_64, lookups_128, lookups_256 },
+        );
+        return error.TestUnexpectedResult;
+    }
+}
+
+// A recursive mention at a constant argument (`Weird(Str)` inside the
+// declaration of `Weird(a)`) instantiates one backing per distinct argument
+// class and terminates: the mention's checked type is scope-independent, so
+// every nesting level presents the same argument cell and the second level
+// hits the placeholder registered by the first.
+test "recursive nominal mention at a constant argument lowers finitely" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Weird(a) := [End, Wrap(Weird(Str))].{
+        \\    make : a -> Weird(a)
+        \\    make = |_| End
+        \\
+        \\    wrap : Weird(Str) -> Weird(a)
+        \\    wrap = |w| Wrap(w)
+        \\}
+        \\
+        \\main : U8
+        \\main = {
+        \\    w : Weird(U8)
+        \\    w = Weird.wrap(Weird.make("s"))
+        \\    match w {
+        \\        Wrap(_) => 1
+        \\        End => 0
+        \\    }
+        \\}
+    ;
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+}

@@ -15686,13 +15686,15 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [19]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [21]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
         .{ .name = "Nodes created", .count = graph.nodes_created },
         .{ .name = "Unification requests", .count = graph.unify_requests },
         .{ .name = "Union classes joined", .count = graph.class_unions },
+        .{ .name = "Union class lookups", .count = graph.class_lookups },
+        .{ .name = "Nominal backing rekeys", .count = graph.nominal_backing_rekeys },
         .{ .name = "Active type requests", .count = graph.active_type_requests },
         .{ .name = "Imported active type hits", .count = graph.active_type_imported_hits },
         .{ .name = "Active snapshot hits", .count = graph.active_snapshot_cache_hits },

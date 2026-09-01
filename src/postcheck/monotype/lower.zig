@@ -17205,7 +17205,7 @@ const BodyContext = struct {
         args: []NodeId,
     ) Allocator.Error!NodeId {
         const declaration_id: u32 = @intFromEnum(source.declaration.id);
-        if (self.graph.nominalBackingNode(source.view.key.bytes, declaration_id, args)) |cached| {
+        if (try self.graph.nominalBackingNode(source.view.key.bytes, declaration_id, args)) |cached| {
             self.builder.count("nominal_backing_reuses");
             return cached;
         }
