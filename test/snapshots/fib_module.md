@@ -67,22 +67,22 @@ NO CHANGE
 						(e-lookup-local
 							(p-assign (ident "n")))))
 				(if-else
-					(e-dispatch-call (method "plus") (constraint-fn-var 254)
+					(e-dispatch-call (method "plus") (constraint-fn-var 255)
 						(receiver
-							(e-call (constraint-fn-var 243)
+							(e-call (constraint-fn-var 244)
 								(e-lookup-local
 									(p-assign (ident "fib")))
-								(e-dispatch-call (method "minus") (constraint-fn-var 239)
+								(e-dispatch-call (method "minus") (constraint-fn-var 242)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "n"))))
 									(args
 										(e-num (value "1"))))))
 						(args
-							(e-call (constraint-fn-var 253)
+							(e-call (constraint-fn-var 254)
 								(e-lookup-local
 									(p-assign (ident "fib")))
-								(e-dispatch-call (method "minus") (constraint-fn-var 251)
+								(e-dispatch-call (method "minus") (constraint-fn-var 252)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "n"))))

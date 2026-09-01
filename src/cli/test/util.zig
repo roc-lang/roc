@@ -230,6 +230,7 @@ fn appendTimeoutMessage(
     stderr: *std.ArrayList(u8),
     argv: []const []const u8,
     timeout_ms: u64,
+    stacks: ?[]const u8,
 ) (std.mem.Allocator.Error || error{WriteFailed})!void {
     var aw: std.Io.Writer.Allocating = .fromArrayList(allocator, stderr);
     defer stderr.* = aw.toArrayList();
@@ -241,6 +242,74 @@ fn appendTimeoutMessage(
         try aw.writer.print(" {s}", .{arg});
     }
     try aw.writer.writeAll("\n");
+    if (stacks) |text| {
+        if (text.len != 0) {
+            try aw.writer.writeAll("stuck: sampled stacks of the timed-out child:\n");
+            try aw.writer.writeAll(text);
+            try aw.writer.writeAll("\n");
+        }
+    }
+}
+
+/// Sample where a process is stuck, best effort.
+///
+/// Returns null when no sampler is available or it fails: a timeout report is
+/// still worth printing without one. The sampler gets its own short watchdog
+/// so a wedged sampler cannot hold up the kill.
+fn sampleChildStacks(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    child_id: std.process.Child.Id,
+) ?[]u8 {
+    if (comptime builtin.os.tag == .windows) return null;
+    const pid: std.posix.pid_t = child_id;
+    var pid_buffer: [32]u8 = undefined;
+    const pid_text = std.fmt.bufPrint(&pid_buffer, "{d}", .{pid}) catch return null;
+
+    // One entry per sampler to try, in order of preference for this OS.
+    const candidates: []const []const []const u8 = if (comptime builtin.os.tag == .macos)
+        &.{
+            &.{ "/usr/bin/sample", pid_text, "2", "-mayDie" },
+        }
+    else if (comptime builtin.os.tag == .linux)
+        &.{
+            &.{ "eu-stack", "-p", pid_text },
+            &.{ "gdb", "-p", pid_text, "-batch", "-ex", "thread apply all bt" },
+        }
+    else
+        &.{};
+
+    for (candidates) |argv| {
+        // A full sample of a large process runs to several megabytes, so the
+        // capture limit has to be generous even though only the head of the
+        // call graph is worth printing.
+        const result = runChildWithTimeout(io, allocator, argv, .{
+            .timeout_ms = 60_000,
+            .max_output_bytes = 64 << 20,
+        }) catch continue;
+        allocator.free(result.stderr);
+        if (result.stdout.len != 0) {
+            defer allocator.free(result.stdout);
+            return allocator.dupe(u8, headOfCallGraph(result.stdout)) catch null;
+        }
+        allocator.free(result.stdout);
+    }
+    return null;
+}
+
+/// The part of a sampler report worth putting in a CI log: the call graph, cut
+/// off once it has shown enough to identify where the process is stuck.
+fn headOfCallGraph(report: []const u8) []const u8 {
+    const max_lines = 200;
+    const start = if (std.mem.find(u8, report, "Call graph:")) |index| index else 0;
+    const tail = report[start..];
+    var end: usize = 0;
+    var lines: usize = 0;
+    while (lines < max_lines) : (lines += 1) {
+        const newline = std.mem.findScalarPos(u8, tail, end, '\n') orelse return tail;
+        end = newline + 1;
+    }
+    return tail[0..end];
 }
 
 /// Run a child process with captured output and a watchdog timeout.
@@ -259,9 +328,14 @@ pub fn runChildWithTimeout(
         job: windows_job.Handle,
         child_id: std.process.Child.Id,
         io: std.Io,
+        allocator: std.mem.Allocator,
         timeout_ms: u64,
         timed_out: std.atomic.Value(bool),
         done: std.atomic.Value(bool),
+        /// Where the timed-out child was stuck, sampled just before it was
+        /// killed. Written only by the watch thread and read only after it is
+        /// joined, so the join is the ordering edge.
+        stacks: ?[]u8,
 
         fn run(self: *@This()) void {
             if (self.timeout_ms == 0) return;
@@ -273,6 +347,10 @@ pub fn runChildWithTimeout(
                 const elapsed_ms: u64 = @intCast(@max(0, milliTimestamp(self.io) - start_ms));
                 if (elapsed_ms >= self.timeout_ms) {
                     self.timed_out.store(true, .release);
+                    // A killed child leaves no evidence of what it was doing.
+                    // Sample it first: a hang that only reproduces on CI is
+                    // otherwise undiagnosable from the log alone.
+                    self.stacks = sampleChildStacks(self.io, self.allocator, self.child_id);
                     terminateChildGroup(self.job, self.child_id);
                     return;
                 }
@@ -357,9 +435,11 @@ pub fn runChildWithTimeout(
         .job = child_job,
         .child_id = child_pid orelse undefined,
         .io = io,
+        .allocator = allocator,
         .timeout_ms = if (child_pid == null) 0 else options.timeout_ms,
         .timed_out = std.atomic.Value(bool).init(false),
         .done = std.atomic.Value(bool).init(false),
+        .stacks = null,
     };
     const watch_thread = if (watch.timeout_ms == 0)
         null
@@ -404,8 +484,9 @@ pub fn runChildWithTimeout(
     errdefer stderr.deinit(allocator);
 
     if (watch.timed_out.load(.acquire)) {
-        try appendTimeoutMessage(allocator, &stderr, argv, options.timeout_ms);
+        try appendTimeoutMessage(allocator, &stderr, argv, options.timeout_ms, watch.stacks);
     }
+    if (watch.stacks) |stacks| allocator.free(stacks);
 
     return .{
         .stdout = try stdout.toOwnedSlice(allocator),

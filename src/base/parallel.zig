@@ -3,6 +3,7 @@
 //! (Currently only used in the snapshot tool)
 const std = @import("std");
 const builtin = @import("builtin");
+const stack_budget = @import("stack_budget.zig");
 const stack_overflow = @import("stack_overflow.zig");
 const SingleThreadArena = @import("collections").SingleThreadArena;
 const Allocator = std.mem.Allocator;
@@ -170,10 +171,10 @@ pub fn process(
                     .options = options,
                 };
                 if (i < threads.len) {
-                    threads[i] = try Thread.spawn(.{}, workerThread, .{ T, ctx });
+                    threads[i] = try Thread.spawn(.{ .stack_size = stack_budget.roc_stack_size }, workerThread, .{ T, ctx });
                     stack_threads_started += 1;
                 } else {
-                    const thread = try Thread.spawn(.{}, workerThread, .{ T, ctx });
+                    const thread = try Thread.spawn(.{ .stack_size = stack_budget.roc_stack_size }, workerThread, .{ T, ctx });
                     extra_threads.append(thread) catch |err| {
                         thread.join();
                         return err;

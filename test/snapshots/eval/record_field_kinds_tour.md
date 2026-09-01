@@ -5,9 +5,9 @@ type=repl
 ~~~
 # SOURCE
 ~~~roc
-» Rec : { req : U8, def : U8 ?? 10, opt ?: U8 }
+» Rec := { req : U8, def : U8 ?? 10, opt ?: U8 }
 » r : Rec
-» r = { req: 1 }
+» r = Rec.{ req: 1 }
 » r
 » r.?opt ?? 99
 » r.def

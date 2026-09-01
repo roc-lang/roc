@@ -17,6 +17,7 @@ const collections = @import("collections");
 const types = @import("types");
 const CIR = @import("CIR.zig");
 const ModuleEnv = @import("ModuleEnv.zig");
+const default_omissions = @import("default_omissions.zig");
 const Var = types.Var;
 
 /// Represents a directed graph of dependencies between top-level definitions.
@@ -269,6 +270,14 @@ const DemandAnalyzer = struct {
     scheme_use_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, u32) = .{},
     summaries: std.AutoHashMapUnmanaged(CIR.Expr.Idx, DemandSummary) = .{},
     active_lambdas: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
+    /// Dedups omitted-default expression pushes per walk, mirroring
+    /// `collectNameReferences`'s `scratch_seen_defaults` (see its doc
+    /// comment): a default expression is shared across construction sites,
+    /// and a chain of defaults that each construct omitting more defaults
+    /// would otherwise re-walk with product growth. Demand contributions are
+    /// set-based and frames fold into their parents, so one visit per walk
+    /// reaches the walk's output. Cleared per walk root.
+    scratch_seen_defaults: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
 
     fn init(
         cir: *const ModuleEnv,
@@ -330,6 +339,7 @@ const DemandAnalyzer = struct {
         self.resolved_literal_targets.deinit(self.allocator);
         self.scheme_use_by_node.deinit(self.allocator);
         self.active_lambdas.deinit(self.allocator);
+        self.scratch_seen_defaults.deinit(self.allocator);
     }
 
     fn computeSummaries(self: *DemandAnalyzer) std.mem.Allocator.Error!void {
@@ -481,6 +491,7 @@ const DemandAnalyzer = struct {
     ) std.mem.Allocator.Error!void {
         var walk = Walk{};
         defer walk.deinit(self.allocator);
+        self.scratch_seen_defaults.clearRetainingCapacity();
         try walk.push(self.allocator, .{ .visit = root_expr });
 
         try self.drainWalk(&walk, out, local_callables);
@@ -527,6 +538,7 @@ const DemandAnalyzer = struct {
     ) std.mem.Allocator.Error!void {
         var walk = Walk{};
         defer walk.deinit(self.allocator);
+        self.scratch_seen_defaults.clearRetainingCapacity();
         try walk.push(self.allocator, .{ .visit_pattern = root_pattern });
 
         try self.drainWalk(&walk, out, local_callables);
@@ -825,8 +837,29 @@ const DemandAnalyzer = struct {
                 }
             },
             .e_tag => |tag| try self.pushExprSpanReversed(walk, tag.args),
-            .e_nominal => |nominal| try walk.push(self.allocator, .{ .visit = nominal.backing_expr }),
+            .e_nominal => |nominal| {
+                // A local construction that omits declared defaulted fields
+                // materializes those defaults here, so the omitted defaults'
+                // expressions contribute this walk's demands: explicit
+                // omission edges, mirroring DefaultCycles' cycle graph via
+                // the shared enumeration (design.md "Defaulted Fields").
+                // DefaultCycles runs before any demand graph is built and
+                // drops every name-resolvable cyclic default, so the
+                // omission relation walked here is acyclic and the walk
+                // terminates; `scratch_seen_defaults` dedups the pushes so
+                // shared defaults don't re-walk with product growth.
+                var omissions = default_omissions.omittedDefaults(self.cir, nominal.nominal_type_decl, nominal.backing_expr);
+                while (omissions.next()) |omitted| {
+                    const entry = try self.scratch_seen_defaults.getOrPut(self.allocator, omitted.default_expr);
+                    if (entry.found_existing) continue;
+                    try walk.push(self.allocator, .{ .visit = omitted.default_expr });
+                }
+                try walk.push(self.allocator, .{ .visit = nominal.backing_expr });
+            },
             .e_run_low_level => |run_ll| try self.pushExprSpanReversed(walk, run_ll.args),
+            // A foreign construction's omitted defaults live in the foreign
+            // module and are that module's own compile-time roots; only the
+            // supplied values contribute local demands.
             .e_nominal_external => |nominal| try walk.push(self.allocator, .{ .visit = nominal.backing_expr }),
             .e_dbg => |dbg| try walk.push(self.allocator, .{ .visit = dbg.expr }),
             .e_expect_err => |expect_err| try walk.push(self.allocator, .{ .visit = expect_err.expr }),
@@ -1245,6 +1278,16 @@ pub fn getConstantsInDependencyOrder(
 /// type-directed and contributes no edge; the checker discovers those
 /// dependencies during inference and resolves them at group boundaries.
 ///
+/// A local nominal construction that omits declared defaulted fields also
+/// walks those defaults' expressions (the checker materializes the default at
+/// the construction site, so checking this def needs the default's referenced
+/// defs checked first). `scratch_seen_defaults` dedups those pushes per call:
+/// unlike the tree structure, a default expression is shared across
+/// construction sites—and because this walk enters lambda bodies, an
+/// un-deduped push could revisit a construction of the same declaration
+/// through a lambda-valued default (a shape DefaultCycles deliberately keeps:
+/// materializing it only creates the closure).
+///
 /// The walk is an explicit worklist (zero-recursion policy).
 pub fn collectNameReferences(
     cir: *const ModuleEnv,
@@ -1252,9 +1295,11 @@ pub fn collectNameReferences(
     root_expr: CIR.Expr.Idx,
     out: *std.AutoHashMapUnmanaged(CIR.Def.Idx, void),
     scratch_stack: *std.ArrayList(CIR.Expr.Idx),
+    scratch_seen_defaults: *std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!void {
     scratch_stack.clearRetainingCapacity();
+    scratch_seen_defaults.clearRetainingCapacity();
     try scratch_stack.append(allocator, root_expr);
 
     while (scratch_stack.pop()) |expr_idx| {
@@ -1386,7 +1431,21 @@ pub fn collectNameReferences(
             .e_tag => |tag| {
                 for (cir.store.sliceExpr(tag.args)) |arg| try scratch_stack.append(allocator, arg);
             },
-            .e_nominal => |nominal| try scratch_stack.append(allocator, nominal.backing_expr),
+            .e_nominal => |nominal| {
+                // Omitted defaulted fields materialize at this construction,
+                // so their expressions' references are this def's references
+                // (shared enumeration with DefaultCycles; see the doc
+                // comment for why the pushes dedup).
+                var omissions = default_omissions.omittedDefaults(cir, nominal.nominal_type_decl, nominal.backing_expr);
+                while (omissions.next()) |omitted| {
+                    const entry = try scratch_seen_defaults.getOrPut(allocator, omitted.default_expr);
+                    if (entry.found_existing) continue;
+                    try scratch_stack.append(allocator, omitted.default_expr);
+                }
+                try scratch_stack.append(allocator, nominal.backing_expr);
+            },
+            // Foreign defaults are the foreign module's concern; only the
+            // supplied values contribute local references.
             .e_nominal_external => |nominal| try scratch_stack.append(allocator, nominal.backing_expr),
             .e_run_low_level => |run_ll| {
                 for (cir.store.sliceExpr(run_ll.args)) |arg| try scratch_stack.append(allocator, arg);
@@ -1470,11 +1529,13 @@ pub fn computeCheckOrder(
     defer refs.deinit(allocator);
     var scratch_stack: std.ArrayList(CIR.Expr.Idx) = .empty;
     defer scratch_stack.deinit(allocator);
+    var scratch_seen_defaults: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{};
+    defer scratch_seen_defaults.deinit(allocator);
 
     for (defs_slice) |def_idx| {
         refs.clearRetainingCapacity();
         const def = cir.store.getDef(def_idx);
-        try collectNameReferences(cir, &pattern_to_def, def.expr, &refs, &scratch_stack, allocator);
+        try collectNameReferences(cir, &pattern_to_def, def.expr, &refs, &scratch_stack, &scratch_seen_defaults, allocator);
         var ref_iter = refs.keyIterator();
         while (ref_iter.next()) |ref_def_idx| {
             try graph.addEdge(def_idx, ref_def_idx.*);

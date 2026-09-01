@@ -171,7 +171,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-dispatch-call (method "first") (constraint-fn-var 348)
+								(e-dispatch-call (method "first") (constraint-fn-var 360)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "strings"))))
@@ -196,7 +196,7 @@ NO CHANGE
 												(builtin)
 												(e-tag (name "Err")
 													(args
-														(e-call (constraint-fn-var 377)
+														(e-call (constraint-fn-var 402)
 															(e-lambda
 																(args
 																	(p-assign (ident "e")))
