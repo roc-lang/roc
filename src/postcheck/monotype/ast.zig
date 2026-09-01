@@ -354,7 +354,10 @@ pub fn fnEvidenceEql(
             .constraint_callable => |left_source| switch (right) {
                 .constraint_callable => |right_source| if (!std.meta.eql(left_source.view, right_source.view) or
                     !std.meta.eql(left_source.callable_key, right_source.callable_key) or
-                    !std.meta.eql(left_source.source, right_source.source)) return false,
+                    left_source.source.plan != right_source.source.plan or
+                    left_source.source.method != right_source.source.method or
+                    !std.meta.eql(left_source.source.structural, right_source.source.structural) or
+                    !std.meta.eql(left_source.source.path, right_source.source.path)) return false,
                 .target, .structural, .unreachable_value, .checked_error => return false,
             },
             .unreachable_value => if (right != .unreachable_value) return false,
@@ -472,6 +475,34 @@ test "function evidence identity uses checked callable type keys" {
 
     right[0].target.method_callable_key = method_key;
     right[0].target.instantiation.?.callable_key.bytes[0] = 9;
+    try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
+    try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
+}
+
+test "constraint callable evidence identity ignores checked type replay payload" {
+    var callable_key: names.CanonicalTypeKey = .{};
+    callable_key.bytes[0] = 1;
+    const frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),
+    };
+    const left = [_]check.ConstStore.ConstFnEvidence{.{ .constraint_callable = .{
+        .view = .{},
+        .callable_key = callable_key,
+        .source = .{
+            .plan = @enumFromInt(2),
+            .callable_ty = @enumFromInt(3),
+            .method = @enumFromInt(4),
+            .structural = null,
+            .path = .{ .start = 5, .len = 1 },
+        },
+    } }};
+    var right = left;
+    right[0].constraint_callable.source.callable_ty = @enumFromInt(6);
+
+    try std.testing.expect(fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
+    try std.testing.expectEqual(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0));
+
+    right[0].constraint_callable.callable_key.bytes[0] = 9;
     try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
     try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
 }
