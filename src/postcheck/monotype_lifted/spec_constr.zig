@@ -303,7 +303,6 @@ pub const OwnedProcedureUsage = struct {
     }
 };
 
-/// Specialize recursive direct calls whose arguments are known constructor shapes.
 /// How the value-aware whole-body rewrite of original functions inlines
 /// direct calls.
 ///
@@ -321,7 +320,7 @@ pub const OwnedProcedureUsage = struct {
 /// iterator code the rewrite improves.
 pub const BodyRewriteInlining = enum { all_calls, iterator_fusion };
 
-/// Run SpecConstr, discarding the use inventory it collects.
+/// Specialize recursive direct calls whose arguments are known constructor shapes.
 pub fn run(allocator: Allocator, program: *Ast.Program, body_rewrite_inlining: BodyRewriteInlining) Common.LowerError!void {
     var procedure_usage = try runAndCollectProcedureUsage(allocator, program, body_rewrite_inlining);
     defer procedure_usage.deinit();

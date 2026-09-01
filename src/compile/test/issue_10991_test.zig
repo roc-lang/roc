@@ -25,7 +25,7 @@ const ProcScan = struct {
         store: *const lir.LirStore,
         proc_id: lir.LIR.LirProcSpecId,
         seen_stmts: []bool,
-    ) !ProcScan {
+    ) std.mem.Allocator.Error!ProcScan {
         const allocator = std.testing.allocator;
         var result = ProcScan{};
         var stack = std.ArrayList(lir.LIR.CFStmtId).empty;
