@@ -862,8 +862,8 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
     );
     try expectContains(cell_boundary, "self.lowerExprAtTypeCellWithDemand(checked_expr, cell, .runtime_value)");
     try expectContains(cell_boundary, "const region = self.sourceRegionForExpr(expr)");
-    try expectContains(cell_boundary, "self.builder.program.current_loc = try self.sourceLocFor(region)");
-    try expectContains(cell_boundary, "self.builder.program.current_region = region");
+    try expectContains(cell_boundary, "self.builder.current_loc = try self.sourceLocFor(region)");
+    try expectContains(cell_boundary, "self.builder.current_region = region");
     try expectContains(cell_boundary, "return switch (cell)");
     try expectContains(cell_boundary, ".sealed => |ty|");
     try expectContains(cell_boundary, "self.requireLoweredExprAtCell(expr, cell, demand, lowered)");
@@ -1021,7 +1021,8 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
     try expectContains(emit_inspect, "try impossibility_evaluator.holds(boundary.impossibility_proof)");
     try expectContains(emit_inspect, "try ctx.zeroBranchMatchAtTypeCell(boundary.value");
     try expectContains(emit_inspect, "const value_ty = try sealer.sealNode(boundary.value_node)");
-    try expectContains(emit_inspect, "break :blk try ctx.inspectCall(boundary.value, value_ty, boundary.ret_ty)");
+    try expectContains(emit_inspect, "const ret_ty = try sealer.sealType(boundary.ret_ty)");
+    try expectContains(emit_inspect, "break :blk try ctx.inspectCall(boundary.value, value_ty, ret_ty)");
 
     const deferred_guard = sourceSliceBetween(
         lower_source,

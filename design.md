@@ -2883,6 +2883,36 @@ identities. A forwarded requirement records its enclosing evidence index
 explicitly; checked errors and unreachable values remain distinct evidence
 kinds.
 
+Every procedure evidence parameter also carries an explicit dispatcher source.
+The source is exactly one of: a checked component path over the procedure's
+scheme callable; a checked component path over the exact checked dispatch-plan
+callable whose constraint introduced a specialization-time defaultable
+parameter; a nested constraint requirement resolved only by checked use-site
+evidence; an explicit specialization-time literal default; or an erased
+open-row remainder. Defaultable constraint-callable sources retain the
+dispatch plan identity and their path relative to that plan's callable in
+checked evidence at each instantiation edge. An empty path is not a defaulting
+signal and consumers must never infer one source category from path length.
+Dispatch plans owned by standalone default-field expressions are the explicit
+exception: their dispatch requirements consume the default root's checked
+use-site evidence, because that root has no enclosing template specialization
+whose interface replay could discharge symbolic constraint-callable evidence.
+
+Monotype preserves a constraint-callable source as symbolic specialization
+evidence while constructing the specialization key. Interface relation replay
+then relates the source plan's checked callable and operands to the concrete
+request. Before a method dictionary or literal descriptor consumes that
+evidence, Monotype walks the producer-authored path over that now-related
+callable node at the exact dispatch consumption that requires it and resolves
+the concrete method evidence. It must not default the checked dispatcher,
+search another plan by method or type shape, or scan the solved graph for a
+matching component. Non-defaultable nested constraint requirements are marked
+use-site-only and must arrive as checked use-site evidence; they cannot be
+synthesized from a template. For runtime-dictionary requirements the checked
+entry remains a forwarded constraint slot: Boxy consumes its explicit slot and
+callable type in checked dictionary order, while the source recipe is retained
+for Monotype's specialization-time checked component-path walk.
+
 Boxy dictionary planning consumes those entries one-for-one in dictionary slot
 order. Each planned slot records the selected worker or structural operation,
 the concrete callable type used by its adapter, and fully planned hidden
@@ -6464,20 +6494,22 @@ that checked module. The same checked function template may therefore produce
 many Monotype bodies, and the same checked nested lambda site may produce many
 nested Monotype functions, each with a different monomorphic function type.
 
-Each independently sealed specialization group owns an instantiation graph:
-union-find nodes with explicit row-extension links, created by instantiating
-checked types on first touch. An ordinary procedure body begins a group by
-itself. The root producer may explicitly mark adjacent procedure-template roots
-as one shared group so a callee request proven equivalent under the complete
-graph-local specialization identity is reused before a second root replays that
-request. Test plans select this grouping; ordinary build and platform roots are
-independently sealed. Every root still uses a fresh instantiation scope, owns
-its own body and durable specialization record, and contributes its own checked
-relations; sharing the graph never authorizes importing a checked node from
-another scope. The reuse key includes callable family, method scope, checked
-source-function key, exact evidence topology, lexical context, and the exact
-function request interface. A different or still-unproven request remains
-independent.
+Each root owns an independently sealed instantiation graph: union-find nodes
+with explicit row-extension links, created by instantiating checked types on
+first touch. Every root uses a fresh instantiation scope, owns its own body and
+durable specialization record, and contributes its own checked relations.
+Specialization body scheduling may deduplicate global deferred work, but never
+authorizes importing a checked node or root-owned graph state from another
+root.
+
+Procedure-use roots and ordinary specialization bodies can lower concurrently
+because their results cross the worker boundary as sealed, graph-free drafts.
+Each executor lane owns a private cumulative type/name domain; after a frozen
+batch completes, the coordinator absorbs each immutable suffix and assigns
+program identities strictly in request order. This keeps global identity
+independent of worker scheduling without locking coordinator state. Root kinds
+that reserve durable identities or write directly to the final program remain
+serial barriers until they have the same sealed-draft boundary.
 
 Instantiation graph node ids are dense, append-only indexes for the lifetime of
 the graph. Per-node optional attributes such as a row root's current extension
@@ -8823,6 +8855,14 @@ not by a backend. Their contents are serialized into LirImage when any reachable
 LIR statement references them. A backend may cache lowered helper code for a
 descriptor, dictionary, or adapter, but it must not change that data's meaning.
 
+After reachable-procedure compaction, `LirProgram.Result.boxy_worker_procs` is
+the dense, deduplicated list named by every live, present, non-structural Boxy
+method slot. This includes descriptor-carried inspect methods as well as
+dictionary methods. Machine backends emit uniform runtime worker thunks only
+for those explicit proc ids. General Boxy runtime use, erased-callable worker
+registration, and Boxy method-worker dispatch are separate capabilities;
+observing one never authorizes a backend to emit code for either of the others.
+
 `BoxyDescSource` and `BoxyDictSource` are intentionally split into static side-table
 references and local references. A `.static` reference names immutable LIR-owned
 metadata. A `.local` reference names a runtime value that already has the
@@ -8857,11 +8897,15 @@ worker thunks and erased-callable registrations expose only the proc ids,
 layouts, descriptor sources, and ownership metadata already present in LIR;
 backend code does not derive any of them from procedure bodies.
 
-In-process test invocation context is also an explicit execution ABI input. It
-is threaded through ordinary procedures, Boxy dictionary calls and their
-registered worker thunks, descriptor-guided inspect callbacks, and registered
-Roc erased-callable workers. Exported symbol procedures omit it, and dev, Wasm,
-and host-facing Boxy calls pass null.
+The in-process invocation context is also an explicit execution ABI input. It
+owns immutable per-invocation runtime inputs, including the Boxy native-function
+table used by generated vtable calls, and mutable observation output used by
+test roots. It is threaded through ordinary procedures, Boxy dictionary calls
+and their registered worker thunks, descriptor-guided inspect callbacks, and
+registered Roc erased-callable workers. LLVM eval entrypoints receive it from
+the evaluator, and LLVM plugin wrappers construct one for each call. Exported
+symbol procedures omit it; dev, Wasm, and public host-symbol Boxy calls pass
+null.
 The public erased-callable payload ABI remains `(ops, ret, args, capture,
 ret_desc)`; only a registered in-process worker is invoked with the additional
 context argument. The runtime receives in-process ABI selection as an explicit
@@ -11367,17 +11411,19 @@ needed to locate the entrypoint in the loaded test library.
 Every optimized test entrypoint uses the compiler-internal test ABI, not the
 public host symbol ABI. The entrypoint receives `RocOps`, a pointer to a
 test-invocation context, the return buffer, and the argument buffer. The
-invocation context stores mutable observation output produced by generated test
-code that cannot live in `RocOps`; currently this includes the `expect_err`
-source region. The LLVM backend must not use a shared exported global such as
-`roc_expect_err_region` for optimized tests, because a command-level test
-library runs multiple roots in parallel.
+invocation context stores immutable execution inputs and mutable observation
+output produced by generated test code that cannot live in `RocOps`; currently
+these are the Boxy native-function table and the `expect_err` source region.
+The LLVM backend must not use shared mutable globals such as a Boxy dispatch
+pointer or `roc_expect_err_region` for optimized tests, because a command-level
+test library runs multiple roots in parallel.
 
 After the single library is loaded, test roots run on a worker pool. Each root
 call owns its `RuntimeHostEnv`, `RocOps`, allocation tracker, crash boundary,
 argument buffer, return buffer, test-invocation context, and result slot. The
-loaded code and immutable static data are shared across workers. Mutable
-observation state is per invocation. Generated test code must be reentrant with
+loaded code, immutable static data, and immutable Boxy native-function table are
+shared across workers. Each invocation context references that table and owns
+its mutable observation state. Generated test code must be reentrant with
 respect to test-root calls: a root call must not write process-global state
 except through explicitly thread-safe runtime services or the invocation data
 passed to that root.
@@ -11798,6 +11844,17 @@ columns with its supplied scratch allocator, and owns those reconstructed
 columns until `deinit`. The mapped bytes and the scratch allocator must both
 outlive the view. Format version 15 introduced the portable columns; version 16
 added `LirProcSpec.ret_desc`.
+
+An interpreter-mode host entry pins each root's `LirInterpreter` on the heap.
+Every interpreter-created erased-callable allocation owns one reference to that
+interpreter, independent of the callable allocation's own Roc reference count,
+and its final-drop callback releases that reference after following the exact
+LIR capture-drop plan. Calls through a retained interpreter are reentrant on
+their current thread and serialized across threads. Runtime-created descriptor
+identities use lifetime-long storage, while operation-local interpreter scratch
+is recycled between independent host entries. The shim keeps the mapped
+`ProgramView` process-stable so every retained interpreter's store and layout
+pointers remain valid.
 
 Hosted proc entries keep their exact checked hosted ABI in both strategies. A
 boxy caller adapts arguments before the hosted call and adapts the result after
