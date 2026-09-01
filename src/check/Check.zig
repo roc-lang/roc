@@ -5134,6 +5134,7 @@ fn finalizeTypeDeclarationValidity(self: *Self) std.mem.Allocator.Error!void {
     try self.poisonInvalidTypeDeclarations(poisoned);
 
     try self.validateNominalDeclRecursion();
+    try self.validateNominalDeclArgumentGrowth();
 
     self.propagateTypeDeclarationInvalidity(dependent_offsets, dependents, propagated, &worklist);
     try self.poisonInvalidTypeDeclarations(poisoned);
@@ -5201,6 +5202,498 @@ fn validateNominalDeclRecursion(self: *Self) std.mem.Allocator.Error!void {
         self.types.markNominalDeclInvalid(decl_idx);
         try self.types.setVarContent(decl_var, .err);
         try self.types.setVarContent(decl.backing, .err);
+    }
+}
+
+/// One nominal application found inside a local declaration's backing
+/// template that resolves to another local declaration.
+const NominalDeclMention = struct {
+    from_slot: u32,
+    to_slot: u32,
+    args: types_mod.Var.SafeList.Range,
+};
+
+/// One directed edge of the formal-flow graph: instantiating the mention
+/// that produced it substitutes something built from the source formal for
+/// the target formal—the formal itself passed straight through
+/// (`grows == false`) or a composite containing it (`grows == true`).
+const FormalFlowEdge = struct {
+    from_formal: u32,
+    to_formal: u32,
+    grows: bool,
+    owner_slot: u32,
+};
+
+/// Reject nominal declarations whose recursion admits no finite set of
+/// instantiations. Monomorphization instantiates a declaration's backing at
+/// every distinct argument tuple, so a declaration group is monomorphizable
+/// exactly when the argument tuples reachable from any application form a
+/// finite set. Two shapes break that:
+///
+/// - A formal that flows around a mention cycle while some step of the
+///   cycle wraps it in more structure (`Nest(a) := [More(Nest(List(a)))]`):
+///   each trip produces a strictly larger argument, so every expansion
+///   level is a distinct type. This is tracked exactly on the formal-flow
+///   graph—a mention argument that is a formal passed straight through
+///   adds a plain edge from the source formal to the mentioned
+///   declaration's formal, and one that embeds a formal inside a composite
+///   adds a growing edge—and a declaration is invalid exactly when one of
+///   its growing edges lies inside a formal-flow cycle. Growth that never
+///   returns to its origin stays finite (a mention cycle whose growing step
+///   is reached only through closed arguments resets every trip), so only
+///   cyclic growth is rejected.
+///
+/// - A recursive mention argument containing a variable that is no formal
+///   of the mentioning declaration: nothing binds it, so every expansion
+///   mints it fresh, and a mention whose target reaches back to its owner
+///   then re-enters at a new tuple every level. Outside a declaration
+///   cycle a stray variable cannot recur and is left to the diagnostics
+///   that own it.
+///
+/// Unbounded growth is a property of the declarations alone (mirroring the
+/// derived-codec growth rule), so it is reported here, once, at the
+/// declaration. Imported declarations were validated by their own module,
+/// and module imports are acyclic, so no recursive group spans modules.
+///
+/// Everything this rule admits terminates in Monotype lowering: a formal
+/// argument resolves in the innermost declaration scope to the enclosing
+/// instance's own cell and hits the backing cache's placeholder, a closed
+/// argument memoizes to one cell per instantiation context, and growing
+/// edges descend the formal-flow condensation, so every expansion draws its
+/// argument tuple from a finite universe of cells.
+fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const self_origin = self.cir.selfModuleIdentity();
+    const decl_count: u32 = @intCast(self.types.nominalDeclCount());
+
+    // Slot table: local, still-valid declarations with nominal content.
+    var slots: std.ArrayListUnmanaged(types_mod.NominalDecl.Idx) = .empty;
+    defer slots.deinit(self.gpa);
+    var slot_by_decl = std.AutoHashMap(types_mod.NominalDecl.Idx, u32).init(self.gpa);
+    defer slot_by_decl.deinit();
+
+    var decl_int: u32 = 0;
+    while (decl_int < decl_count) : (decl_int += 1) {
+        const decl_idx: types_mod.NominalDecl.Idx = @enumFromInt(decl_int);
+        const decl = self.types.getNominalDecl(decl_idx);
+        if (decl.origin_module != self_origin) continue;
+        if (!decl.isValid()) continue;
+        const decl_var: Var = @enumFromInt(decl.statement());
+        const resolved = self.types.resolveVar(decl_var).desc.content;
+        if (resolved != .structure or resolved.structure != .nominal_type) continue;
+        const slot: u32 = @intCast(slots.items.len);
+        try slots.append(self.gpa, decl_idx);
+        try slot_by_decl.put(decl_idx, slot);
+    }
+    if (slots.items.len == 0) return;
+    const slot_count = slots.items.len;
+
+    // Collect every local-declaration mention inside each backing template.
+    // The walk stays within the mentioning declaration's own template: a
+    // mentioned declaration's backing belongs to its own slot's analysis.
+    var mentions: std.ArrayListUnmanaged(NominalDeclMention) = .empty;
+    defer mentions.deinit(self.gpa);
+    var walk_stack: std.ArrayListUnmanaged(Var) = .empty;
+    defer walk_stack.deinit(self.gpa);
+    var visited = std.AutoHashMap(Var, void).init(self.gpa);
+    defer visited.deinit();
+
+    for (slots.items, 0..) |decl_idx, from_slot_usize| {
+        const from_slot: u32 = @intCast(from_slot_usize);
+        const decl = self.types.getNominalDecl(decl_idx);
+        visited.clearRetainingCapacity();
+        walk_stack.clearRetainingCapacity();
+        try walk_stack.append(self.gpa, decl.backing);
+        while (walk_stack.pop()) |var_| {
+            const root = self.types.resolveVar(var_);
+            if (visited.contains(root.var_)) continue;
+            try visited.put(root.var_, {});
+            switch (root.desc.content) {
+                .structure => |flat_type| switch (flat_type) {
+                    .nominal_type => |nominal_type| {
+                        if (self.types.lookupNominalDecl(nominal_type)) |target_idx| {
+                            if (slot_by_decl.get(target_idx)) |to_slot| {
+                                try mentions.append(self.gpa, .{
+                                    .from_slot = from_slot,
+                                    .to_slot = to_slot,
+                                    .args = nominal_type.args,
+                                });
+                            }
+                        }
+                        var arg_iter = self.types.iterNominalArgs(nominal_type);
+                        while (arg_iter.next()) |arg_var| {
+                            try walk_stack.append(self.gpa, arg_var);
+                        }
+                    },
+                    .tuple => |tuple| {
+                        try walk_stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems));
+                    },
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                        try walk_stack.append(self.gpa, func.ret);
+                        try walk_stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                        try walk_stack.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
+                    },
+                    .record => |record| {
+                        try walk_stack.append(self.gpa, record.ext);
+                        const fields = self.types.getRecordFieldsSlice(record.fields);
+                        for (fields.items(.presence)) |presence| {
+                            try walk_stack.append(self.gpa, presence.typeVar());
+                            if (presence.presenceVar()) |presence_var| {
+                                try walk_stack.append(self.gpa, presence_var);
+                            }
+                        }
+                    },
+                    .record_unbound => |fields| {
+                        const fields_slice = self.types.getRecordFieldsSlice(fields);
+                        for (fields_slice.items(.presence)) |presence| {
+                            try walk_stack.append(self.gpa, presence.typeVar());
+                            if (presence.presenceVar()) |presence_var| {
+                                try walk_stack.append(self.gpa, presence_var);
+                            }
+                        }
+                    },
+                    .tag_union => |tag_union| {
+                        try walk_stack.append(self.gpa, tag_union.ext);
+                        const tags = self.types.getTagsSlice(tag_union.tags);
+                        for (tags.items(.args)) |tag_args| {
+                            try walk_stack.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                        }
+                    },
+                    .empty_record, .empty_tag_union => {},
+                },
+                .alias => |alias| {
+                    try walk_stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                    var arg_iter = self.types.iterAliasArgs(alias);
+                    while (arg_iter.next()) |arg_var| {
+                        try walk_stack.append(self.gpa, arg_var);
+                    }
+                },
+                .flex, .rigid, .field_presence, .err => {},
+            }
+        }
+    }
+    if (mentions.items.len == 0) return;
+
+    // Declaration-graph components: a mention is recursive exactly when its
+    // target's component reaches back to its owner, i.e. both share one
+    // strongly connected component.
+    var decl_adjacency = try self.gpa.alloc(std.ArrayListUnmanaged(u32), slot_count);
+    defer {
+        for (decl_adjacency) |*list| list.deinit(self.gpa);
+        self.gpa.free(decl_adjacency);
+    }
+    @memset(decl_adjacency, .empty);
+    for (mentions.items) |mention| {
+        try decl_adjacency[mention.from_slot].append(self.gpa, mention.to_slot);
+    }
+    const decl_component = try self.gpa.alloc(u32, slot_count);
+    defer self.gpa.free(decl_component);
+    try self.stronglyConnectedComponents(decl_adjacency, decl_component);
+
+    // Flatten each declaration's resolved formal roots so mention arguments
+    // classify by direct var comparison.
+    var formal_base = try self.gpa.alloc(u32, slot_count + 1);
+    defer self.gpa.free(formal_base);
+    formal_base[0] = 0;
+    for (slots.items, 0..) |decl_idx, slot| {
+        const decl = self.types.getNominalDecl(decl_idx);
+        formal_base[slot + 1] = formal_base[slot] + @as(u32, @intCast(self.types.sliceVars(decl.formals).len));
+    }
+    const formal_count = formal_base[slot_count];
+    var formal_roots = try self.gpa.alloc(Var, formal_count);
+    defer self.gpa.free(formal_roots);
+    var max_decl_formals: usize = 0;
+    for (slots.items, 0..) |decl_idx, slot| {
+        const decl = self.types.getNominalDecl(decl_idx);
+        const formals = self.types.sliceVars(decl.formals);
+        max_decl_formals = @max(max_decl_formals, formals.len);
+        for (formals, formal_roots[formal_base[slot]..formal_base[slot + 1]]) |formal, *out| {
+            out.* = self.types.resolveVar(formal).var_;
+        }
+    }
+
+    const reported = try self.gpa.alloc(bool, slot_count);
+    defer self.gpa.free(reported);
+    @memset(reported, false);
+    const found_formals = try self.gpa.alloc(bool, max_decl_formals);
+    defer self.gpa.free(found_formals);
+
+    // Classify every mention argument into formal-flow edges, rejecting
+    // recursive mentions that carry unbindable variables outright.
+    var flow_edges: std.ArrayListUnmanaged(FormalFlowEdge) = .empty;
+    defer flow_edges.deinit(self.gpa);
+
+    mention_loop: for (mentions.items) |mention| {
+        if (reported[mention.from_slot]) continue;
+        const recursive = decl_component[mention.from_slot] == decl_component[mention.to_slot];
+        const owner_formals = formal_roots[formal_base[mention.from_slot]..formal_base[mention.from_slot + 1]];
+        const target_formal_count = formal_base[mention.to_slot + 1] - formal_base[mention.to_slot];
+        for (self.types.sliceVars(mention.args), 0..) |arg_var, position| {
+            // An arity mismatch against the declaration is diagnosed at the
+            // application; extra arguments carry no formal-flow meaning.
+            if (position >= target_formal_count) continue;
+            const to_formal = formal_base[mention.to_slot] + @as(u32, @intCast(position));
+            const arg_root = self.types.resolveVar(arg_var);
+            switch (arg_root.desc.content) {
+                .flex, .rigid => {
+                    var matched = false;
+                    for (owner_formals, 0..) |formal, formal_position| {
+                        if (formal == arg_root.var_) {
+                            try flow_edges.append(self.gpa, .{
+                                .from_formal = formal_base[mention.from_slot] + @as(u32, @intCast(formal_position)),
+                                .to_formal = to_formal,
+                                .grows = false,
+                                .owner_slot = mention.from_slot,
+                            });
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if (!matched and recursive) {
+                        reported[mention.from_slot] = true;
+                        try self.reportGrowingNominalDecl(slots.items[mention.from_slot]);
+                        continue :mention_loop;
+                    }
+                },
+                .err, .field_presence => {},
+                .structure, .alias => {
+                    @memset(found_formals[0..owner_formals.len], false);
+                    const saw_non_formal = try self.collectFormalOccurrences(
+                        arg_root.var_,
+                        owner_formals,
+                        found_formals,
+                        &walk_stack,
+                        &visited,
+                    );
+                    if (saw_non_formal and recursive) {
+                        reported[mention.from_slot] = true;
+                        try self.reportGrowingNominalDecl(slots.items[mention.from_slot]);
+                        continue :mention_loop;
+                    }
+                    for (found_formals[0..owner_formals.len], 0..) |occurred, formal_position| {
+                        if (!occurred) continue;
+                        try flow_edges.append(self.gpa, .{
+                            .from_formal = formal_base[mention.from_slot] + @as(u32, @intCast(formal_position)),
+                            .to_formal = to_formal,
+                            .grows = true,
+                            .owner_slot = mention.from_slot,
+                        });
+                    }
+                },
+            }
+        }
+    }
+    if (flow_edges.items.len == 0) return;
+
+    // A growing edge repeats exactly when it lies inside a formal-flow
+    // cycle, i.e. when its endpoints share a strongly connected component.
+    var flow_adjacency = try self.gpa.alloc(std.ArrayListUnmanaged(u32), formal_count);
+    defer {
+        for (flow_adjacency) |*list| list.deinit(self.gpa);
+        self.gpa.free(flow_adjacency);
+    }
+    @memset(flow_adjacency, .empty);
+    for (flow_edges.items) |edge| {
+        try flow_adjacency[edge.from_formal].append(self.gpa, edge.to_formal);
+    }
+    const flow_component = try self.gpa.alloc(u32, formal_count);
+    defer self.gpa.free(flow_component);
+    try self.stronglyConnectedComponents(flow_adjacency, flow_component);
+
+    for (flow_edges.items) |edge| {
+        if (!edge.grows) continue;
+        if (flow_component[edge.from_formal] != flow_component[edge.to_formal]) continue;
+        if (reported[edge.owner_slot]) continue;
+        reported[edge.owner_slot] = true;
+        try self.reportGrowingNominalDecl(slots.items[edge.owner_slot]);
+    }
+}
+
+/// Report one growing declaration and poison it exactly like the other
+/// invalid-recursion kinds: uses instantiate `.err` and are suppressed, and
+/// no later stage walks the template.
+fn reportGrowingNominalDecl(self: *Self, decl_idx: types_mod.NominalDecl.Idx) std.mem.Allocator.Error!void {
+    const decl = self.types.getNominalDecl(decl_idx);
+    const decl_var: Var = @enumFromInt(decl.statement());
+    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, decl.backing);
+    _ = try self.problems.appendProblem(self.gpa, .{ .invalid_nominal_decl_recursion = .{
+        .decl_var = decl_var,
+        .snapshot = snapshot,
+        .type_name = decl.ident.ident_idx,
+        .kind = .growing_args,
+    } });
+    self.markTypeDeclInvalid(@enumFromInt(decl.statement()));
+    self.types.markNominalDeclInvalid(decl_idx);
+    try self.types.setVarContent(decl_var, .err);
+    try self.types.setVarContent(decl.backing, .err);
+}
+
+/// Walk `start` recording which of `formals` (resolved roots) occur inside
+/// it and whether any variable outside that set occurs. Structural
+/// positions, alias backings and arguments, function effect dependencies,
+/// and nominal application arguments are traversed; nominal backings are
+/// not entered, because a mentioned declaration's template can only
+/// reference that declaration's own formals, never the caller's. `.err`
+/// counts as variable-free so already-poisoned declarations are not
+/// re-reported through their poisoned types. This deliberately treats a
+/// transparent alias of a formal as an occurrence inside a composite: the
+/// alias mention instantiates its own node per expansion level, so passing
+/// a formal through an alias does not preserve the argument cell the way a
+/// bare formal does.
+fn collectFormalOccurrences(
+    self: *Self,
+    start: Var,
+    formals: []const Var,
+    found: []bool,
+    walk_stack: *std.ArrayListUnmanaged(Var),
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    visited.clearRetainingCapacity();
+    walk_stack.clearRetainingCapacity();
+    try walk_stack.append(self.gpa, start);
+    var saw_non_formal = false;
+    while (walk_stack.pop()) |var_| {
+        const root = self.types.resolveVar(var_);
+        if (visited.contains(root.var_)) continue;
+        try visited.put(root.var_, {});
+        switch (root.desc.content) {
+            .flex, .rigid => {
+                var matched = false;
+                for (formals, 0..) |formal, position| {
+                    if (formal == root.var_) {
+                        found[position] = true;
+                        matched = true;
+                        break;
+                    }
+                }
+                if (!matched) saw_non_formal = true;
+            },
+            .structure => |flat_type| switch (flat_type) {
+                .nominal_type => |nominal_type| {
+                    var arg_iter = self.types.iterNominalArgs(nominal_type);
+                    while (arg_iter.next()) |arg_var| {
+                        try walk_stack.append(self.gpa, arg_var);
+                    }
+                },
+                .tuple => |tuple| {
+                    try walk_stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems));
+                },
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try walk_stack.append(self.gpa, func.ret);
+                    try walk_stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try walk_stack.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
+                },
+                .record => |record| {
+                    try walk_stack.append(self.gpa, record.ext);
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    for (fields.items(.presence)) |presence| {
+                        try walk_stack.append(self.gpa, presence.typeVar());
+                        if (presence.presenceVar()) |presence_var| {
+                            try walk_stack.append(self.gpa, presence_var);
+                        }
+                    }
+                },
+                .record_unbound => |fields| {
+                    const fields_slice = self.types.getRecordFieldsSlice(fields);
+                    for (fields_slice.items(.presence)) |presence| {
+                        try walk_stack.append(self.gpa, presence.typeVar());
+                        if (presence.presenceVar()) |presence_var| {
+                            try walk_stack.append(self.gpa, presence_var);
+                        }
+                    }
+                },
+                .tag_union => |tag_union| {
+                    try walk_stack.append(self.gpa, tag_union.ext);
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.args)) |tag_args| {
+                        try walk_stack.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                    }
+                },
+                .empty_record, .empty_tag_union => {},
+            },
+            .alias => |alias| {
+                try walk_stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                var arg_iter = self.types.iterAliasArgs(alias);
+                while (arg_iter.next()) |arg_var| {
+                    try walk_stack.append(self.gpa, arg_var);
+                }
+            },
+            .field_presence, .err => {},
+        }
+    }
+    return saw_non_formal;
+}
+
+/// Iterative Tarjan strongly-connected components over a dense node range.
+/// Two nodes receive the same component id exactly when each reaches the
+/// other through the adjacency lists.
+fn stronglyConnectedComponents(
+    self: *Self,
+    adjacency: []const std.ArrayListUnmanaged(u32),
+    component_of: []u32,
+) std.mem.Allocator.Error!void {
+    const node_count = adjacency.len;
+    const unvisited = std.math.maxInt(u32);
+    const index_of = try self.gpa.alloc(u32, node_count);
+    defer self.gpa.free(index_of);
+    @memset(index_of, unvisited);
+    const low_of = try self.gpa.alloc(u32, node_count);
+    defer self.gpa.free(low_of);
+    const on_stack = try self.gpa.alloc(bool, node_count);
+    defer self.gpa.free(on_stack);
+    @memset(on_stack, false);
+
+    var component_stack: std.ArrayListUnmanaged(u32) = .empty;
+    defer component_stack.deinit(self.gpa);
+    const WalkFrame = struct { node: u32, edge: u32 };
+    var walk_frames: std.ArrayListUnmanaged(WalkFrame) = .empty;
+    defer walk_frames.deinit(self.gpa);
+
+    var next_index: u32 = 0;
+    var next_component: u32 = 0;
+    for (0..node_count) |start| {
+        if (index_of[start] != unvisited) continue;
+        index_of[start] = next_index;
+        low_of[start] = next_index;
+        next_index += 1;
+        try component_stack.append(self.gpa, @intCast(start));
+        on_stack[start] = true;
+        try walk_frames.append(self.gpa, .{ .node = @intCast(start), .edge = 0 });
+        while (walk_frames.items.len != 0) {
+            const frame = &walk_frames.items[walk_frames.items.len - 1];
+            const node = frame.node;
+            if (frame.edge < adjacency[node].items.len) {
+                const next = adjacency[node].items[frame.edge];
+                frame.edge += 1;
+                if (index_of[next] == unvisited) {
+                    index_of[next] = next_index;
+                    low_of[next] = next_index;
+                    next_index += 1;
+                    try component_stack.append(self.gpa, next);
+                    on_stack[next] = true;
+                    try walk_frames.append(self.gpa, .{ .node = next, .edge = 0 });
+                } else if (on_stack[next]) {
+                    low_of[node] = @min(low_of[node], index_of[next]);
+                }
+                continue;
+            }
+            walk_frames.items.len -= 1;
+            if (walk_frames.items.len != 0) {
+                const parent = walk_frames.items[walk_frames.items.len - 1].node;
+                low_of[parent] = @min(low_of[parent], low_of[node]);
+            }
+            if (low_of[node] == index_of[node]) {
+                while (true) {
+                    const member = component_stack.pop().?;
+                    on_stack[member] = false;
+                    component_of[member] = next_component;
+                    if (member == node) break;
+                }
+                next_component += 1;
+            }
+        }
     }
 }
 

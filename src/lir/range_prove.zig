@@ -1916,12 +1916,14 @@ const Pass = struct {
             const false_join = try self.store.addCFStmt(.{ .join = .{
                 .id = false_id,
                 .params = empty_params,
+                .retained = join.retained,
                 .body = false_arm,
                 .remainder = join.remainder,
             } });
             self.store.getCFStmtPtr(join_stmt).* = .{ .join = .{
                 .id = true_id,
                 .params = empty_params,
+                .retained = join.retained,
                 .body = true_arm,
                 .remainder = false_join,
             } };

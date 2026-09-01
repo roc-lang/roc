@@ -4126,6 +4126,11 @@ pub const ReportBuilder = struct {
                 D.ident(type_name_ident).withAnnotation(.type_variable),
                 D.bytes("contains recursion that never passes back through a nominal type."),
             }, self, &report, &report.headline),
+            .growing_args => try D.renderSliceInto(&.{
+                D.bytes("The nominal type"),
+                D.ident(type_name_ident).withAnnotation(.type_variable),
+                D.bytes("passes changing type arguments to its own recursion, so it would need infinitely many instantiations."),
+            }, self, &report, &report.headline),
         }
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.decl_var)))) |region| {
@@ -4151,12 +4156,26 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        try D.renderSlice(&.{
-            D.bytes("Hint:").withAnnotation(.emphasized),
-            D.bytes("Recursion in a nominal type is only allowed inside a tag union payload or record field—for example"),
-            D.bytes("ConsList(a) := [Nil, Cons(a, ConsList(a))]").withAnnotation(.inline_code),
-            D.bytes(".").withNoPrecedingSpace(),
-        }, self, &report);
+        switch (data.kind) {
+            .infinite, .anonymous => try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("Recursion in a nominal type is only allowed inside a tag union payload or record field—for example"),
+                D.bytes("ConsList(a) := [Nil, Cons(a, ConsList(a))]").withAnnotation(.inline_code),
+                D.bytes(".").withNoPrecedingSpace(),
+            }, self, &report),
+            .growing_args => try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("A recursive use of a nominal type must pass each of its type parameters through unchanged, like"),
+                D.bytes("Tree(a) := [Leaf(a), Node(Tree(a), Tree(a))]").withAnnotation(.inline_code),
+                D.bytes(", or apply it to a type with no type variables, like").withNoPrecedingSpace(),
+                D.bytes("Chain(a) := [End, Link(a, Chain(Str))]").withAnnotation(.inline_code),
+                D.bytes(". An argument that wraps a type parameter, like").withNoPrecedingSpace(),
+                D.bytes("Nest(List(a))").withAnnotation(.inline_code),
+                D.bytes("inside the declaration of"),
+                D.bytes("Nest(a)").withAnnotation(.inline_code),
+                D.bytes(", would create a different type at every level of the recursion.").withNoPrecedingSpace(),
+            }, self, &report),
+        }
 
         return report;
     }

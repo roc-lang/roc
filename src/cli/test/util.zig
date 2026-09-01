@@ -168,6 +168,7 @@ pub const ChildRunOptions = struct {
     cwd: ?[]const u8 = null,
     env_map: ?*const std.process.Environ.Map = null,
     max_output_bytes: usize = 10 * 1024 * 1024,
+    sample_stacks_on_timeout: bool = true,
     stdin: ?[]const u8 = null,
     timeout_ms: u64 = default_child_timeout_ms,
 };
@@ -286,6 +287,9 @@ fn sampleChildStacks(
         const result = runChildWithTimeout(io, allocator, argv, .{
             .timeout_ms = 60_000,
             .max_output_bytes = 64 << 20,
+            // The sampler already exists to diagnose another timeout. If it
+            // wedges, kill it without recursively starting another sampler.
+            .sample_stacks_on_timeout = false,
         }) catch continue;
         allocator.free(result.stderr);
         if (result.stdout.len != 0) {
@@ -330,6 +334,7 @@ pub fn runChildWithTimeout(
         io: std.Io,
         allocator: std.mem.Allocator,
         timeout_ms: u64,
+        sample_stacks_on_timeout: bool,
         timed_out: std.atomic.Value(bool),
         done: std.atomic.Value(bool),
         /// Where the timed-out child was stuck, sampled just before it was
@@ -350,10 +355,24 @@ pub fn runChildWithTimeout(
                     // A killed child leaves no evidence of what it was doing.
                     // Sample it first: a hang that only reproduces on CI is
                     // otherwise undiagnosable from the log alone.
-                    self.stacks = sampleChildStacks(self.io, self.allocator, self.child_id);
+                    if (self.sample_stacks_on_timeout) {
+                        self.stacks = sampleChildStacks(self.io, self.allocator, self.child_id);
+                    }
+                    // Sampling can take long enough for the child to finish on
+                    // its own. child.wait publishes that completion before it
+                    // joins this thread, so do not signal a now-stale id.
+                    if (self.done.load(.acquire)) return;
                     terminateChildGroup(self.job, self.child_id);
                     return;
                 }
+            }
+        }
+
+        fn stopAndJoin(self: *@This(), thread: *?std.Thread) void {
+            self.done.store(true, .release);
+            if (thread.*) |running_thread| {
+                running_thread.join();
+                thread.* = null;
             }
         }
     };
@@ -430,6 +449,13 @@ pub fn runChildWithTimeout(
 
     // The watchdog signals the child's process group; it needs the child id.
     const child_pid: ?std.process.Child.Id = child.id;
+    var child_reaped = false;
+    // Any error before child.wait succeeds must terminate the entire group.
+    // This runs after the watchdog's deferred join and before child.kill reaps
+    // the leader, so child_pid still identifies the group created above.
+    errdefer if (!child_reaped) {
+        if (child_pid) |pid| terminateChildGroup(child_job, pid);
+    };
 
     var watch = Watch{
         .job = child_job,
@@ -437,17 +463,18 @@ pub fn runChildWithTimeout(
         .io = io,
         .allocator = allocator,
         .timeout_ms = if (child_pid == null) 0 else options.timeout_ms,
+        .sample_stacks_on_timeout = options.sample_stacks_on_timeout,
         .timed_out = std.atomic.Value(bool).init(false),
         .done = std.atomic.Value(bool).init(false),
         .stacks = null,
     };
-    const watch_thread = if (watch.timeout_ms == 0)
+    var watch_thread: ?std.Thread = if (watch.timeout_ms == 0)
         null
     else
         try std.Thread.spawn(.{}, Watch.run, .{&watch});
     defer {
-        watch.done.store(true, .release);
-        if (watch_thread) |thread| thread.join();
+        watch.stopAndJoin(&watch_thread);
+        if (watch.stacks) |stacks| allocator.free(stacks);
     }
 
     if (options.stdin) |stdin_input| {
@@ -477,6 +504,10 @@ pub fn runChildWithTimeout(
     try multi_reader.checkAnyError();
 
     const term = try child.wait(io);
+    child_reaped = true;
+    // child.wait invalidates the raw child id. Publish completion and join the
+    // only writer before reading its sampled-stack result.
+    watch.stopAndJoin(&watch_thread);
 
     var stdout: std.ArrayList(u8) = .fromOwnedSlice(try multi_reader.toOwnedSlice(0));
     errdefer stdout.deinit(allocator);
@@ -486,7 +517,6 @@ pub fn runChildWithTimeout(
     if (watch.timed_out.load(.acquire)) {
         try appendTimeoutMessage(allocator, &stderr, argv, options.timeout_ms, watch.stacks);
     }
-    if (watch.stacks) |stacks| allocator.free(stacks);
 
     return .{
         .stdout = try stdout.toOwnedSlice(allocator),

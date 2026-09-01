@@ -123,6 +123,7 @@ comptime {
         std.testing.refAllDecls(@import("test/platform_config.zig"));
         std.testing.refAllDecls(@import("ReplLine.zig"));
         std.testing.refAllDecls(@import("ReplSession.zig"));
+        std.testing.refAllDecls(@import("macho/DyldExportStrip.zig"));
     }
 }
 const linker = @import("linker.zig");

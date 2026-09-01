@@ -380,7 +380,13 @@ pub const Evaluator = struct {
             .join_point => |join_point| return try self.evalJoinPoint(frame, join_point),
             .jump => |jump| {
                 self.jump_target = jump.target;
+                const update_values = try self.evalExprSpan(frame, jump.loop_values);
                 self.jump_values = try self.evalExprSpan(frame, jump.args);
+                const update_params = self.program.typedLocalSpan(jump.loop_params);
+                if (update_params.len != update_values.len) return self.unsupported_("jump loop-update arity mismatch");
+                for (0..update_params.len) |index| {
+                    frame.put(GuardedList.at(update_params, index).local, update_values[index]) catch return error.OutOfMemory;
+                }
                 return error.Jumped;
             },
             .return_ => |value_expr| {
@@ -831,6 +837,12 @@ pub const Evaluator = struct {
             return self.evalExpr(frame, seq.ok_body);
         }
         if (tag.discriminant == err_index) {
+            if (seq.err_target) |target| {
+                if (tag.payloads.len != 1) return self.unsupported_("try sequence Err payload arity");
+                self.jump_target = target;
+                self.jump_values = tag.payloads;
+                return error.Jumped;
+            }
             // Build the Err in the enclosing expression's result type.
             return self.rebuildErr(result_ty, tag.payloads);
         }
@@ -865,6 +877,12 @@ pub const Evaluator = struct {
             return self.evalExpr(frame, seq.ok_body);
         }
         if (tag.discriminant == err_index) {
+            if (seq.err_target) |target| {
+                if (tag.payloads.len != 1) return self.unsupported_("try record Err payload arity");
+                self.jump_target = target;
+                self.jump_values = tag.payloads;
+                return error.Jumped;
+            }
             return self.rebuildErr(result_ty, tag.payloads);
         }
         return self.unsupported_("try record scrutinee tag neither Ok nor Err");
