@@ -432,7 +432,7 @@ an ordinary checker expression frame, so rank, generalization, dispatch,
 call-position, and hoist state enter and finish in exactly the same order as any
 other expression. The conditional state and expression-frame payloads live in
 separate typed arrays backed first by local storage and then by the general
-allocator. Checking must not flatten CIR after the fact or infer that a
+allocator. Checking must not flatten CIR later or infer that a
 conditional came from a particular source operator.
 
 The checker has one authoritative state for effect propagation and compile-time
