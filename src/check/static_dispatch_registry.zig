@@ -1958,7 +1958,7 @@ pub const StaticDispatchPlanTable = struct {
                 while (candidate_lists.next()) |list| list.deinit(allocator);
                 role_candidates.deinit();
             }
-            var next_role_by_method = std.AutoHashMap(canonical.MethodNameId, u32).init(allocator);
+            var next_role_by_method = collections.DenseMap(canonical.MethodNameId, u32).init(allocator);
             defer next_role_by_method.deinit();
             for (source_calls) |call| {
                 const method = try names.internMethodIdent(module.identStoreConst(), @bitCast(call.method_ident));

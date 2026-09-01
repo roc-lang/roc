@@ -141,6 +141,8 @@ pub const EvidenceDigest = extern struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
+/// The structural codec derivation whose checked call contract identifies a
+/// specialization context.
 pub const CodecContractKind = enum(u8) {
     parser,
     encoder,
