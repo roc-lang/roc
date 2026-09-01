@@ -20391,6 +20391,41 @@ fn descendIntoNestedIf(
     return nested.state;
 }
 
+fn scheduleIfChild(
+    self: *Self,
+    frame_allocator: std.mem.Allocator,
+    parents: *std.ArrayList(IfCheckState),
+    expr_frames: *std.ArrayList(ExprCheckFrame),
+    current: *IfCheckState,
+    expr_idx: CIR.Expr.Idx,
+    env: *Env,
+    expected: Expected,
+    forward_call_position: bool,
+    is_call_arg: bool,
+    is_immediate_callee: bool,
+) std.mem.Allocator.Error!?bool {
+    switch (try self.checkIfChild(
+        expr_idx,
+        env,
+        expected,
+        forward_call_position,
+        is_call_arg,
+        is_immediate_callee,
+    )) {
+        .checked => |does_fx| return does_fx,
+        .nested => |nested| {
+            current.* = try descendIntoNestedIf(
+                frame_allocator,
+                parents,
+                expr_frames,
+                current.*,
+                nested,
+            );
+            return null;
+        },
+    }
+}
+
 fn checkIfElseExpr(
     self: *Self,
     if_expr_idx: CIR.Expr.Idx,
@@ -20437,12 +20472,18 @@ fn checkIfElseExpr(
             .schedule_first_cond => {
                 current.phase = .after_first_cond;
                 const first_branch = self.cir.store.getIfBranch(branches[0]);
-                switch (try self.checkIfChild(first_branch.cond, env, current.expected.forStatement(), false, false, false)) {
-                    .checked => |does_fx| last_child = does_fx,
-                    .nested => |nested| {
-                        current = try descendIntoNestedIf(frame_allocator, &parents, &expr_frames, current, nested);
-                    },
-                }
+                last_child = try self.scheduleIfChild(
+                    frame_allocator,
+                    &parents,
+                    &expr_frames,
+                    &current,
+                    first_branch.cond,
+                    env,
+                    current.expected.forStatement(),
+                    false,
+                    false,
+                    false,
+                );
             },
             .after_first_cond => {
                 current.does_fx = last_child.? or current.does_fx;
@@ -20459,19 +20500,18 @@ fn checkIfElseExpr(
             .schedule_first_body => {
                 current.phase = .after_first_body;
                 const first_branch = self.cir.store.getIfBranch(branches[0]);
-                switch (try self.checkIfChild(
+                last_child = try self.scheduleIfChild(
+                    frame_allocator,
+                    &parents,
+                    &expr_frames,
+                    &current,
                     first_branch.body,
                     env,
                     current.expected.forBranchBody(),
                     true,
                     current.is_call_arg,
                     current.is_immediate_callee,
-                )) {
-                    .checked => |does_fx| last_child = does_fx,
-                    .nested => |nested| {
-                        current = try descendIntoNestedIf(frame_allocator, &parents, &expr_frames, current, nested);
-                    },
-                }
+                );
             },
             .after_first_body => {
                 current.does_fx = last_child.? or current.does_fx;
@@ -20494,19 +20534,18 @@ fn checkIfElseExpr(
             .schedule_branch_cond => {
                 current.phase = .after_branch_cond;
                 const branch = self.cir.store.getIfBranch(branches[current.branch_index]);
-                switch (try self.checkIfChild(
+                last_child = try self.scheduleIfChild(
+                    frame_allocator,
+                    &parents,
+                    &expr_frames,
+                    &current,
                     branch.cond,
                     env,
                     current.expected.forStatement().suppressHoistSelection(),
                     false,
                     false,
                     false,
-                )) {
-                    .checked => |does_fx| last_child = does_fx,
-                    .nested => |nested| {
-                        current = try descendIntoNestedIf(frame_allocator, &parents, &expr_frames, current, nested);
-                    },
-                }
+                );
             },
             .after_branch_cond => {
                 current.does_fx = last_child.? or current.does_fx;
@@ -20523,19 +20562,18 @@ fn checkIfElseExpr(
             .schedule_branch_body => {
                 current.phase = .after_branch_body;
                 const branch = self.cir.store.getIfBranch(branches[current.branch_index]);
-                switch (try self.checkIfChild(
+                last_child = try self.scheduleIfChild(
+                    frame_allocator,
+                    &parents,
+                    &expr_frames,
+                    &current,
                     branch.body,
                     env,
                     current.expected.forBranchBody(),
                     true,
                     current.is_call_arg,
                     current.is_immediate_callee,
-                )) {
-                    .checked => |does_fx| last_child = does_fx,
-                    .nested => |nested| {
-                        current = try descendIntoNestedIf(frame_allocator, &parents, &expr_frames, current, nested);
-                    },
-                }
+                );
             },
             .after_branch_body => {
                 current.does_fx = last_child.? or current.does_fx;
@@ -20576,19 +20614,18 @@ fn checkIfElseExpr(
             .schedule_remaining_cond => {
                 current.phase = .after_remaining_cond;
                 const branch = self.cir.store.getIfBranch(branches[current.remaining_index]);
-                switch (try self.checkIfChild(
+                last_child = try self.scheduleIfChild(
+                    frame_allocator,
+                    &parents,
+                    &expr_frames,
+                    &current,
                     branch.cond,
                     env,
                     current.expected.forStatement().suppressHoistSelection(),
                     false,
                     false,
                     false,
-                )) {
-                    .checked => |does_fx| last_child = does_fx,
-                    .nested => |nested| {
-                        current = try descendIntoNestedIf(frame_allocator, &parents, &expr_frames, current, nested);
-                    },
-                }
+                );
             },
             .after_remaining_cond => {
                 current.does_fx = last_child.? or current.does_fx;
@@ -20605,19 +20642,18 @@ fn checkIfElseExpr(
             .schedule_remaining_body => {
                 current.phase = .after_remaining_body;
                 const branch = self.cir.store.getIfBranch(branches[current.remaining_index]);
-                switch (try self.checkIfChild(
+                last_child = try self.scheduleIfChild(
+                    frame_allocator,
+                    &parents,
+                    &expr_frames,
+                    &current,
                     branch.body,
                     env,
                     current.expected.forBranchBody(),
                     true,
                     current.is_call_arg,
                     current.is_immediate_callee,
-                )) {
-                    .checked => |does_fx| last_child = does_fx,
-                    .nested => |nested| {
-                        current = try descendIntoNestedIf(frame_allocator, &parents, &expr_frames, current, nested);
-                    },
-                }
+                );
             },
             .after_remaining_body => {
                 current.does_fx = last_child.? or current.does_fx;
@@ -20632,19 +20668,18 @@ fn checkIfElseExpr(
             },
             .schedule_final_else => {
                 current.phase = .after_final_else;
-                switch (try self.checkIfChild(
+                last_child = try self.scheduleIfChild(
+                    frame_allocator,
+                    &parents,
+                    &expr_frames,
+                    &current,
                     current.if_.final_else,
                     env,
                     current.expected.forBranchBody(),
                     true,
                     current.is_call_arg,
                     current.is_immediate_callee,
-                )) {
-                    .checked => |does_fx| last_child = does_fx,
-                    .nested => |nested| {
-                        current = try descendIntoNestedIf(frame_allocator, &parents, &expr_frames, current, nested);
-                    },
-                }
+                );
             },
             .after_final_else => {
                 current.does_fx = last_child.? or current.does_fx;
