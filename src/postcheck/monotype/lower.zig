@@ -18986,14 +18986,17 @@ const BodyContext = struct {
     /// with this instance's argument nodes: two instances of the same nominal at
     /// different arguments stay independent.
     ///
-    /// Termination: the checker rejects declarations whose recursive mentions
-    /// carry anything other than formals passed straight through or closed
-    /// types (`validateNominalDeclArgumentGrowth`). A formal argument resolves
+    /// Termination: the checker's `validateNominalDeclArgumentGrowth` rejects
+    /// any declaration group whose formal-flow graph carries a growing edge
+    /// inside a cycle, and any recursive mention argument holding a variable
+    /// that is no formal of the mentioning declaration. What remains keeps
+    /// the reachable argument tuples finite here: a formal argument resolves
     /// in the innermost scope to this instance's own argument cell, so the
     /// recursive lookup hits the placeholder registered below before the
     /// backing expands; a closed argument memoizes once per instantiation
-    /// context, so nested expansions present the same cell and the argument
-    /// tuples reachable from any application form a finite set.
+    /// context, so nested expansions present the same cell; and a
+    /// formal-wrapping argument only occurs on acyclic flow edges, so the
+    /// fresh cells it mints never feed back into their own declaration.
     fn instNominalBackingNode(
         self: *BodyContext,
         nominal: checked.CheckedNominalType,

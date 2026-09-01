@@ -2,10 +2,13 @@
 //! type arguments.
 //!
 //! Monomorphization instantiates a declaration's backing at every distinct
-//! argument tuple, so a recursive mention whose argument is neither a formal
-//! passed straight through nor a closed type has no finite set of
-//! instantiations: no application of such a declaration has a Monotype.
-//! The checker reports this once, at the declaration.
+//! argument tuple, so a declaration group is monomorphizable exactly when
+//! those tuples form a finite set. A formal wrapped in more structure on a
+//! formal-flow cycle grows without bound, and a recursive mention argument
+//! carrying a variable that is no formal of its declaration is minted fresh
+//! at every level; either way no application has a Monotype, and the checker
+//! reports it once, at the declaration. Growth that never flows back into
+//! its own declaration stays finite and is accepted.
 
 const TestEnv = @import("./TestEnv.zig");
 
@@ -82,6 +85,40 @@ test "regular recursion with the mention inside a container payload stays valid"
 
     try test_env.assertNoErrors();
     try test_env.assertNominalDeclValidity("Node", true);
+}
+
+test "growth that resets through a closed argument stays valid" {
+    // Deep wraps its formal in the mention of Wrap, but the only way from
+    // Wrap back into Deep passes the closed argument Str, so the growth
+    // never returns to its origin: the reachable instantiations are just
+    // Wrap at the original argument, Deep(Str), and Wrap(List(Str)).
+    const src =
+        \\Wrap(a) := [W(a), Back(Deep(Str))]
+        \\Deep(x) := [T(Wrap(List(x))), DeepEnd]
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertNominalDeclValidity("Wrap", true);
+    try test_env.assertNominalDeclValidity("Deep", true);
+}
+
+test "a recursive mention that hides its formal behind an alias is rejected" {
+    // A transparent alias of a formal is not the formal cell itself: every
+    // expansion level instantiates its own alias node, so this recursion
+    // grows exactly like a constructor-wrapped formal.
+    const src =
+        \\Same(a) : a
+        \\Nest(a) := [Done, More(Nest(Same(a)))]
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Invalid Recursive Type");
+    try test_env.assertNominalDeclValidity("Nest", false);
 }
 
 test "mutual recursion at closed arguments with a formal-dependent payload stays valid" {
