@@ -3140,16 +3140,24 @@ the method name in a registry.
 Monotype instantiates a generated-codec contract once at the codec boundary.
 While the specialization graph is mutable, codec preparation relates the
 contract's checked call interfaces, reserves their exact callees, and records
-the method identity with each prepared call. Repeated exact subjects share one
-checker-authored method-role slot; Monotype selects that slot only through the
-explicit graph relation established when it instantiates the contract, without
-structurally comparing types. After relation freeze, generated bodies may
-consume only that frozen prepared-call plan. They do not repeat method lookup,
-synthesize another specialization request, or interpret the shape to recover a
-call the checker did not publish. Debug compiler builds audit that every
-producer-required call was consumed and that repeated roles have exactly equal
-checked type graphs; these audits and their consumption bits are absent from
-release compiler builds.
+the method identity and checker-authored role with each prepared call. Repeated
+exact subjects share one such role slot; Phase A deduplicates by that contract
+identity instead of comparing graph shapes. Freezing installs the selected role
+in a content-addressed prepared-call index. A subject-bearing entry uses the
+cached full Monotype digest of Phase A's related shape cell as its bucket,
+while a shape-independent entry has one reusable address. Exact equality
+inside one digest bucket protects correctness from digest collisions without
+scanning unrelated calls. Two distinct checker roles for one exact Monotype
+shape must name the same prepared target, otherwise freezing reports an
+invariant violation rather than choosing one. Phase B performs no method
+lookup and its structural comparison is bounded to the normally-single-entry
+digest bucket. After relation freeze, generated bodies may consume only that
+frozen prepared-call plan. They do not repeat method lookup, synthesize another
+specialization request, or interpret the shape to recover a call the checker
+did not publish. Debug compiler builds audit that every producer-required call
+was consumed and that repeated roles have exactly equal checked type graphs;
+these audits and their consumption bits are absent from release compiler
+builds.
 
 If a format does not support a shape, checking reports the missing method as a
 static-dispatch error. Unsupported shapes are not represented as runtime parse
