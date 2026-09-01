@@ -78,6 +78,13 @@ pub const LirInspectFn = *const fn (
     layouts: *const layout.Store,
 ) LowerToLirHarnessError!void;
 
+/// Callback type for tests that inspect the whole lowered program. Backend
+/// codegen needs the boxy side tables alongside the store and layout store,
+/// so those tests take the lowering result rather than the two stores.
+pub const LoweredInspectFn = *const fn (
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) LowerToLirHarnessError!void;
+
 /// Options controlling how the harness lowers an app to LIR.
 pub const LirLoweringOptions = struct {
     specialization_strategy: base.SpecializationStrategy = .lss,
@@ -110,19 +117,30 @@ pub fn expectLowersToLirWithOptions(app_body: []const u8, opts: LirLoweringOptio
 /// Lower an app at `app_path` to LIR. Reaching the end without a panic means
 /// the app checked cleanly and passed ARC certification.
 pub fn expectAppPathLowersToLir(app_path: []const u8) LowerToLirHarnessError!void {
-    try lowerAppPathToLir(std.testing.allocator, app_path, null, .{}, null);
+    try lowerAppPathToLir(std.testing.allocator, app_path, null, .{}, null, null);
 }
 
 /// Lower an app at `app_path` to LIR, then run a focused invariant check
 /// against the actual lowered store and layout store.
 pub fn expectAppPathLirInspection(app_path: []const u8, inspect: LirInspectFn) LowerToLirHarnessError!void {
-    try lowerAppPathToLir(std.testing.allocator, app_path, null, .{}, inspect);
+    try lowerAppPathToLir(std.testing.allocator, app_path, null, .{}, inspect, null);
+}
+
+/// Lower an app at `app_path` to LIR with explicit lowering options, then run
+/// a focused invariant check against the whole lowered program, for tests that
+/// drive a backend over the result.
+pub fn runAppPathLoweredInspection(
+    app_path: []const u8,
+    opts: LirLoweringOptions,
+    inspect: LoweredInspectFn,
+) LowerToLirHarnessError!void {
+    try lowerAppPathToLir(std.testing.allocator, app_path, null, opts, null, inspect);
 }
 
 /// Lower an app at `app_path` to LIR with explicit lowering options, then run
 /// a focused invariant check against the actual lowered store and layout store.
 pub fn runAppPathLirInspection(app_path: []const u8, opts: LirLoweringOptions, inspect: LirInspectFn) LowerToLirHarnessError!void {
-    try lowerAppPathToLir(std.testing.allocator, app_path, null, opts, inspect);
+    try lowerAppPathToLir(std.testing.allocator, app_path, null, opts, inspect, null);
 }
 
 /// Lower an app whose body is `app_body` to LIR, then run a focused invariant
@@ -236,7 +254,7 @@ fn runToLir(
     const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
     defer gpa.free(app_path);
 
-    try lowerAppPathToLir(gpa, app_path, dump, opts, inspect);
+    try lowerAppPathToLir(gpa, app_path, dump, opts, inspect, null);
 }
 
 fn lowerAppPathToLir(
@@ -245,6 +263,7 @@ fn lowerAppPathToLir(
     dump: ?*std.Io.Writer,
     opts: LirLoweringOptions,
     inspect: ?LirInspectFn,
+    inspect_lowered: ?LoweredInspectFn,
 ) LowerToLirHarnessError!void {
     var arena_impl = collections.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
@@ -314,5 +333,9 @@ fn lowerAppPathToLir(
 
     if (inspect) |inspect_fn| {
         try inspect_fn(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    }
+
+    if (inspect_lowered) |inspect_fn| {
+        try inspect_fn(&lowered);
     }
 }

@@ -405,6 +405,7 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
             static_strings.entries,
             program.boxy_tables.erased_arg_desc_offsets,
             program.boxy_tables.erased_arg_desc_params,
+            program.boxy_tables.worker_procs,
             .preserve,
             roc_target.host_cpu.level(),
         );
@@ -478,6 +479,7 @@ fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
         program.layouts,
         program.boxy_tables.erased_arg_desc_offsets,
         program.boxy_tables.erased_arg_desc_params,
+        program.boxy_tables.worker_procs,
         .default,
     );
     defer codegen.deinit();
@@ -558,6 +560,7 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
         program.store,
         program.boxy_tables.erased_arg_desc_offsets,
         program.boxy_tables.erased_arg_desc_params,
+        program.boxy_tables.worker_procs,
     );
     codegen.layout_store = program.layouts;
     defer codegen.deinit();

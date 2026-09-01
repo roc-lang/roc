@@ -150,9 +150,10 @@ pub const ObjectFileCompiler = struct {
         proc_specs: []const LirProcSpec,
         erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
         erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
+        boxy_worker_procs: []const lir.LIR.LirProcSpecId,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, target, self.enable_default_platform_runtime, self.timing);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target, self.enable_default_platform_runtime, self.timing);
     }
 
     /// Compile to an object file and write it to a path. Returns whether the
@@ -167,6 +168,7 @@ pub const ObjectFileCompiler = struct {
         proc_specs: []const LirProcSpec,
         erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
         erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
+        boxy_worker_procs: []const lir.LIR.LirProcSpecId,
         target: RocTarget,
         output_path: []const u8,
         roc_ctx: CoreCtx,
@@ -179,6 +181,7 @@ pub const ObjectFileCompiler = struct {
             proc_specs,
             erased_arg_desc_offsets,
             erased_arg_desc_params,
+            boxy_worker_procs,
             target,
         );
         defer result.deinit();
@@ -257,6 +260,7 @@ fn compileWithCodeGen(
     proc_specs: []const LirProcSpec,
     erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
     erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
+    boxy_worker_procs: []const lir.LIR.LirProcSpecId,
     target: RocTarget,
     enable_default_platform_runtime: bool,
     timing: ?*ObjectFileCompiler.Timing,
@@ -279,6 +283,7 @@ fn compileWithCodeGen(
         static_strings.entries,
         erased_arg_desc_offsets,
         erased_arg_desc_params,
+        boxy_worker_procs,
         .preserve,
         target.cpuLevel(),
     ) catch return CompilationError.OutOfMemory;
@@ -727,6 +732,7 @@ fn crossCompileDispatch(
     proc_specs: []const LirProcSpec,
     erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
     erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
+    boxy_worker_procs: []const lir.LIR.LirProcSpecId,
     target: RocTarget,
     enable_default_platform_runtime: bool,
     timing: ?*ObjectFileCompiler.Timing,
@@ -749,6 +755,7 @@ fn crossCompileDispatch(
                     proc_specs,
                     erased_arg_desc_offsets,
                     erased_arg_desc_params,
+                    boxy_worker_procs,
                     target,
                     enable_default_platform_runtime,
                     timing,

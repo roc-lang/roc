@@ -5511,6 +5511,13 @@ pub fn build(b: *std.Build) void {
             module_test.test_step.root_module.addImport("stack_overflow_test_options", stack_overflow_test_options_module);
         }
 
+        // Compile tests lower real apps to LIR and hand the result to the LLVM
+        // backend to assert on what it emits. Building the LLVM module is pure
+        // Zig (the vendored IR builder), so no LLVM library linkage is needed.
+        if (std.mem.eql(u8, module_test.test_step.name, "compile")) {
+            module_test.test_step.root_module.addImport("llvm_codegen", llvm_codegen_module);
+        }
+
         if (std.mem.eql(u8, module_test.test_step.name, "glue")) {
             const has_llvm = try addLlvmLinkSupportToStep(
                 b,

@@ -319,6 +319,10 @@ pub const Result = struct {
     boxy_adapt_steps: std.ArrayList(BoxyAdaptStep),
     boxy_payload_steps: std.ArrayList(BoxyPayloadStep),
     boxy_method_slots: std.ArrayList(BoxyMethodSlot),
+    /// Dense, deduplicated proc ids named by live non-structural Boxy method
+    /// slots. Machine backends consume this exact list when emitting the
+    /// uniform worker thunks used by the Boxy runtime.
+    boxy_worker_procs: std.ArrayList(LIR.LirProcSpecId),
     boxy_method_arg_layouts: std.ArrayList(layout.Idx),
     boxy_method_hidden_desc_sources: std.ArrayList(BoxyMethodHiddenDescSource),
     boxy_erased_arg_layouts: std.ArrayList(layout.Idx),
@@ -352,6 +356,7 @@ pub const Result = struct {
             .boxy_adapt_steps = .empty,
             .boxy_payload_steps = .empty,
             .boxy_method_slots = .empty,
+            .boxy_worker_procs = .empty,
             .boxy_method_arg_layouts = .empty,
             .boxy_method_hidden_desc_sources = .empty,
             .boxy_erased_arg_layouts = .empty,
@@ -383,6 +388,7 @@ pub const Result = struct {
         self.boxy_erased_arg_layouts.deinit(allocator);
         self.boxy_method_hidden_desc_sources.deinit(allocator);
         self.boxy_method_arg_layouts.deinit(allocator);
+        self.boxy_worker_procs.deinit(allocator);
         self.boxy_method_slots.deinit(allocator);
         self.boxy_payload_steps.deinit(allocator);
         self.boxy_adapt_steps.deinit(allocator);

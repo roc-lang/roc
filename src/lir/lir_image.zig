@@ -45,7 +45,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v24: source file table entries carry package-qualified module identities
 ///      alongside display names.
 /// v25: integer arithmetic uses explicit behavior-family operations.
-pub const FORMAT_VERSION: u32 = 25;
+/// v26: LIR images carry the exact dense Boxy runtime worker proc set.
+pub const FORMAT_VERSION: u32 = 26;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{
@@ -89,6 +90,7 @@ pub const Header = extern struct {
     _padding: [8]u8 = [_]u8{0} ** 8,
     root_procs: ArrayRef,
     platform_entrypoints: ArrayRef,
+    boxy_worker_procs: ArrayRef,
     store: LirStoreImage,
     layouts: LayoutStoreImage,
     boxy_tables: BoxyTablesImage,
@@ -112,6 +114,7 @@ pub const ProgramView = struct {
     boxy_adapt_steps: []Program.BoxyAdaptStep,
     boxy_payload_steps: []Program.BoxyPayloadStep,
     boxy_method_slots: []Program.BoxyMethodSlot,
+    boxy_worker_procs: []LIR.LirProcSpecId,
     boxy_method_arg_layouts: []layout_mod.Idx,
     boxy_method_hidden_desc_sources: []Program.BoxyMethodHiddenDescSource,
     boxy_erased_arg_layouts: []layout_mod.Idx,
@@ -869,6 +872,7 @@ pub fn fillHeaderInBuffer(
         .image_size = image_size,
         .root_procs = try arrayRef(base_ptr, image_size, lowered.root_procs.items),
         .platform_entrypoints = try arrayRef(base_ptr, image_size, platform_entrypoints),
+        .boxy_worker_procs = try arrayRef(base_ptr, image_size, lowered.boxy_worker_procs.items),
         .store = try LirStoreImage.fromStore(base_ptr, image_size, &lowered.store),
         .layouts = try LayoutStoreImage.fromStore(base_ptr, image_size, &lowered.layouts),
         .boxy_tables = try BoxyTablesImage.fromProgram(base_ptr, image_size, lowered),
@@ -880,6 +884,7 @@ pub const CopiedProgram = struct {
     image_capacity: usize,
     root_procs: ArrayRef,
     platform_entrypoints: ArrayRef,
+    boxy_worker_procs: ArrayRef,
     store: LirStoreImage,
     layouts: LayoutStoreImage,
     boxy_tables: BoxyTablesImage,
@@ -892,6 +897,7 @@ pub const CopiedProgram = struct {
             .image_size = image_size,
             .root_procs = self.root_procs,
             .platform_entrypoints = self.platform_entrypoints,
+            .boxy_worker_procs = self.boxy_worker_procs,
             .store = self.store,
             .layouts = self.layouts,
             .boxy_tables = self.boxy_tables,
@@ -916,6 +922,7 @@ pub fn copyProgramIntoBuffer(
         .image_capacity = image_capacity,
         .root_procs = try copyArrayRef(allocator, base_ptr, image_capacity, lowered.root_procs.items),
         .platform_entrypoints = try copyArrayRef(allocator, base_ptr, image_capacity, platform_entrypoints),
+        .boxy_worker_procs = try copyArrayRef(allocator, base_ptr, image_capacity, lowered.boxy_worker_procs.items),
         .store = try LirStoreImage.copyFromStore(allocator, base_ptr, image_capacity, &lowered.store),
         .layouts = try LayoutStoreImage.copyFromStore(allocator, base_ptr, image_capacity, &lowered.layouts),
         .boxy_tables = try BoxyTablesImage.copyFromProgram(allocator, base_ptr, image_capacity, lowered),
@@ -979,6 +986,7 @@ pub fn viewMappedImageWithAllocator(
         .boxy_adapt_steps = boxy_tables.adapt_steps,
         .boxy_payload_steps = boxy_tables.payload_steps,
         .boxy_method_slots = boxy_tables.method_slots,
+        .boxy_worker_procs = try sliceFromRef(LIR.LirProcSpecId, mutable_base, @intCast(header.image_size), header.boxy_worker_procs),
         .boxy_method_arg_layouts = boxy_tables.method_arg_layouts,
         .boxy_method_hidden_desc_sources = boxy_tables.method_hidden_desc_sources,
         .boxy_erased_arg_layouts = boxy_tables.erased_arg_layouts,
@@ -1133,6 +1141,7 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_adapt_steps.len);
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_payload_steps.len);
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_method_slots.len);
+    try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_worker_procs.len);
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_method_arg_layouts.len);
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_method_hidden_desc_sources.len);
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_erased_arg_layouts.len);
@@ -1168,6 +1177,7 @@ test "LIR image views empty and populated boxy tables" {
             .hidden_desc_sources = .{ .start = 0, .len = 1 },
         },
     });
+    try lowered.boxy_worker_procs.append(allocator, @enumFromInt(fixtureTableIndex(0)));
     try lowered.boxy_type_descs.append(allocator, .{
         .payload_layout = .zst,
         .contains_refcounted = true,
@@ -1230,6 +1240,7 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_adapt_steps.len);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_payload_steps.len);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_method_slots.len);
+    try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_worker_procs.len);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_method_arg_layouts.len);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_method_hidden_desc_sources.len);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_erased_arg_layouts.len);
@@ -1245,6 +1256,7 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expectEqual(layout_mod.Idx.zst, populated_view.boxy_method_arg_layouts[0]);
     try std.testing.expectEqual(layout_mod.Idx.u64, populated_view.boxy_erased_arg_layouts[0]);
     try std.testing.expectEqual(Program.BoxySpan{ .start = 0, .len = 1 }, populated_view.boxy_method_slots[0].adapter.call_descs);
+    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(populated_view.boxy_worker_procs[0]));
     try std.testing.expectEqual(@as(u32, 0), populated_view.boxy_method_hidden_desc_sources[0].slot);
     try std.testing.expectEqual(@as(u16, 7), populated_view.layouts.struct_fields.fieldItem(.index, struct_field_idx));
     try std.testing.expectEqual(layout_mod.Idx.str, populated_view.layouts.struct_fields.fieldItem(.layout, struct_field_idx));

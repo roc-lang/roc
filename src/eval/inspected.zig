@@ -2511,6 +2511,7 @@ pub fn devEvalBoolRootsWithTimingAndMaxWorkers(
             static_strings.entries,
             tables.erased_arg_desc_offsets,
             tables.erased_arg_desc_params,
+            tables.worker_procs,
             .preserve,
             roc_target.host_cpu.level(),
         );
@@ -2968,6 +2969,7 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
             module.store,
             module.tables.erased_arg_desc_offsets,
             module.tables.erased_arg_desc_params,
+            module.tables.worker_procs,
         );
         codegen.layout_store = module.layouts;
         defer codegen.deinit();

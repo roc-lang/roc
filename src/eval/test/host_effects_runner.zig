@@ -388,6 +388,7 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
             static_strings.entries,
             lowered.view.boxy_erased_arg_desc_offsets,
             lowered.view.boxy_erased_arg_desc_params,
+            lowered.view.boxy_worker_procs,
             .preserve,
             roc_target.host_cpu.level(),
         );

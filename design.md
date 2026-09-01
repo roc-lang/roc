@@ -8823,6 +8823,14 @@ not by a backend. Their contents are serialized into LirImage when any reachable
 LIR statement references them. A backend may cache lowered helper code for a
 descriptor, dictionary, or adapter, but it must not change that data's meaning.
 
+After reachable-procedure compaction, `LirProgram.Result.boxy_worker_procs` is
+the dense, deduplicated list named by every live, present, non-structural Boxy
+method slot. This includes descriptor-carried inspect methods as well as
+dictionary methods. Machine backends emit uniform runtime worker thunks only
+for those explicit proc ids. General Boxy runtime use, erased-callable worker
+registration, and Boxy method-worker dispatch are separate capabilities;
+observing one never authorizes a backend to emit code for either of the others.
+
 `BoxyDescSource` and `BoxyDictSource` are intentionally split into static side-table
 references and local references. A `.static` reference names immutable LIR-owned
 metadata. A `.local` reference names a runtime value that already has the

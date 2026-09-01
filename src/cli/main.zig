@@ -1661,6 +1661,7 @@ fn generatePlatformHostShimFromLirData(
         store,
         &.{},
         &.{},
+        &.{},
         std_target,
     );
     codegen.layout_store = layouts;
@@ -6376,6 +6377,7 @@ fn writeDevRunImageToSharedMemory(
             static_strings.entries,
             lowered.lir_result.boxy_erased_arg_desc_offsets.items,
             lowered.lir_result.boxy_erased_arg_desc_params.items,
+            lowered.lir_result.boxy_worker_procs.items,
             .preserve,
             roc_target.host_cpu.level(),
         );
@@ -9128,6 +9130,7 @@ fn writeDevWasmObject(
         &lowered.lir_result.layouts,
         lowered.lir_result.boxy_erased_arg_desc_offsets.items,
         lowered.lir_result.boxy_erased_arg_desc_params.items,
+        lowered.lir_result.boxy_worker_procs.items,
         &wasm_module,
         cpu_level,
     );
@@ -9472,6 +9475,7 @@ fn compileLlvmAppObject(
         &lowered.lir_result.store,
         lowered.lir_result.boxy_erased_arg_desc_offsets.items,
         lowered.lir_result.boxy_erased_arg_desc_params.items,
+        lowered.lir_result.boxy_worker_procs.items,
         std_target,
     );
     codegen.layout_store = &lowered.lir_result.layouts;
@@ -10327,6 +10331,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         lowered.lir_result.store.getProcSpecs(),
         lowered.lir_result.boxy_erased_arg_desc_offsets.items,
         lowered.lir_result.boxy_erased_arg_desc_params.items,
+        lowered.lir_result.boxy_worker_procs.items,
         target,
         obj_path,
         ctx.coreCtx(),

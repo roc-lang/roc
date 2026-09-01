@@ -137,6 +137,7 @@ const Pass = struct {
         self.remapComptimeSites();
         self.remapProcDebugNames();
         self.compactProcSpecs();
+        try self.rebuildBoxyWorkerProcs();
         self.compactCFStmts();
         self.compactStaticDataValues();
         self.verifyReachableProcRefs();
@@ -584,6 +585,35 @@ const Pass = struct {
         self.store.compactProcSpecs(self.reachable);
     }
 
+    /// Publish the exact dense proc set the runtime can reach through a Boxy
+    /// method slot. Building this once at the proc-compaction boundary keeps
+    /// every backend from rediscovering and deduplicating the same set.
+    fn rebuildBoxyWorkerProcs(self: *Pass) Allocator.Error!void {
+        self.result.boxy_worker_procs.clearRetainingCapacity();
+
+        const proc_count = self.store.procSpecCount();
+        const selected = try self.allocator.alloc(bool, proc_count);
+        defer self.allocator.free(selected);
+        @memset(selected, false);
+
+        var selected_count: usize = 0;
+        for (self.result.boxy_method_slots.items) |slot| {
+            if (!slot.present or slot.structural_eq) continue;
+            const proc_index = @intFromEnum(slot.proc);
+            if (proc_index >= proc_count) {
+                reachableProcInvariant("boxy method worker exceeds compact proc_specs len");
+            }
+            if (!selected[proc_index]) selected_count += 1;
+            selected[proc_index] = true;
+        }
+
+        try self.result.boxy_worker_procs.ensureTotalCapacity(self.allocator, selected_count);
+        for (selected, 0..) |is_selected, proc_index| {
+            if (!is_selected) continue;
+            self.result.boxy_worker_procs.appendAssumeCapacity(@enumFromInt(@as(u32, @intCast(proc_index))));
+        }
+    }
+
     fn compactCFStmts(self: *Pass) void {
         self.store.compactCFStmts(self.reachable_stmts);
     }
@@ -955,4 +985,56 @@ test "reachable proc pass follows packed erased callable refs in static initiali
     try std.testing.expect(compact_initializer.is_static_initializer);
     const packed_erased_proc = result.store.getCFStmt(compact_initializer.body.?).assign_packed_erased_fn.proc;
     try std.testing.expectEqual(@as(u32, 0), @intFromEnum(packed_erased_proc));
+}
+
+test "reachable proc pass publishes exact deduplicated boxy worker procs" {
+    var result = try LirProgram.Result.init(std.testing.allocator, base.target.TargetUsize.native);
+    defer result.deinit();
+
+    const value = try result.store.addLocal(.{ .layout_idx = .zst });
+    const ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } });
+
+    const ignored_proc = try result.store.addProcSpec(.{
+        .name = result.store.freshSyntheticSymbol(),
+        .args = LIR.LocalSpan.empty(),
+        .body = ret,
+        .ret_layout = .zst,
+    });
+    const first_worker = try result.store.addProcSpec(.{
+        .name = result.store.freshSyntheticSymbol(),
+        .args = LIR.LocalSpan.empty(),
+        .body = ret,
+        .ret_layout = .zst,
+    });
+    const second_worker = try result.store.addProcSpec(.{
+        .name = result.store.freshSyntheticSymbol(),
+        .args = LIR.LocalSpan.empty(),
+        .body = ret,
+        .ret_layout = .zst,
+    });
+    const root_proc = try result.store.addProcSpec(.{
+        .name = result.store.freshSyntheticSymbol(),
+        .args = LIR.LocalSpan.empty(),
+        .body = ret,
+        .ret_layout = .zst,
+    });
+    try result.root_procs.append(std.testing.allocator, root_proc);
+
+    // This pass only inspects each slot's presence, structural-equality status,
+    // and worker proc; method identities are deliberately never read here.
+    try result.boxy_method_slots.appendSlice(std.testing.allocator, &.{
+        .{ .method = undefined, .proc = second_worker },
+        .{ .method = undefined, .proc = second_worker },
+        .{ .method = undefined, .proc = first_worker },
+        .{ .present = false, .method = undefined, .proc = ignored_proc },
+        .{ .method = undefined, .proc = ignored_proc, .structural_eq = true },
+    });
+
+    try run(&result);
+
+    try std.testing.expectEqual(@as(usize, 3), result.store.procSpecCount());
+    try std.testing.expectEqual(@as(usize, 2), result.boxy_worker_procs.items.len);
+    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(result.boxy_worker_procs.items[0]));
+    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(result.boxy_worker_procs.items[1]));
+    try std.testing.expectEqual(@as(u32, 2), @intFromEnum(result.root_procs.items[0]));
 }
