@@ -3378,6 +3378,20 @@ field recognition goes straight to the concrete parser, successful updates
 write the fixed payload slot and presence word, and the only `O(N)` error work
 is destruction of payload slots whose presence words prove they are initialized.
 
+The debug ARC certifier indexes the join-authored payload/condition relation
+once by `LocalId`. Encountering the declaring join marks those conditional
+cells unresolved in the exact path state; nested join summaries represent each
+unresolved cell as one symbolic `conditional_owned(condition, mask)` mode
+instead of splitting into initialized and uninitialized groups. An explicit
+initialized-payload switch resolves that mode on both successors. The declaring
+join can establish the symbolic mode again on a loop edge. A guarded release
+spends and unbinds the named cell while preserving aliases; summaries union a
+"may already be released" state bit so a repeated guarded use is rejected
+without splitting initialized and uninitialized paths. These scope and
+refinement transitions are part of the certifier summary, so unrelated joins
+cannot manufacture optional ownership and certifier work remains linear in the
+generated field chain.
+
 Input formats return seamless slices whenever the value being produced is a
 slice of the original input. Parsing a `Str` from a larger `Str` or validated
 byte buffer returns a slice into that buffer when the format can do so. The
