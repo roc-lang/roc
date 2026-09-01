@@ -61,6 +61,14 @@ pub const ArtifactRef = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
+/// 32-byte deep module content identity carried raw at post-check boundaries
+/// (the hash `base.module_identity` computes). Store-independent, unlike the
+/// dense `ModuleIdentityId`: consumers resolve it against loaded module views
+/// by content identity (design.md "Defaulted Fields", `moduleForIdentityHash`).
+pub const ModuleContentIdentity = struct {
+    bytes: [32]u8,
+};
+
 /// Digest for checked module identity at post-check boundaries.
 pub const CheckedModuleDigest = ArtifactRef;
 
@@ -343,6 +351,198 @@ pub const CanonicalNameStore = struct {
         self.* = CanonicalNameStore.init(self.allocator);
     }
 
+    /// Immutable append boundary for every canonical-id backing array.
+    pub const EpochBoundary = struct {
+        module_names: NameInterner.EpochBoundary,
+        module_identities: NameInterner.EpochBoundary,
+        type_names: NameInterner.EpochBoundary,
+        method_names: NameInterner.EpochBoundary,
+        record_field_labels: NameInterner.EpochBoundary,
+        tag_labels: NameInterner.EpochBoundary,
+        export_names: NameInterner.EpochBoundary,
+        external_symbol_names: NameInterner.EpochBoundary,
+        proc_bases: u32,
+    };
+
+    pub fn epochBoundary(self: *const CanonicalNameStore) EpochBoundary {
+        return .{
+            .module_names = self.module_names.epochBoundary(),
+            .module_identities = self.module_identities.epochBoundary(),
+            .type_names = self.type_names.epochBoundary(),
+            .method_names = self.method_names.epochBoundary(),
+            .record_field_labels = self.record_field_labels.epochBoundary(),
+            .tag_labels = self.tag_labels.epochBoundary(),
+            .export_names = self.export_names.epochBoundary(),
+            .external_symbol_names = self.external_symbol_names.epochBoundary(),
+            .proc_bases = @intCast(self.proc_bases.items.items.len),
+        };
+    }
+
+    /// Result-owned canonical-name suffix. String indexes are derived on append;
+    /// the proc-base dedup map remains absent because copied epoch stores
+    /// are immutable coordinator sources rather than interning destinations.
+    pub const EpochDelta = struct {
+        allocator: Allocator,
+        begin: EpochBoundary,
+        end: EpochBoundary,
+        module_names: NameInterner.EpochDelta,
+        module_identities: NameInterner.EpochDelta,
+        type_names: NameInterner.EpochDelta,
+        method_names: NameInterner.EpochDelta,
+        record_field_labels: NameInterner.EpochDelta,
+        tag_labels: NameInterner.EpochDelta,
+        export_names: NameInterner.EpochDelta,
+        external_symbol_names: NameInterner.EpochDelta,
+        proc_bases: []ProcBaseKey,
+
+        pub fn capture(
+            allocator: Allocator,
+            source: *const CanonicalNameStore,
+            begin: EpochBoundary,
+            end: EpochBoundary,
+        ) Allocator.Error!EpochDelta {
+            std.debug.assert(begin.proc_bases <= end.proc_bases);
+            std.debug.assert(end.proc_bases <= source.proc_bases.items.items.len);
+            var module_names = try NameInterner.EpochDelta.capture(
+                allocator,
+                &source.module_names,
+                begin.module_names,
+                end.module_names,
+            );
+            errdefer module_names.deinit();
+            var module_identities = try NameInterner.EpochDelta.capture(
+                allocator,
+                &source.module_identities,
+                begin.module_identities,
+                end.module_identities,
+            );
+            errdefer module_identities.deinit();
+            var type_names = try NameInterner.EpochDelta.capture(
+                allocator,
+                &source.type_names,
+                begin.type_names,
+                end.type_names,
+            );
+            errdefer type_names.deinit();
+            var method_names = try NameInterner.EpochDelta.capture(
+                allocator,
+                &source.method_names,
+                begin.method_names,
+                end.method_names,
+            );
+            errdefer method_names.deinit();
+            var record_field_labels = try NameInterner.EpochDelta.capture(
+                allocator,
+                &source.record_field_labels,
+                begin.record_field_labels,
+                end.record_field_labels,
+            );
+            errdefer record_field_labels.deinit();
+            var tag_labels = try NameInterner.EpochDelta.capture(
+                allocator,
+                &source.tag_labels,
+                begin.tag_labels,
+                end.tag_labels,
+            );
+            errdefer tag_labels.deinit();
+            var export_names = try NameInterner.EpochDelta.capture(
+                allocator,
+                &source.export_names,
+                begin.export_names,
+                end.export_names,
+            );
+            errdefer export_names.deinit();
+            var external_symbol_names = try NameInterner.EpochDelta.capture(
+                allocator,
+                &source.external_symbol_names,
+                begin.external_symbol_names,
+                end.external_symbol_names,
+            );
+            errdefer external_symbol_names.deinit();
+            const proc_bases = try allocator.dupe(
+                ProcBaseKey,
+                source.proc_bases.items.items[begin.proc_bases..end.proc_bases],
+            );
+            return .{
+                .allocator = allocator,
+                .begin = begin,
+                .end = end,
+                .module_names = module_names,
+                .module_identities = module_identities,
+                .type_names = type_names,
+                .method_names = method_names,
+                .record_field_labels = record_field_labels,
+                .tag_labels = tag_labels,
+                .export_names = export_names,
+                .external_symbol_names = external_symbol_names,
+                .proc_bases = proc_bases,
+            };
+        }
+
+        /// Reserve every allocation needed to append this exact suffix.
+        pub fn prepareAppend(
+            self: *const EpochDelta,
+            destination: *CanonicalNameStore,
+        ) Allocator.Error!void {
+            std.debug.assert(std.meta.eql(destination.epochBoundary(), self.begin));
+            try self.module_names.prepareAppend(&destination.module_names, destination.allocator);
+            try self.module_identities.prepareAppend(&destination.module_identities, destination.allocator);
+            try self.type_names.prepareAppend(&destination.type_names, destination.allocator);
+            try self.method_names.prepareAppend(&destination.method_names, destination.allocator);
+            try self.record_field_labels.prepareAppend(&destination.record_field_labels, destination.allocator);
+            try self.tag_labels.prepareAppend(&destination.tag_labels, destination.allocator);
+            try self.export_names.prepareAppend(&destination.export_names, destination.allocator);
+            try self.external_symbol_names.prepareAppend(&destination.external_symbol_names, destination.allocator);
+            try destination.proc_bases.items.ensureTotalCapacity(
+                destination.allocator,
+                self.end.proc_bases,
+            );
+        }
+
+        /// Append after `prepareAppend`; no logical mutation can fail.
+        pub fn appendPrepared(
+            self: *const EpochDelta,
+            destination: *CanonicalNameStore,
+        ) void {
+            std.debug.assert(std.meta.eql(destination.epochBoundary(), self.begin));
+            self.module_names.appendPrepared(&destination.module_names, destination.allocator);
+            self.module_identities.appendPrepared(&destination.module_identities, destination.allocator);
+            self.type_names.appendPrepared(&destination.type_names, destination.allocator);
+            self.method_names.appendPrepared(&destination.method_names, destination.allocator);
+            self.record_field_labels.appendPrepared(&destination.record_field_labels, destination.allocator);
+            self.tag_labels.appendPrepared(&destination.tag_labels, destination.allocator);
+            self.export_names.appendPrepared(&destination.export_names, destination.allocator);
+            self.external_symbol_names.appendPrepared(&destination.external_symbol_names, destination.allocator);
+            destination.proc_bases.items.appendSlice(
+                destination.allocator,
+                self.proc_bases,
+            ) catch unreachable;
+            std.debug.assert(std.meta.eql(destination.epochBoundary(), self.end));
+        }
+
+        /// Append this suffix after an identical prefix, preserving every id.
+        pub fn appendTo(
+            self: *const EpochDelta,
+            destination: *CanonicalNameStore,
+        ) Allocator.Error!void {
+            try self.prepareAppend(destination);
+            self.appendPrepared(destination);
+        }
+
+        pub fn deinit(self: *EpochDelta) void {
+            self.allocator.free(self.proc_bases);
+            self.external_symbol_names.deinit();
+            self.export_names.deinit();
+            self.tag_labels.deinit();
+            self.record_field_labels.deinit();
+            self.method_names.deinit();
+            self.type_names.deinit();
+            self.module_identities.deinit();
+            self.module_names.deinit();
+            self.* = undefined;
+        }
+    };
+
     /// Relocatable serialized form (build-only dedup/scratch fields excluded).
     pub const Serialized = extern struct {
         module_names: NameInterner.Serialized,
@@ -579,6 +779,175 @@ pub const CanonicalNameStore = struct {
     }
 };
 
+/// Cumulative, store-qualified translation for dense canonical-name ids.
+///
+/// Type and syntax transfer can share this object so a source name is interned
+/// in the destination once even when it appears in both representations. Name
+/// interning is monotonic: an allocation failure may leave destination text
+/// interned, while the corresponding id mapping is added only after it succeeds.
+/// Procedure-base refs remain coordinator identities rather than body-local names.
+pub const NameRelocation = struct {
+    source: *const CanonicalNameStore,
+    destination: *CanonicalNameStore,
+    module_names: collections.DenseMap(ModuleNameId, ModuleNameId),
+    module_identities: collections.DenseMap(ModuleIdentityId, ModuleIdentityId),
+    type_names: collections.DenseMap(TypeNameId, TypeNameId),
+    method_names: collections.DenseMap(MethodNameId, MethodNameId),
+    record_field_labels: collections.DenseMap(RecordFieldLabelId, RecordFieldLabelId),
+    tag_labels: collections.DenseMap(TagLabelId, TagLabelId),
+    export_names: collections.DenseMap(ExportNameId, ExportNameId),
+    external_symbol_names: collections.DenseMap(ExternalSymbolNameId, ExternalSymbolNameId),
+
+    pub fn init(
+        allocator: Allocator,
+        source: *const CanonicalNameStore,
+        destination: *CanonicalNameStore,
+    ) NameRelocation {
+        return .{
+            .source = source,
+            .destination = destination,
+            .module_names = collections.DenseMap(ModuleNameId, ModuleNameId).init(allocator),
+            .module_identities = collections.DenseMap(ModuleIdentityId, ModuleIdentityId).init(allocator),
+            .type_names = collections.DenseMap(TypeNameId, TypeNameId).init(allocator),
+            .method_names = collections.DenseMap(MethodNameId, MethodNameId).init(allocator),
+            .record_field_labels = collections.DenseMap(RecordFieldLabelId, RecordFieldLabelId).init(allocator),
+            .tag_labels = collections.DenseMap(TagLabelId, TagLabelId).init(allocator),
+            .export_names = collections.DenseMap(ExportNameId, ExportNameId).init(allocator),
+            .external_symbol_names = collections.DenseMap(ExternalSymbolNameId, ExternalSymbolNameId).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *NameRelocation) void {
+        self.external_symbol_names.deinit();
+        self.export_names.deinit();
+        self.tag_labels.deinit();
+        self.record_field_labels.deinit();
+        self.method_names.deinit();
+        self.type_names.deinit();
+        self.module_identities.deinit();
+        self.module_names.deinit();
+        self.* = undefined;
+    }
+
+    pub fn mappedCount(self: *const NameRelocation) usize {
+        return self.module_names.count() +
+            self.module_identities.count() +
+            self.type_names.count() +
+            self.method_names.count() +
+            self.record_field_labels.count() +
+            self.tag_labels.count() +
+            self.export_names.count() +
+            self.external_symbol_names.count();
+    }
+
+    fn requireSource(self: *const NameRelocation, source: *const CanonicalNameStore) void {
+        if (source != self.source) {
+            @panic("canonical name relocation used with an unrelated source store");
+        }
+    }
+
+    fn relocateText(
+        self: *NameRelocation,
+        comptime Id: type,
+        source: *const CanonicalNameStore,
+        id: Id,
+        map: *collections.DenseMap(Id, Id),
+    ) Allocator.Error!Id {
+        self.requireSource(source);
+        if (source == self.destination) return id;
+        if (map.get(id)) |mapped| return mapped;
+
+        const mapped: Id = if (Id == ModuleNameId)
+            try self.destination.internModuleName(source.moduleNameText(id))
+        else if (Id == TypeNameId)
+            try self.destination.internTypeName(source.typeNameText(id))
+        else if (Id == MethodNameId)
+            try self.destination.internMethodName(source.methodNameText(id))
+        else if (Id == RecordFieldLabelId)
+            try self.destination.internRecordFieldLabel(source.recordFieldLabelText(id))
+        else if (Id == TagLabelId)
+            try self.destination.internTagLabel(source.tagLabelText(id))
+        else if (Id == ExportNameId)
+            try self.destination.internExportName(source.exportNameText(id))
+        else if (Id == ExternalSymbolNameId)
+            try self.destination.internExternalSymbolName(source.externalSymbolNameText(id))
+        else
+            @compileError("unsupported canonical text-name relocation domain");
+
+        try map.put(id, mapped);
+        return mapped;
+    }
+
+    pub fn relocateModuleName(
+        self: *NameRelocation,
+        source: *const CanonicalNameStore,
+        id: ModuleNameId,
+    ) Allocator.Error!ModuleNameId {
+        return self.relocateText(ModuleNameId, source, id, &self.module_names);
+    }
+
+    pub fn relocateModuleIdentity(
+        self: *NameRelocation,
+        source: *const CanonicalNameStore,
+        id: ModuleIdentityId,
+    ) Allocator.Error!ModuleIdentityId {
+        self.requireSource(source);
+        if (source == self.destination) return id;
+        if (self.module_identities.get(id)) |mapped| return mapped;
+        const mapped = try self.destination.internModuleIdentity(source.moduleIdentityBytes(id));
+        try self.module_identities.put(id, mapped);
+        return mapped;
+    }
+
+    pub fn relocateTypeName(
+        self: *NameRelocation,
+        source: *const CanonicalNameStore,
+        id: TypeNameId,
+    ) Allocator.Error!TypeNameId {
+        return self.relocateText(TypeNameId, source, id, &self.type_names);
+    }
+
+    pub fn relocateMethodName(
+        self: *NameRelocation,
+        source: *const CanonicalNameStore,
+        id: MethodNameId,
+    ) Allocator.Error!MethodNameId {
+        return self.relocateText(MethodNameId, source, id, &self.method_names);
+    }
+
+    pub fn relocateRecordFieldLabel(
+        self: *NameRelocation,
+        source: *const CanonicalNameStore,
+        id: RecordFieldLabelId,
+    ) Allocator.Error!RecordFieldLabelId {
+        return self.relocateText(RecordFieldLabelId, source, id, &self.record_field_labels);
+    }
+
+    pub fn relocateTagLabel(
+        self: *NameRelocation,
+        source: *const CanonicalNameStore,
+        id: TagLabelId,
+    ) Allocator.Error!TagLabelId {
+        return self.relocateText(TagLabelId, source, id, &self.tag_labels);
+    }
+
+    pub fn relocateExportName(
+        self: *NameRelocation,
+        source: *const CanonicalNameStore,
+        id: ExportNameId,
+    ) Allocator.Error!ExportNameId {
+        return self.relocateText(ExportNameId, source, id, &self.export_names);
+    }
+
+    pub fn relocateExternalSymbolName(
+        self: *NameRelocation,
+        source: *const CanonicalNameStore,
+        id: ExternalSymbolNameId,
+    ) Allocator.Error!ExternalSymbolNameId {
+        return self.relocateText(ExternalSymbolNameId, source, id, &self.external_symbol_names);
+    }
+};
+
 fn appendOptionalNestedProcSiteKey(
     scratch: *std.ArrayList(u8),
     maybe_key: ?NestedProcSiteKey,
@@ -641,6 +1010,145 @@ test "canonical names dedupe by text" {
     const a = try names.internModuleName("Main");
     const b = try names.internModuleName("Main");
     try std.testing.expectEqual(a, b);
+}
+
+test "canonical name relocation qualifies every text domain by owning stores" {
+    const allocator = std.testing.allocator;
+    var source = CanonicalNameStore.init(allocator);
+    defer source.deinit();
+    var destination = CanonicalNameStore.init(allocator);
+    defer destination.deinit();
+
+    _ = try destination.internModuleName("Unrelated");
+    _ = try destination.internModuleIdentity(&([_]u8{0xFF} ** 32));
+    _ = try destination.internTypeName("Unrelated");
+    _ = try destination.internMethodName("unrelated");
+    _ = try destination.internRecordFieldLabel("unrelated");
+    _ = try destination.internTagLabel("Unrelated");
+    _ = try destination.internExportName("unrelated!");
+    _ = try destination.internExternalSymbolName("unrelated_external");
+
+    const module_name = try source.internModuleName("Main");
+    const module_identity = try source.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const type_name = try source.internTypeName("Model");
+    const method_name = try source.internMethodName("render");
+    const field_name = try source.internRecordFieldLabel("value");
+    const tag_name = try source.internTagLabel("Value");
+    const export_name = try source.internExportName("main!");
+    const external_name = try source.internExternalSymbolName("roc_main");
+
+    var relocation = NameRelocation.init(allocator, &source, &destination);
+    defer relocation.deinit();
+
+    const relocated_module_name = try relocation.relocateModuleName(&source, module_name);
+    const relocated_module_identity = try relocation.relocateModuleIdentity(&source, module_identity);
+    const relocated_type_name = try relocation.relocateTypeName(&source, type_name);
+    const relocated_method_name = try relocation.relocateMethodName(&source, method_name);
+    const relocated_field_name = try relocation.relocateRecordFieldLabel(&source, field_name);
+    const relocated_tag_name = try relocation.relocateTagLabel(&source, tag_name);
+    const relocated_export_name = try relocation.relocateExportName(&source, export_name);
+    const relocated_external_name = try relocation.relocateExternalSymbolName(&source, external_name);
+
+    try std.testing.expect(module_name != relocated_module_name);
+    try std.testing.expect(module_identity != relocated_module_identity);
+    try std.testing.expect(type_name != relocated_type_name);
+    try std.testing.expect(method_name != relocated_method_name);
+    try std.testing.expect(field_name != relocated_field_name);
+    try std.testing.expect(tag_name != relocated_tag_name);
+    try std.testing.expect(export_name != relocated_export_name);
+    try std.testing.expect(external_name != relocated_external_name);
+    try std.testing.expectEqualStrings("Main", destination.moduleNameText(relocated_module_name));
+    try std.testing.expectEqualSlices(u8, source.moduleIdentityBytes(module_identity), destination.moduleIdentityBytes(relocated_module_identity));
+    try std.testing.expectEqualStrings("Model", destination.typeNameText(relocated_type_name));
+    try std.testing.expectEqualStrings("render", destination.methodNameText(relocated_method_name));
+    try std.testing.expectEqualStrings("value", destination.recordFieldLabelText(relocated_field_name));
+    try std.testing.expectEqualStrings("Value", destination.tagLabelText(relocated_tag_name));
+    try std.testing.expectEqualStrings("main!", destination.exportNameText(relocated_export_name));
+    try std.testing.expectEqualStrings("roc_main", destination.externalSymbolNameText(relocated_external_name));
+    try std.testing.expectEqual(@as(usize, 8), relocation.mappedCount());
+
+    try std.testing.expectEqual(relocated_field_name, try relocation.relocateRecordFieldLabel(&source, field_name));
+    try std.testing.expectEqual(@as(usize, 8), relocation.mappedCount());
+
+    var shared = NameRelocation.init(allocator, &source, &source);
+    defer shared.deinit();
+    try std.testing.expectEqual(tag_name, try shared.relocateTagLabel(&source, tag_name));
+    try std.testing.expectEqual(@as(usize, 0), shared.mappedCount());
+}
+
+test "canonical name epoch deltas own consecutive id ranges" {
+    const allocator = std.testing.allocator;
+    var source = CanonicalNameStore.init(allocator);
+    const start = source.epochBoundary();
+    var empty = try CanonicalNameStore.EpochDelta.capture(
+        allocator,
+        &source,
+        start,
+        start,
+    );
+    defer empty.deinit();
+    try std.testing.expectEqual(@as(usize, 0), empty.proc_bases.len);
+
+    const module_name = try source.internModuleName("Main");
+    const module_identity = try source.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const type_name = try source.internTypeName("Model");
+    const method_name = try source.internMethodName("render");
+    const field_name = try source.internRecordFieldLabel("value");
+    const tag_name = try source.internTagLabel("Value");
+    const export_name = try source.internExportName("main!");
+    const external_name = try source.internExternalSymbolName("roc_main");
+    const proc_base = try source.internProcBase(.{
+        .module_name = module_name,
+        .export_name = export_name,
+        .kind = .checked_source,
+        .ordinal = 7,
+    });
+    const middle = source.epochBoundary();
+    var first = try CanonicalNameStore.EpochDelta.capture(
+        allocator,
+        &source,
+        start,
+        middle,
+    );
+    defer first.deinit();
+
+    const second_field = try source.internRecordFieldLabel("next");
+    const second_tag = try source.internTagLabel("Next");
+    const end = source.epochBoundary();
+    var second = try CanonicalNameStore.EpochDelta.capture(
+        allocator,
+        &source,
+        middle,
+        end,
+    );
+    defer second.deinit();
+
+    var index: usize = 0;
+    while (index < 256) : (index += 1) {
+        var buffer: [32]u8 = undefined;
+        const text = try std.fmt.bufPrint(&buffer, "growth_{d}", .{index});
+        _ = try source.internRecordFieldLabel(text);
+        _ = try source.internTagLabel(text);
+    }
+    source.deinit();
+
+    var destination = CanonicalNameStore.init(allocator);
+    defer destination.deinit();
+    try empty.appendTo(&destination);
+    try first.appendTo(&destination);
+    try second.appendTo(&destination);
+    try std.testing.expectEqualStrings("Main", destination.moduleNameText(module_name));
+    try std.testing.expectEqualSlices(u8, &([_]u8{0xAB} ** 32), destination.moduleIdentityBytes(module_identity));
+    try std.testing.expectEqualStrings("Model", destination.typeNameText(type_name));
+    try std.testing.expectEqualStrings("render", destination.methodNameText(method_name));
+    try std.testing.expectEqualStrings("value", destination.recordFieldLabelText(field_name));
+    try std.testing.expectEqualStrings("Value", destination.tagLabelText(tag_name));
+    try std.testing.expectEqualStrings("main!", destination.exportNameText(export_name));
+    try std.testing.expectEqualStrings("roc_main", destination.externalSymbolNameText(external_name));
+    try std.testing.expectEqualStrings("next", destination.recordFieldLabelText(second_field));
+    try std.testing.expectEqualStrings("Next", destination.tagLabelText(second_tag));
+    try std.testing.expectEqual(module_name, destination.procBase(proc_base).module_name);
+    try std.testing.expectEqual(export_name, destination.procBase(proc_base).export_name.?);
 }
 
 test "proc base identity includes nested owner mono specialization" {

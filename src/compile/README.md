@@ -73,7 +73,10 @@ const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         .imports = imports,
     },
     .{ .requests = lir_roots },
-    .{ .target_usize = base.target.TargetUsize.native },
+    .{
+        .target_usize = base.target.TargetUsize.native,
+        .post_check_executor = coord.postCheckExecutor(),
+    },
 );
 
 // 6. Build the LIR image in the same contiguous buffer.
@@ -108,6 +111,13 @@ var interp = try eval.LirInterpreter.init(
 defer interp.deinit();
 _ = try interp.runEntrypoint(&view, 0, &args, &result_buf);
 ```
+
+`postCheckExecutor()` reuses the coordinator's persistent compilation workers
+for graph-free post-check tasks. It is intentionally a synchronous borrowed
+capability: obtain and use it only after `coordinatorLoop()` has drained the
+frontend and before coordinator shutdown. Frontend and post-check work share
+the same task/result channels, so overlapping those phases is an invariant
+violation.
 
 ### Type-check-only flow
 

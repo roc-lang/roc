@@ -13,6 +13,7 @@ const sljmp = @import("sljmp");
 
 const Allocator = std.mem.Allocator;
 const RocOps = builtins.host_abi.RocOps;
+const signal_handler = base.signal_handler;
 const JmpBuf = sljmp.JmpBuf;
 const setjmp = sljmp.setjmp;
 const longjmp = sljmp.longjmp;
@@ -32,16 +33,26 @@ pub const Termination = enum {
     host_oom,
 };
 
+/// A failed inline `expect` observed during native compile-time evaluation,
+/// with the failing statement's checked region and resolved location (whose
+/// file entry names the declaring module) as emitted by the dev backend's
+/// failure-region hook immediately before the expect-failed call.
+pub const ExpectFailedEvent = struct {
+    message: []u8,
+    region: ?base.Region,
+    loc: ?base.SourceLoc,
+};
+
 /// Root-local host effects captured during native compile-time evaluation.
 pub const HostEvent = union(enum) {
     dbg: []u8,
-    expect_failed: []u8,
+    expect_failed: ExpectFailedEvent,
     crashed: []u8,
 
     pub fn bytes(self: HostEvent) []const u8 {
         return switch (self) {
             .dbg => |msg| msg,
-            .expect_failed => |msg| msg,
+            .expect_failed => |event| event.message,
             .crashed => |msg| msg,
         };
     }
@@ -53,15 +64,27 @@ pub const ComptimeBranchHit = struct {
     branch_index: u32,
 };
 
+/// A generated call frame's checked source region plus the resolved source
+/// location stamped on the calling LIR statement. The location's file entry
+/// carries the declaring module, so a failure region is never rendered
+/// against another module's source.
+pub const CallRegion = struct {
+    region: base.Region,
+    loc: base.SourceLoc,
+};
+
 arena: base.SingleThreadArena,
 host_arena: base.SingleThreadArena,
 allocations: std.AutoHashMapUnmanaged(usize, Allocation) = .empty,
 roc_ops: ?RocOps = null,
 events: std.ArrayListUnmanaged(HostEvent) = .empty,
 comptime_branch_hits: std.ArrayListUnmanaged(ComptimeBranchHit) = .empty,
-call_regions: std.ArrayListUnmanaged(base.Region) = .empty,
+call_regions: std.ArrayListUnmanaged(CallRegion) = .empty,
 comptime_failed_site: ?lir.LIR.ComptimeSiteId = null,
 failed_region: ?base.Region = null,
+/// Resolved source location of the failing LIR statement (file entry names
+/// the declaring module), captured alongside `failed_region`.
+failed_loc: ?base.SourceLoc = null,
 jmp_buf: JmpBuf = undefined,
 active_jmp_buf: ?*JmpBuf = null,
 termination: Termination = .returned,
@@ -104,6 +127,7 @@ pub fn resetForRun(self: *CompileTimeHost) void {
     _ = self.host_arena.reset(.free_all);
     self.comptime_failed_site = null;
     self.failed_region = null;
+    self.failed_loc = null;
     _ = self.arena.reset(.free_all);
     self.termination = .returned;
     self.active_jmp_buf = null;
@@ -113,6 +137,9 @@ pub fn resetForRun(self: *CompileTimeHost) void {
 pub const CrashBoundary = struct {
     env: *CompileTimeHost,
     prev_jmp_buf: ?*JmpBuf,
+    recovery: signal_handler.StackOverflowRecovery = undefined,
+    prev_recovery: ?*const signal_handler.StackOverflowRecovery = null,
+    recovery_registered: bool = false,
 
     pub fn init(env: *CompileTimeHost) CrashBoundary {
         return .{
@@ -122,14 +149,61 @@ pub const CrashBoundary = struct {
     }
 
     pub fn deinit(self: *CrashBoundary) void {
+        if (self.recovery_registered) {
+            _ = signal_handler.setStackOverflowRecovery(self.prev_recovery);
+            self.recovery_registered = false;
+        }
         if (sljmp.supported) self.env.restoreJumpBuf(self.prev_jmp_buf);
     }
 
     pub inline fn set(self: *CrashBoundary) c_int {
-        if (sljmp.supported) return setjmp(&self.env.jmp_buf);
-        return 0;
+        if (!sljmp.supported) return 0;
+        const sj = setjmp(&self.env.jmp_buf);
+        if (sj == 0) {
+            // Register this boundary as the thread's escape route for a stack
+            // overflow in the compile-time code about to run: the fault
+            // handler longjmps back here and the root reports a crash instead
+            // of the overflow taking the compiler down.
+            self.recovery = .{
+                .context = @ptrCast(self.env),
+                .escape = &escapeStackOverflow,
+            };
+            self.prev_recovery = signal_handler.setStackOverflowRecovery(&self.recovery);
+            self.recovery_registered = true;
+        } else if (sj == signal_handler.stack_overflow_longjmp_value) {
+            signal_handler.restoreStackGuardAfterOverflow();
+            self.env.noteStackOverflow();
+        }
+        return sj;
     }
 };
+
+fn escapeStackOverflow(context: *anyopaque) noreturn {
+    const env: *CompileTimeHost = @ptrCast(@alignCast(context));
+    if (sljmp.supported) {
+        if (env.active_jmp_buf) |active_jmp_buf| {
+            env.active_jmp_buf = null;
+            longjmp(active_jmp_buf, signal_handler.stack_overflow_longjmp_value);
+        }
+    }
+    std.process.exit(134);
+}
+
+/// The message recorded when compile-time code overflows its stack. Worded to
+/// match the interpreter's own stack-overflow report.
+pub const STACK_OVERFLOW_MESSAGE = "This Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.";
+
+/// Record a caught stack overflow exactly the way a Roc `crash` is recorded,
+/// so the finalizer reports it as this root's compile-time crash.
+pub fn noteStackOverflow(self: *CompileTimeHost) void {
+    if (self.failed_region == null and self.call_regions.items.len > 0) {
+        const frame = self.call_regions.items[self.call_regions.items.len - 1];
+        self.failed_region = frame.region;
+        self.failed_loc = frame.loc;
+    }
+    self.appendEvent(.crashed, STACK_OVERFLOW_MESSAGE);
+    self.termination = .crashed;
+}
 
 /// Install a crash boundary before calling generated root code.
 pub fn enterCrashBoundary(self: *CompileTimeHost) CrashBoundary {
@@ -166,16 +240,22 @@ pub fn rocComptimeExhaustivenessFailed(roc_ops: *RocOps, site_raw: u32) callconv
     self.jump(.comptime_exhaustiveness);
 }
 
-/// Dev-backend hook recording the source region for an imminent failure.
-pub fn rocComptimeFailureRegion(roc_ops: *RocOps, start_offset: u32, end_offset: u32) callconv(.c) void {
+/// Dev-backend hook recording the source region for an imminent failure,
+/// together with the failing statement's resolved location (whose file entry
+/// names the declaring module).
+pub fn rocComptimeFailureRegion(roc_ops: *RocOps, start_offset: u32, end_offset: u32, file: u32, line: u32, column: u32) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
     self.failed_region = base.Region.from_raw_offsets(start_offset, end_offset);
+    self.failed_loc = .{ .file = file, .line = line, .column = column };
 }
 
 /// Dev-backend hook pushing a source region for a generated call frame.
-pub fn rocComptimeCallEnter(roc_ops: *RocOps, start_offset: u32, end_offset: u32) callconv(.c) void {
+pub fn rocComptimeCallEnter(roc_ops: *RocOps, start_offset: u32, end_offset: u32, file: u32, line: u32, column: u32) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
-    self.call_regions.append(self.host_arena.allocator(), base.Region.from_raw_offsets(start_offset, end_offset)) catch {
+    self.call_regions.append(self.host_arena.allocator(), .{
+        .region = base.Region.from_raw_offsets(start_offset, end_offset),
+        .loc = .{ .file = file, .line = line, .column = column },
+    }) catch {
         self.jump(.host_oom);
     };
 }
@@ -207,12 +287,30 @@ fn clearHostState(self: *CompileTimeHost) void {
 }
 
 fn appendEvent(self: *CompileTimeHost, comptime tag: std.meta.Tag(HostEvent), bytes: []const u8) void {
+    const owned = self.dupeEventBytes(bytes);
     const host_allocator = self.host_arena.allocator();
-    const owned = host_allocator.dupe(u8, bytes) catch {
+    self.events.append(host_allocator, @unionInit(HostEvent, @tagName(tag), owned)) catch {
         self.jump(.host_oom);
         unreachable;
     };
-    self.events.append(host_allocator, @unionInit(HostEvent, @tagName(tag), owned)) catch {
+}
+
+fn appendExpectFailedEvent(self: *CompileTimeHost, bytes: []const u8, region: ?base.Region, loc: ?base.SourceLoc) void {
+    const owned = self.dupeEventBytes(bytes);
+    const host_allocator = self.host_arena.allocator();
+    self.events.append(host_allocator, .{ .expect_failed = .{
+        .message = owned,
+        .region = region,
+        .loc = loc,
+    } }) catch {
+        self.jump(.host_oom);
+        unreachable;
+    };
+}
+
+fn dupeEventBytes(self: *CompileTimeHost, bytes: []const u8) []u8 {
+    const host_allocator = self.host_arena.allocator();
+    return host_allocator.dupe(u8, bytes) catch {
         self.jump(.host_oom);
         unreachable;
     };
@@ -275,13 +373,23 @@ fn rocDbg(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
 
 fn rocExpectFailed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
-    self.appendEvent(.expect_failed, bytes[0..len]);
+    // The dev backend emits a failure-region hook call immediately before an
+    // expect-failed call, exactly as for crashes. Consume that pending
+    // location into this event: evaluation continues after a failed expect,
+    // so leaving it set would misattribute a later crash to the expect.
+    const region = self.failed_region;
+    const loc = self.failed_loc;
+    self.failed_region = null;
+    self.failed_loc = null;
+    self.appendExpectFailedEvent(bytes[0..len], region, loc);
 }
 
 fn rocCrashed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
     if (self.failed_region == null and self.call_regions.items.len > 0) {
-        self.failed_region = self.call_regions.items[self.call_regions.items.len - 1];
+        const frame = self.call_regions.items[self.call_regions.items.len - 1];
+        self.failed_region = frame.region;
+        self.failed_loc = frame.loc;
     }
     self.appendEvent(.crashed, bytes[0..len]);
     self.jump(.crashed);

@@ -56,6 +56,7 @@ const package_source = @import("package_source.zig");
 const package_identity = @import("package_identity.zig");
 const compiler_platforms = @import("compiler_platforms.zig");
 const watch_inputs = @import("watch_inputs.zig");
+const post_check_executor = base.post_check_task_executor;
 const CacheManager = cache_manager_mod.CacheManager;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
 const CacheStats = @import("cache_config.zig").CacheStats;
@@ -1081,6 +1082,12 @@ pub const Coordinator = struct {
     /// `error.OutOfMemory` instead of hanging or silently dropping the failure.
     worker_oom: std.atomic.Value(bool),
 
+    /// Prevents nested or concurrent use of the shared worker result channel.
+    post_check_batch_active: std.atomic.Value(bool),
+    /// Set only after the frontend coordinator loop has drained every task and
+    /// result. Post-check work shares those channels and cannot start earlier.
+    frontend_complete: bool,
+
     /// Total modules remaining across all packages
     total_remaining: usize,
 
@@ -1200,6 +1207,8 @@ pub const Coordinator = struct {
             .inflight = std.atomic.Value(usize).init(0),
             .shutting_down = std.atomic.Value(bool).init(false),
             .worker_oom = std.atomic.Value(bool).init(false),
+            .post_check_batch_active = std.atomic.Value(bool).init(false),
+            .frontend_complete = false,
             .total_remaining = 0,
             .app_package_name = null,
             .app_package_absent = false,
@@ -2478,7 +2487,6 @@ pub const Coordinator = struct {
                 .expect,
                 .numeral_conversion,
                 .quote_conversion,
-                .field_default,
                 => {},
             }
         }
@@ -2505,7 +2513,6 @@ pub const Coordinator = struct {
                 .expect,
                 .numeral_conversion,
                 .quote_conversion,
-                .field_default,
                 => continue,
             }
             const source_expr = switch (root.source) {
@@ -2530,7 +2537,6 @@ pub const Coordinator = struct {
                     .expect,
                     .numeral_conversion,
                     .quote_conversion,
-                    .field_default,
                     => unreachable,
                 },
             };
@@ -2668,8 +2674,12 @@ pub const Coordinator = struct {
             try self.workers.ensureTotalCapacity(self.gpa, n);
             var i: usize = 0;
             while (i < n) : (i += 1) {
-                const th = try std.Thread.spawn(.{}, workerThread, .{self});
-                try self.workers.append(self.gpa, th);
+                const th = std.Thread.spawn(.{ .stack_size = base.stack_budget.roc_stack_size }, workerThread, .{ self, i }) catch |err| {
+                    // A partially started pool must not outlive a failed start.
+                    self.shutdown();
+                    return err;
+                };
+                self.workers.appendAssumeCapacity(th);
             }
         }
     }
@@ -2679,6 +2689,9 @@ pub const Coordinator = struct {
     /// pick up additional queued work.
     pub fn shutdown(self: *Coordinator) void {
         if (!threads_available) return;
+        if (self.post_check_batch_active.load(.acquire)) {
+            @panic("compiler coordinator shut down during a post-check batch");
+        }
 
         // Signal workers to stop before closing channels, so workers that
         // are between recv() calls see the flag and exit instead of
@@ -2703,6 +2716,7 @@ pub const Coordinator = struct {
                 .parse => |t| std.debug.print("[COORD] ENQUEUE parse: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
                 .canonicalize => |t| std.debug.print("[COORD] ENQUEUE canonicalize: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
                 .type_check => |t| std.debug.print("[COORD] ENQUEUE type_check: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
+                .post_check => {},
             }
         }
         // Increment inflight BEFORE sending to the channel. This ensures there is
@@ -2721,7 +2735,7 @@ pub const Coordinator = struct {
                 if (has_workers) {
                     _ = self.inflight.fetchSub(1, .monotonic);
                 }
-                return;
+                @panic("task channel closed while enqueueing compiler work");
             },
             error.OutOfMemory => {
                 if (has_workers) {
@@ -2862,6 +2876,7 @@ pub const Coordinator = struct {
                 }
             }
         }
+        self.frontend_complete = true;
     }
 
     /// Try to unblock all modules waiting on external imports
@@ -2902,7 +2917,93 @@ pub const Coordinator = struct {
             .parse => |t| self.executeParse(t, allocators),
             .canonicalize => |t| self.executeCanonicalize(t, allocators),
             .type_check => |t| self.executeTypeCheck(t, allocators),
+            .post_check => unreachable,
         };
+    }
+
+    /// A stage-independent view over the persistent compilation workers.
+    ///
+    /// Call this only after `coordinatorLoop` has completed and before shutdown.
+    pub fn postCheckExecutor(self: *Coordinator) post_check_executor.Executor {
+        if (!self.frontend_complete or self.shutting_down.load(.acquire)) {
+            @panic("post-check executor requested outside the completed frontend lifetime");
+        }
+        return .{
+            .context = self,
+            .worker_count = if (threads_available and self.mode == .multi_threaded and self.workers.items.len > 0)
+                self.workers.items.len
+            else
+                1,
+            .runFn = runPostCheckTasks,
+        };
+    }
+
+    fn runPostCheckTasks(
+        context: *anyopaque,
+        tasks: []const post_check_executor.Task,
+        completions: []post_check_executor.Completion,
+    ) Allocator.Error!void {
+        const self: *Coordinator = @ptrCast(@alignCast(context));
+        std.debug.assert(tasks.len == completions.len);
+        if (!self.frontend_complete or self.shutting_down.load(.acquire)) {
+            @panic("post-check batch started outside the completed frontend lifetime");
+        }
+        if (self.post_check_batch_active.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) {
+            @panic("compiler coordinator started overlapping post-check batches");
+        }
+        defer self.post_check_batch_active.store(false, .release);
+        if (tasks.len == 0) return;
+
+        if (!threads_available or self.mode == .single_threaded or self.workers.items.len == 0) {
+            var allocs = WorkerAllocators.init(self.gpa);
+            defer allocs.deinit();
+            const allocator = allocs.taskAllocators().module;
+            for (tasks, completions) |task, *completion| {
+                completion.* = .{
+                    .id = task.id,
+                    .worker_id = 0,
+                    .value = task.run(task.context, .{
+                        .id = 0,
+                        .allocator = allocator,
+                        .scratch = allocs.taskAllocators().scratch,
+                    }),
+                };
+                allocs.resetArena();
+            }
+            return;
+        }
+
+        var sent: usize = 0;
+        var received: usize = 0;
+        var enqueue_oom = false;
+        const width = self.workers.items.len;
+        while (received < tasks.len and (!enqueue_oom or received < sent)) {
+            while (sent < tasks.len and sent - received < width) : (sent += 1) {
+                self.enqueueTask(.{ .post_check = tasks[sent] }) catch {
+                    enqueue_oom = true;
+                    break;
+                };
+            }
+            if (received == sent) break;
+            const result = self.result_channel.recv() orelse
+                @panic("post-check result channel closed while a batch was active");
+            _ = self.inflight.fetchSub(1, .monotonic);
+            switch (result) {
+                .post_check => |completion| {
+                    completions[received] = completion;
+                    received += 1;
+                },
+                .parsed,
+                .canonicalized,
+                .type_checked,
+                .parse_failed,
+                .compile_failed,
+                .cycle_detected,
+                .worker_oom,
+                => unreachable,
+            }
+        }
+        if (enqueue_oom) return error.OutOfMemory;
     }
 
     fn createOwnedSemanticResult(
@@ -3569,6 +3670,7 @@ pub const Coordinator = struct {
             .compile_failed => |*r| try self.handleCompileFailed(r),
             .cycle_detected => |*r| try self.handleCycleDetected(r),
             .worker_oom => return error.OutOfMemory,
+            .post_check => unreachable,
         }
     }
 
@@ -5324,7 +5426,7 @@ pub const Coordinator = struct {
     }
 
     /// Worker thread main function
-    fn workerThread(self: *Coordinator) void {
+    fn workerThread(self: *Coordinator, worker_id: usize) void {
         _ = base.stack_overflow.installForCurrentThread();
 
         // Each worker has its own allocators for thread safety.
@@ -5343,6 +5445,22 @@ pub const Coordinator = struct {
             // Block until a task is available. Returns null when the channel
             // is closed and drained.
             const t = self.task_channel.recv() orelse break;
+
+            if (t == .post_check) {
+                const task = t.post_check;
+                const completion: WorkerResult = .{ .post_check = .{
+                    .id = task.id,
+                    .worker_id = worker_id,
+                    .value = task.run(task.context, .{
+                        .id = worker_id,
+                        .allocator = worker_allocs.taskAllocators().module,
+                        .scratch = worker_allocs.taskAllocators().scratch,
+                    }),
+                } };
+                worker_allocs.resetArena();
+                self.result_channel.send(completion) catch break;
+                continue;
+            }
 
             // Execute task. On OOM we cannot return an error from this `void`
             // thread entry point, so record it for the coordinator to observe
@@ -6424,7 +6542,6 @@ fn hashPatternExtractionRegionsForView(
             .expect,
             .numeral_conversion,
             .quote_conversion,
-            .field_default,
             => false,
         };
         if (!is_selected_root) continue;
@@ -6483,7 +6600,6 @@ fn hashPatternExtractionRegionsForView(
             .expect,
             .numeral_conversion,
             .quote_conversion,
-            .field_default,
             => unreachable,
         }
 
@@ -7331,6 +7447,79 @@ test "Coordinator shutdown stops spawned workers promptly" {
     // The deterministic drain test above covers the flag+close path.
     try std.testing.expect(coord.shutting_down.load(.acquire));
     try std.testing.expectEqual(@as(usize, 0), coord.workers.items.len);
+}
+
+test "Coordinator post-check executor completes repeated bounded batches" {
+    if (is_freestanding) return error.SkipZigTest;
+
+    var coord = try Coordinator.init(
+        std.testing.allocator,
+        .multi_threaded,
+        2,
+        roc_target.RocTarget.detectNative(),
+        undefined,
+        "test",
+        null,
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+    );
+    defer coord.deinit();
+    try coord.start();
+    try coord.coordinatorLoop();
+
+    const TaskContext = struct {
+        hits: *std.atomic.Value(usize),
+        active_by_worker: []std.atomic.Value(bool),
+
+        fn run(opaque_context: *anyopaque, worker: post_check_executor.Worker) ?*anyopaque {
+            const context: *@This() = @ptrCast(@alignCast(opaque_context));
+            if (worker.id >= context.active_by_worker.len) {
+                @panic("post-check executor supplied an unknown worker id");
+            }
+            if (context.active_by_worker[worker.id].swap(true, .acq_rel)) {
+                @panic("post-check executor overlapped callbacks on one worker id");
+            }
+            defer context.active_by_worker[worker.id].store(false, .release);
+            _ = context.hits.fetchAdd(1, .monotonic);
+            return context;
+        }
+    };
+
+    var active_by_worker = [_]std.atomic.Value(bool){
+        std.atomic.Value(bool).init(false),
+        std.atomic.Value(bool).init(false),
+    };
+    var hits = std.atomic.Value(usize).init(0);
+    var contexts: [7]TaskContext = undefined;
+    var tasks: [7]post_check_executor.Task = undefined;
+    var completions: [7]post_check_executor.Completion = undefined;
+    for (&contexts, &tasks, 0..) |*context, *task, index| {
+        context.* = .{
+            .hits = &hits,
+            .active_by_worker = &active_by_worker,
+        };
+        task.* = .{
+            .id = index,
+            .context = context,
+            .run = TaskContext.run,
+        };
+    }
+
+    const executor = coord.postCheckExecutor();
+    try executor.run(&tasks, &completions);
+    var observed = [_]bool{false} ** tasks.len;
+    for (completions) |completion| {
+        try std.testing.expect(completion.id < tasks.len);
+        try std.testing.expect(!observed[completion.id]);
+        observed[completion.id] = true;
+        try std.testing.expectEqual(
+            @as(?*anyopaque, @ptrCast(&contexts[completion.id])),
+            completion.value,
+        );
+    }
+    try std.testing.expectEqual(tasks.len, hits.load(.monotonic));
+
+    try executor.run(tasks[0..3], completions[0..3]);
+    try std.testing.expectEqual(tasks.len + 3, hits.load(.monotonic));
 }
 
 test "Coordinator enqueueParseTask flow" {

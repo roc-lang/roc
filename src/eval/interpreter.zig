@@ -93,14 +93,19 @@ const longjmp = sljmp.longjmp;
 pub const ExpectFailure = struct {
     message: []const u8,
     region: base.Region,
+    /// Resolved location of the failing `expect` statement. Its file entry
+    /// names the declaring module, so the failure is never rendered against
+    /// another module's source (source inlined across modules, e.g. `??`
+    /// field defaults materialized per specialization).
+    loc: base.SourceLoc,
 };
 
 /// Environment for interpreter-managed RocOps forwarding.
 ///
-/// The interpreter always evaluates with the RocOps it was initialized with.
-/// These callbacks forward the caller's alloc/dealloc/realloc/dbg/expect/crash
-/// hooks while retaining local bookkeeping for crash and expect messages so
-/// hosts that care can inspect the last message after evaluation.
+/// These callbacks forward through the RocOps for the current host entry while
+/// retaining local bookkeeping for crash and expect messages so hosts that care
+/// can inspect the last message after evaluation. A retained interpreter
+/// rebinds this pointer when the host invokes one of its callables later.
 const InterpreterRocEnv = struct {
     allocator: Allocator,
     crashed: bool = false,
@@ -179,12 +184,13 @@ const InterpreterRocEnv = struct {
         self.expect_failures.clearRetainingCapacity();
     }
 
-    fn recordExpectFailure(self: *InterpreterRocEnv, msg: []const u8, region: base.Region) Allocator.Error!void {
+    fn recordExpectFailure(self: *InterpreterRocEnv, msg: []const u8, region: base.Region, loc: base.SourceLoc) Allocator.Error!void {
         const owned_msg = try self.allocator.dupe(u8, msg);
         errdefer self.allocator.free(owned_msg);
         try self.expect_failures.append(self.allocator, .{
             .message = owned_msg,
             .region = region,
+            .loc = loc,
         });
     }
 
@@ -303,14 +309,22 @@ pub const Interpreter = struct {
     const max_debug_value_visits: usize = 16;
     pub const erased_callable_context_alignment: usize = builtins.erased_callable.capture_alignment;
 
+    const ErasedCallableCaptureDrop = enum(u8) {
+        none,
+        rc_helper,
+        boxy_capture,
+    };
+
     pub const ErasedCallableInterpreterContext = extern struct {
+        owner: ?*Retained,
         interpreter: *LirInterpreter,
-        capture_desc: ?*const LirProgram.BoxyTypeDesc,
         result_desc: ?*const LirProgram.BoxyTypeDesc,
         proc_id: u32,
-        capture_layout_plus_one: u32,
+        drop_layout_plus_one: u32,
         capture_value_offset: u32,
-        padding: u32,
+        drop_desc_field_offset: u32,
+        drop_kind: u8,
+        padding: [3]u8,
     };
 
     pub const erased_callable_context_capture_offset: usize =
@@ -321,6 +335,9 @@ pub const Interpreter = struct {
     layout_store: *const layout_mod.Store,
     helper: LayoutHelper,
     float_nan_mode: builtins.float_bits.NanMode,
+    /// Arena for runtime-created descriptors whose identities can escape in a
+    /// retained callable or host result and must survive later evaluations.
+    descriptor_arena: base.SingleThreadArena,
     /// Arena for interpreter-allocated memory (temporaries, copies).
     arena: base.SingleThreadArena,
     /// RocOps environment for builtin dispatch.
@@ -376,6 +393,9 @@ pub const Interpreter = struct {
     failed_stmt_inline_scope: InlineScopeId = InlineScopeId.none,
     comptime_branch_hits: std.ArrayList(ComptimeBranchHit),
     comptime_failed_site: ?LIR.ComptimeSiteId = null,
+    /// Heap-pinned owner used by host-facing integrations whose erased
+    /// callables can outlive the evaluation that created them.
+    retained_owner: ?*Retained = null,
 
     const RcPresence = enum(u2) {
         unknown,
@@ -600,6 +620,112 @@ pub const Interpreter = struct {
 
     pub const BoxyTables = boxy_runtime.BoxyTables;
 
+    /// Heap-pinned interpreter lifetime for host-facing execution. The root
+    /// call owns the initial reference and every interpreter-created erased
+    /// callable owns another. The recursive execution lock keeps reentrant
+    /// host callbacks working while serializing calls from other threads into
+    /// the same single-threaded interpreter state.
+    pub const Retained = struct {
+        allocator: Allocator,
+        references: std.atomic.Value(usize),
+        synchronization_io: std.Io,
+        execution_mutex: std.Io.Mutex = .init,
+        execution_owner: std.atomic.Value(std.Thread.Id) = .init(0),
+        execution_depth: usize = 0,
+        interpreter: LirInterpreter,
+
+        pub fn createWithBoxyTables(
+            allocator: Allocator,
+            store: *const LirStore,
+            layout_store: *const layout_mod.Store,
+            boxy_tables: BoxyTables,
+            caller_roc_ops: *RocOps,
+            float_nan_mode: builtins.float_bits.NanMode,
+            synchronization_io: std.Io,
+        ) Allocator.Error!*Retained {
+            const self = try allocator.create(Retained);
+            errdefer allocator.destroy(self);
+
+            self.* = .{
+                .allocator = allocator,
+                .references = .init(1),
+                .synchronization_io = synchronization_io,
+                .interpreter = try LirInterpreter.initWithBoxyTables(
+                    allocator,
+                    store,
+                    layout_store,
+                    boxy_tables,
+                    caller_roc_ops,
+                    float_nan_mode,
+                ),
+            };
+            self.interpreter.retained_owner = self;
+            return self;
+        }
+
+        pub fn retain(self: *Retained) void {
+            const previous = self.references.fetchAdd(1, .monotonic);
+            if (builtin.mode == .Debug) std.debug.assert(previous > 0);
+        }
+
+        pub fn release(self: *Retained) void {
+            const previous = self.references.fetchSub(1, .release);
+            if (builtin.mode == .Debug) std.debug.assert(previous > 0);
+            if (previous != 1) return;
+            _ = self.references.load(.acquire);
+            if (builtin.mode == .Debug) {
+                std.debug.assert(self.execution_owner.load(.acquire) == 0);
+                std.debug.assert(self.execution_depth == 0);
+            }
+
+            const allocator = self.allocator;
+            self.interpreter.deinit();
+            allocator.destroy(self);
+        }
+
+        pub fn enter(self: *Retained) void {
+            // Freestanding targets have no OS threads, and std.Thread cannot
+            // produce an identity for them. Their only possible nesting is
+            // same-thread reentrancy, so depth alone is the execution gate.
+            if (comptime is_freestanding) {
+                if (self.execution_depth == 0) self.interpreter.resetRetainedExecution();
+                self.execution_depth += 1;
+                return;
+            }
+
+            const thread_id = std.Thread.getCurrentId();
+            if (self.execution_owner.load(.acquire) == thread_id) {
+                self.execution_depth += 1;
+                return;
+            }
+
+            self.execution_mutex.lockUncancelable(self.synchronization_io);
+            if (builtin.mode == .Debug) std.debug.assert(self.execution_owner.load(.monotonic) == 0);
+            self.interpreter.resetRetainedExecution();
+            self.execution_depth = 1;
+            self.execution_owner.store(thread_id, .release);
+        }
+
+        pub fn leave(self: *Retained) void {
+            if (comptime is_freestanding) {
+                if (builtin.mode == .Debug) std.debug.assert(self.execution_depth > 0);
+                self.execution_depth -= 1;
+                return;
+            }
+
+            const thread_id = std.Thread.getCurrentId();
+            if (builtin.mode == .Debug) {
+                std.debug.assert(self.execution_owner.load(.acquire) == thread_id);
+                std.debug.assert(self.execution_depth > 0);
+            }
+            self.execution_depth -= 1;
+            if (self.execution_depth != 0) return;
+
+            self.execution_owner.store(0, .release);
+            self.execution_mutex.unlock(self.synchronization_io);
+        }
+    };
+
     pub fn init(
         allocator: Allocator,
         store: *const LirStore,
@@ -701,6 +827,7 @@ pub const Interpreter = struct {
             .layout_store = layout_store,
             .helper = LayoutHelper.init(layout_store),
             .float_nan_mode = float_nan_mode,
+            .descriptor_arena = base.SingleThreadArena.init(allocator),
             .arena = base.SingleThreadArena.init(allocator),
             .roc_env = roc_env,
             .roc_ops = RocOps{
@@ -767,6 +894,7 @@ pub const Interpreter = struct {
         self.roc_env.deinit();
         self.allocator.destroy(self.roc_env);
         self.static_strings.deinit();
+        self.descriptor_arena.deinit();
         self.arena.deinit();
         self.tag_variant_plans.deinit(self.allocator);
         self.struct_field_plans.deinit(self.allocator);
@@ -928,6 +1056,20 @@ pub const Interpreter = struct {
         return null;
     }
 
+    /// The source-file entry (display name plus package-qualified module
+    /// identity) of the statement that first failed, resolved through the LIR
+    /// store's explicit source-file table. The lowerer stamps every statement
+    /// with its declaring module's file entry (including source inlined
+    /// across modules, e.g. `??` field defaults materialized per
+    /// specialization), so this is the failed region's owning module.
+    pub fn getFailedSourceFile(self: *const LirInterpreter) ?base.SourceFileEntry {
+        if (!self.failed_stmt_loc.hasLocation()) return null;
+        return .{
+            .name = self.store.sourceFileName(self.failed_stmt_loc.file),
+            .qualified_name = self.store.sourceFileQualifiedName(self.failed_stmt_loc.file),
+        };
+    }
+
     /// The innermost virtual source frame of the failed statement. Callers can
     /// walk `LirStore.inlineScope(id).parent` to expand the complete inlined
     /// source stack without inferring it from physical procedures.
@@ -1044,8 +1186,36 @@ pub const Interpreter = struct {
         self.boxy_runtime.runtime_boxy_tag_payload_descs = &self.runtime_boxy_tag_payload_descs;
         self.boxy_runtime.runtime_boxy_payload_steps = &self.runtime_boxy_payload_steps;
         self.boxy_runtime.roc_ops = &self.roc_ops;
-        self.boxy_runtime.descriptor_arena = self.evalAllocator();
+        self.boxy_runtime.descriptor_arena = self.descriptor_arena.allocator();
         self.boxy_runtime.eval_arena = self.evalAllocator();
+    }
+
+    /// Discard operation-local allocations between independent host entries.
+    /// Descriptor identities live in `descriptor_arena` and remain stable for
+    /// every callable retained from this interpreter.
+    fn resetRetainedExecution(self: *LirInterpreter) void {
+        self.call_stack = .empty;
+        self.failed_call_stack = .empty;
+        self.comptime_branch_hits = .empty;
+        _ = self.arena.reset(.retain_capacity);
+
+        self.roc_env.resetForEval();
+        self.active_stmt_loc = base.SourceLoc.none;
+        self.active_stmt_region = base.Region.zero();
+        self.active_stmt_inline_scope = InlineScopeId.none;
+        self.failed_stmt_loc = base.SourceLoc.none;
+        self.failed_stmt_region = base.Region.zero();
+        self.failed_stmt_inline_scope = InlineScopeId.none;
+        self.comptime_failed_site = null;
+        if (builtin.mode == .Debug) self.inflight_zeroed_box_payloads.clearRetainingCapacity();
+    }
+
+    fn bindCallerRocOps(self: *LirInterpreter, caller_roc_ops: *RocOps) void {
+        // A host-created callable can synchronously invoke this interpreter's
+        // callable again with the interpreter's forwarding RocOps. Preserve
+        // the ultimate host in that case instead of forwarding back to self.
+        if (caller_roc_ops == &self.roc_ops) return;
+        self.roc_env.caller_roc_ops = caller_roc_ops;
     }
 
     /// Frame-aware services the boxy runtime calls back into: descriptor and
@@ -3103,7 +3273,7 @@ pub const Interpreter = struct {
                         self.store.getLocal(cond_local).layout_idx,
                     );
                     if (cond_value == 0) {
-                        try self.roc_env.recordExpectFailure("expect failed", self.store.stmtRegion(current));
+                        try self.roc_env.recordExpectFailure("expect failed", self.store.stmtRegion(current), self.store.stmtLoc(current));
                         self.roc_ops.expectFailed("expect failed");
                     }
                     current = expect_stmt.next;
@@ -4124,7 +4294,21 @@ pub const Interpreter = struct {
         out_desc: *?*const anyopaque,
     ) callconv(.c) void {
         const context = erasedCallableInterpreterContextFromCapture(capture);
-        context.interpreter.callInterpreterErasedCallable(context, ops, ret, args, reuse, out_desc) catch |err| switch (err) {
+        const owner = context.owner;
+        if (owner) |retained| {
+            retained.retain();
+            retained.enter();
+        }
+        context.interpreter.callInterpreterErasedCallable(context, ops, ret, args, reuse, out_desc) catch |err| {
+            leaveAndReleaseErasedCallableOwner(owner);
+            reportInterpreterErasedCallableError(ops, err);
+            return;
+        };
+        leaveAndReleaseErasedCallableOwner(owner);
+    }
+
+    fn reportInterpreterErasedCallableError(ops: *RocOps, err: Error) void {
+        switch (err) {
             error.OutOfMemory => ops.crash("LIR/interpreter erased callable trampoline ran out of memory"),
             error.RuntimeError => ops.crash("LIR/interpreter erased callable trampoline hit runtime error"),
             error.ComptimeExhaustiveness => ops.crash("LIR/interpreter erased callable trampoline hit compile-time exhaustiveness marker"),
@@ -4135,50 +4319,113 @@ pub const Interpreter = struct {
             // expect_err statements only occur in top-level expect test
             // roots, never in callable bodies.
             error.ExpectErr => unreachable,
-        };
+        }
+    }
+
+    fn leaveAndReleaseErasedCallableOwner(owner: ?*Retained) void {
+        if (owner) |retained| {
+            retained.leave();
+            retained.release();
+        }
     }
 
     fn interpreterErasedCallableOnDrop(capture: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
         const context = erasedCallableInterpreterContextFromCapture(capture);
-        const capture_layout: layout_mod.Idx = if (context.capture_layout_plus_one == 0)
-            return
+        const owner = context.owner;
+        if (owner) |retained| retained.enter();
+        context.interpreter.bindCallerRocOps(roc_ops);
+
+        context.interpreter.dropInterpreterErasedCallableCapture(context, capture) catch |err| {
+            leaveAndReleaseErasedCallableOwner(owner);
+            reportInterpreterErasedCallableDropError(roc_ops, err);
+            return;
+        };
+        leaveAndReleaseErasedCallableOwner(owner);
+    }
+
+    fn dropInterpreterErasedCallableCapture(
+        self: *LirInterpreter,
+        context: *ErasedCallableInterpreterContext,
+        capture: ?[*]u8,
+    ) Error!void {
+        const drop_kind: ErasedCallableCaptureDrop = @enumFromInt(context.drop_kind);
+        if (drop_kind == .none) return;
+        const capture_layout: layout_mod.Idx = if (context.drop_layout_plus_one == 0)
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: erased callable capture drop lacked a layout",
+                .{},
+            )
         else
-            @enumFromInt(context.capture_layout_plus_one - 1);
-        if (capture_layout == .zst) return;
+            @enumFromInt(context.drop_layout_plus_one - 1);
         const capture_value_ptr = (capture orelse unreachable) + context.capture_value_offset;
-        if (context.capture_desc) |capture_desc| {
-            context.interpreter.boxy_runtime.performBoxyLayoutDrop(
-                context.interpreter.boxyFrameHooks(null),
+        switch (drop_kind) {
+            .none => unreachable,
+            .rc_helper => self.performRcHelperRequired(
+                .{ .op = .decref, .layout_idx = capture_layout },
                 .{ .ptr = capture_value_ptr },
-                capture_layout,
-                capture_desc,
-                .decref,
                 1,
                 .atomic,
-            ) catch |err| switch (err) {
-                error.OutOfMemory => roc_ops.crash("LIR/interpreter erased callable capture drop ran out of memory"),
-                error.RuntimeError => roc_ops.crash("LIR/interpreter erased callable capture drop hit runtime error"),
-                error.ComptimeExhaustiveness => roc_ops.crash("LIR/interpreter erased callable capture drop hit compile-time exhaustiveness marker"),
-                error.DivisionByZero => roc_ops.crash("LIR/interpreter erased callable capture drop hit division by zero"),
-                error.Crash => roc_ops.crash("LIR/interpreter erased callable capture drop hit Roc crash"),
-                error.UnsupportedHostedFunction => roc_ops.crash("LIR/interpreter erased callable capture drop reached an unsupported hosted function"),
-                error.InvalidHostedFunctionSignature => roc_ops.crash("LIR/interpreter erased callable capture drop reached an invalid hosted function signature"),
-                error.ExpectErr => unreachable,
-            };
-            return;
+            ),
+            .boxy_capture => {
+                const desc_address = self.readPointerInt(.{
+                    .ptr = capture_value_ptr + context.drop_desc_field_offset,
+                });
+                const desc: *const LirProgram.BoxyTypeDesc = if (desc_address == 0)
+                    self.invariantFailed(
+                        "LIR/interpreter invariant violated: Boxy erased callable capture drop descriptor was null",
+                        .{},
+                    )
+                else
+                    @ptrFromInt(desc_address);
+                try self.boxy_runtime.performBoxyLayoutDrop(
+                    self.boxyFrameHooks(null),
+                    .{ .ptr = capture_value_ptr },
+                    capture_layout,
+                    desc,
+                    .decref,
+                    1,
+                    .atomic,
+                );
+            },
         }
-        context.interpreter.performRawRc(.decref, .{ .ptr = capture_value_ptr }, capture_layout, 1);
+    }
+
+    fn reportInterpreterErasedCallableDropError(roc_ops: *RocOps, err: Error) void {
+        switch (err) {
+            error.OutOfMemory => roc_ops.crash("LIR/interpreter erased callable capture drop ran out of memory"),
+            error.RuntimeError => roc_ops.crash("LIR/interpreter erased callable capture drop hit runtime error"),
+            error.ComptimeExhaustiveness => roc_ops.crash("LIR/interpreter erased callable capture drop hit compile-time exhaustiveness marker"),
+            error.DivisionByZero => roc_ops.crash("LIR/interpreter erased callable capture drop hit division by zero"),
+            error.Crash => roc_ops.crash("LIR/interpreter erased callable capture drop hit Roc crash"),
+            error.UnsupportedHostedFunction => roc_ops.crash("LIR/interpreter erased callable capture drop reached an unsupported hosted function"),
+            error.InvalidHostedFunctionSignature => roc_ops.crash("LIR/interpreter erased callable capture drop reached an invalid hosted function signature"),
+            error.ExpectErr => unreachable,
+        }
     }
 
     fn callInterpreterErasedCallable(
         self: *LirInterpreter,
         context: *ErasedCallableInterpreterContext,
-        _: *RocOps,
+        ops: *RocOps,
         ret: ?[*]u8,
         args: ?[*]const u8,
         reuse_ptr: ?[*]u8,
         out_desc: *?*const anyopaque,
     ) Error!void {
+        self.bindCallerRocOps(ops);
+        self.bindBoxyRuntime();
+        if (sljmp.supported) {
+            var call_jmp_buf: JmpBuf = undefined;
+            const prev_jmp_buf = self.roc_env.installJumpBuf(&call_jmp_buf);
+            defer self.roc_env.restoreJumpBuf(prev_jmp_buf);
+            const sj = setjmp(&call_jmp_buf);
+            if (sj != 0) {
+                self.recordActiveFailureLocIfUnset();
+                self.recordFailedCallStackIfUnset() catch {};
+                return error.Crash;
+            }
+        }
+
         const proc_id: LIR.LirProcSpecId = @enumFromInt(context.proc_id);
         const proc_spec = self.store.getProcSpec(proc_id);
         const proc_arg_locals = self.store.getLocalSpan(proc_spec.args);
@@ -4577,6 +4824,7 @@ pub const Interpreter = struct {
                 );
             }
         }
+        const result = try self.alloc(target_layout);
         const capture_size = erased_callable_context_capture_offset + capture_value_size;
         const data_ptr = if (assign.reuse) |reuse_local| blk: {
             const reuse_value = try self.getLocalChecked(frame, reuse_local);
@@ -4606,12 +4854,24 @@ pub const Interpreter = struct {
             builtins.erased_callable.allocation_has_refcounted_children,
         );
 
-        const on_drop: ?builtins.erased_callable.OnDropFn = switch (assign.on_drop) {
-            .none => null,
-            .rc_helper => &interpreterErasedCallableOnDrop,
-            .boxy_capture => &interpreterErasedCallableOnDrop,
-            .interpreter_context_drop => &interpreterErasedCallableOnDrop,
+        const capture_drop_kind: ErasedCallableCaptureDrop = switch (assign.on_drop) {
+            .none, .interpreter_context_drop => .none,
+            .rc_helper => .rc_helper,
+            .boxy_capture => .boxy_capture,
         };
+        const drop_layout: ?layout_mod.Idx = switch (assign.on_drop) {
+            .none, .interpreter_context_drop => null,
+            .rc_helper => |helper| helper.layout_idx,
+            .boxy_capture => |plan| plan.capture_layout,
+        };
+        const drop_desc_field_offset: u32 = switch (assign.on_drop) {
+            .boxy_capture => |plan| plan.desc_field_offset,
+            .none, .rc_helper, .interpreter_context_drop => 0,
+        };
+        const on_drop: ?builtins.erased_callable.OnDropFn = if (self.retained_owner != null or capture_drop_kind != .none)
+            &interpreterErasedCallableOnDrop
+        else
+            null;
         const payload = builtins.erased_callable.payloadPtr(data_ptr);
         payload.* = .{
             .callable_fn_ptr = &interpreterErasedCallableTrampoline,
@@ -4619,32 +4879,33 @@ pub const Interpreter = struct {
         };
 
         const context = erasedCallableInterpreterContextFromPayload(data_ptr);
-        const capture_desc = if (assign.capture) |capture_local|
-            frame.localDesc(capture_local) orelse try self.resolveOptionalBoxyDescRef(frame, self.store.getLocal(capture_local).boxy_desc)
+        const capture_value = if (assign.capture) |capture_local|
+            try self.getLocalChecked(frame, capture_local)
         else
             null;
         const result_desc = try self.resolveOptionalBoxyDescRef(frame, assign.result_desc);
+        if (self.retained_owner) |owner| owner.retain();
         context.* = .{
+            .owner = self.retained_owner,
             .interpreter = self,
-            .capture_desc = capture_desc,
             .result_desc = result_desc,
             .proc_id = @intFromEnum(assign.proc),
-            .capture_layout_plus_one = if (assign.capture_layout) |layout_idx| @intFromEnum(layout_idx) + 1 else 0,
+            .drop_layout_plus_one = if (drop_layout) |layout_idx| @intFromEnum(layout_idx) + 1 else 0,
             .capture_value_offset = @intCast(erased_callable_context_capture_offset),
-            .padding = 0,
+            .drop_desc_field_offset = drop_desc_field_offset,
+            .drop_kind = @intFromEnum(capture_drop_kind),
+            .padding = .{ 0, 0, 0 },
         };
 
-        if (assign.capture) |capture_local| {
+        if (capture_value) |value| {
             const capture_layout = assign.capture_layout orelse unreachable;
-            const capture_value = try self.getLocalChecked(frame, capture_local);
             const capture_ptr = erasedCallableInterpreterCaptureValuePtr(data_ptr);
             const size = self.helper.sizeOf(capture_layout);
             if (size > 0) {
-                @memcpy(capture_ptr[0..size], capture_value.ptr[0..size]);
+                @memcpy(capture_ptr[0..size], value.ptr[0..size]);
             }
         }
 
-        const result = try self.alloc(target_layout);
         self.writeBoxedDataPointer(result, data_ptr);
         return result;
     }
