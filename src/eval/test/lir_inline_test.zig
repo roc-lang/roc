@@ -176,7 +176,6 @@ const LowerMonotypeOptions = struct {
     specialization_counters: ?*MonoLower.SpecializationCounters = null,
     diagnostics: ?*MonoLower.Diagnostics = null,
     root_selection: enum { all, test_expects } = .all,
-    procedure_template_root_grouping: postcheck.Common.ProcedureTemplateRootGrouping = .isolated,
 };
 
 fn lowerMonotypeModuleWithOptions(
@@ -221,7 +220,6 @@ fn lowerMonotypeModuleWithOptions(
         },
         .{
             .requests = root_requests,
-            .procedure_template_root_grouping = options.procedure_template_root_grouping,
         },
         .{
             .specialization_cache = options.specialization_cache,
@@ -2021,7 +2019,7 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
     });
 }
 
-test "test roots share template work only when explicitly grouped" {
+test "adjacent expect roots remain isolated and ordered" {
     const allocator = std.testing.allocator;
     const source =
         \\identity : a -> a
@@ -2033,23 +2031,22 @@ test "test roots share template work only when explicitly grouped" {
         \\main = 0
     ;
 
-    var isolated_diagnostics = MonoLower.Diagnostics{};
-    var isolated = try lowerMonotypeModuleWithOptions(allocator, source, .{
-        .diagnostics = &isolated_diagnostics,
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
         .root_selection = .test_expects,
     });
-    defer isolated.deinit(allocator);
+    defer lowered.deinit(allocator);
 
-    var shared_diagnostics = MonoLower.Diagnostics{};
-    var shared = try lowerMonotypeModuleWithOptions(allocator, source, .{
-        .diagnostics = &shared_diagnostics,
-        .root_selection = .test_expects,
-        .procedure_template_root_grouping = .shared_adjacent,
-    });
-    defer shared.deinit(allocator);
+    const roots = lowered.mono.rootsView();
+    try std.testing.expectEqual(@as(usize, 2), roots.len);
+    try std.testing.expect(roots[0].def != roots[1].def);
 
-    try std.testing.expectEqual(@as(u64, 0), isolated_diagnostics.body.cross_root_template_reuses);
-    try std.testing.expect(shared_diagnostics.body.cross_root_template_reuses > 0);
+    var root_index: usize = 0;
+    for (lowered.resources.checked_artifact.root_requests.requests) |request| {
+        if (request.kind != .test_expect) continue;
+        try std.testing.expectEqual(request.order, roots[root_index].request.order);
+        root_index += 1;
+    }
+    try std.testing.expectEqual(roots.len, root_index);
 }
 
 test "deferred specialization bodies queue once and drain at the wave boundary" {

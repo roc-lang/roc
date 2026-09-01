@@ -265,7 +265,8 @@ pub const Options = struct {
     /// ConstStore shape may require runtime storage.
     static_data_literals: bool = false,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
-    /// Optional executor for ordinary specialization batches.
+    /// Optional executor for isolated procedure roots and ordinary
+    /// specialization batches.
     post_check_executor: ?base.post_check_task_executor.Executor = null,
     /// Optional phase timings for the work owned by Monotype lowering.
     timing: ?*Timing = null,
@@ -503,7 +504,6 @@ pub const BodyDiagnostics = struct {
     spec_jobs_skipped_ready: u64 = 0,
     spec_job_shards_lowered: u64 = 0,
     spec_job_shards_committed: u64 = 0,
-    cross_root_template_reuses: u64 = 0,
     caller_owned_template_bodies_lowered: u64 = 0,
     deferred_template_reuses: u64 = 0,
     deferred_template_bodies_lowered: u64 = 0,
@@ -576,25 +576,7 @@ pub fn run(
     // bodies drain afterward in deterministic dispatch order.
     const procedures_started_ns = if (options.timing) |timing| timing.start() else 0;
     if (options.timing) |timing| timing.startProcedureBreakdown();
-    switch (roots.procedure_template_root_grouping) {
-        .isolated => for (roots.requests) |request| try builder.lowerRoot(request),
-        .shared_adjacent => {
-            var root_index: usize = 0;
-            while (root_index < roots.requests.len) {
-                if (roots.requests[root_index].procedure_template == null) {
-                    try builder.lowerRoot(roots.requests[root_index]);
-                    root_index += 1;
-                    continue;
-                }
-
-                const batch_start = root_index;
-                while (root_index < roots.requests.len and roots.requests[root_index].procedure_template != null) {
-                    root_index += 1;
-                }
-                try builder.lowerTemplateRootBatch(roots.requests[batch_start..root_index]);
-            }
-        },
-    }
+    try builder.lowerIsolatedRoots(roots.requests);
     try builder.drainPendingSpecJobs();
     if (options.timing) |timing| timing.finishProcedureBreakdown();
     if (options.timing) |timing| timing.finish(procedures_started_ns, .procedure_specialization);
@@ -2382,6 +2364,29 @@ const CompletedSpecJobShard = struct {
     }
 };
 
+/// Graph-free procedure-use root result. Keeping this shape separate prevents
+/// root commit concerns from leaking into ordinary specialization shards.
+const CompletedProcedureRootShard = struct {
+    worker_id: SpecJobWorkerId,
+    worker_local_symbol_count: u32,
+    specialization_counter_delta: ?SpecializationCounters = null,
+    store_epoch: SpecJobStoreEpoch,
+    body_draft: BodyDraftStore,
+    root_ty: Type.TypeId,
+    root_def: DraftDefId,
+    diagnostics: ?*SpecJobDiagnostics,
+    diagnostics_committed: bool = false,
+    store_epoch_absorbed: bool = false,
+
+    fn deinit(self: *CompletedProcedureRootShard) void {
+        const allocator = self.body_draft.allocator;
+        self.body_draft.deinit();
+        self.store_epoch.deinit();
+        if (self.diagnostics) |diagnostics| allocator.destroy(diagnostics);
+        self.* = undefined;
+    }
+};
+
 /// Immutable coordinator input shared by one frozen ordinary-specialization batch.
 const SpecJobWorkerInputs = struct {
     modules: Common.CheckedModules,
@@ -2417,10 +2422,16 @@ const SpecJobTaskContext = struct {
     completed: bool = false,
 };
 
-const RootTemplateBatch = struct {
-    graph: *InstGraph,
-    draft: *BodyDraftStore,
-    pending: std.ArrayList(PendingTemplateBody) = .empty,
+/// Caller-owned root task storage lets unordered executor completion be
+/// validated before any ordered coordinator commit begins.
+const ProcedureRootTaskContext = struct {
+    inputs: *const SpecJobWorkerInputs,
+    workers: []?SpecJobWorkerState,
+    request: checked.RootRequest,
+    shard: ?CompletedProcedureRootShard = null,
+    failed: bool = false,
+    retry_serial: bool = false,
+    completed: bool = false,
 };
 
 const FinalBodyOutputCounts = struct {
@@ -3440,7 +3451,7 @@ const Builder = struct {
         const def = if (request.procedure_binding) |binding|
             try self.lowerProcedureBindingRoot(request, binding)
         else if (request.procedure_template) |template|
-            try self.lowerTemplate(template, moduleView(self.root_view), request.checked_type, request.root_evidence, null)
+            try self.lowerTemplate(template, moduleView(self.root_view), request.checked_type, request.root_evidence)
         else if (request.procedure_use) |procedure|
             try self.lowerProcedureUseRoot(request, procedure)
         else
@@ -3449,68 +3460,102 @@ const Builder = struct {
         try self.program.addRoot(.{ .def = def, .request = request });
     }
 
-    /// Lower adjacent checked template roots into one graph and draft. Every
-    /// root receives a fresh `BodyContext` (and therefore a fresh checked-type
-    /// instantiation scope), but graph-local specialization identities remain
-    /// visible across roots. Equivalent callee requests can consequently reuse
-    /// the first deferred request before either graph sealing or body lowering.
-    fn lowerTemplateRootBatch(self: *Builder, requests: []const checked.RootRequest) Allocator.Error!void {
-        if (requests.len == 0) return;
-
-        var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
-        defer graph_setup_timing_scope.end();
-        const graph = try self.createGraph();
-        defer graph.destroy();
-        var body_draft = BodyDraftStore.init(self.allocator);
-        defer body_draft.deinit();
-        var batch = RootTemplateBatch{ .graph = graph, .draft = &body_draft };
-        defer batch.pending.deinit(self.allocator);
-        const defs = try self.allocator.alloc(Ast.DefId, requests.len);
-        defer self.allocator.free(defs);
-        graph_setup_timing_scope.end();
-
-        const draft_guard = FinalBodyOutputGuard.begin(self);
-        for (requests, 0..) |request, index| {
-            const template = request.procedure_template orelse
-                Common.invariant("procedure-template root batch contained another root kind");
-            defs[index] = try self.lowerTemplate(
-                template,
-                moduleView(self.root_view),
-                request.checked_type,
-                request.root_evidence,
-                &batch,
-            );
+    /// Procedure-use runs are the only isolated roots without an ordered
+    /// coordinator dependency; every other root kind remains a serial barrier.
+    fn lowerIsolatedRoots(self: *Builder, requests: []const checked.RootRequest) Allocator.Error!void {
+        const executor = self.post_check_executor orelse {
+            for (requests) |request| try self.lowerRoot(request);
+            return;
+        };
+        if (executor.worker_count <= 1) {
+            for (requests) |request| try self.lowerRoot(request);
+            return;
         }
-        const draft_end = draft_guard.end(self);
-
-        const root_nodes = try self.allocator.alloc(NodeId, batch.pending.items.len);
-        defer self.allocator.free(root_nodes);
-        for (batch.pending.items, 0..) |pending, index| root_nodes[index] = pending.root_node;
-
-        const sealed = try self.sealActiveBodyDraft(
-            graph,
-            &body_draft,
-            draft_guard,
-            draft_end,
-            null,
-            root_nodes,
-            null,
-            null,
-            null,
-        );
-        defer sealed.deinit(self.allocator);
-
-        var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
-        defer completion_timing_scope.end();
-        if (sealed.root_tys.len != batch.pending.items.len) {
-            Common.invariant("root template batch sealing returned the wrong number of root types");
+        var index: usize = 0;
+        while (index < requests.len) {
+            if (requests[index].procedure_use == null) {
+                try self.lowerRoot(requests[index]);
+                index += 1;
+                continue;
+            }
+            const start = index;
+            while (index < requests.len and
+                requests[index].procedure_use != null and
+                index - start < executor.worker_count) : (index += 1)
+            {}
+            try self.lowerProcedureRootBatch(executor, requests[start..index]);
         }
-        for (batch.pending.items, sealed.root_tys) |pending, final_fn_ty| {
-            try self.finishReservedTemplateBody(pending, sealed.ids, final_fn_ty);
+    }
+
+    /// Run a frozen root batch to completion before committing its first root,
+    /// so callbacks can never overlap coordinator mutation.
+    fn lowerProcedureRootBatch(
+        self: *Builder,
+        executor: base.post_check_task_executor.Executor,
+        requests: []const checked.RootRequest,
+    ) Allocator.Error!void {
+        try self.ensureParallelSpecJobState(executor.worker_count);
+        const contexts = try self.allocator.alloc(ProcedureRootTaskContext, requests.len);
+        defer self.allocator.free(contexts);
+        const tasks = try self.allocator.alloc(base.post_check_task_executor.Task, requests.len);
+        defer self.allocator.free(tasks);
+        const completions = try self.allocator.alloc(base.post_check_task_executor.Completion, requests.len);
+        defer self.allocator.free(completions);
+        const inputs = SpecJobWorkerInputs{
+            .modules = self.modules,
+            .program = self.program,
+            .proc_debug_names = self.proc_debug_names,
+            .specialization_cache = self.specialization_cache,
+            .loaded_specialization_shards = self.loaded_specialization_shards,
+            .collect_counters = self.counters != null,
+            .collect_diagnostics = self.diagnostics != null,
+            .inline_expects = self.inline_expects,
+            .static_data_literals = self.static_data_literals,
+            .target_usize = self.target_usize,
+            .hosted_catalog = self.hosted_catalog,
+            .current_loc = self.current_loc,
+            .current_region = self.current_region,
+        };
+        for (requests, 0..) |request, task_id| {
+            contexts[task_id] = .{
+                .inputs = &inputs,
+                .workers = self.spec_job_parallel_workers,
+                .request = request,
+            };
+            tasks[task_id] = .{ .id = task_id, .context = &contexts[task_id], .run = runProcedureRootTask };
         }
-        for (requests, defs) |request, def| {
-            try self.appendRuntimeSchemaRequestsForDef(def);
-            try self.program.addRoot(.{ .def = def, .request = request });
+        defer for (contexts) |*context| {
+            if (context.shard) |*shard| shard.deinit();
+        };
+        try executor.run(tasks, completions);
+        for (completions) |completion| {
+            if (completion.id >= contexts.len) Common.compilerBug("post-check executor returned an unknown root task");
+            const context = &contexts[completion.id];
+            if (context.completed) Common.compilerBug("post-check executor completed a root task more than once");
+            if (completion.value != @as(?*anyopaque, @ptrCast(context))) {
+                Common.compilerBug("post-check executor returned the wrong root task context");
+            }
+            context.completed = true;
+            if (context.shard) |*shard| {
+                if (@intFromEnum(shard.worker_id) != completion.worker_id) {
+                    Common.compilerBug("post-check executor changed root worker ownership");
+                }
+            }
+        }
+        for (contexts) |*context| {
+            if (!context.completed) Common.compilerBug("post-check executor omitted a root completion");
+            if (context.failed) return error.OutOfMemory;
+        }
+        for (contexts) |*context| {
+            if (context.retry_serial) {
+                try self.lowerRoot(context.request);
+            } else {
+                const def = try self.commitCompletedProcedureRootShard(&context.shard.?);
+                try self.appendRuntimeSchemaRequestsForDef(def);
+                try self.program.addRoot(.{ .def = def, .request = context.request });
+                context.shard.?.deinit();
+                context.shard = null;
+            }
         }
     }
 
@@ -3651,6 +3696,41 @@ const Builder = struct {
         request: checked.RootRequest,
         procedure: checked.ProcedureUseTemplate,
     ) Allocator.Error!Ast.DefId {
+        const worker = self.ensureSerialSpecJobWorker();
+        var shard = try self.lowerProcedureUseRootToShard(worker, request, procedure);
+        defer shard.deinit();
+        return self.commitCompletedProcedureRootShard(&shard);
+    }
+
+    /// Produce a root entirely in a worker epoch, sealing every graph-qualified
+    /// cell before destroying the graph and handing ownership to the coordinator.
+    fn lowerProcedureUseRootToShard(
+        self: *Builder,
+        worker: *SpecJobWorkerState,
+        request: checked.RootRequest,
+        procedure: checked.ProcedureUseTemplate,
+    ) Allocator.Error!CompletedProcedureRootShard {
+        if (self.symbols.active != .coordinator) {
+            Common.compilerBug("procedure root shard entered with a worker-local symbol domain active");
+        }
+        self.symbols.worker_local = .{};
+        self.symbols.active = .worker_local;
+        defer self.symbols.active = .coordinator;
+        const workspace = &worker.workspace;
+        const epoch = workspace.beginEpoch(self.program);
+        errdefer workspace.finishEpoch(epoch);
+        const program_types_before = self.program.types.epochBoundary();
+        const program_names_before = self.program.names.epochBoundary();
+        const program_loc_before = self.program.current_loc;
+        const program_region_before = self.program.current_region;
+        const shard_diagnostics: ?*SpecJobDiagnostics = if (self.diagnostics != null) blk: {
+            const diagnostics = try self.allocator.create(SpecJobDiagnostics);
+            diagnostics.* = .{};
+            break :blk diagnostics;
+        } else null;
+        errdefer if (shard_diagnostics) |diagnostics| self.allocator.destroy(diagnostics);
+        self.active_spec_job_diagnostics = shard_diagnostics;
+        defer self.active_spec_job_diagnostics = null;
         const view = moduleView(self.root_view);
         const callable_eval = self.callableEvalForProcedureUse(procedure);
         const template_ref = if (callable_eval) |use| blk: {
@@ -3665,16 +3745,18 @@ const Builder = struct {
         } else self.templateRefForProcedureUse(procedure);
         var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
         defer graph_setup_timing_scope.end();
-        const graph = try self.createGraph();
-        defer graph.destroy();
+        const graph = try self.createGraphForStores(&workspace.types, &workspace.name_store);
+        errdefer graph.destroy();
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
         self.active_graph = graph;
         defer self.active_graph = saved_graph;
         var body_draft = BodyDraftStore.init(self.allocator);
+        errdefer body_draft.deinit();
+        body_draft.spec_job_workspace = workspace;
+        body_draft.mutable_graph_names = &workspace.name_store;
         self.active_body_draft = &body_draft;
         defer self.active_body_draft = saved_body_draft;
-        defer body_draft.deinit();
         var ctx = try BodyContext.init(self.allocator, self, view, template_ref, graph, &body_draft);
         defer ctx.deinit();
 
@@ -3752,21 +3834,50 @@ const Builder = struct {
         });
         body_timing_scope.end();
         const draft_end = draft.end(self);
-        const sealed = try self.sealActiveBodyDraft(
-            graph,
-            &body_draft,
-            draft,
-            draft_end,
-            root_node,
-            &.{},
-            null,
-            root_def,
-            null,
-        );
-        defer sealed.deinit(self.allocator);
-        var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
-        defer completion_timing_scope.end();
-        return sealed.root_def orelse Common.invariant("procedure use root did not commit its wrapper definition");
+        try self.finalizeBodyDraftGraph(graph, &body_draft, draft, draft_end);
+        const root_ty = seal: {
+            var phase_b_sealer = GraphTypeFinals.init(graph);
+            defer phase_b_sealer.deinit();
+            try self.emitDraftDeferredStructuralSerializations(&body_draft, graph, &phase_b_sealer);
+            try self.emitDraftDeferredCallsiteIntrinsics(&body_draft, graph, &phase_b_sealer);
+            try self.emitDraftDeferredStructuralEqs(&body_draft, graph, &phase_b_sealer);
+            try self.emitDraftDeferredInspects(&body_draft, graph, &phase_b_sealer);
+            try body_draft.finishOwnerRuns();
+            var sealer = GraphTypeFinals.init(graph);
+            defer sealer.deinit();
+            try sealDraftCoordinatorIntents(graph, &body_draft, &sealer);
+            const sealed_root_ty = try sealer.sealNode(root_node);
+            try body_draft.sealTypeCellsInPlace(graph, &sealer);
+            body_draft.discardGraphStateAfterSeal();
+            body_draft.assertGraphStateDiscarded();
+            break :seal sealed_root_ty;
+        };
+        body_draft.sealWorkerLocalSymbols(self.symbols.worker_local.next);
+        if (self.spec_job_parallel_callback) {
+            if (!std.meta.eql(program_types_before, self.program.types.epochBoundary()) or
+                !std.meta.eql(program_names_before, self.program.names.epochBoundary()))
+            {
+                Common.compilerBug("parallel root lowering mutated coordinator stores");
+            }
+            if (!std.meta.eql(program_loc_before, self.program.current_loc) or
+                !std.meta.eql(program_region_before, self.program.current_region))
+            {
+                Common.compilerBug("parallel root lowering mutated coordinator source scratch");
+            }
+        }
+        var store_epoch = try workspace.captureStoreEpoch(epoch);
+        errdefer store_epoch.deinit();
+        graph.destroy();
+        workspace.finishEpoch(epoch);
+        return .{
+            .worker_id = worker.worker_id,
+            .worker_local_symbol_count = body_draft.worker_local_symbol_count,
+            .store_epoch = store_epoch,
+            .body_draft = body_draft,
+            .root_ty = root_ty,
+            .root_def = root_def,
+            .diagnostics = shard_diagnostics,
+        };
     }
 
     fn lowerProcedureBindingRoot(
@@ -3965,7 +4076,6 @@ const Builder = struct {
         source_ty_view: ModuleView,
         source_fn_ty: checked.CheckedTypeId,
         root_evidence: ?checked.CheckedEvidenceSpan,
-        root_batch: ?*RootTemplateBatch,
     ) Allocator.Error!Ast.DefId {
         const fn_ty = try self.lowerContextFreeSpecializationType(
             source_ty_view,
@@ -3996,7 +4106,6 @@ const Builder = struct {
             .count,
             null,
             null,
-            root_batch,
             .immediate,
         );
     }
@@ -4129,7 +4238,6 @@ const Builder = struct {
         request_accounting: TemplateRequestAccounting,
         precomputed_request_digest: ?names.TypeDigest,
         retained_topology: ?EvidenceChain,
-        root_batch: ?*RootTemplateBatch,
         body_scheduling: TemplateBodyScheduling,
     ) Allocator.Error!Ast.DefId {
         var lookup_timing_scope = ProcedureTimingScope.begin(self.timing, .lookup_reservation);
@@ -4205,7 +4313,6 @@ const Builder = struct {
                                 job.evidence,
                                 null,
                                 job.signature_relation,
-                                null,
                             );
                             return existing.def;
                         },
@@ -4276,9 +4383,6 @@ const Builder = struct {
         switch (body_scheduling) {
             .immediate => {},
             .queued => {
-                if (root_batch != null) {
-                    Common.invariant("queued Monotype specialization request cannot join a root batch");
-                }
                 if (retained_topology != null) {
                     Common.invariant("queued Monotype specialization request cannot carry a retained lexical topology");
                 }
@@ -4319,15 +4423,14 @@ const Builder = struct {
             spec_evidence,
             retained_topology,
             signature_relation,
-            root_batch,
         );
         return reservation.def;
     }
 
     /// Lower the body (or hosted completion) for a specialization whose
     /// identity, ids, and seed are already reserved. Runs immediately for
-    /// direct callers and root batches, and from the scheduler's wave drain
-    /// for queued symbolic requests.
+    /// direct callers and from the scheduler's wave drain for queued symbolic
+    /// requests.
     fn completeTemplateReservation(
         self: *Builder,
         reservation: TemplateReservation,
@@ -4340,7 +4443,6 @@ const Builder = struct {
         spec_evidence: []const SpecEvidence,
         retained_topology: ?EvidenceChain,
         signature_relation: Ast.SignatureRelation,
-        root_batch: ?*RootTemplateBatch,
     ) Allocator.Error!void {
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
@@ -4387,7 +4489,6 @@ const Builder = struct {
                         &.{},
                         signature_relation,
                         .count,
-                        null,
                         null,
                         null,
                         .immediate,
@@ -4445,26 +4546,6 @@ const Builder = struct {
             .entry,
             .comptime_only,
             => {},
-        }
-
-        if (root_batch) |batch| {
-            const pending = try self.lowerReservedTemplateBodyIntoDraft(
-                batch.graph,
-                batch.draft,
-                reservation,
-                fn_template,
-                template_ref,
-                view,
-                method_scope,
-                template,
-                source_fn_key,
-                lower_fn_ty,
-                spec_evidence,
-                retained_topology,
-                signature_relation,
-            );
-            try batch.pending.append(self.allocator, pending);
-            return;
         }
 
         const graph = try self.createGraph();
@@ -4753,6 +4834,49 @@ const Builder = struct {
         return context;
     }
 
+    fn runProcedureRootTask(
+        opaque_context: *anyopaque,
+        executor_worker: base.post_check_task_executor.Worker,
+    ) ?*anyopaque {
+        const context: *ProcedureRootTaskContext = @ptrCast(@alignCast(opaque_context));
+        if (executor_worker.id >= context.workers.len or executor_worker.id >= std.math.maxInt(u32)) {
+            Common.compilerBug("post-check executor returned an invalid root worker id");
+        }
+        const slot = &context.workers[executor_worker.id];
+        if (slot.* == null) {
+            slot.* = SpecJobWorkerState.init(executor_worker.allocator, @enumFromInt(executor_worker.id));
+        }
+        const worker = &slot.*.?;
+        worker.counters = .{};
+        worker.diagnostics = .{};
+        const builder = Builder.ensureSpecJobWorkerBuilder(worker, context.inputs) catch {
+            context.failed = true;
+            return context;
+        };
+        builder.current_loc = context.inputs.current_loc;
+        builder.current_region = context.inputs.current_region;
+        builder.spec_job_parallel_callback = true;
+        builder.spec_job_requires_serial_retry = false;
+        defer builder.spec_job_parallel_callback = false;
+        var shard = builder.lowerProcedureUseRootToShard(
+            worker,
+            context.request,
+            context.request.procedure_use orelse
+                Common.compilerBug("procedure root task lost its procedure use"),
+        ) catch {
+            if (builder.spec_job_requires_serial_retry) {
+                builder.spec_job_requires_serial_retry = false;
+                context.retry_serial = true;
+            } else {
+                context.failed = true;
+            }
+            return context;
+        };
+        if (context.inputs.collect_counters) shard.specialization_counter_delta = worker.counters;
+        context.shard = shard;
+        return context;
+    }
+
     fn requirePendingSpecJobsDrained(self: *Builder) void {
         if (self.pending_spec_jobs_head != self.pending_spec_jobs.items.len) {
             Common.compilerBug("Monotype specialization queue was not drained at a wave boundary");
@@ -4803,7 +4927,6 @@ const Builder = struct {
                     job.evidence,
                     null,
                     job.signature_relation,
-                    null,
                 );
                 self.acceptSpecDispatch(job.dispatch_index);
             },
@@ -5039,6 +5162,7 @@ const Builder = struct {
             &shard.body_draft,
             shard.pending.root_ty,
             &committed_types,
+            null,
         );
         defer sealed.deinit(self.allocator);
         var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
@@ -5057,6 +5181,47 @@ const Builder = struct {
         shard.diagnostics_committed = true;
         self.countCoordinatorBodyDiagnostic("spec_job_shards_committed");
         self.acceptSpecDispatch(shard.dispatch_index);
+    }
+
+    /// Commit one root shard after its worker epoch joins the cumulative lane
+    /// domain, recovering the wrapper def from the exhaustive draft commit.
+    fn commitCompletedProcedureRootShard(
+        self: *Builder,
+        shard: *CompletedProcedureRootShard,
+    ) Allocator.Error!Ast.DefId {
+        if (shard.diagnostics_committed or shard.store_epoch_absorbed) {
+            Common.compilerBug("procedure root shard was committed more than once");
+        }
+        const commit_domain = self.specJobCommitDomainFor(shard.worker_id);
+        try commit_domain.absorb(&shard.store_epoch);
+        shard.store_epoch_absorbed = true;
+        var committed_types = CommittedGraphTypes.relocatedStore(
+            &commit_domain.types,
+            &commit_domain.name_store,
+            &self.program.types,
+            &self.program.names,
+            commit_domain.committedTypeRelocation(self.program),
+        );
+        if (shard.worker_local_symbol_count != shard.body_draft.worker_local_symbol_count) {
+            Common.compilerBug("procedure root shard symbol count disagreed with its sealed draft");
+        }
+        shard.body_draft.relocateWorkerLocalSymbols(&self.symbols.coordinator);
+        shard.body_draft.assertGraphStateDiscarded();
+        const sealed = try self.commitSealedBodyDraft(
+            &shard.body_draft,
+            shard.root_ty,
+            &committed_types,
+            shard.root_def,
+        );
+        defer sealed.deinit(self.allocator);
+        const def = sealed.root_def orelse
+            Common.invariant("procedure root shard did not commit its wrapper definition");
+        if (shard.diagnostics) |diagnostics| diagnostics.addTo(self.diagnostics.?);
+        if (shard.specialization_counter_delta) |delta| {
+            addFlatCounters(SpecializationCounters, self.counters.?, delta);
+        }
+        shard.diagnostics_committed = true;
+        return def;
     }
 
     fn lowerReservedTemplateBodyIntoDraft(
@@ -5396,9 +5561,7 @@ const Builder = struct {
             const candidate_owner = source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].parent_owner;
             switch (request_owner) {
                 .reserved_fn => |requesting_root| switch (candidate_owner) {
-                    .reserved_fn => |candidate_root| if (requesting_root != candidate_root) {
-                        self.countBodyDiagnostic("cross_root_template_reuses");
-                    },
+                    .reserved_fn => |candidate_root| _ = candidate_root != requesting_root,
                     .root, .draft_fn => {},
                 },
                 .root, .draft_fn => {},
@@ -7025,7 +7188,6 @@ const Builder = struct {
             .count,
             null,
             null,
-            null,
             .immediate,
         );
         return .{ .local = self.defFnId(def) };
@@ -7119,7 +7281,6 @@ const Builder = struct {
                     .count,
                     null,
                     retained,
-                    null,
                     .immediate,
                 );
                 return self.defFnId(def);
@@ -8521,7 +8682,6 @@ const Builder = struct {
                 .already_counted,
                 request_digest,
                 null,
-                null,
                 body_scheduling,
             );
             break :blk .{ .local = self.defFnId(def) };
@@ -9076,6 +9236,7 @@ const Builder = struct {
         body_draft: *BodyDraftStore,
         root_ty: Type.TypeId,
         committed_types: *CommittedGraphTypes,
+        root_def: ?DraftDefId,
     ) Allocator.Error!ActiveBodyDraftSeal {
         var timing_scope = ProcedureTimingScope.begin(self.timing, .body_finalization);
         defer timing_scope.end();
@@ -9116,7 +9277,7 @@ const Builder = struct {
             .root_ty = sealed_root,
             .root_tys = sealed_roots,
             .extra_ty = null,
-            .root_def = null,
+            .root_def = if (root_def) |draft_def| body_ids.def(draft_def) else null,
             .root_fn = null,
             .core_maps = retained_core_maps,
         };
@@ -31196,7 +31357,7 @@ const BodyContext = struct {
             // This path consumes a callee's solved private iterator
             // representation immediately and still performs coordinator-owned
             // reservation/body completion. Leave the frozen worker result
-            // unpublished and re-run this uncommon job on the serial executor.
+            // uncommitted and re-run this uncommon job on the serial executor.
             self.builder.spec_job_requires_serial_retry = true;
             return error.OutOfMemory;
         }
