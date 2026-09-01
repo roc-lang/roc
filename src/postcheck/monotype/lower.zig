@@ -19299,10 +19299,6 @@ const BodyContext = struct {
         return try self.resolvedTypeViewForNode(node);
     }
 
-    fn resolvedCheckedTypeView(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
-        return try self.resolvedTypeViewForNode(try self.lowerTypeNode(checked_ty));
-    }
-
     fn lowerTypeView(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
         return try self.activeTypeFromCell(try self.lowerTypeCell(checked_ty));
     }
