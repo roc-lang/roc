@@ -240,7 +240,17 @@ pub fn elide(gpa: Allocator, store: *LirStore) Allocator.Error!usize {
             .incref => |s| .{ s.value, s.next },
             .decref => |s| .{ s.value, s.next },
             .decref_if_initialized => |s| .{ s.value, s.next },
-            else => continue,
+            .init_uninitialized, .boxy_tag_match, .str_match, .str_match_set, .switch_stmt,
+            .switch_initialized_payload, .join,
+            .assign_ref, .assign_literal, .assign_call, .assign_call_erased,
+            .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref,
+            .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt,
+            .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload,
+            .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag,
+            .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken,
+            .free, .jump, .ret, .crash, .expect_err, .runtime_error,
+            .comptime_exhaustiveness_failed, .loop_continue, .loop_break,
+            => continue,
         };
         if (!immortal.contains(value)) continue;
         dropped[index] = true;
