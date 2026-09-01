@@ -2894,7 +2894,7 @@ dispatch plan identity and their path relative to that plan's callable in
 checked evidence at each instantiation edge. An empty path is not a defaulting
 signal and consumers must never infer one source category from path length.
 Dispatch plans owned by standalone default-field expressions are the explicit
-exception: their obligations are resolved from the default root's checked
+exception: their dispatch requirements consume the default root's checked
 use-site evidence, because that root has no enclosing template specialization
 whose interface replay could discharge symbolic constraint-callable evidence.
 
