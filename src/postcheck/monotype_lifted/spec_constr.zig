@@ -304,15 +304,34 @@ pub const OwnedProcedureUsage = struct {
 };
 
 /// Specialize recursive direct calls whose arguments are known constructor shapes.
-pub fn run(allocator: Allocator, program: *Ast.Program) Common.LowerError!void {
-    var procedure_usage = try runAndCollectProcedureUsage(allocator, program);
+/// How the value-aware whole-body rewrite of original functions inlines
+/// direct calls.
+///
+/// `.all_calls` lets the rewrite inline any admissible direct call while it
+/// chases known values, so general call-pattern specialization simplifies
+/// across arbitrary procedure boundaries. That chase is the expensive part of
+/// this pass: its cost grows with how much known-value structure flows through
+/// a module's call graph, independent of the emitted-code budgets.
+///
+/// `.iterator_fusion` restricts the rewrite's inlining to checker-stamped
+/// iterator producers and calls already inside an iterator context: the
+/// subset that collapses `Iter` pipelines into scalar loops. Argument-level
+/// specialization still runs in full; only the whole-body value chase narrows.
+/// Dev builds select this so their post-check time stays proportional to the
+/// iterator code the rewrite improves.
+pub const BodyRewriteInlining = enum { all_calls, iterator_fusion };
+
+/// Run SpecConstr, discarding the use inventory it collects.
+pub fn run(allocator: Allocator, program: *Ast.Program, body_rewrite_inlining: BodyRewriteInlining) Common.LowerError!void {
+    var procedure_usage = try runAndCollectProcedureUsage(allocator, program, body_rewrite_inlining);
     defer procedure_usage.deinit();
 }
 
 /// Run SpecConstr and retain the exact use inventory from its final graph.
-pub fn runAndCollectProcedureUsage(allocator: Allocator, program: *Ast.Program) Common.LowerError!OwnedProcedureUsage {
+pub fn runAndCollectProcedureUsage(allocator: Allocator, program: *Ast.Program, body_rewrite_inlining: BodyRewriteInlining) Common.LowerError!OwnedProcedureUsage {
     var pass = try Pass.init(allocator, program);
     defer pass.deinit();
+    pass.body_rewrite_inlining = body_rewrite_inlining;
     return try pass.run();
 }
 
@@ -935,6 +954,9 @@ const Pass = struct {
     program: *Ast.Program,
     plans: []FnPlan,
     symbols: Common.SymbolGen,
+    /// Direct-call inlining scope for the whole-body rewrite of original
+    /// functions. See `BodyRewriteInlining`.
+    body_rewrite_inlining: BodyRewriteInlining = .all_calls,
     /// Per source function: whether the whole-body value clone has already
     /// satisfied value-aware call rewriting, shape demand, and known-loop
     /// scalarization. Those analyses can all request the same clone, but the
@@ -3816,6 +3838,10 @@ const Pass = struct {
         };
         var cloner = Cloner.initForRewrite(self);
         defer cloner.deinit();
+        cloner.inline_calls = switch (self.body_rewrite_inlining) {
+            .all_calls => .all,
+            .iterator_fusion => .iterator_fusion,
+        };
         cloner.inline_direct_requires_known_arg = true;
         const args = self.program.typedLocalSpan(fn_.args);
         for (0..args.len) |index| {
@@ -13953,7 +13979,7 @@ test "call-pattern specialization preserves imported direct calls" {
     var lifted = try @import("lift.zig").run(allocator, mono);
     defer lifted.deinit();
 
-    try run(allocator, &lifted);
+    try run(allocator, &lifted, .all_calls);
 
     const body_data = lifted.getExpr(body).data;
     if (body_data != .call_proc) return error.TestUnexpectedResult;

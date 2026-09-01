@@ -965,7 +965,7 @@ fn liftModuleAfterSpecConstr(
     mono = undefined;
     errdefer lifted.deinit();
 
-    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
+    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted, .all_calls);
 
     return .{
         .resources = resources,
@@ -1170,7 +1170,7 @@ fn expectInlinePlanDecision(
     var lifted_owned = true;
     errdefer if (lifted_owned) lifted.deinit();
 
-    var procedure_usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted);
+    var procedure_usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted, .all_calls);
     defer procedure_usage.deinit();
 
     var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);
@@ -7347,7 +7347,7 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
     mono_consumed = true;
     defer lifted.deinit();
 
-    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
+    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted, .all_calls);
 
     // The input program has no tuple nested directly inside another tuple, so a
     // nested tuple after specialization means the substituted aggregate leaked
