@@ -17333,6 +17333,14 @@ const EvidencePass = struct {
         return entry.value_ptr.*;
     }
 
+    fn planIsDefaultRoot(self: *const EvidencePass, plan_id: static_dispatch.StaticDispatchPlanId) bool {
+        const span = self.template_iterator_refs.default_plan_refs;
+        for (self.plan_table.template_refs[span.start .. span.start + span.len]) |default_plan_id| {
+            if (default_plan_id == plan_id) return true;
+        }
+        return false;
+    }
+
     fn appendEvidenceParams(self: *EvidencePass, params: []const EvidenceParam) Allocator.Error!artifact_serialize.Span {
         const idents = self.module.identStoreConst();
         const pool_start: u32 = @intCast(self.evidence_params_pool.items.len);
@@ -17349,6 +17357,7 @@ const EvidencePass = struct {
                     // No Monotype consumer is reachable from that expression.
                     const intro_expr = constraint_callable.intro_expr orelse break :constraint .checked_error;
                     const plan = self.plan_table.lookupByExpr(@enumFromInt(intro_expr)) orelse break :constraint .checked_error;
+                    if (self.planIsDefaultRoot(plan)) break :constraint .use_site_only;
                     break :constraint .{ .constraint_callable = .{
                         .plan = plan,
                         .callable_ty = self.checked_types.rootForSourceVar(self.module, constraint_callable.callable_var) orelse
@@ -18176,6 +18185,7 @@ const EvidencePass = struct {
         if (!self.constraintCallableNeedsDefaultProvenance(param)) return null;
         const intro_expr = constraint_callable.intro_expr orelse return null;
         const source_plan = self.plan_table.lookupByExpr(@enumFromInt(intro_expr)) orelse return null;
+        if (self.planIsDefaultRoot(source_plan)) return null;
         const dispatcher_ty = self.checked_types.rootForSourceVar(self.module, param.dispatcher_var) orelse
             checkedArtifactInvariant("constraint-callable evidence dispatcher type was not published", .{});
         const path_start: u32 = @intCast(self.constraint_callable_paths.items.len);
