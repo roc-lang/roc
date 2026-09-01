@@ -36,6 +36,8 @@ pub const EventView = union(enum) {
     dbg: []const u8,
 };
 
+/// Borrowed callback used to forward structured compile-time events to a
+/// caller such as the REPL without routing them through stderr.
 pub const EventCallback = struct {
     context: *anyopaque,
     notify: *const fn (*anyopaque, EventView) void,
