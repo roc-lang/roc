@@ -287,6 +287,11 @@ sub check_body_context_output_access {
         commitGraphType
         programFnSourceTypeNode
     );
+    my %allowed_global_name_access = map { $_ => 1 } qw(
+        importProgramType
+        commitGraphType
+        lookupMethodTargetByName
+    );
     my %allowed_graph_type_egress = map { $_ => 1 } qw(
         completeDeferredIteratorResult
     );
@@ -295,6 +300,7 @@ sub check_body_context_output_access {
     my $global_type_access = qr/(?:\.builder\.program\.(?:fnSource|types)|self\.builder\.(?:constBoxPayloadType|constListElemType|constRecordFields|errorRowIsIncludedIn|functionShape|namedBackingType|nominalConstructionLayer|nominalExprBackingType|optionalFieldSlot|optionalSlotInfo|recordField|recordFieldByTextOptional|recordFieldType|recordFieldsSpan|shapeContent|singleTypeArg|specializationTypeDigest|tagByName|tagPayloadTypes|tagUnionTags|tupleItemTypes|typeHasBuiltinOwner|typeIsProvenUninhabited))\b/;
     my $global_type_ingress = qr/self\.builder\.(?:lowerType|primitiveType)\b/;
     my $global_type_cache = qr/\.builder\.(?:type_cache|parse_result_ok_types|generated_try_types|uninhabited_type_cache)\.(?:get|getPtr|getOrPut|put|remove)\b/;
+    my $global_name_access = qr/(?:self\.builder\.program\.names|self\.builder\.(?:moduleIdentity|recordFieldName|tagName|typeName|typeDef|lookupMethodTarget|lookupMethodTargetByName))\b/;
     my $graph_type_egress = qr/self\.commitGraphType\b/;
     my $coordinator_static_data = qr/self\.builder\.commitStaticDataValue\b/;
 
@@ -335,6 +341,9 @@ sub check_body_context_output_access {
         }
         if ($code =~ $global_type_cache) {
             push @violations, "$rel:$line_no: body-context-builder-global-type-cache: $line";
+        }
+        if ($code =~ $global_name_access && !$allowed_global_name_access{$current_fn // ''}) {
+            push @violations, "$rel:$line_no: body-context-global-name-store: $line";
         }
         if ($code =~ $graph_type_egress && !$allowed_graph_type_egress{$current_fn // ''}) {
             push @violations, "$rel:$line_no: body-context-global-type-egress: $line";
@@ -449,11 +458,12 @@ sub check_active_body_draft_seal_access {
         }
 
         # `sealActiveBodyDraft` composes the synchronous path, while
-        # `commitFinalizedBodyDraft` is the same ordered commit suffix used
-        # after a queued shard crosses the coordinator handoff.
+        # Finalized graph-backed bodies and sealed graph-free shards each own
+        # one ordered draft commit suffix.
         my $owns_body_draft_commit =
             ($current_fn // '') eq 'sealActiveBodyDraft' ||
-            ($current_fn // '') eq 'commitFinalizedBodyDraft';
+            ($current_fn // '') eq 'commitFinalizedBodyDraft' ||
+            ($current_fn // '') eq 'commitSealedBodyDraft';
         if (!$in_test && !$owns_body_draft_commit) {
             if ($code =~ /\b[A-Za-z_][A-Za-z0-9_]*\.sealCoreIntoProgram\(/) {
                 push @violations, "$rel:$line_no: active-body-draft-seal-bypass: $line";

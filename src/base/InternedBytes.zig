@@ -103,6 +103,25 @@ pub fn Index(comptime Policy: type) type {
             return id;
         }
 
+        /// Reserve enough table storage for `total_count` entries. Once this
+        /// succeeds, inserts up to that count cannot resize the index.
+        pub fn ensureTotalCapacity(
+            self: *Self,
+            owner: anytype,
+            gpa: Allocator,
+            total_count: usize,
+        ) Allocator.Error!void {
+            if (self.cells.len() == 0) {
+                var capacity = Policy.initial_index_capacity;
+                while (wouldExceedMaxLoad(total_count, capacity)) capacity *= 2;
+                try self.allocate(gpa, capacity);
+                return;
+            }
+            while (wouldExceedMaxLoad(total_count, @intCast(self.cells.len()))) {
+                try self.resize(owner, gpa);
+            }
+        }
+
         pub fn findStringOrSlot(self: *const Self, owner: anytype, bytes_hash: u64, bytes: []const u8) Find {
             const table_size: usize = @intCast(self.cells.len());
             if (table_size == 0) return .{ .idx = null, .slot = 0 };

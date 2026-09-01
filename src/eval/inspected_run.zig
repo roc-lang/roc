@@ -405,6 +405,7 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
             static_strings.entries,
             program.boxy_tables.erased_arg_desc_offsets,
             program.boxy_tables.erased_arg_desc_params,
+            program.boxy_tables.worker_procs,
             .preserve,
             roc_target.host_cpu.level(),
         );
@@ -478,6 +479,7 @@ fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
         program.layouts,
         program.boxy_tables.erased_arg_desc_offsets,
         program.boxy_tables.erased_arg_desc_params,
+        program.boxy_tables.worker_procs,
         .default,
     );
     defer codegen.deinit();
@@ -510,11 +512,7 @@ fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
     };
 }
 
-const TestInvocationContext = extern struct {
-    expect_err_set: u32 = 0,
-    expect_err_start: u32 = 0,
-    expect_err_end: u32 = 0,
-};
+const InProcessContext = boxy_abi.InProcessContext;
 
 const OwnedLlvmCompileOptions = struct {
     options: @import("llvm_compile").CompileOptions,
@@ -562,6 +560,7 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
         program.store,
         program.boxy_tables.erased_arg_desc_offsets,
         program.boxy_tables.erased_arg_desc_params,
+        program.boxy_tables.worker_procs,
     );
     codegen.layout_store = program.layouts;
     defer codegen.deinit();
@@ -598,7 +597,7 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
     var lib = try EvalDynLib.open(allocator, dylib_path);
     defer lib.close();
 
-    const EntryFn = *const fn (*builtins.host_abi.RocOps, *TestInvocationContext, [*]u8, ?*anyopaque, *const boxy_abi.BoxyNativeFnTable) callconv(.c) void;
+    const EntryFn = *const fn (*builtins.host_abi.RocOps, *InProcessContext, [*]u8, ?*anyopaque) callconv(.c) void;
     const entry = lib.lookup(EntryFn, "roc_eval_main") orelse return error.LlvmBackendUnavailable;
 
     var runtime_env = RuntimeHostEnv.init(allocator);
@@ -624,14 +623,13 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
     const sj = crash_boundary.set();
     if (sj != 0) return crashResult(allocator, &runtime_env, null);
 
-    var test_context: TestInvocationContext = .{};
-    var native_fns = boxy_abi.nativeFnTable();
+    const native_fns = boxy_abi.nativeFnTable();
+    var in_process_context: InProcessContext = .{ .boxy_fn_table = &native_fns };
     entry(
         runtime_env.get_ops(),
-        &test_context,
+        &in_process_context,
         ret_buf.ptr,
         if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
-        &native_fns,
     );
     switch (runtime_env.crashState()) {
         .did_not_crash => {},

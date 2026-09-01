@@ -85,6 +85,140 @@ pub fn count(self: *const SerialStringInterner) u32 {
     return @intCast(self.ranges.items.items.len);
 }
 
+/// Immutable append boundary for the durable id and byte arrays.
+pub const EpochBoundary = struct {
+    ids: u32,
+    bytes: u32,
+};
+
+/// Capture the current durable boundary without exposing growable storage.
+pub fn epochBoundary(self: *const SerialStringInterner) EpochBoundary {
+    return .{
+        .ids = @intCast(self.ranges.items.items.len),
+        .bytes = @intCast(self.bytes.items.items.len),
+    };
+}
+
+/// Owned immutable suffix between two durable boundaries.
+///
+/// Hash-index cells are derived insertion state, not durable data. Range
+/// starts are normalized to this segment's byte allocation so no pointer or
+/// offset retains the mutable source interner.
+pub const EpochDelta = struct {
+    allocator: Allocator,
+    begin: EpochBoundary,
+    end: EpochBoundary,
+    bytes: []u8,
+    ranges: []Range,
+
+    pub fn capture(
+        allocator: Allocator,
+        source: *const SerialStringInterner,
+        begin: EpochBoundary,
+        end: EpochBoundary,
+    ) Allocator.Error!EpochDelta {
+        requireEpochBoundary(source, begin);
+        requireEpochBoundary(source, end);
+        std.debug.assert(begin.ids <= end.ids);
+        std.debug.assert(begin.bytes <= end.bytes);
+
+        const owned_bytes = try allocator.dupe(
+            u8,
+            source.bytes.items.items[begin.bytes..end.bytes],
+        );
+        errdefer allocator.free(owned_bytes);
+        const source_ranges = source.ranges.items.items[begin.ids..end.ids];
+        const owned_ranges = try allocator.alloc(Range, source_ranges.len);
+        errdefer allocator.free(owned_ranges);
+        for (source_ranges, owned_ranges) |source_range, *owned_range| {
+            std.debug.assert(source_range.start >= begin.bytes);
+            std.debug.assert(source_range.start + source_range.len <= end.bytes);
+            owned_range.* = .{
+                .start = source_range.start - begin.bytes,
+                .len = source_range.len,
+            };
+        }
+        return .{
+            .allocator = allocator,
+            .begin = begin,
+            .end = end,
+            .bytes = owned_bytes,
+            .ranges = owned_ranges,
+        };
+    }
+
+    /// Resolve a workspace-local serial id when it belongs to this segment.
+    pub fn getText(self: *const EpochDelta, id: u32) ?[]const u8 {
+        if (id < self.begin.ids or id >= self.end.ids) return null;
+        const range = self.ranges[id - self.begin.ids];
+        return self.bytes[range.start..][0..range.len];
+    }
+
+    /// Reserve every allocation needed to append this exact suffix.
+    pub fn prepareAppend(
+        self: *const EpochDelta,
+        destination: *SerialStringInterner,
+        allocator: Allocator,
+    ) Allocator.Error!void {
+        std.debug.assert(std.meta.eql(destination.epochBoundary(), self.begin));
+        if (self.begin.ids == self.end.ids) return;
+        try destination.bytes.items.ensureTotalCapacity(allocator, self.end.bytes);
+        try destination.ranges.items.ensureTotalCapacity(allocator, self.end.ids);
+        var index = Index.fromCells(destination.index, destination.count());
+        defer destination.index = index.cells;
+        try index.ensureTotalCapacity(destination, allocator, self.end.ids);
+    }
+
+    /// Append after `prepareAppend`; no logical mutation can fail.
+    pub fn appendPrepared(
+        self: *const EpochDelta,
+        destination: *SerialStringInterner,
+        allocator: Allocator,
+    ) void {
+        std.debug.assert(std.meta.eql(destination.epochBoundary(), self.begin));
+        var index = Index.fromCells(destination.index, destination.count());
+        defer destination.index = index.cells;
+        var id = self.begin.ids;
+        while (id < self.end.ids) : (id += 1) {
+            const inserted = index.insert(
+                destination,
+                allocator,
+                self.getText(id).?,
+            ) catch unreachable;
+            std.debug.assert(inserted == id);
+        }
+        std.debug.assert(std.meta.eql(destination.epochBoundary(), self.end));
+    }
+
+    /// Append this suffix after an identical prefix while preserving serial ids.
+    pub fn appendTo(
+        self: *const EpochDelta,
+        destination: *SerialStringInterner,
+        allocator: Allocator,
+    ) Allocator.Error!void {
+        try self.prepareAppend(destination, allocator);
+        self.appendPrepared(destination, allocator);
+    }
+
+    pub fn deinit(self: *EpochDelta) void {
+        self.allocator.free(self.ranges);
+        self.allocator.free(self.bytes);
+        self.* = undefined;
+    }
+};
+
+fn requireEpochBoundary(self: *const SerialStringInterner, mark: EpochBoundary) void {
+    std.debug.assert(mark.ids <= self.ranges.items.items.len);
+    std.debug.assert(mark.bytes <= self.bytes.items.items.len);
+    const expected_bytes: u32 = if (mark.ids == 0)
+        0
+    else blk: {
+        const range = self.ranges.items.items[mark.ids - 1];
+        break :blk range.start + range.len;
+    };
+    std.debug.assert(mark.bytes == expected_bytes);
+}
+
 fn textAt(self: *const SerialStringInterner, id: u32) []const u8 {
     const r = self.ranges.items.items[id];
     return self.bytes.items.items[r.start .. r.start + r.len];
@@ -253,6 +387,50 @@ test "SerialStringInterner: default-empty interner lazily initializes on first i
     try testing.expectEqual(@as(u32, 0), try it.insert(gpa, "List"));
     try testing.expectEqualStrings("Dict", it.getText(1));
     try testing.expectEqual(@as(?u32, 0), it.lookup("List"));
+}
+
+test "SerialStringInterner epoch deltas own consecutive immutable suffixes" {
+    const gpa = testing.allocator;
+    var source: SerialStringInterner = .{};
+    const start = source.epochBoundary();
+    var empty = try EpochDelta.capture(gpa, &source, start, start);
+    defer empty.deinit();
+    try testing.expectEqual(@as(usize, 0), empty.bytes.len);
+    try testing.expectEqual(@as(usize, 0), empty.ranges.len);
+
+    try testing.expectEqual(@as(u32, 0), try source.insert(gpa, "alpha"));
+    try testing.expectEqual(@as(u32, 1), try source.insert(gpa, ""));
+    const middle = source.epochBoundary();
+    var first = try EpochDelta.capture(gpa, &source, start, middle);
+    defer first.deinit();
+
+    try testing.expectEqual(@as(u32, 2), try source.insert(gpa, "omega"));
+    const end = source.epochBoundary();
+    var second = try EpochDelta.capture(gpa, &source, middle, end);
+    defer second.deinit();
+
+    // Force source growth, then destroy it before reading either owned segment.
+    var index: usize = 0;
+    while (index < 256) : (index += 1) {
+        var buffer: [32]u8 = undefined;
+        const text = try std.fmt.bufPrint(&buffer, "growth-{d}", .{index});
+        _ = try source.insert(gpa, text);
+    }
+    source.deinit(gpa);
+
+    try testing.expectEqualStrings("alpha", first.getText(0).?);
+    try testing.expectEqualStrings("", first.getText(1).?);
+    try testing.expect(first.getText(2) == null);
+    try testing.expectEqualStrings("omega", second.getText(2).?);
+
+    var destination: SerialStringInterner = .{};
+    defer destination.deinit(gpa);
+    try empty.appendTo(&destination, gpa);
+    try first.appendTo(&destination, gpa);
+    try second.appendTo(&destination, gpa);
+    try testing.expectEqualStrings("alpha", destination.getText(0));
+    try testing.expectEqualStrings("", destination.getText(1));
+    try testing.expectEqualStrings("omega", destination.getText(2));
 }
 
 test "SerialStringInterner: grows past initial table capacity preserving ids/lookup" {

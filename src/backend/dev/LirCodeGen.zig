@@ -265,8 +265,11 @@ pub const GenerationMode = enum {
 pub const ComptimeHooks = struct {
     branch_taken: *const fn (*RocOps, u32, u32) callconv(.c) void,
     exhaustiveness_failed: *const fn (*RocOps, u32) callconv(.c) void,
-    failure_region: *const fn (*RocOps, u32, u32) callconv(.c) void,
-    call_enter: *const fn (*RocOps, u32, u32) callconv(.c) void,
+    /// (roc_ops, region start, region end, source file, line, column): the
+    /// statement's resolved location rides along with its region so the host
+    /// knows which module's source the byte offsets belong to.
+    failure_region: *const fn (*RocOps, u32, u32, u32, u32, u32) callconv(.c) void,
+    call_enter: *const fn (*RocOps, u32, u32, u32, u32, u32) callconv(.c) void,
     call_exit: *const fn (*RocOps) callconv(.c) void,
 };
 
@@ -1003,6 +1006,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// boxy runtime (via `roc_boxy_init_embedded`) before running procs.
         boxy_runtime_used: bool = false,
 
+        /// Exact dense LIR proc ids reachable through Boxy method slots.
+        boxy_worker_procs: []const lir.LIR.LirProcSpecId,
+
         /// Native addresses of the boxy runtime wrappers for in-process
         /// execution. When set, `native_execution` boxy calls dispatch through
         /// these; otherwise boxy codegen requires the shim or object-file symbol
@@ -1281,6 +1287,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             store: *const LirStore,
             layout_store_opt: *const LayoutStore,
             static_strings: []const StaticStringData.Entry,
+            boxy_worker_procs: []const lir.LIR.LirProcSpecId,
             float_nan_mode: builtins.float_bits.NanMode,
             cpu_level: CpuLevel,
         ) Allocator.Error!Self {
@@ -1291,6 +1298,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 static_strings,
                 &.{},
                 &.{},
+                boxy_worker_procs,
                 float_nan_mode,
                 cpu_level,
             );
@@ -1303,6 +1311,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             static_strings: []const StaticStringData.Entry,
             erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
             erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
+            boxy_worker_procs: []const lir.LIR.LirProcSpecId,
             float_nan_mode: builtins.float_bits.NanMode,
             cpu_level: CpuLevel,
         ) Allocator.Error!Self {
@@ -1319,6 +1328,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .static_data_symbol_names = .empty,
                 .erased_arg_desc_offsets = erased_arg_desc_offsets,
                 .erased_arg_desc_params = erased_arg_desc_params,
+                .boxy_worker_procs = boxy_worker_procs,
+                .boxy_runtime_used = boxy_worker_procs.len != 0,
                 .local_locations = std.AutoHashMap(u32, ValueLocation).init(allocator),
                 .vector_local_by_reg = .initFill(null),
                 .vector_local_mask = 0,
@@ -1539,12 +1550,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// - Second arg (RSI/X1) contains the pointer to RocOps
         /// - The function writes the result to the result buffer and returns
         ///
-        /// For tuples, pass tuple_len > 1 to copy all elements to the result buffer.
         pub fn generateCode(
             self: *Self,
             root_proc_id: lir.LIR.LirProcSpecId,
             result_layout: layout.Idx,
-            tuple_len: usize,
         ) Allocator.Error!CodeResult {
             // Clear any leftover state from compileAllProcSpecs
             self.clearLocalLocationsRetainingCapacity();
@@ -1628,7 +1637,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (final_result != .noreturn) {
                 const ret_size = self.getLayoutSize(actual_ret_layout);
                 if (ret_size > 0) {
-                    try self.storeResultToSavedPtr(final_result, actual_ret_layout, result_ptr_save_reg, tuple_len);
+                    try self.storeResultToSavedPtr(final_result, actual_ret_layout, result_ptr_save_reg);
                 }
             }
 
@@ -15908,13 +15917,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (inner_layout.tag == .tag_union) {
                     const box_ptr_reg = try self.ensureInGeneralReg(raw_value_loc);
                     const dest_offset = self.codegen.allocStackSlot(payload_size);
-                    var copied: u32 = 0;
-                    while (copied < payload_size) : (copied += 8) {
-                        const temp_reg = try self.allocTempGeneral();
-                        try self.emitLoad(.w64, temp_reg, box_ptr_reg, @intCast(copied));
-                        try self.emitStore(.w64, frame_ptr, dest_offset + @as(i32, @intCast(copied)), temp_reg);
-                        self.codegen.freeGeneral(temp_reg);
-                    }
+                    // The box allocation holds the inner tag union layout's
+                    // size, which can be smaller than a word-rounded payload
+                    // copy, so the copy must read exactly payload_size bytes.
+                    const temp_reg = try self.allocTempGeneral();
+                    try self.copyChunked(temp_reg, box_ptr_reg, 0, frame_ptr, dest_offset, payload_size);
+                    self.codegen.freeGeneral(temp_reg);
                     self.codegen.freeGeneral(box_ptr_reg);
                     const raw_payload_loc = self.fieldLocationFromLayout(dest_offset, payload_size, payload_layout_idx);
                     return self.requireExactValueLocationToLayout(raw_payload_loc, payload_layout_idx, tps.target_layout, "tag_payload_struct_access.boxed");
@@ -19150,71 +19158,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Store the result to the output buffer pointed to by a saved register
         /// This is used when the original result pointer (X0/RDI) may have been clobbered
-        fn storeResultToSavedPtr(self: *Self, loc: ValueLocation, result_layout: layout.Idx, saved_ptr_reg: GeneralReg, tuple_len: usize) Allocator.Error!void {
-            // Handle tuples specially - copy all elements from stack to result buffer
-            if (tuple_len > 1) {
-                switch (loc) {
-                    .stack => |s| {
-                        const base_offset = s.offset;
-                        // Use layout store for accurate element offsets and sizes
-                        {
-                            const ls = self.layout_store;
-                            const tuple_layout = ls.getLayout(result_layout);
-                            if (tuple_layout.tag == .struct_) {
-                                const tuple_data = ls.getStructData(tuple_layout.getStruct().idx);
-                                const total_size = tuple_data.size.get(ls.targetUsize());
-
-                                // Copy entire tuple as 8-byte chunks
-                                const temp_reg = try self.allocTempGeneral();
-                                var copied: u32 = 0;
-
-                                while (copied < total_size) {
-                                    const stack_offset = base_offset + @as(i32, @intCast(copied));
-                                    const buf_offset: i32 = @as(i32, @intCast(copied));
-
-                                    // Load from stack
-                                    try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset);
-
-                                    // Store to result buffer
-                                    try self.emitStore(.w64, saved_ptr_reg, buf_offset, temp_reg);
-
-                                    copied += 8;
-                                }
-
-                                self.codegen.freeGeneral(temp_reg);
-                                return;
-                            }
-                        }
-
-                        // Fallback: copy tuple_len * 8 bytes
-                        const temp_reg = try self.allocTempGeneral();
-                        for (0..tuple_len) |i| {
-                            const stack_offset = base_offset + @as(i32, @intCast(i)) * 8;
-                            const buf_offset: i32 = @as(i32, @intCast(i)) * 8;
-
-                            try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset);
-                            try self.emitStore(.w64, saved_ptr_reg, buf_offset, temp_reg);
-                        }
-                        self.codegen.freeGeneral(temp_reg);
-                        return;
-                    },
-                    .general_reg,
-                    .float_reg,
-                    .vector_reg,
-                    .stack_i128,
-                    .stack_str,
-                    .list_stack,
-                    .immediate_i64,
-                    .immediate_f32,
-                    .immediate_f64,
-                    .immediate_i128,
-                    .noreturn,
-                    => {
-                        // Fallback - just store the single value
-                    },
-                }
-            }
-
+        fn storeResultToSavedPtr(self: *Self, loc: ValueLocation, result_layout: layout.Idx, saved_ptr_reg: GeneralReg) Allocator.Error!void {
             switch (result_layout) {
                 .i64, .u64 => {
                     const reg = try self.ensureInGeneralReg(loc);
@@ -20035,32 +19979,46 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        /// Copy exactly `size` bytes from [src_base + src_offset] to
+        /// [dst_base + dst_offset], never a byte more, so it is safe for
+        /// buffers whose exact extent someone else owns (heap allocations,
+        /// caller-owned result storage). Any codegen that writes through a
+        /// pointer it did not size itself must use this instead of a
+        /// word-rounded copy loop. Sizes that are not chunk multiples finish
+        /// with an overlapping copy of the tail, which re-copies earlier
+        /// bytes; source and destination therefore must not overlap.
         fn copyChunked(self: *Self, temp_reg: GeneralReg, src_base: GeneralReg, src_offset: i32, dst_base: GeneralReg, dst_offset: i32, size: u32) Allocator.Error!void {
-            std.debug.assert(size > 0);
+            if (size == 0) return;
             if (size == 8) {
                 try self.emitLoad(.w64, temp_reg, src_base, src_offset);
                 try self.emitStore(.w64, dst_base, dst_offset, temp_reg);
                 return;
             }
             if (size < 8) {
-                var remaining = size;
-                var off: i32 = 0;
-                if (remaining >= 4) {
-                    try self.emitLoad(.w32, temp_reg, src_base, src_offset + off);
-                    try self.emitStore(.w32, dst_base, dst_offset + off, temp_reg);
-                    remaining -= 4;
-                    off += 4;
+                // A leading chunk plus an overlapping tail chunk of the same
+                // width cover any sub-word size in at most two copies.
+                if (size >= 4) {
+                    const tail: i32 = @intCast(size - 4);
+                    try self.emitLoad(.w32, temp_reg, src_base, src_offset);
+                    try self.emitStore(.w32, dst_base, dst_offset, temp_reg);
+                    if (tail > 0) {
+                        try self.emitLoad(.w32, temp_reg, src_base, src_offset + tail);
+                        try self.emitStore(.w32, dst_base, dst_offset + tail, temp_reg);
+                    }
+                    return;
                 }
-                if (remaining >= 2) {
-                    try self.emitLoadW16(temp_reg, src_base, src_offset + off);
-                    try self.emitStoreW16(dst_base, dst_offset + off, temp_reg);
-                    remaining -= 2;
-                    off += 2;
+                if (size >= 2) {
+                    const tail: i32 = @intCast(size - 2);
+                    try self.emitLoadW16(temp_reg, src_base, src_offset);
+                    try self.emitStoreW16(dst_base, dst_offset, temp_reg);
+                    if (tail > 0) {
+                        try self.emitLoadW16(temp_reg, src_base, src_offset + tail);
+                        try self.emitStoreW16(dst_base, dst_offset + tail, temp_reg);
+                    }
+                    return;
                 }
-                if (remaining >= 1) {
-                    try self.emitLoadW8(temp_reg, src_base, src_offset + off);
-                    try self.emitStoreW8(dst_base, dst_offset + off, temp_reg);
-                }
+                try self.emitLoadW8(temp_reg, src_base, src_offset);
+                try self.emitStoreW8(dst_base, dst_offset, temp_reg);
                 return;
             }
 
@@ -20367,31 +20325,34 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.patchPendingCalls();
             try self.patchPendingProcAddrs();
 
-            // Emit a dictionary-dispatch thunk for each worker a boxy method
-            // slot can dispatch to, once every procedure has a resolved code
-            // address. Programs without boxy dictionary dispatch never emit a
-            // dictionary call, so the runtime flag stays clear and no thunks
-            // are produced.
-            if (self.boxy_runtime_used) {
-                try self.generateBoxyDictProcThunks(proc_specs);
-            }
+            // Emit a dictionary-dispatch thunk for each exact worker named by
+            // the producer-owned Boxy worker list, once every procedure has a
+            // resolved code address.
+            try self.generateBoxyDictProcThunks();
         }
 
-        /// Generate one dictionary-dispatch thunk per non-hosted `.roc`
-        /// procedure and record its code offset. `roc_boxy_call_dict` resolves
-        /// a worker slot to a procedure id and invokes the registered thunk,
-        /// which marshals the procedure's explicit argument layouts from the
-        /// worker call's argument-pointer array.
-        fn generateBoxyDictProcThunks(self: *Self, proc_specs: []const LirProcSpec) Allocator.Error!void {
-            for (proc_specs, 0..) |proc, i| {
-                // Erased-callable adapters carry their own uniform ABI and are
-                // dispatched through `roc_boxy_call_erased`; hosted procedures
-                // resolve through the host dispatch table. Neither is a boxy
-                // dictionary worker.
-                if (proc.abi == .erased_callable or proc.hosted != null) continue;
-                const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(i);
-                const compiled = self.proc_registry.get(@intFromEnum(proc_id)) orelse continue;
-                if (compiled.code_start == unresolved_proc_code_start) continue;
+        /// Generate the exact dictionary/inspect worker thunks named by LIR.
+        fn generateBoxyDictProcThunks(self: *Self) Allocator.Error!void {
+            for (self.boxy_worker_procs) |proc_id| {
+                const proc = self.store.getProcSpec(proc_id);
+                if (proc.is_static_initializer or proc.abi == .erased_callable or proc.hosted != null or proc.body == null) {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("Dev/codegen invariant violated: Boxy worker proc {d} had a non-worker procedure shape", .{@intFromEnum(proc_id)});
+                    }
+                    unreachable;
+                }
+                const compiled = self.proc_registry.get(@intFromEnum(proc_id)) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("Dev/codegen invariant violated: Boxy worker proc {d} was not compiled", .{@intFromEnum(proc_id)});
+                    }
+                    unreachable;
+                };
+                if (compiled.code_start == unresolved_proc_code_start) {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("Dev/codegen invariant violated: Boxy worker proc {d} had no code address", .{@intFromEnum(proc_id)});
+                    }
+                    unreachable;
+                }
                 const thunk_offset = try self.generateBoxyDictProcThunk(proc_id);
                 try self.boxy_dict_thunks.put(@intFromEnum(proc_id), thunk_offset);
             }
@@ -22197,17 +22158,59 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
             const layout_val = ls.getLayout(runtime_ret_layout);
             const ret_size = ls.layoutSizeAlign(layout_val).size;
+            if (ret_size == 0) return;
 
-            // Ensure result is on stack
+            // The return buffer is caller-owned storage of exactly ret_size
+            // bytes. Erased-callable and hosted results land in buffers sized
+            // by compiled Zig code (e.g. a comparator's `var ordering: u8`),
+            // so writing even one byte past ret_size corrupts the caller's
+            // frame.
+            const ptr_reg: GeneralReg = scratch_reg;
+            const temp_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
+
+            // Register and immediate scalars store their exact width straight
+            // through the return pointer instead of bouncing through a spill
+            // slot; every other location spills to stack and copies from
+            // there.
             const result_offset: i32 = switch (result_loc) {
                 .stack => |s| s.offset,
                 .list_stack => |info| info.struct_offset,
                 .stack_str => |off| off,
                 .stack_i128 => |off| off,
-                .general_reg,
+                .general_reg => |reg| switch (ret_size) {
+                    1, 2, 4, 8 => {
+                        // The register allocator never hands out scratch_reg
+                        // (both x86_64 masks exclude R11 and the aarch64 mask
+                        // excludes X9), so the result value cannot alias
+                        // ptr_reg.
+                        try self.emitLoad(.w64, ptr_reg, frame_ptr, ret_ptr_stack_slot);
+                        try self.emitStoreScalarToPtr(ptr_reg, reg, ret_size);
+                        self.codegen.freeGeneral(reg);
+                        return;
+                    },
+                    else => blk: {
+                        // A general register holds at most 8 bytes; a wider
+                        // return value can never be materialized here.
+                        if (builtin.mode == .Debug and ret_size > 8) {
+                            std.debug.panic(
+                                "LIR/codegen invariant violated: general-register return value has size {d}",
+                                .{ret_size},
+                            );
+                        }
+                        break :blk try self.ensureOnStack(result_loc, ret_size);
+                    },
+                },
+                .immediate_i64 => |val| switch (ret_size) {
+                    1, 2, 4, 8 => {
+                        try self.emitLoad(.w64, ptr_reg, frame_ptr, ret_ptr_stack_slot);
+                        try self.codegen.emitLoadImm(temp_reg, val);
+                        try self.emitStoreScalarToPtr(ptr_reg, temp_reg, ret_size);
+                        return;
+                    },
+                    else => try self.ensureOnStack(result_loc, ret_size),
+                },
                 .float_reg,
                 .vector_reg,
-                .immediate_i64,
                 .immediate_f32,
                 .immediate_f64,
                 .immediate_i128,
@@ -22216,17 +22219,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
 
             // Load the return pointer from the saved stack slot
-            const ptr_reg: GeneralReg = scratch_reg;
             try self.emitLoad(.w64, ptr_reg, frame_ptr, ret_ptr_stack_slot);
-
-            // Copy data in 8-byte chunks from local stack to return buffer
-            const temp_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
-            const num_words = (ret_size + 7) / 8;
-            for (0..num_words) |w| {
-                const off: i32 = @intCast(w * 8);
-                try self.emitLoad(.w64, temp_reg, frame_ptr, result_offset + off);
-                try self.emitStore(.w64, ptr_reg, off, temp_reg);
-            }
+            try self.copyChunked(temp_reg, frame_ptr, result_offset, ptr_reg, 0, ret_size);
         }
 
         fn copyValueToPointer(self: *Self, value_loc: ValueLocation, value_layout: layout.Idx, ptr_local: LocalId) Allocator.Error!void {
@@ -23832,6 +23826,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn emitRocExpectFailed(self: *Self) Allocator.Error!void {
+            // Stamp the failing statement's region/location before the call,
+            // exactly as for crashes, so compile-time expect failures resolve
+            // their declaring module (the host consumes the pending location
+            // per expect event; see CompileTimeHost.rocExpectFailed).
+            if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
             try self.emitRocStaticMessageCall(@offsetOf(RocOps, "roc_expect_failed"), "expect failed");
         }
 
@@ -23869,11 +23868,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const roc_ops_reg = self.roc_ops_reg orelse return;
             const region = self.store.stmtRegion(stmt_id);
             if (region.isEmpty()) return;
+            const loc = self.store.stmtLoc(stmt_id);
             try self.spillAllVectorLocals();
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addRegArg(roc_ops_reg);
             try builder.addImmArg(@intCast(region.start.offset));
             try builder.addImmArg(@intCast(region.end.offset));
+            try builder.addImmArg(@intCast(loc.file));
+            try builder.addImmArg(@intCast(loc.line));
+            try builder.addImmArg(@intCast(loc.column));
             try builder.call(@intFromPtr(hooks.failure_region));
         }
 
@@ -23885,11 +23888,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const roc_ops_reg = self.roc_ops_reg orelse return false;
             const region = self.store.stmtRegion(stmt_id);
             if (region.isEmpty()) return false;
+            const loc = self.store.stmtLoc(stmt_id);
             try self.spillAllVectorLocals();
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addRegArg(roc_ops_reg);
             try builder.addImmArg(@intCast(region.start.offset));
             try builder.addImmArg(@intCast(region.end.offset));
+            try builder.addImmArg(@intCast(loc.file));
+            try builder.addImmArg(@intCast(loc.line));
+            try builder.addImmArg(@intCast(loc.column));
             try builder.call(@intFromPtr(hooks.call_enter));
             return true;
         }
@@ -24404,7 +24411,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (self.getLayoutSize(proc_spec.ret_layout) > 0) {
                 const ret_ptr_reg = try self.allocTempGeneral();
                 try self.emitLoad(.w64, ret_ptr_reg, frame_ptr, ret_ptr_slot);
-                try self.storeResultToSavedPtr(result_loc, proc_spec.ret_layout, ret_ptr_reg, 1);
+                try self.storeResultToSavedPtr(result_loc, proc_spec.ret_layout, ret_ptr_reg);
                 self.codegen.freeGeneral(ret_ptr_reg);
             }
 
@@ -24476,17 +24483,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// the boxy runtime is installed so the runtime's proc table is
         /// populated before any dictionary dispatch.
         fn emitBoxyDictProcRegistrations(self: *Self) Allocator.Error!void {
-            var it = self.boxy_dict_thunks.iterator();
-            while (it.next()) |entry| {
-                const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(entry.key_ptr.*);
-                const thunk_offset = entry.value_ptr.*;
+            for (self.boxy_worker_procs) |proc_id| {
+                const proc_index = @intFromEnum(proc_id);
+                const thunk_offset = self.boxy_dict_thunks.get(proc_index) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("Dev/codegen invariant violated: Boxy worker proc {d} had no generated dispatch thunk", .{proc_index});
+                    }
+                    unreachable;
+                };
                 const proc = self.store.getProcSpec(proc_id);
                 const ret_layout = self.runtimeRepresentationLayoutIdx(proc.ret_layout);
 
                 const addr_reg = try self.allocTempGeneral();
                 try self.emitInternalCodeAddress(thunk_offset, addr_reg);
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                try builder.addImmArg(@intCast(entry.key_ptr.*));
+                try builder.addImmArg(@intCast(proc_index));
                 try builder.addRegArg(addr_reg);
                 try builder.addImmArg(@intFromEnum(ret_layout));
                 try builder.addImmArg(@bitCast(proc.rc_borrowed_params));
@@ -24934,7 +24945,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .none => {},
                 .indirect => {
                     if (self.getLayoutSize(ret_layout) > 0) {
-                        try self.storeResultToSavedPtr(result_loc, ret_layout, sret_reg, 1);
+                        try self.storeResultToSavedPtr(result_loc, ret_layout, sret_reg);
                     }
                     // Both SysV and Win64 require the sret pointer back in RAX.
                     if (comptime target.toCpuArch() == .x86_64) {
@@ -25074,7 +25085,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const arg_infos = try self.materializeEntrypointArgInfos(arg_layouts, args_ptr_reg);
             const result_loc = try self.callCompiledOffsetWithArgInfos(compiled, arg_infos, ret_layout, null);
             if (self.getLayoutSize(ret_layout) > 0) {
-                try self.storeResultToSavedPtr(result_loc, ret_layout, ret_ptr_reg, 1);
+                try self.storeResultToSavedPtr(result_loc, ret_layout, ret_ptr_reg);
             }
         }
 
@@ -25437,11 +25448,11 @@ fn compileRootWithFloatNanMode(
     const allocator = std.testing.allocator;
     // The callers of this run the code they get back, so it is held to what
     // the machine running the tests executes.
-    var codegen = try HostLirCodeGen.init(allocator, store, layout_store, &.{}, float_nan_mode, roc_target_mod.host_cpu.level());
+    var codegen = try HostLirCodeGen.init(allocator, store, layout_store, &.{}, &.{}, float_nan_mode, roc_target_mod.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
 
-    const result = try codegen.generateCode(root_proc, ret_layout, 1);
+    const result = try codegen.generateCode(root_proc, ret_layout);
     errdefer allocator.free(result.code);
     const unwind_functions = try allocator.dupe(coff.FunctionInfo, codegen.getUnwindFunctions());
     return .{
@@ -25601,8 +25612,50 @@ test "code generator initialization" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
+}
+
+test "Boxy dictionary thunks are emitted only for producer-named workers" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const ordinary_proc = try addLiteralProc(
+        &store,
+        .{ .i64_literal = .{ .value = 41, .layout_idx = .u64 } },
+        .u64,
+    );
+    const worker_proc = try addLiteralProc(
+        &store,
+        .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
+        .u64,
+    );
+
+    var codegen = try HostLirCodeGen.initWithBoxyMetadata(
+        allocator,
+        &store,
+        &test_state.layout_store,
+        &.{},
+        &.{},
+        &.{},
+        &.{worker_proc},
+        .preserve,
+        roc_target_mod.host_cpu.level(),
+    );
+    defer codegen.deinit();
+
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+
+    try std.testing.expectEqual(@as(usize, 1), codegen.boxy_dict_thunks.count());
+    try std.testing.expect(codegen.boxy_dict_thunks.contains(@intFromEnum(worker_proc)));
+    try std.testing.expect(!codegen.boxy_dict_thunks.contains(@intFromEnum(ordinary_proc)));
 }
 
 test "vector spill residency is independent of scalar local count" {
@@ -25616,7 +25669,7 @@ test "vector spill residency is independent of scalar local count" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const vector_local = try addLocal(&store, .u8x16);
@@ -25681,7 +25734,7 @@ test "proc params and mutable list cells use distinct stack slots" {
     } });
     const args = try store.addLocalSpan(&.{ start, end });
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const HostCodeGen = @TypeOf(codegen.codegen);
@@ -25723,7 +25776,7 @@ test "Windows internal proc ABI reads stack arguments after shadow space" {
     const list = try addLocal(&store, list_layout);
     const args = try store.addLocalSpan(&.{ a, b, c, d, list });
 
-    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const InnerCodeGen = @TypeOf(codegen.codegen);
@@ -25749,7 +25802,7 @@ test "Windows erased callable ABI reads reuse pointer from caller stack" {
     const args = try store.addLocalSpan(&.{ explicit_arg, capture_arg, reuse_arg });
     const arg_plan = try store.internErasedCallArgsPlan(&test_state.layout_store, &.{.u64});
 
-    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const InnerCodeGen = @TypeOf(codegen.codegen);
@@ -25784,7 +25837,7 @@ test "Windows dictionary thunk ABI reads result descriptor pointer from caller s
     const proc = store.getProcSpec(proc_id);
 
     const WinCodeGen = LirCodeGen(.x64win);
-    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     try codegen.proc_registry.put(@intFromEnum(proc_id), .{
@@ -25822,7 +25875,7 @@ test "AArch64 internal proc ABI uses caller stack arg base for stack arguments" 
     const stack_arg = try addLocal(&store, .u64);
     const args = try store.addLocalSpan(&.{ a0, a1, a2, a3, a4, a5, a6, a7, stack_arg });
 
-    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     const InnerCodeGen = @TypeOf(codegen.codegen);
@@ -25846,7 +25899,7 @@ test "AArch64 compare immediate accepts large bit masks" {
     defer test_state.deinit();
 
     const ArmCodeGen = LirCodeGen(.arm64mac);
-    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     try codegen.emitCmpImm(aarch64.GeneralReg.X0, @bitCast(@as(u64, 1) << 63));
@@ -26751,7 +26804,7 @@ test "entrypoint arg offsets preserve Roc alignment order" {
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     var offsets: [2]u32 = undefined;
@@ -26778,7 +26831,7 @@ test "entrypoint param slots round aggregates to ABI word width" {
         test_state.layout_store.getLayout(.f32),
     });
 
-    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, .preserve, .default);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, &.{}, &.{}, .preserve, .default);
     defer codegen.deinit();
 
     try std.testing.expectEqual(@as(u32, 16), codegen.entrypointParamSlotSize(aggregate_layout));
