@@ -30,6 +30,17 @@ const LirProgram = lir.Program;
 const BoxyBuiltinFn = backend.LirCodeGenMod.BoxyBuiltinFn;
 const BoxyNativeFnTable = backend.LirCodeGenMod.BoxyNativeFnTable;
 
+/// Borrowed compile-time `dbg` observation delivered while finalized roots are
+/// replayed in deterministic request order.
+pub const EventView = union(enum) {
+    dbg: []const u8,
+};
+
+pub const EventCallback = struct {
+    context: *anyopaque,
+    notify: *const fn (*anyopaque, EventView) void,
+};
+
 /// Runtime options for compile-time finalization.
 pub const Options = struct {
     pub const StderrWriter = struct {
@@ -45,6 +56,7 @@ pub const Options = struct {
 
     max_threads: usize = 0,
     stderr: ?StderrWriter = null,
+    event_callback: ?EventCallback = null,
     std_io: ?std.Io = null,
     slow_root_threshold_ns: u64 = 3 * std.time.ns_per_s,
     slow_root_period_ns: u64 = std.time.ns_per_s,
@@ -822,6 +834,7 @@ fn lowerEvalAndFinishRoots(
         }
         const root_id = root_ids[i];
         const compile_time_root = module.compile_time_roots.root(root_id);
+        host.clearDebugMessages();
         var payload: checked.CompileTimeRootPayload = blk: {
             if (root.request.kind == .compile_time_constant and problem_store == null) {
                 const eval_result = interpreter.eval(.{
@@ -874,6 +887,12 @@ fn lowerEvalAndFinishRoots(
             compile_time_root,
             interpreter.getExpectFailures(),
         )) had_problem = true;
+        try reportInterpreterDebugMessages(
+            allocator,
+            options,
+            compile_time_root,
+            host.debugMessages(),
+        );
 
         if (compile_time_root.literalConversionKind() != null) {
             payload = try finishLiteralConversionRoot(allocator, module, problem_store, compile_time_root, payload);
@@ -888,6 +907,7 @@ fn lowerEvalAndFinishRoots(
             .numeral_conversion,
             .quote_conversion,
             .field_default,
+            .repl_expr,
             => null,
         };
         finishConstRoot(module, compile_time_root, payload, stored_root_type);
@@ -1492,7 +1512,7 @@ fn lowerDevEvalAndFinishRoots(
 
         try recordComptimeSiteHits(problem_store, coverage, module, job.compile_time_root, &lowered.lir_result, job.host.comptime_branch_hits.items, job.root.proc);
 
-        if (try reportDevHostEvents(allocator, options.stderr, problem_store, module, job.compile_time_root, job.host.events.items)) {
+        if (try reportDevHostEvents(allocator, options, problem_store, module, job.compile_time_root, job.host.events.items)) {
             had_problem = true;
         }
 
@@ -1511,6 +1531,7 @@ fn lowerDevEvalAndFinishRoots(
             .numeral_conversion,
             .quote_conversion,
             .field_default,
+            .repl_expr,
             => null,
         };
         finishConstRoot(module, job.compile_time_root, payload, stored_root_type);
@@ -1695,7 +1716,7 @@ fn devCrashedRootPayload(
 
 fn reportDevHostEvents(
     allocator: Allocator,
-    stderr: ?Options.StderrWriter,
+    options: Options,
     maybe_problem_store: ?*check.problem.Store,
     module: *const checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
@@ -1705,10 +1726,17 @@ fn reportDevHostEvents(
     const region = module.checked_bodies.expr(root.expr).source_region;
     for (events) |event| {
         switch (event) {
-            .dbg => |msg| if (stderr) |writer| {
-                const line = try std.fmt.allocPrint(allocator, "[dbg] {s}\n", .{msg});
-                defer allocator.free(line);
-                writer.writeAll(line);
+            .dbg => |msg| {
+                if (root.kind == .repl_expr) {
+                    if (options.event_callback) |callback| {
+                        callback.notify(callback.context, .{ .dbg = msg });
+                    }
+                }
+                if (options.stderr) |writer| {
+                    const line = try std.fmt.allocPrint(allocator, "[dbg] {s}\n", .{msg});
+                    defer allocator.free(line);
+                    writer.writeAll(line);
+                }
             },
             .expect_failed => |msg| if (maybe_problem_store) |store| {
                 const message_idx = try store.putExtraString(msg);
@@ -1722,6 +1750,26 @@ fn reportDevHostEvents(
         }
     }
     return had_problem;
+}
+
+fn reportInterpreterDebugMessages(
+    allocator: Allocator,
+    options: Options,
+    root: checked.CompileTimeRoot,
+    messages: []const []const u8,
+) Allocator.Error!void {
+    for (messages) |msg| {
+        if (root.kind == .repl_expr) {
+            if (options.event_callback) |callback| {
+                callback.notify(callback.context, .{ .dbg = msg });
+            }
+        }
+        if (options.stderr) |writer| {
+            const line = try std.fmt.allocPrint(allocator, "[dbg] {s}\n", .{msg});
+            defer allocator.free(line);
+            writer.writeAll(line);
+        }
+    }
 }
 
 /// Unwrap the `Try` value a literal-conversion root evaluated to. `Ok` payloads
@@ -1947,6 +1995,7 @@ fn reportsUnusedBranches(kind: checked.CompileTimeRootKind) bool {
         .numeral_conversion,
         .quote_conversion,
         .field_default,
+        .repl_expr,
         => true,
         .hoisted_constant,
         .hoisted_validation,
@@ -2092,6 +2141,7 @@ fn failedRootPayload(
         .numeral_conversion,
         .quote_conversion,
         .field_default,
+        .repl_expr,
         => .{ .const_node = try appendCrashConst(module, message) },
     };
 }
@@ -2160,12 +2210,12 @@ fn compileTimeRootForRequest(
     const kind_matches = switch (request.kind) {
         .compile_time_constant => root.kind == .constant or root.kind == .hoisted_constant or root.kind == .hoisted_validation or root.kind == .numeral_conversion or root.kind == .quote_conversion or root.kind == .field_default,
         .compile_time_callable => root.kind == .callable_binding,
+        .repl_expr => root.kind == .repl_expr,
         .runtime_entrypoint,
         .provided_export,
         .platform_required_binding,
         .hosted_export,
         .test_expect,
-        .repl_expr,
         .dev_expr,
         => finalizationInvariant("non compile-time request reached compile-time root lookup"),
     };
@@ -2182,6 +2232,12 @@ fn finishConstRoot(
     payload: checked.CompileTimeRootPayload,
     root_type: ?check.ConstStore.ConstTypeId,
 ) void {
+    if (root.kind == .repl_expr) {
+        if (payload != .const_node) {
+            finalizationInvariant("compile-time REPL root finalized with non-constant payload");
+        }
+        return;
+    }
     if (root.kind != .constant and root.kind != .hoisted_constant) return;
     const node = switch (payload) {
         .const_node => |id| id,
@@ -2215,6 +2271,7 @@ fn finishConstRoot(
         .numeral_conversion,
         .quote_conversion,
         .field_default,
+        .repl_expr,
         => unreachable,
     };
     const stored = checked.StoredConstTemplate{

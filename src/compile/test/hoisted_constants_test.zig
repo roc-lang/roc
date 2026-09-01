@@ -1855,6 +1855,7 @@ fn expectCompileTimeRootKindsPresent(
             .numeral_conversion,
             .quote_conversion,
             .field_default,
+            .repl_expr,
             => {},
         }
     }
@@ -1936,6 +1937,7 @@ fn compileTimeRootKindMatchesRequest(
         .constant, .hoisted_constant, .hoisted_validation => request_kind == .compile_time_constant,
         .callable_binding => request_kind == .compile_time_callable,
         .expect => request_kind == .test_expect,
+        .repl_expr => request_kind == .repl_expr,
         .numeral_conversion, .quote_conversion, .field_default => request_kind == .compile_time_constant,
     };
 }

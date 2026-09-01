@@ -1107,13 +1107,14 @@ pub const RootRequestTable = struct {
                     .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .field_default => .compile_time_constant,
                     .callable_binding => .compile_time_callable,
                     .expect => .test_expect,
+                    .repl_expr => .repl_expr,
                 },
                 .source = root.source,
                 .compile_time_root = root.id,
                 .checked_type = entryWrapperForRoot(entry_wrappers, root.id).checked_fn_root,
                 .abi = switch (root.kind) {
                     .expect => .test_expect,
-                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => .compile_time,
+                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .field_default, .repl_expr => .compile_time,
                 },
                 .exposure = .private,
                 .procedure_template = templateForEntryWrapperRoot(entry_wrappers, root.id),
@@ -2023,6 +2024,7 @@ fn compileTimeRootKindMatchesRequest(
         .constant, .hoisted_constant, .hoisted_validation => request_kind == .compile_time_constant,
         .callable_binding => request_kind == .compile_time_callable,
         .expect => request_kind == .test_expect,
+        .repl_expr => request_kind == .repl_expr,
         .numeral_conversion, .quote_conversion, .field_default => request_kind == .compile_time_constant,
     };
 }
@@ -2095,6 +2097,7 @@ fn compileTimeRootDependsOnUnboundPlatformRequirement(
         .numeral_conversion,
         .quote_conversion,
         .field_default,
+        .repl_expr,
         => exprDependsOnUnboundPlatformRequirement(
             checked_bodies,
             resolved_value_refs,
@@ -18467,6 +18470,7 @@ fn sealConstEvalTemplatesForRoots(
             .numeral_conversion,
             .quote_conversion,
             .field_default,
+            .repl_expr,
             => checkedArtifactInvariant("non-constant root reached const eval template sealing", .{}),
         };
         const body = checked_const_bodies.bodyForRoot(root.id) orelse {
@@ -19585,7 +19589,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 .nested_proc_sites = .{},
                 .target = switch (root.kind) {
                     .expect => .entry,
-                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => .comptime_only,
+                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .field_default, .repl_expr => .comptime_only,
                 },
             });
         }
@@ -23707,6 +23711,10 @@ pub const CompileTimeRootKind = enum {
     /// construction sites—local and cross-module—restore the archived
     /// constant instead of re-lowering the expression.
     field_default,
+    /// One explicitly requested REPL expression body whose inspected `Str`
+    /// result is evaluated during checking finalization but is not installed
+    /// as a source-visible top-level constant.
+    repl_expr,
 };
 
 /// A field-default root can also own the checked literal conversion for its
@@ -23753,7 +23761,7 @@ pub const CompileTimeRoot = struct {
             .numeral_conversion => .numeral,
             .quote_conversion => .quote,
             .field_default => self.literal_conversion,
-            .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect => null,
+            .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect, .repl_expr => null,
         };
     }
 };
@@ -23783,6 +23791,7 @@ pub const CompileTimeRootTable = struct {
         names: *const canonical.CanonicalNameStore,
         value_binding_defs: []const CIR.Def.Idx,
         selected_hoisted_roots: []const hoist_roots.SelectedHoistedRoot,
+        explicit_roots: []const ExplicitRootRequestInput,
         checked_types: *CheckedTypePublication,
         checked_body_builder: *CheckedBodyStoreBuilder,
         procedure_templates: *const CheckedProcedureTemplateTable,
@@ -23823,6 +23832,27 @@ pub const CompileTimeRootTable = struct {
         }
 
         const module_env = module.moduleEnvConst();
+
+        for (explicit_roots) |explicit| {
+            if (explicit.kind != .repl_expr) continue;
+            const expr_idx = switch (explicit.source) {
+                .expr => |expr| expr,
+                .def, .statement, .required_binding, .hoisted => checkedArtifactInvariant(
+                    "compile-time REPL root did not name its checked expression body",
+                    .{},
+                ),
+            };
+            try appendCompileTimeRoot(&roots, allocator, .{
+                .module_idx = module.moduleIndex(),
+                .kind = .repl_expr,
+                .source = explicit.source,
+                .pattern = null,
+                .expr = checkedExprIdForSource(checked_bodies, expr_idx),
+                .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(expr_idx)),
+                .payload = .pending,
+            });
+        }
+
         for (value_binding_defs) |def_idx| {
             const def = module.def(def_idx);
             if (def.expr.data == .e_derived_method) {
@@ -24173,7 +24203,7 @@ fn deinitCompileTimeRootSlice(allocator: Allocator, roots: []CompileTimeRoot) vo
 
 fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: CompileTimeRootPayload) void {
     const matches = switch (kind) {
-        .constant, .hoisted_constant => switch (payload) {
+        .constant, .hoisted_constant, .repl_expr => switch (payload) {
             .const_node => true,
             .pending, .fn_value, .discarded, .expect => false,
         },
@@ -24212,6 +24242,7 @@ fn verifyCompileTimeRootLiteralConversion(root: CompileTimeRoot) void {
         .expect,
         .numeral_conversion,
         .quote_conversion,
+        .repl_expr,
         => std.debug.assert(root.literal_conversion == null),
     }
 }
@@ -24221,7 +24252,7 @@ fn compileTimeRootHasConstBody(kind: CompileTimeRootKind) bool {
         .constant, .hoisted_constant => true,
         // A field default's constant is restored by expression lookup at
         // construction sites, never exported as a named data constant.
-        .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .field_default => false,
+        .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .field_default, .repl_expr => false,
     };
 }
 
@@ -24681,6 +24712,7 @@ fn compileTimeRootReplacesSourceOccurrence(kind: CompileTimeRootKind) bool {
         // exhaustiveness site inside it belongs to its compile-time
         // evaluation (design.md "Defaulted Fields").
         .field_default,
+        .repl_expr,
         => true,
         .callable_binding,
         .expect,
@@ -29506,7 +29538,7 @@ pub const CheckedModuleArtifact = struct {
             verifyCompileTimeRootLiteralConversion(root);
             if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patternCount());
             switch (root.kind) {
-                .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => switch (root.payload) {
+                .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .field_default, .repl_expr => switch (root.payload) {
                     .pending => {},
                     .const_node,
                     .fn_value,
@@ -32804,6 +32836,7 @@ pub fn publishFromTypedModule(
         &canonical_names,
         value_binding_defs,
         inputs.hoisted_roots,
+        inputs.explicit_roots,
         &checked_type_publication,
         &checked_body_builder,
         &checked_procedure_templates,
@@ -33526,6 +33559,7 @@ fn expectProvidedExportKind(
         module,
         &canonical_names,
         value_binding_defs,
+        &.{},
         &.{},
         &checked_type_publication,
         &checked_body_builder,
