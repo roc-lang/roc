@@ -54190,17 +54190,21 @@ test "frozen codec format index resolves equivalent TypeIds only for agreeing ro
 
     var view: ModuleView = undefined;
     view.key = .{};
+    // These opaque ids are deliberate synthetic identities: this unit only
+    // compares call targets for equality and never dereferences their source
+    // tables. Keep the identities explicit instead of manufacturing dummy
+    // table entries unrelated to the format-index behavior under test.
     const target: static_dispatch.MethodTarget = .{
         .module_idx = 0,
-        .def_idx = @enumFromInt(0),
+        .def_idx = @enumFromInt(1),
         .kind = .{ .procedure = .{
-            .proc = .{ .proc_base = @enumFromInt(0) },
-            .template = .{ .proc_base = @enumFromInt(0), .template = @enumFromInt(0) },
+            .proc = .{ .proc_base = @enumFromInt(2) },
+            .template = .{ .proc_base = @enumFromInt(2), .template = @enumFromInt(3) },
         } },
-        .callable_ty = @enumFromInt(0),
+        .callable_ty = @enumFromInt(4),
     };
     const lookup = MethodLookup{ .view = view, .target = target };
-    const callee = DraftFnSlot{ .local = .{ .draft = @enumFromInt(0) } };
+    const callee = DraftFnSlot{ .local = .{ .draft = @enumFromInt(5) } };
     const calls = try gpa.alloc(FrozenPreparedCodecCall, 2);
     calls[0] = .{
         .kind = .parser,
@@ -54209,7 +54213,7 @@ test "frozen codec format index resolves equivalent TypeIds only for agreeing ro
         .method_role = 0,
         .subject_bearing = true,
         .contract_view = [_]u8{0} ** 32,
-        .contract_derivation = @enumFromInt(0),
+        .contract_derivation = @enumFromInt(6),
         .shape_ty = first_shape,
         .lookup = lookup,
         .callable_ty = first_str,
