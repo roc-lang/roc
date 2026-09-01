@@ -6808,6 +6808,33 @@ test "check type - single question binop joins mapped error into return row" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try(I64, [BadA, Wrapped([BadB]), ..])");
 }
 
+test "check type - try joins two unresolved dispatch methods' closed rows at the use site" {
+    // design.md "Try Question Row Widening": each `?` on an UNRESOLVED
+    // dispatch call attaches a `try_row_join` constraint to the method's
+    // still-flex error row. Both constraints ride the generalized scheme and
+    // fire at the concrete use, joining each method's own closed row into
+    // the instantiated return row without demanding either method AT the
+    // caller's whole row.
+    const source =
+        \\P := [Mk].{
+        \\    parse_a : P, Str -> Try(I64, [BadA])
+        \\    parse_a = |_, _| Err(BadA)
+        \\    parse_b : P, Str -> Try(I64, [BadB])
+        \\    parse_b = |_, _| Err(BadB)
+        \\}
+        \\
+        \\use_both = |p, s| {
+        \\    x = p.parse_a(s)?
+        \\    y = p.parse_b(s)?
+        \\    Ok(x + y)
+        \\}
+        \\
+        \\concrete : Str -> Try(I64, [BadA, BadB, Extra])
+        \\concrete = |s| use_both(P.Mk, s)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try(I64, [BadA, BadB, Extra])");
+}
+
 test "check type - try passthrough keeps higher-order error row polymorphic" {
     // design.md "Try Question Row Widening": an unresolved (flex) source row
     // keeps the plain unification relation, so `?` on a function-typed
@@ -6945,7 +6972,7 @@ test "check type - List.get method syntax" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "Try(Dec, [OutOfBounds, ..])",
+        "Try(Dec, [OutOfBounds])",
     );
 }
 
@@ -6993,11 +7020,11 @@ test "check type - List.first method syntax should not create cyclic types" {
     const source =
         \\result = [1].first()
     ;
-    // Expected: Try(Dec, [ListWasEmpty, ..]) after from_numeral resolution
+    // Expected: Try(Dec, [ListWasEmpty]) after from_numeral resolution
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "Try(Dec, [ListWasEmpty, ..])",
+        "Try(Dec, [ListWasEmpty])",
     );
 }
 
@@ -9808,7 +9835,7 @@ test "check type - boundary defaulting - literal behind dispatch chain rooted at
         \\top_str = "a,b,c"
         \\get_first = |_x| top_str.split_on(",").get(0)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Try(Str, [OutOfBounds, ..])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Try(Str, [OutOfBounds])");
 }
 
 // Nested-frame analogue of the test above—no top-level weak value involved.
@@ -9822,7 +9849,7 @@ test "check type - boundary defaulting - literal behind dispatch chain rooted in
         \\    inner({})
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Try(Str, [OutOfBounds, ..])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Try(Str, [OutOfBounds])");
 }
 
 // Guard: explicit scheme requirements must not disturb weak top-level literal
