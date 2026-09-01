@@ -3098,6 +3098,26 @@ encoding and state types for exactly the methods needed by that shape:
 - named nominal values call that nominal type's explicit method. If the method
   is missing, checking reports the missing static-dispatch requirement.
 
+The checked artifact publishes each parser/encoder derivation as an explicit
+generated-codec contract. It records every generated call's method, concrete
+dispatcher and callable types, optional subject role, and exact resolution to
+either checked callable evidence or another generated-codec contract. A
+structural dispatch plan and any stored generated runtime name that contract by
+identity. Boxy and Monotype consume the identity directly; they must not find a
+derivation by comparing runtime types or resolve one of its calls by looking up
+the method name in a registry.
+
+Monotype instantiates a generated-codec contract once at the codec boundary.
+While the specialization graph is mutable, codec preparation relates the
+contract's checked call interfaces, reserves their exact callees, and records
+the method identity with each prepared call. After relation freeze, generated
+bodies may consume only that frozen prepared-call plan. They do not repeat
+method lookup, synthesize another specialization request, or interpret the
+shape to recover a call the checker did not publish. Debug compiler builds
+audit that every producer-required call was consumed and that repeated roles
+have exactly equal checked type graphs; these audits and their consumption
+bits are absent from release compiler builds.
+
 If a format does not support a shape, checking reports the missing method as a
 static-dispatch error. Unsupported shapes are not represented as runtime parse
 or encode failures. Runtime failures are reserved for input/output conditions
@@ -4867,6 +4887,13 @@ complete):
   Monotype output. Downstream (LIR layout, ARC, match
   compilation, interpreter, backends) the slot is an ORDINARY structural
   tag union—no new concepts anywhere below Monotype lowering.
+- Generated codecs traverse the source-value axis, not the runtime-slot axis.
+  An `InstField` with kind `optional` must therefore carry `value_ty`, and codec
+  planning reads that exact node; required and defaulted fields use their inline
+  `ty`. There is no `value_ty orelse ty` rule: a missing optional value node or
+  optional metadata on a required/defaulted field is an invariant violation.
+  The tagged presence slot is consumed only where generated parser/encoder code
+  explicitly reads, constructs, or tests record storage.
 - Boxy planning consumes the checked row's explicit field kind directly.
   Required and defaulted children use their inline representation; optional
   children use a memoized `[#Missing, #Present(payload)]` representation and

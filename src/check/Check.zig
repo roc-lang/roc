@@ -33997,7 +33997,23 @@ fn validateDerivedParseTagExt(
     return switch (self.types.resolveVar(ext_var).desc.content) {
         .structure => |structure| switch (structure) {
             .empty_tag_union => .ok,
-            .tag_union => |tag_union| try self.validateDerivedParseTagUnion(ext_var, tag_union, encoding_var, state_var, err_var, constraint, env, region, walk, failure_expr),
+            .tag_union => |tag_union| blk: {
+                // A row extension is another storage fragment of the same
+                // logical union. Its payloads need codec validation, but the
+                // generated runtime invokes `parse_tag_union` once for the
+                // flattened row, so do not record another format call here.
+                for (0..tag_union.tags.count) |tag_offset| {
+                    const tag_args_range = self.types.getTagAt(tag_union.tags, @intCast(tag_offset)).args;
+                    for (0..tag_args_range.count) |tag_arg_offset| {
+                        const tag_arg = self.types.getVarAt(tag_args_range, @intCast(tag_arg_offset));
+                        switch (try self.validateDerivedParseVar(tag_arg, encoding_var, state_var, err_var, constraint, env, region, walk, .shape, failure_expr)) {
+                            .ok => {},
+                            .unsupported, .reported_error => |result| break :blk result,
+                        }
+                    }
+                }
+                break :blk try self.validateDerivedParseTagExt(tag_union.ext, encoding_var, state_var, err_var, constraint, env, region, walk, failure_expr);
+            },
             .record,
             .record_unbound,
             .tuple,
@@ -34544,7 +34560,22 @@ fn validateDerivedEncodeTagExt(
     return switch (self.types.resolveVar(ext_var).desc.content) {
         .structure => |structure| switch (structure) {
             .empty_tag_union => .ok,
-            .tag_union => |tag_union| try self.validateDerivedEncodeTagUnion(tag_union, encoding_var, state_var, err_var, constraint, env, region, walk),
+            .tag_union => |tag_union| blk: {
+                // As on the parser side, an extension contributes payloads to
+                // one flattened runtime union; `encode_tag` is one container
+                // call, not one call per internal row fragment.
+                for (0..tag_union.tags.count) |tag_offset| {
+                    const tag_args_range = self.types.getTagAt(tag_union.tags, @intCast(tag_offset)).args;
+                    for (0..tag_args_range.count) |tag_arg_offset| {
+                        const tag_arg = self.types.getVarAt(tag_args_range, @intCast(tag_arg_offset));
+                        switch (try self.validateDerivedEncodeVar(tag_arg, encoding_var, state_var, err_var, constraint, env, region, walk)) {
+                            .ok => {},
+                            .unsupported, .reported_error => |result| break :blk result,
+                        }
+                    }
+                }
+                break :blk try self.validateDerivedEncodeTagExt(tag_union.ext, encoding_var, state_var, err_var, constraint, env, region, walk);
+            },
             .record,
             .record_unbound,
             .tuple,
