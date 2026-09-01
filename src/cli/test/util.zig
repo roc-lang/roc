@@ -449,6 +449,13 @@ pub fn runChildWithTimeout(
 
     // The watchdog signals the child's process group; it needs the child id.
     const child_pid: ?std.process.Child.Id = child.id;
+    var child_reaped = false;
+    // Any error before child.wait succeeds must terminate the entire group.
+    // This runs after the watchdog's deferred join and before child.kill reaps
+    // the leader, so child_pid still identifies the group created above.
+    errdefer if (!child_reaped) {
+        if (child_pid) |pid| terminateChildGroup(child_job, pid);
+    };
 
     var watch = Watch{
         .job = child_job,
@@ -497,6 +504,7 @@ pub fn runChildWithTimeout(
     try multi_reader.checkAnyError();
 
     const term = try child.wait(io);
+    child_reaped = true;
     // child.wait invalidates the raw child id. Publish completion and join the
     // only writer before reading its sampled-stack result.
     watch.stopAndJoin(&watch_thread);
