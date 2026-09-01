@@ -11235,8 +11235,8 @@ checked CIR
 An interactive REPL expression is an explicit `.repl_expr` compile-time root
 whose checked body returns `Str.inspect(expression)`. The evaluation helper
 that generated the zero-argument wrapper resolves its asserted body once and
-puts that exact expression identity in the root request; publication and later
-stages consume the identity directly. Checking retains the zero-argument
+puts that exact expression identity in the root request; `CheckedModuleBuilder`
+and `CompileTimeFinalization` consume the identity directly. Checking retains the zero-argument
 REPL-root context so inspecting an
 uncalled constrained polymorphic function does not force its body, but checking
 finalization evaluates the selected body itself and stores its `Str` result in
