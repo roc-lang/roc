@@ -171,7 +171,7 @@ main = g([1.U32, 2.U32])
 				(e-num (value "0")))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 321)
+		(e-call (constraint-fn-var 352)
 			(e-lookup-local
 				(p-assign (ident "g")))
 			(e-list

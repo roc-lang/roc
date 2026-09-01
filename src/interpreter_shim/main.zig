@@ -35,7 +35,14 @@ const shim_symbols = builtins.shim_symbols;
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 
 const RuntimeState = struct {
-    shm: SharedMemoryAllocator,
+    source: union(enum) {
+        coordination,
+        embedded: struct {
+            base: usize,
+            len: usize,
+        },
+    },
+    shm: ?SharedMemoryAllocator,
     view: lir.LirImage.ProgramView,
 };
 
@@ -47,7 +54,7 @@ const ShimError = error{
 
 const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || lir.LirImage.ImageError;
 
-var runtime_state_initialized: bool = false;
+var runtime_state_initialized: std.atomic.Value(bool) = .init(false);
 var runtime_state: RuntimeState = undefined;
 var runtime_state_mutex: std.Io.Mutex = .init;
 
@@ -75,24 +82,35 @@ fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
     const view = try lir.LirImage.viewMappedImageWithAllocator(header, shm.base_ptr, shm.total_size, TargetUsize.native, gpa);
 
     return .{
+        .source = .coordination,
         .shm = shm,
         .view = view,
     };
 }
 
+fn requireCoordinationRuntimeState(ops: *RocOps) ShimError!*RuntimeState {
+    return switch (runtime_state.source) {
+        .coordination => &runtime_state,
+        .embedded => {
+            ops.crash("LIR shim cannot use coordination after installing an embedded image");
+            return error.ImageUnavailable;
+        },
+    };
+}
+
 fn ensureRuntimeState(ops: *RocOps) ShimError!*RuntimeState {
-    if (runtime_state_initialized) return &runtime_state;
+    if (runtime_state_initialized.load(.acquire)) return requireCoordinationRuntimeState(ops);
 
     runtime_state_mutex.lockUncancelable(shimIo());
     defer runtime_state_mutex.unlock(shimIo());
 
-    if (runtime_state_initialized) return &runtime_state;
+    if (runtime_state_initialized.load(.monotonic)) return requireCoordinationRuntimeState(ops);
 
     runtime_state = openRuntimeState(allocator()) catch {
         ops.crash("LIR shim could not map the compiled Roc image");
         return error.ImageUnavailable;
     };
-    runtime_state_initialized = true;
+    runtime_state_initialized.store(true, .release);
     return &runtime_state;
 }
 
@@ -167,18 +185,22 @@ fn evaluateEntrypointInView(
     };
     defer gpa.free(arg_layouts);
 
-    var interpreter = eval.LirInterpreter.initWithBoxyTables(
+    const retained = eval.LirInterpreter.Retained.createWithBoxyTables(
         gpa,
         &view.store,
         &view.layouts,
         eval.LirInterpreter.BoxyTables.fromImageView(view),
         ops,
         .preserve,
+        shimIo(),
     ) catch {
         ops.crash("LIR shim could not initialize the LIR interpreter");
         return error.OutOfMemory;
     };
-    defer interpreter.deinit();
+    defer retained.release();
+    retained.enter();
+    defer retained.leave();
+    const interpreter = &retained.interpreter;
 
     const proc = view.store.getProcSpec(entrypoint.root_proc);
     _ = interpreter.eval(.{
@@ -188,7 +210,7 @@ fn evaluateEntrypointInView(
         .arg_ptr = arg_ptr,
         .ret_ptr = ret_ptr,
     }) catch |err| {
-        reportEvalError(ops, &interpreter, err);
+        reportEvalError(ops, interpreter, err);
         return;
     };
 }
@@ -209,6 +231,39 @@ fn viewEmbeddedLirImage(image_base: *anyopaque, image_len: usize, ops: *RocOps) 
         ops.crash("LIR shim could not view the embedded LIR image");
         return error.ImageUnavailable;
     };
+}
+
+fn requireEmbeddedRuntimeState(base: usize, image_len: usize, ops: *RocOps) ShimError!*RuntimeState {
+    return switch (runtime_state.source) {
+        .embedded => |embedded| if (embedded.base == base and embedded.len == image_len)
+            &runtime_state
+        else mismatch: {
+            ops.crash("LIR shim received a different embedded image after initialization");
+            break :mismatch error.ImageUnavailable;
+        },
+        .coordination => {
+            ops.crash("LIR shim cannot install an embedded image after coordination");
+            return error.ImageUnavailable;
+        },
+    };
+}
+
+fn ensureEmbeddedRuntimeState(image_base: *anyopaque, image_len: usize, ops: *RocOps) ShimError!*RuntimeState {
+    const base = @intFromPtr(image_base);
+    if (runtime_state_initialized.load(.acquire)) return requireEmbeddedRuntimeState(base, image_len, ops);
+
+    runtime_state_mutex.lockUncancelable(shimIo());
+    defer runtime_state_mutex.unlock(shimIo());
+
+    if (runtime_state_initialized.load(.monotonic)) return requireEmbeddedRuntimeState(base, image_len, ops);
+
+    runtime_state = .{
+        .source = .{ .embedded = .{ .base = base, .len = image_len } },
+        .shm = null,
+        .view = viewEmbeddedLirImage(image_base, image_len, ops) catch return error.ImageUnavailable,
+    };
+    runtime_state_initialized.store(true, .release);
+    return &runtime_state;
 }
 
 comptime {
@@ -248,15 +303,14 @@ fn shimEntrypointFromImage(
         return;
     };
 
-    var view = viewEmbeddedLirImage(base, image_len, ops) catch |err| switch (err) {
+    const state = ensureEmbeddedRuntimeState(base, image_len, ops) catch |err| switch (err) {
         error.ImageUnavailable,
         error.InvalidEntrypoint,
         error.OutOfMemory,
         => return,
     };
-    defer view.deinit();
 
-    evaluateEntrypointInView(&view, entry_idx, ops, ret_ptr, arg_ptr) catch |err| switch (err) {
+    evaluateEntrypointInView(&state.view, entry_idx, ops, ret_ptr, arg_ptr) catch |err| switch (err) {
         error.ImageUnavailable,
         error.InvalidEntrypoint,
         error.OutOfMemory,

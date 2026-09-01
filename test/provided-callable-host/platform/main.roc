@@ -1,6 +1,7 @@
 platform ""
 	requires {
 		make_boxed_callable : U64 -> Box(U64 -> U64),
+		make_boxed_str_callable : Str -> Box(U64 -> U64),
 		drop_boxed_callable : Box(U64 -> U64) -> {},
 		make_aliased_boxed_callables : () -> Box({ first : Box(U64 -> U64), second : Box(U64 -> U64) }),
 		make_shared_boxed_callables : () -> Box({ first : Box(U64 -> U64), second : Box(U64 -> U64) }),
@@ -10,6 +11,7 @@ platform ""
 	packages {}
 	provides {
 		"roc_make_boxed_callable": make_boxed_callable_for_host,
+		"roc_make_boxed_str_callable": make_boxed_str_callable_for_host,
 		"roc_drop_boxed_callable": drop_boxed_callable_for_host,
 		"roc_make_aliased_boxed_callables": make_aliased_boxed_callables_for_host,
 		"roc_make_shared_boxed_callables": make_shared_boxed_callables_for_host,
@@ -35,6 +37,9 @@ platform ""
 
 make_boxed_callable_for_host : U64 -> Box(U64 -> U64)
 make_boxed_callable_for_host = make_boxed_callable
+
+make_boxed_str_callable_for_host : Str -> Box(U64 -> U64)
+make_boxed_str_callable_for_host = make_boxed_str_callable
 
 drop_boxed_callable_for_host : Box(U64 -> U64) -> {}
 drop_boxed_callable_for_host = drop_boxed_callable

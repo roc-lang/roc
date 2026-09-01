@@ -67,8 +67,10 @@ pub const Problem = union(enum) {
     tuple_access_needs_annotation: TupleAccessNeedsAnnotation,
     invalid_tuple_access: InvalidTupleAccess,
     optional_access_of_required_field: OptionalAccessOfRequiredField,
+    unset_of_required_field: UnsetOfRequiredField,
+    unset_of_defaulted_field: UnsetOfDefaultedField,
     effectful_default_value: EffectfulDefaultValue,
-    non_concrete_default_value: NonConcreteDefaultValue,
+    default_constrains_type_parameter: DefaultConstrainsTypeParameter,
     recursive_default_value: RecursiveDefaultValue,
     circular_value_definition: CircularValueDefinition,
     literal_defaulted: LiteralDefaulted,
@@ -191,10 +193,28 @@ pub const EffectfulFunctionName = struct {
 
 // comptime errors //
 
+/// Declaring-module provenance of a compile-time failure that happened in
+/// source inlined from another module (e.g. a `??` field default
+/// materialized per specialization). The carrying problem's `region` then
+/// highlights this module's consuming compile-time root, and the origin
+/// carries the declaring module's exact resolved location as stamped on the
+/// failing LIR statement by the lowerer. `module_name` is the declaring
+/// module's display name, or its package-qualified name when the bare name
+/// collides with the reporting module's.
+pub const ComptimeOrigin = struct {
+    module_name: ExtraStringIdx,
+    line: u32,
+    column: u32,
+};
+
 /// A crash that occurred during compile-time evaluation
 pub const ComptimeCrash = struct {
     message: ExtraStringIdx,
     region: base.Region,
+    /// See `ComptimeOrigin`.
+    origin: ?ComptimeOrigin = null,
+
+    pub const Origin = ComptimeOrigin;
 };
 
 /// A numeric literal that a custom `from_numeral` implementation rejected
@@ -202,6 +222,12 @@ pub const ComptimeCrash = struct {
 pub const ComptimeInvalidNumeral = struct {
     message: ExtraStringIdx,
     region: base.Region,
+    /// See `ComptimeOrigin`. Structurally always null today: a numeral
+    /// conversion root lives in the module that declares the literal, so its
+    /// rejection is reported during that module's own finalization. Wired
+    /// through the shared resolution anyway so the report cannot silently
+    /// misrender if that ever changes.
+    origin: ?ComptimeOrigin = null,
 };
 
 /// A string literal that a custom `from_quote` implementation rejected
@@ -209,12 +235,18 @@ pub const ComptimeInvalidNumeral = struct {
 pub const ComptimeInvalidQuote = struct {
     message: ExtraStringIdx,
     region: base.Region,
+    /// See `ComptimeOrigin` and the note on `ComptimeInvalidNumeral.origin`.
+    origin: ?ComptimeOrigin = null,
 };
 
 /// An expect that failed during compile-time evaluation
 pub const ComptimeExpectFailed = struct {
     message: ExtraStringIdx,
     region: base.Region,
+    /// See `ComptimeOrigin`. Reachable cross-module: an inline `expect`
+    /// inside a `??` field default fails while the consuming module's
+    /// compile-time root evaluates the inlined copy.
+    origin: ?ComptimeOrigin = null,
 };
 
 /// An error that occurred during compile-time evaluation
@@ -290,6 +322,23 @@ pub const OptionalAccessOfRequiredField = struct {
     field_name: Ident.Idx,
 };
 
+/// Unset (`x: _`) of a field whose presence resolved to `required`: the
+/// field is always present, so there is no missing state to select
+/// (design.md "In Progress: Unsetting an Optional Field").
+pub const UnsetOfRequiredField = struct {
+    region: base.Region,
+    field_name: Ident.Idx,
+};
+
+/// Unset (`x: _`) of a field whose presence resolved to `defaulted`: the
+/// field is an inline slot with no missing state, and "unsetting" it would
+/// have to rematerialize the default—construction behavior, not update
+/// (design.md "In Progress: Unsetting an Optional Field").
+pub const UnsetOfDefaultedField = struct {
+    region: base.Region,
+    field_name: Ident.Idx,
+};
+
 /// A record field default (`a : U8 ?? expr`) whose expression is effectful.
 /// A default is materialized by the compiler at construction sites, so it
 /// must be pure (design.md "Defaulted Fields").
@@ -298,13 +347,31 @@ pub const EffectfulDefaultValue = struct {
     field_name: Ident.Idx,
 };
 
-/// A record field default (`a : T ?? expr`) whose type is not concrete
-/// (contains type variables). A default is evaluated once at compile time
-/// and materialized at construction sites, so it must have exactly one
-/// runtime representation (design.md "Defaulted Fields").
-pub const NonConcreteDefaultValue = struct {
+/// A `??` default whose check constrained one of the declaration's type
+/// parameters—either a residual dispatch constraint (a literal's
+/// `from_numeral`/`from_quote`, or a constraint arriving through a referenced
+/// def's instantiated scheme), or a STRUCTURAL pin (the default's type forced
+/// the parameter's copy to concrete structure, e.g. `?? []` on `value : a`).
+/// Defaults may constrain NO type parameter: type declarations never carry
+/// written `where` clauses and the compiler never infers such requirements
+/// onto a type, so there is no place the constraint could live (design.md
+/// "Defaulted Fields"). The default EXPRESSION may still be polymorphic
+/// (e.g. `?? []` on `List(x)`)—it just may not demand anything of a
+/// parameter.
+pub const DefaultConstrainsTypeParameter = struct {
     region: base.Region,
     field_name: Ident.Idx,
+    /// The demanded method for a residual-dispatch-constraint rejection;
+    /// null for a structural pin (which demands no method but forces the
+    /// parameter to a concrete type all the same) and for a parameter
+    /// aliasing (which pins no structure but merges two parameters).
+    method_name: ?Ident.Idx,
+    type_param: Ident.Idx,
+    /// The second parameter of a parameter-aliasing rejection: the default
+    /// forces `type_param` and `aliased_param` to be the same type. Null for
+    /// the dispatch-constraint and structural-pin forms, which convict a
+    /// single parameter.
+    aliased_param: ?Ident.Idx,
 };
 
 /// A record field default whose literal construction transitively omits the
