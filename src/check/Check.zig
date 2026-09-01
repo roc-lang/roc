@@ -17992,7 +17992,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_if => |if_expr| {
-            does_fx = try self.checkIfElseExprIterative(
+            does_fx = try self.checkIfElseExpr(
                 expr_idx,
                 expr_region,
                 env,
@@ -20262,8 +20262,6 @@ const IfCheckState = struct {
     expected: Expected,
     is_call_arg: bool,
     is_immediate_callee: bool,
-    expected_branch_ret: ?Var,
-    child_expected: Expected,
     branch_acc: ?Var,
     does_fx: bool = false,
     branch_var: Var = undefined,
@@ -20311,8 +20309,6 @@ fn initIfCheckState(
         .expected = expected,
         .is_call_arg = is_call_arg,
         .is_immediate_callee = is_immediate_callee,
-        .expected_branch_ret = expected_branch_ret,
-        .child_expected = expected.forStatement(),
         .branch_acc = branch_acc,
         .num_branches = @intCast(branches.len + 1),
         .last_if_branch = branches[0],
@@ -20379,6 +20375,8 @@ fn descendIntoNestedIf(
     parent: IfCheckState,
     nested: NestedIfCheck,
 ) std.mem.Allocator.Error!IfCheckState {
+    std.debug.assert(parents.items.len == expr_frames.items.len);
+    std.debug.assert(nested.state.owns_expr_frame);
     var nested_frame = nested.expr_frame;
     expr_frames.append(frame_allocator, nested_frame) catch |err| {
         nested_frame.deinit();
@@ -20389,10 +20387,11 @@ fn descendIntoNestedIf(
         stored_frame.deinit();
         return err;
     };
+    std.debug.assert(parents.items.len == expr_frames.items.len);
     return nested.state;
 }
 
-fn checkIfElseExprIterative(
+fn checkIfElseExpr(
     self: *Self,
     if_expr_idx: CIR.Expr.Idx,
     expr_region: Region,
@@ -20405,7 +20404,7 @@ fn checkIfElseExprIterative(
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    var fallback_state = std.heap.stackFallback(16 * 1024, self.gpa);
+    var fallback_state = std.heap.stackFallback(4 * 1024, self.gpa);
     const frame_allocator = fallback_state.get();
     var parents: std.ArrayList(IfCheckState) = .empty;
     defer parents.deinit(frame_allocator);
@@ -20431,12 +20430,14 @@ fn checkIfElseExprIterative(
     }
 
     if_kernel: while (true) {
+        std.debug.assert(parents.items.len == expr_frames.items.len);
+        std.debug.assert(current.owns_expr_frame == (expr_frames.items.len != 0));
         const branches = self.cir.store.sliceIfBranches(current.if_.branches);
         switch (current.phase) {
             .schedule_first_cond => {
                 current.phase = .after_first_cond;
                 const first_branch = self.cir.store.getIfBranch(branches[0]);
-                switch (try self.checkIfChild(first_branch.cond, env, current.child_expected, false, false, false)) {
+                switch (try self.checkIfChild(first_branch.cond, env, current.expected.forStatement(), false, false, false)) {
                     .checked => |does_fx| last_child = does_fx,
                     .nested => |nested| {
                         current = try descendIntoNestedIf(frame_allocator, &parents, &expr_frames, current, nested);
@@ -20477,7 +20478,7 @@ fn checkIfElseExprIterative(
                 last_child = null;
                 const first_branch_idx = branches[0];
                 const first_branch = self.cir.store.getIfBranch(first_branch_idx);
-                if (current.expected_branch_ret) |expected_ret| {
+                if (current.expected.branch_result) |expected_ret| {
                     const branch_ctx = problem.Context{ .if_branch = .{
                         .branch_index = 0,
                         .num_branches = current.num_branches,
@@ -20496,7 +20497,7 @@ fn checkIfElseExprIterative(
                 switch (try self.checkIfChild(
                     branch.cond,
                     env,
-                    current.child_expected.suppressHoistSelection(),
+                    current.expected.forStatement().suppressHoistSelection(),
                     false,
                     false,
                     false,
@@ -20541,7 +20542,7 @@ fn checkIfElseExprIterative(
                 last_child = null;
                 const branch_idx = branches[current.branch_index];
                 const branch = self.cir.store.getIfBranch(branch_idx);
-                if (current.expected_branch_ret) |expected_ret| {
+                if (current.expected.branch_result) |expected_ret| {
                     const branch_ctx = problem.Context{ .if_branch = .{
                         .branch_index = @intCast(current.branch_index),
                         .num_branches = current.num_branches,
@@ -20578,7 +20579,7 @@ fn checkIfElseExprIterative(
                 switch (try self.checkIfChild(
                     branch.cond,
                     env,
-                    current.child_expected.suppressHoistSelection(),
+                    current.expected.forStatement().suppressHoistSelection(),
                     false,
                     false,
                     false,
@@ -20648,7 +20649,7 @@ fn checkIfElseExprIterative(
             .after_final_else => {
                 current.does_fx = last_child.? or current.does_fx;
                 last_child = null;
-                if (current.expected_branch_ret) |expected_ret| {
+                if (current.expected.branch_result) |expected_ret| {
                     const branch_ctx = problem.Context{ .if_branch = .{
                         .branch_index = current.num_branches - 1,
                         .num_branches = current.num_branches,
@@ -20690,6 +20691,7 @@ fn checkIfElseExprIterative(
                 if (parents.pop()) |parent| {
                     current = parent;
                     last_child = does_fx;
+                    std.debug.assert(parents.items.len == expr_frames.items.len);
                 } else {
                     return does_fx;
                 }
