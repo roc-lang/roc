@@ -8,7 +8,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
 const semantic_tokens = @import("../semantic_tokens.zig");
-const line_info = @import("../line_info.zig");
 const uri_util = @import("../uri.zig");
 
 /// Returns the semantic tokens handler for the LSP.
@@ -36,9 +35,7 @@ pub fn handler(comptime ServerType: type) type {
                 return try ServerType.sendError(self, id, .request_failed, "document not found");
             };
 
-            // Build line info for position conversion
-            var info = try line_info.LineInfo.init(self.allocator, doc.text);
-            defer info.deinit();
+            const info = doc.lineIndex();
 
             // Try to get imported ModuleEnvs for cross-module semantic tokens
             var imported_envs: ?[]*@import("can").ModuleEnv = null;
@@ -90,7 +87,6 @@ pub fn handler(comptime ServerType: type) type {
             // Extract semantic tokens using CIR with cross-module context
             const tokens = try semantic_tokens.extractSemanticTokensWithImports(
                 self.allocator,
-                doc.text,
                 &info,
                 imported_envs,
             );

@@ -11,6 +11,7 @@ const parse = @import("parse");
 const can = @import("can");
 const Token = parse.tokenize.Token;
 const pos = @import("../position.zig");
+const LineIndex = @import("../line_index.zig").LineIndex;
 
 /// Handler for `textDocument/documentHighlight` requests.
 pub fn handler(comptime ServerType: type) type {
@@ -186,9 +187,10 @@ fn findHighlightsByToken(allocator: std.mem.Allocator, source: []const u8, line:
     // Build line offset table
     const line_offsets = try pos.buildLineOffsets(allocator, source);
     defer line_offsets.deinit();
+    const index = LineIndex.fromLineOffsets(&line_offsets);
 
     // Convert position to offset
-    const target_offset = line_offsets.offsetAt(line, character) orelse {
+    const target_offset = index.utf16ToByte(line, character, .nearest) orelse {
         return &[_]DocumentHighlight{};
     };
 
@@ -239,8 +241,8 @@ fn findHighlightsByToken(allocator: std.mem.Allocator, source: []const u8, line:
 
         const token_text = source[start..end];
         if (std.mem.eql(u8, token_text, target_text.?)) {
-            const start_pos = positionAt(start, &line_offsets);
-            const end_pos = positionAt(end, &line_offsets);
+            const start_pos = positionAt(start, &index);
+            const end_pos = positionAt(end, &index);
 
             try highlights.append(allocator, .{
                 .range = .{
@@ -260,7 +262,7 @@ fn isIdentifierTag(tag: Token.Tag) bool {
 }
 
 /// Convert a byte offset into this handler's position shape.
-fn positionAt(offset: u32, line_offsets: *const pos.LineOffsets) Position {
-    const converted = pos.offsetToPosition(offset, line_offsets);
+fn positionAt(offset: u32, index: *const LineIndex) Position {
+    const converted = index.byteToUtf16(offset) orelse return .{ .line = 0, .character = 0 };
     return .{ .line = converted.line, .character = converted.character };
 }

@@ -9,6 +9,7 @@ const protocol = @import("../protocol.zig");
 const parse = @import("parse");
 const can = @import("can");
 const pos = @import("../position.zig");
+const LineIndex = @import("../line_index.zig").LineIndex;
 const AST = parse.AST;
 const TokenizedRegion = AST.TokenizedRegion;
 
@@ -159,9 +160,10 @@ fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line:
     // Build line offset table
     const line_offsets = try pos.buildLineOffsets(allocator, source);
     defer line_offsets.deinit();
+    const index = LineIndex.fromLineOffsets(&line_offsets);
 
     // Convert position to offset
-    const target_offset = line_offsets.offsetAt(line, character) orelse return error.InvalidPosition;
+    const target_offset = index.utf16ToByte(line, character, .nearest) orelse return error.InvalidPosition;
 
     // Parse to get AST
     var module_env = try can.ModuleEnv.init(allocator, source);
@@ -241,8 +243,8 @@ fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line:
         const parent_node = try allocator.create(SelectionRange);
         parent_node.* = .{
             .range = .{
-                .start = positionAt(byte_range.start, &line_offsets),
-                .end = positionAt(byte_range.end, &line_offsets),
+                .start = positionAt(byte_range.start, &index),
+                .end = positionAt(byte_range.end, &index),
             },
             .parent = current_parent,
         };
@@ -253,8 +255,8 @@ fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line:
     const innermost = unique_regions.items[0];
     return .{
         .range = .{
-            .start = positionAt(innermost.start, &line_offsets),
-            .end = positionAt(innermost.end, &line_offsets),
+            .start = positionAt(innermost.start, &index),
+            .end = positionAt(innermost.end, &index),
         },
         .parent = current_parent,
     };
@@ -518,8 +520,8 @@ fn collectContainingRegionsFromExpr(
 }
 
 /// Convert a byte offset into this handler's position shape.
-fn positionAt(offset: u32, line_offsets: *const pos.LineOffsets) Position {
-    const converted = pos.offsetToPosition(offset, line_offsets);
+fn positionAt(offset: u32, index: *const LineIndex) Position {
+    const converted = index.byteToUtf16(offset) orelse return .{ .line = 0, .character = 0 };
     return .{ .line = converted.line, .character = converted.character };
 }
 

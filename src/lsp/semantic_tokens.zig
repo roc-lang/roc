@@ -16,12 +16,11 @@ const CoreCtx = can.CoreCtx;
 const base = @import("base");
 const eval_mod = @import("eval");
 const compiled_builtins = @import("compiled_builtins");
-const line_info = @import("line_info.zig");
+const LineIndex = @import("line_index.zig").LineIndex;
 
 const Token = tokenize.Token;
 const Tokenizer = tokenize.Tokenizer;
 const CommonEnv = base.CommonEnv;
-const LineInfo = line_info.LineInfo;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const Region = base.Region;
@@ -102,9 +101,9 @@ fn tokenSemanticTypeAt(tags: []const Token.Tag, token_index: usize) ?u32 {
 /// Returns a list of SemanticToken structs with absolute positions.
 pub fn extractSemanticTokens(
     allocator: std.mem.Allocator,
-    source: []const u8,
-    info: *const LineInfo,
+    info: *const LineIndex,
 ) Allocator.Error![]SemanticToken {
+    const source = info.source;
     // Create a CommonEnv for tokenization
     const source_copy = try allocator.dupe(u8, source);
     defer allocator.free(source_copy);
@@ -133,21 +132,12 @@ pub fn extractSemanticTokens(
 
         const start_offset = region.start.offset;
         const end_offset = region.end.offset;
-        const length = end_offset - start_offset;
+        const byte_length = end_offset - start_offset;
 
         // Skip zero-length tokens
-        if (length == 0) continue;
+        if (byte_length == 0) continue;
 
-        // Convert byte offset to line/character position
-        const pos = info.positionFromOffset(start_offset) orelse continue;
-
-        try tokens.append(allocator, .{
-            .line = pos.line,
-            .start_char = pos.character,
-            .length = length,
-            .token_type = semantic_type,
-            .modifiers = 0,
-        });
+        try appendTokenSegments(allocator, &tokens, info, start_offset, end_offset, semantic_type, 0);
     }
 
     return tokens.toOwnedSlice(allocator);
@@ -157,10 +147,10 @@ pub fn extractSemanticTokens(
 /// When imported_envs is provided, can distinguish Module.function from record.field.
 pub fn extractSemanticTokensWithImports(
     allocator: std.mem.Allocator,
-    source: []const u8,
-    info: *const LineInfo,
+    info: *const LineIndex,
     imported_envs: ?[]*ModuleEnv,
 ) Allocator.Error![]SemanticToken {
+    const source = info.source;
     // Create ModuleEnv with source
     var module_env = ModuleEnv.init(allocator, source) catch return error.OutOfMemory;
     defer module_env.deinit();
@@ -176,7 +166,7 @@ pub fn extractSemanticTokensWithImports(
     var builtin_module = builtin_static.moduleView(allocator, compiled_builtins.builtin_bin[0..], "Builtin", compiled_builtins.builtin_source) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.CorruptEmbeddedBuiltins,
-        => return extractSemanticTokens(allocator, source, info),
+        => return extractSemanticTokens(allocator, info),
     };
     defer builtin_module.deinit();
 
@@ -209,7 +199,6 @@ pub fn extractSemanticTokensWithImports(
         .tokens = .empty,
         .module_env = &module_env,
         .info = info,
-        .source = source,
         .import_context = &import_context,
     };
     errdefer collector.tokens.deinit(allocator);
@@ -292,8 +281,7 @@ const SemanticCollector = struct {
     allocator: std.mem.Allocator,
     tokens: std.ArrayListUnmanaged(SemanticToken),
     module_env: *const ModuleEnv,
-    info: *const LineInfo,
-    source: []const u8,
+    info: *const LineIndex,
     import_context: *const ImportContext,
 
     /// Walk all top-level statements in the module.
@@ -607,9 +595,9 @@ const SemanticCollector = struct {
 
             const start_offset = region.start.offset;
             const end_offset = region.end.offset;
-            const length = end_offset - start_offset;
+            const byte_length = end_offset - start_offset;
 
-            if (length == 0) continue;
+            if (byte_length == 0) continue;
 
             if (tag == .NoSpaceDotLowerIdent and
                 prev_tag != null and prev_tag.? == .UpperIdent)
@@ -618,13 +606,13 @@ const SemanticCollector = struct {
                     // Get the module name from the previous UpperIdent token
                     const module_start = prev_reg.start.offset;
                     const module_end = prev_reg.end.offset;
-                    if (module_start < self.source.len and module_end <= self.source.len) {
-                        const module_name = self.source[module_start..module_end];
+                    if (module_start < self.info.source.len and module_end <= self.info.source.len) {
+                        const module_name = self.info.source[module_start..module_end];
 
                         // Get the function name from the current token (skip the leading dot)
                         const func_start = start_offset + 1; // Skip the '.'
-                        if (func_start < self.source.len and end_offset <= self.source.len) {
-                            const func_name = self.source[func_start..end_offset];
+                        if (func_start < self.info.source.len and end_offset <= self.info.source.len) {
+                            const func_name = self.info.source[func_start..end_offset];
 
                             // Check if this is an exported function from the module
                             if (self.import_context.isModuleFunction(module_name, func_name)) {
@@ -635,7 +623,7 @@ const SemanticCollector = struct {
                 }
             }
 
-            const pos = self.info.positionFromOffset(start_offset) orelse continue;
+            const pos = self.info.byteToUtf16(start_offset) orelse continue;
 
             // Check if we already have a token at this position (from CIR)
             const already_exists = for (self.tokens.items) |existing| {
@@ -646,13 +634,7 @@ const SemanticCollector = struct {
 
             if (already_exists) continue;
 
-            try self.tokens.append(self.allocator, .{
-                .line = pos.line,
-                .start_char = pos.character,
-                .length = length,
-                .token_type = semantic_type,
-                .modifiers = 0,
-            });
+            try appendTokenSegments(self.allocator, &self.tokens, self.info, start_offset, end_offset, semantic_type, 0);
         }
     }
 
@@ -660,21 +642,63 @@ const SemanticCollector = struct {
     fn addToken(self: *SemanticCollector, region: Region, semantic_type: SemanticType) Allocator.Error!void {
         const start_offset = region.start.offset;
         const end_offset = region.end.offset;
-        const length = end_offset - start_offset;
+        const byte_length = end_offset - start_offset;
 
-        if (length == 0) return;
-
-        const pos = self.info.positionFromOffset(start_offset) orelse return;
-
-        try self.tokens.append(self.allocator, .{
-            .line = pos.line,
-            .start_char = pos.character,
-            .length = length,
-            .token_type = @intFromEnum(semantic_type),
-            .modifiers = 0,
-        });
+        if (byte_length == 0) return;
+        try appendTokenSegments(self.allocator, &self.tokens, self.info, start_offset, end_offset, @intFromEnum(semantic_type), 0);
     }
 };
+
+/// LSP semantic tokens cannot span lines, so split a source range at each LF.
+fn appendTokenSegments(
+    allocator: Allocator,
+    tokens: *std.ArrayListUnmanaged(SemanticToken),
+    info: *const LineIndex,
+    start_offset: u32,
+    end_offset: u32,
+    token_type: u32,
+    modifiers: u32,
+) Allocator.Error!void {
+    var segment_start: usize = start_offset;
+    const end: usize = end_offset;
+
+    while (segment_start < end) {
+        var segment_end = segment_start;
+        while (segment_end < end and info.source[segment_end] != '\n') : (segment_end += 1) {}
+
+        const logical_end = if (segment_end > segment_start and info.source[segment_end - 1] == '\r') segment_end - 1 else segment_end;
+        if (segment_start < logical_end) {
+            const start: u32 = @intCast(segment_start);
+            const finish: u32 = @intCast(logical_end);
+            const token_position = info.byteToUtf16(start) orelse return;
+            const length = info.utf16Length(start, finish) orelse return;
+            try tokens.append(allocator, .{
+                .line = token_position.line,
+                .start_char = token_position.character,
+                .length = length,
+                .token_type = token_type,
+                .modifiers = modifiers,
+            });
+        }
+
+        if (segment_end == end) break;
+        segment_start = segment_end + 1;
+    }
+}
+
+test "semantic token segments use UTF-16 lengths and do not cross lines" {
+    const source = "ab\r\n😀x";
+    const starts = [_]u32{ 0, 4 };
+    const info = LineIndex{ .source = source, .line_starts = &starts };
+    var tokens: std.ArrayListUnmanaged(SemanticToken) = .empty;
+    defer tokens.deinit(std.testing.allocator);
+
+    try appendTokenSegments(std.testing.allocator, &tokens, &info, 0, source.len, @intFromEnum(SemanticType.string), 0);
+
+    try std.testing.expectEqual(@as(usize, 2), tokens.items.len);
+    try std.testing.expectEqual(SemanticToken{ .line = 0, .start_char = 0, .length = 2, .token_type = @intFromEnum(SemanticType.string) }, tokens.items[0]);
+    try std.testing.expectEqual(SemanticToken{ .line = 1, .start_char = 0, .length = 3, .token_type = @intFromEnum(SemanticType.string) }, tokens.items[1]);
+}
 
 /// Delta-encodes a list of semantic tokens into the LSP format.
 /// The LSP format uses 5 integers per token: [deltaLine, deltaStartChar, length, tokenType, tokenModifiers]

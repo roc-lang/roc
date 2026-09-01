@@ -44,21 +44,27 @@ test "columns resolve to byte offsets across invalid bytes" {
     const line = "a\xffb";
 
     // Strict landing refuses to place an edit against bytes it cannot read.
-    try std.testing.expectEqual(@as(?usize, null), position.utf16ColumnToByteOffset(line, 2, .exact));
+    try std.testing.expectEqual(@as(?usize, null), position.utf16ColumnToByteOffset(line, 2, .exact, .clamp));
 
     // A query keeps its footing: the invalid byte counts as one unit, so
     // column 2 is the `b` after it.
-    try std.testing.expectEqual(@as(?usize, 2), position.utf16ColumnToByteOffset(line, 2, .nearest));
-    try std.testing.expectEqual(@as(?usize, null), position.utf16ColumnToByteOffset(line, 9, .nearest));
+    try std.testing.expectEqual(@as(?usize, 2), position.utf16ColumnToByteOffset(line, 2, .nearest, .clamp));
+    try std.testing.expectEqual(@as(?usize, 3), position.utf16ColumnToByteOffset(line, 9, .nearest, .clamp));
 }
 
 test "columns resolve to byte offsets in valid text" {
     const line = "aé😀";
-    try std.testing.expectEqual(@as(?usize, 1), position.utf16ColumnToByteOffset(line, 1, .exact));
-    try std.testing.expectEqual(@as(?usize, 3), position.utf16ColumnToByteOffset(line, 2, .exact));
-    try std.testing.expectEqual(@as(?usize, 7), position.utf16ColumnToByteOffset(line, 4, .exact));
+    try std.testing.expectEqual(@as(?usize, 1), position.utf16ColumnToByteOffset(line, 1, .exact, .clamp));
+    try std.testing.expectEqual(@as(?usize, 3), position.utf16ColumnToByteOffset(line, 2, .exact, .clamp));
+    try std.testing.expectEqual(@as(?usize, 7), position.utf16ColumnToByteOffset(line, 4, .exact, .clamp));
 
     // Column 3 lands between the emoji's two surrogates.
-    try std.testing.expectEqual(@as(?usize, null), position.utf16ColumnToByteOffset(line, 3, .exact));
-    try std.testing.expectEqual(@as(?usize, 7), position.utf16ColumnToByteOffset(line, 3, .nearest));
+    try std.testing.expectEqual(@as(?usize, null), position.utf16ColumnToByteOffset(line, 3, .exact, .clamp));
+    try std.testing.expectEqual(@as(?usize, 7), position.utf16ColumnToByteOffset(line, 3, .nearest, .clamp));
+}
+
+test "out-of-range columns can clamp without accepting missing characters" {
+    const line = "abc";
+    try std.testing.expectEqual(@as(?usize, 3), position.utf16ColumnToByteOffset(line, 9, .exact, .clamp));
+    try std.testing.expectEqual(@as(?usize, null), position.utf16ColumnToByteOffset(line, 9, .exact, .reject));
 }
