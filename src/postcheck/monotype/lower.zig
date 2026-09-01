@@ -278,8 +278,12 @@ pub const Options = struct {
 /// Worker work is the sum of task callback elapsed times, not process or thread
 /// CPU time, so it may exceed Monotype wall time when callbacks overlap.
 pub const ParallelMetricsSnapshot = struct {
+    /// Sum of executor callback intervals; overlapping work is counted once per
+    /// callback and can therefore exceed wall time.
     worker_work_ns: u64 = 0,
-    coordinator_commit_work_ns: u64 = 0,
+    /// Sum of validation, serial retry, discard, and ordered commit intervals
+    /// after executor barriers.
+    coordinator_post_batch_work_ns: u64 = 0,
     root_tasks_submitted: u64 = 0,
     root_tasks_committed: u64 = 0,
     root_tasks_retried_serial: u64 = 0,
@@ -288,25 +292,12 @@ pub const ParallelMetricsSnapshot = struct {
     specialization_tasks_retried_serial: u64 = 0,
     specialization_tasks_discarded_ready: u64 = 0,
     task_waves: u64 = 0,
-    worker_lanes_available: u64 = 0,
-    worker_lanes_used: u64 = 0,
-    worker_lane_reuse_tasks: u64 = 0,
-
-    pub fn add(self: *ParallelMetricsSnapshot, other: ParallelMetricsSnapshot) void {
-        self.worker_work_ns +%= other.worker_work_ns;
-        self.coordinator_commit_work_ns +%= other.coordinator_commit_work_ns;
-        self.root_tasks_submitted +%= other.root_tasks_submitted;
-        self.root_tasks_committed +%= other.root_tasks_committed;
-        self.root_tasks_retried_serial +%= other.root_tasks_retried_serial;
-        self.specialization_tasks_submitted +%= other.specialization_tasks_submitted;
-        self.specialization_tasks_committed +%= other.specialization_tasks_committed;
-        self.specialization_tasks_retried_serial +%= other.specialization_tasks_retried_serial;
-        self.specialization_tasks_discarded_ready +%= other.specialization_tasks_discarded_ready;
-        self.task_waves +%= other.task_waves;
-        self.worker_lanes_available = @max(self.worker_lanes_available, other.worker_lanes_available);
-        self.worker_lanes_used = @max(self.worker_lanes_used, other.worker_lanes_used);
-        self.worker_lane_reuse_tasks +%= other.worker_lane_reuse_tasks;
-    }
+    /// Largest executor width represented by any aggregated lowering.
+    peak_worker_lanes_available: u64 = 0,
+    /// Largest number of lanes used by any one aggregated lowering.
+    peak_worker_lanes_used: u64 = 0,
+    /// Tasks after the first task on a lane within one lowering invocation.
+    within_lowering_lane_reuse_tasks: u64 = 0,
 };
 
 /// Timings for coordinator wall phases and aggregate executor work owned by
@@ -519,7 +510,9 @@ const ProcedureTimingScope = struct {
     }
 };
 
-/// Aggregate elapsed coordinator work after an executor batch has completed.
+/// Aggregate elapsed coordinator work after an executor batch has completed,
+/// including validation, serial retry, discard, and ordered commit.
+///
 /// This overlaps the coordinator's procedure wall-time classification and is
 /// therefore reported as work rather than as another sequential phase.
 const ParallelCoordinatorTimingScope = struct {
@@ -535,7 +528,7 @@ const ParallelCoordinatorTimingScope = struct {
         const timing = self.timing orelse return;
         const finished_ns = timing.start();
         const elapsed_ns: u64 = @intCast(@max(0, finished_ns - self.started_ns));
-        timing.parallel.coordinator_commit_work_ns +%= elapsed_ns;
+        timing.parallel.coordinator_post_batch_work_ns +%= elapsed_ns;
         self.timing = null;
     }
 };
@@ -652,18 +645,17 @@ pub fn run(
         Common.invariant("Monotype lowering requires explicit roots, layout requests, or static data requests");
     }
 
+    var setup_timing_scope = TimingPhaseScope.begin(options.timing, .setup);
+    defer setup_timing_scope.end();
     var program = Ast.Program.init(allocator);
     errdefer program.deinit();
 
     var builder = Builder.init(allocator, modules, &program, options);
     defer builder.deinit();
     defer builder.recordParallelLaneMetrics();
-    {
-        var setup_timing_scope = TimingPhaseScope.begin(options.timing, .setup);
-        defer setup_timing_scope.end();
-        try builder.initHostedCatalog();
-        try builder.loadCandidateSpecializationShards();
-    }
+    try builder.initHostedCatalog();
+    try builder.loadCandidateSpecializationShards();
+    setup_timing_scope.end();
 
     // Wave 1: roots in listed order, then the specialization queue. Each
     // root remains a distinct job whose result lands in root order; symbolic
@@ -3699,8 +3691,8 @@ const Builder = struct {
         if (self.timing) |timing| {
             timing.parallel.root_tasks_submitted +%= @intCast(requests.len);
             timing.parallel.task_waves +%= 1;
-            timing.parallel.worker_lanes_available = @max(
-                timing.parallel.worker_lanes_available,
+            timing.parallel.peak_worker_lanes_available = @max(
+                timing.parallel.peak_worker_lanes_available,
                 @as(u64, @intCast(executor.worker_count)),
             );
         }
@@ -4900,8 +4892,8 @@ const Builder = struct {
             if (self.timing) |timing| {
                 timing.parallel.specialization_tasks_submitted +%= @intCast(batch_len);
                 timing.parallel.task_waves +%= 1;
-                timing.parallel.worker_lanes_available = @max(
-                    timing.parallel.worker_lanes_available,
+                timing.parallel.peak_worker_lanes_available = @max(
+                    timing.parallel.peak_worker_lanes_available,
                     @as(u64, @intCast(executor.worker_count)),
                 );
             }
@@ -5019,7 +5011,7 @@ const Builder = struct {
             );
         }
         const worker = &slot.*.?;
-        worker.tasks_started +%= 1;
+        if (context.inputs.timing_std_io != null) worker.tasks_started +%= 1;
         worker.counters = .{};
         worker.diagnostics = .{};
         const builder = Builder.ensureSpecJobWorkerBuilder(worker, context.inputs) catch {
@@ -5079,7 +5071,7 @@ const Builder = struct {
             slot.* = SpecJobWorkerState.init(executor_worker.allocator, @enumFromInt(executor_worker.id));
         }
         const worker = &slot.*.?;
-        worker.tasks_started +%= 1;
+        if (context.inputs.timing_std_io != null) worker.tasks_started +%= 1;
         worker.counters = .{};
         worker.diagnostics = .{};
         const builder = Builder.ensureSpecJobWorkerBuilder(worker, context.inputs) catch {
@@ -5224,8 +5216,8 @@ const Builder = struct {
             lanes_used += 1;
             lane_reuse_tasks +%= initialized.tasks_started -| 1;
         }
-        timing.parallel.worker_lanes_used = @max(timing.parallel.worker_lanes_used, lanes_used);
-        timing.parallel.worker_lane_reuse_tasks +%= lane_reuse_tasks;
+        timing.parallel.peak_worker_lanes_used = @max(timing.parallel.peak_worker_lanes_used, lanes_used);
+        timing.parallel.within_lowering_lane_reuse_tasks +%= lane_reuse_tasks;
     }
 
     fn ensureParallelSpecJobState(self: *Builder, worker_count: usize) Allocator.Error!void {

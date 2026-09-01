@@ -104,6 +104,8 @@ pub const LirLoweringOptions = struct {
     /// Receives the expression count of the lifted program handed to lambda-set
     /// solving, for tests that assert on post-check program growth.
     lifted_expr_count_out: ?*usize = null,
+    /// Receives the complete checked-to-LIR timing snapshot after lowering.
+    timing_out: ?*lir.CheckedPipeline.TimingSnapshot = null,
 };
 
 /// Lower an app whose body is `app_body` (everything after the platform header
@@ -212,11 +214,25 @@ fn expectPostCheckParallelismDeterministicLir(
             const candidate = try gpa.alloc(u8, cap);
             defer gpa.free(candidate);
             var candidate_writer = std.Io.Writer.fixed(candidate);
+            var timing: lir.CheckedPipeline.TimingSnapshot = .{};
             try runToLir(app_body, &candidate_writer, .{
                 .specialization_workers = specialization_workers,
                 .parallel_procedure_root_fixture = parallel_procedure_root_fixture,
+                .timing_out = &timing,
             }, null);
             try std.testing.expectEqualStrings(reference_writer.buffered(), candidate_writer.buffered());
+            if (parallel_procedure_root_fixture) {
+                const parallel = timing.monotype_parallel;
+                try std.testing.expectEqual(@as(u64, 2), parallel.root_tasks_submitted);
+                try std.testing.expectEqual(@as(u64, 2), parallel.root_tasks_committed);
+                try std.testing.expectEqual(@as(u64, 0), parallel.root_tasks_retried_serial);
+                try std.testing.expectEqual(
+                    @as(u64, @intCast(specialization_workers)),
+                    parallel.peak_worker_lanes_available,
+                );
+                try std.testing.expect(parallel.peak_worker_lanes_used > 0);
+                try std.testing.expect(parallel.peak_worker_lanes_used <= parallel.peak_worker_lanes_available);
+            }
         }
     }
 }
@@ -390,6 +406,7 @@ fn lowerAppPathToLir(
         try std.testing.expectEqual(@as(usize, 2), procedure_use_roots);
     }
 
+    var timing = lir.CheckedPipeline.Timing.init(std.testing.io);
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
         .{
@@ -410,9 +427,11 @@ fn lowerAppPathToLir(
                 coord.postCheckExecutor()
             else
                 null,
+            .timing = if (opts.timing_out != null) &timing else null,
         },
     );
     defer lowered.deinit();
+    if (opts.timing_out) |timing_out| timing_out.* = timing.snapshot();
 
     if (dump) |writer| {
         const store = &lowered.lir_result.store;

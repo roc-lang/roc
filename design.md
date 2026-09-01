@@ -6515,8 +6515,14 @@ Post-check timing keeps two distinct measures for this boundary. Monotype wall
 time is the elapsed coordinator interval, including worker waits and ordered
 commit. Aggregate worker work is the sum of executor callback intervals and can
 exceed wall time when callbacks overlap; it is diagnostic work, not another
-sequential phase. Task, lane, retry, and discard counts explain the relationship
-without using scheduling-dependent values for compiler behavior.
+sequential phase. Coordinator post-batch work separately measures validation,
+serial fallback, discard, and ordered commit after each executor barrier. Task,
+lane, retry, and discard counts explain the relationship without using
+scheduling-dependent values for compiler behavior.
+
+Boxy follows a different post-check pipeline and reports its planning and
+lowering wall phases directly rather than projecting Monotype categories onto
+work it does not perform.
 
 Instantiation graph node ids are dense, append-only indexes for the lifetime of
 the graph. Per-node optional attributes such as a row root's current extension
