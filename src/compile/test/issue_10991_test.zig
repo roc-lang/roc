@@ -1,7 +1,7 @@
 //! Regression test for issue #10991.
 //!
-//! Dev builds run post-check inlining and SpecConstr with the whole-body
-//! rewrite scoped to iterator fusion. That scope must still collapse a
+//! Dev builds run post-check inlining and SpecConstr with its value-aware
+//! clones scoped to iterator fusion. That scope must still collapse a
 //! `List.fold` into a direct index loop: the procedure that reads elements
 //! with `list_get_unsafe` may not call any procedure, because a per-element
 //! out-of-line call is exactly the overhead the collapse exists to remove.
@@ -139,7 +139,7 @@ fn expectFoldCollapsedToCallFreeIndexLoop(
     defer allocator.free(seen_stmts);
     @memset(seen_stmts, false);
 
-    // The collapsed loop's home depends on the rewrite scope: `.all_calls`
+    // The collapsed loop's home depends on the clone scope: `.all_calls`
     // chases the known `List.fold` callee into `sum_list`, while
     // `.iterator_fusion` collapses `List.fold`'s own specialization in place
     // and leaves `sum_list` as a wrapper the inline plan then dissolves.
@@ -176,7 +176,7 @@ const fold_app_body =
 test "issue 10991: dev pipeline collapses List.fold to a call-free index loop" {
     try harness.expectLirInspectionWithOptions(
         fold_app_body,
-        .{ .inline_mode = .wrappers, .spec_constr_body_rewrite = .iterator_fusion, .proc_debug_names = true },
+        .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .iterator_fusion, .proc_debug_names = true },
         expectFoldCollapsedToCallFreeIndexLoop,
     );
 }
@@ -184,7 +184,7 @@ test "issue 10991: dev pipeline collapses List.fold to a call-free index loop" {
 test "issue 10991: optimized pipeline also collapses List.fold to a call-free index loop" {
     try harness.expectLirInspectionWithOptions(
         fold_app_body,
-        .{ .inline_mode = .wrappers, .spec_constr_body_rewrite = .all_calls, .proc_debug_names = true },
+        .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .all_calls, .proc_debug_names = true },
         expectFoldCollapsedToCallFreeIndexLoop,
     );
 }
