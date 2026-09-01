@@ -3,6 +3,9 @@
 //! The host obtains a capturing callable from one provided root and passes
 //! ownership to another provided root which ignores it. The callee must emit
 //! the erased-callable release helper, including its closure-environment drop.
+//! The host also invokes a callable it owns after the provided root that
+//! produced it has returned, which is how a platform resumes a Roc callable it
+//! retained across provided calls.
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -22,6 +25,7 @@ pub const std_options: std.Options = .{
 };
 
 const RocOps = builtins.host_abi.RocOps;
+const RocStr = builtins.str.RocStr;
 
 const HostEnv = struct {
     gpa: std.heap.DebugAllocator(.{
@@ -37,6 +41,7 @@ const HostEnv = struct {
 };
 
 extern fn roc_make_boxed_callable(offset: u64) callconv(.c) ?[*]u8;
+extern fn roc_make_boxed_str_callable(captured: RocStr) callconv(.c) ?[*]u8;
 extern fn roc_drop_boxed_callable(callable: ?[*]u8) callconv(.c) void;
 extern fn roc_make_aliased_boxed_callables() callconv(.c) ?[*]u8;
 extern fn roc_make_shared_boxed_callables() callconv(.c) ?[*]u8;
@@ -47,6 +52,30 @@ const AliasedCallables = extern struct {
     first: ?[*]u8,
     second: ?[*]u8,
 };
+
+/// Generated fixed-arity argument struct for the app's `U64 -> U64` callables.
+const U64ToU64Args = extern struct {
+    arg0: u64,
+};
+
+/// Invoke a boxed callable the host owns through the erased-callable ABI.
+/// Null reuse borrows the host's reference, so the host still owns the
+/// callable after the call and releases it separately.
+fn callBoxedU64ToU64(ops: *RocOps, callable: [*]u8, arg0: u64) u64 {
+    const payload = builtins.erased_callable.payloadPtr(callable);
+    var call_args = U64ToU64Args{ .arg0 = arg0 };
+    var result: u64 = undefined;
+    var result_desc: ?*const anyopaque = null;
+    payload.callable_fn_ptr(
+        ops,
+        @ptrCast(&result),
+        @ptrCast(&call_args),
+        builtins.erased_callable.capturePtr(callable),
+        null,
+        &result_desc,
+    );
+    return result;
+}
 
 var g_roc_ops: ?*RocOps = null;
 
@@ -68,11 +97,13 @@ fn __main() callconv(.c) void {}
 fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     const drop_mode = "--run-provided-boxed-callable-drop";
     const identity_mode = "--run-provided-boxed-callable-identity";
+    const post_root_call_mode = "--run-provided-boxed-callable-post-root-call";
     const mode = if (argc == 2) std.mem.span(argv[1]) else "";
     const run_drop = std.mem.eql(u8, mode, drop_mode);
     const run_identity = std.mem.eql(u8, mode, identity_mode);
-    if (!run_drop and !run_identity) {
-        std.debug.print("usage: <app> {s}|{s}\n", .{ drop_mode, identity_mode });
+    const run_post_root_call = std.mem.eql(u8, mode, post_root_call_mode);
+    if (!run_drop and !run_identity and !run_post_root_call) {
+        std.debug.print("usage: <app> {s}|{s}|{s}\n", .{ drop_mode, identity_mode, post_root_call_mode });
         return 1;
     }
 
@@ -115,6 +146,40 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
         }
 
         std.debug.print("provided boxed callable drop ok\n", .{});
+        return 0;
+    }
+
+    // Repro for https://github.com/roc-lang/roc/issues/10775
+    //
+    // A callable the host owns outlives the provided root that produced it, so
+    // the host can invoke it once that root has returned. A heap string capture
+    // also makes the later callable drop exercise capture teardown through the
+    // retained interpreter.
+    if (run_post_root_call) {
+        const captured_text = "12345678901234567890123456789012345678901";
+        const captured = RocStr.fromSlice(captured_text, &roc_ops);
+        const callable = roc_make_boxed_str_callable(captured) orelse {
+            std.debug.print("provided callable maker returned null\n", .{});
+            return 1;
+        };
+
+        const first_result = callBoxedU64ToU64(&roc_ops, callable, 1);
+        const second_result = callBoxedU64ToU64(&roc_ops, callable, 2);
+        roc_drop_boxed_callable(callable);
+
+        if (first_result != 42 or second_result != 43) {
+            std.debug.print("provided callable calls after its root returned {d}, {d}\n", .{ first_result, second_result });
+            return 1;
+        }
+        if (host_env.dealloc_count != host_env.alloc_count) {
+            std.debug.print("provided callable post-root drop released {d} of {d} allocations\n", .{
+                host_env.dealloc_count,
+                host_env.alloc_count,
+            });
+            return 1;
+        }
+
+        std.debug.print("provided boxed callable post-root call ok\n", .{});
         return 0;
     }
 
