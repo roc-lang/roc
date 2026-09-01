@@ -9306,3 +9306,74 @@ test "recursive nominal mention at a constant argument lowers finitely" {
     var lowered = try lowerMonotypeModule(allocator, source);
     defer lowered.deinit(allocator);
 }
+
+// Mutually recursive declarations whose cross-mentions use constant
+// arguments are finite, but the declaration of `Alt(x)` also contains
+// `List(x)`, whose meaning depends on the enclosing formal binding. A
+// nested expansion of `Alt(Str)` reached through `Bare` must instantiate
+// `List(Str)` there, not reuse the outer expansion's `List(I64)`; the
+// checker-typed pattern match below meets that inner slot and exposes any
+// collapsed reuse as a type mismatch.
+test "nested expansion of a mutually recursive nominal keeps formal-dependent payloads per level" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Alt(x) := [Load(List(x)), Wrap(Bare(Str))].{
+        \\    load : x -> Alt(x)
+        \\    load = |v| Load([v])
+        \\}
+        \\
+        \\Bare(y) := [Tie(Alt(Str)), End]
+        \\
+        \\main : Str
+        \\main = {
+        \\    a = Alt.load(42)
+        \\    match a {
+        \\        Wrap(bare) => match bare {
+        \\            Tie(alt) => match alt {
+        \\                Load(strs) => strs.get(0) ?? "none"
+        \\                Wrap(_) => "wrap"
+        \\            }
+        \\            End => "end"
+        \\        }
+        \\        Load(_) => "load"
+        \\    }
+        \\}
+    ;
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+}
+
+// A constant-argument recursive nominal declared in an imported module
+// expands its backing inside a fresh cross-module instantiation context;
+// the recursive mention's closed checked type memoizes per context, so
+// nested expansion levels present one argument cell and the expansion
+// terminates there just as it does for a local declaration.
+test "imported recursive nominal at a constant argument lowers finitely" {
+    const allocator = std.testing.allocator;
+    const chain_module =
+        \\Chain(a) := [Stop, Link(Chain(Str))].{
+        \\    stop : a -> Chain(a)
+        \\    stop = |_| Stop
+        \\
+        \\    link : a, Chain(Str) -> Chain(a)
+        \\    link = |_, c| Link(c)
+        \\
+        \\    depth : Chain(a) -> U8
+        \\    depth = |c| match c {
+        \\        Stop => 0
+        \\        Link(_) => 1
+        \\    }
+        \\}
+    ;
+    const source =
+        \\import Chain
+        \\
+        \\main : U8
+        \\main = Chain.link(7, Chain.stop("s")).depth()
+    ;
+
+    const counters = try monotypeCountersForModuleWithImports(allocator, source, &.{
+        .{ .name = "Chain", .source = chain_module },
+    });
+    try std.testing.expect(counters.nominal_backing_instantiations >= 1);
+}

@@ -227,8 +227,11 @@ pub const ComptimeEvalError = struct {
 
 /// A nominal type declaration whose backing recursion is invalid: the
 /// declaration graph contains a cycle that is either structurally infinite
-/// (never passes through a tag-union/record payload position) or anonymous
-/// (never passes back through a nominal declaration's backing).
+/// (never passes through a tag-union/record payload position), anonymous
+/// (never passes back through a nominal declaration's backing), or applied
+/// at growing type arguments (a recursive mention whose argument is neither
+/// a formal parameter passed straight through nor a type without variables,
+/// so no finite set of instantiations covers the declaration).
 pub const InvalidNominalDeclRecursion = struct {
     /// The declaration statement var (source of the report's region).
     decl_var: Var,
@@ -238,7 +241,7 @@ pub const InvalidNominalDeclRecursion = struct {
     type_name: Ident.Idx,
     kind: Kind,
 
-    pub const Kind = enum { infinite, anonymous };
+    pub const Kind = enum { infinite, anonymous, growing_args };
 };
 
 // generic errors //

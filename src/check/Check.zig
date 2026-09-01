@@ -5117,6 +5117,7 @@ fn finalizeTypeDeclarationValidity(self: *Self) std.mem.Allocator.Error!void {
     try self.poisonInvalidTypeDeclarations(poisoned);
 
     try self.validateNominalDeclRecursion();
+    try self.validateNominalDeclArgumentGrowth();
 
     self.propagateTypeDeclarationInvalidity(dependent_offsets, dependents, propagated, &worklist);
     try self.poisonInvalidTypeDeclarations(poisoned);
@@ -5185,6 +5186,314 @@ fn validateNominalDeclRecursion(self: *Self) std.mem.Allocator.Error!void {
         try self.types.setVarContent(decl_var, .err);
         try self.types.setVarContent(decl.backing, .err);
     }
+}
+
+/// One nominal application found inside a local declaration's backing
+/// template that resolves to another local declaration.
+const NominalDeclMention = struct {
+    from_slot: u32,
+    to_slot: u32,
+    args: types_mod.Var.SafeList.Range,
+};
+
+/// Reject nominal declarations whose recursive mentions change their type
+/// arguments. Monomorphization instantiates a declaration's backing at every
+/// distinct argument tuple, so within a recursive declaration group each
+/// mention argument must either be a formal parameter passed straight
+/// through or contain no type variables: any other argument produces a new
+/// tuple at every expansion level, no finite set of instantiations covers
+/// the declaration, and no application of it has a Monotype. Unbounded
+/// growth is a property of the declaration, so it is reported here, once,
+/// at the declaration (mirroring the derived-codec growth rule).
+///
+/// Runs after `validateNominalDeclRecursion`, so every declaration examined
+/// here has already-validated recursion shape; growth is orthogonal to that
+/// classification and is detected over the local declaration-reference
+/// graph (mutual recursion included). Imported declarations were validated
+/// by their own module, and module imports are acyclic, so no recursive
+/// group spans modules.
+fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const self_origin = self.cir.selfModuleIdentity();
+    const decl_count_u64 = self.types.nominalDeclCount();
+    const decl_count: u32 = @intCast(decl_count_u64);
+
+    // Slot table: local, still-valid declarations with nominal content.
+    var slots: std.ArrayListUnmanaged(types_mod.NominalDecl.Idx) = .empty;
+    defer slots.deinit(self.gpa);
+    var slot_by_decl = std.AutoHashMap(types_mod.NominalDecl.Idx, u32).init(self.gpa);
+    defer slot_by_decl.deinit();
+
+    var decl_int: u32 = 0;
+    while (decl_int < decl_count) : (decl_int += 1) {
+        const decl_idx: types_mod.NominalDecl.Idx = @enumFromInt(decl_int);
+        const decl = self.types.getNominalDecl(decl_idx);
+        if (decl.origin_module != self_origin) continue;
+        if (!decl.isValid()) continue;
+        const decl_var: Var = @enumFromInt(decl.statement());
+        const resolved = self.types.resolveVar(decl_var).desc.content;
+        if (resolved != .structure or resolved.structure != .nominal_type) continue;
+        const slot: u32 = @intCast(slots.items.len);
+        try slots.append(self.gpa, decl_idx);
+        try slot_by_decl.put(decl_idx, slot);
+    }
+    if (slots.items.len == 0) return;
+
+    // Collect every local-declaration mention inside each backing template.
+    // The walk stays within the mentioning declaration's own template: a
+    // mentioned declaration's backing belongs to its own slot's analysis.
+    var mentions: std.ArrayListUnmanaged(NominalDeclMention) = .empty;
+    defer mentions.deinit(self.gpa);
+    var walk_stack: std.ArrayListUnmanaged(Var) = .empty;
+    defer walk_stack.deinit(self.gpa);
+    var visited = std.AutoHashMap(Var, void).init(self.gpa);
+    defer visited.deinit();
+
+    for (slots.items, 0..) |decl_idx, from_slot_usize| {
+        const from_slot: u32 = @intCast(from_slot_usize);
+        const decl = self.types.getNominalDecl(decl_idx);
+        visited.clearRetainingCapacity();
+        walk_stack.clearRetainingCapacity();
+        try walk_stack.append(self.gpa, decl.backing);
+        while (walk_stack.pop()) |var_| {
+            const root = self.types.resolveVar(var_);
+            if (visited.contains(root.var_)) continue;
+            try visited.put(root.var_, {});
+            switch (root.desc.content) {
+                .structure => |flat_type| switch (flat_type) {
+                    .nominal_type => |nominal_type| {
+                        if (self.types.lookupNominalDecl(nominal_type)) |target_idx| {
+                            if (slot_by_decl.get(target_idx)) |to_slot| {
+                                try mentions.append(self.gpa, .{
+                                    .from_slot = from_slot,
+                                    .to_slot = to_slot,
+                                    .args = nominal_type.args,
+                                });
+                            }
+                        }
+                        var arg_iter = self.types.iterNominalArgs(nominal_type);
+                        while (arg_iter.next()) |arg_var| {
+                            try walk_stack.append(self.gpa, arg_var);
+                        }
+                    },
+                    .tuple => |tuple| {
+                        try walk_stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems));
+                    },
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                        try walk_stack.append(self.gpa, func.ret);
+                        try walk_stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    },
+                    .record => |record| {
+                        try walk_stack.append(self.gpa, record.ext);
+                        const fields = self.types.getRecordFieldsSlice(record.fields);
+                        for (fields.items(.presence)) |presence| {
+                            try walk_stack.append(self.gpa, presence.typeVar());
+                            if (presence.presenceVar()) |presence_var| {
+                                try walk_stack.append(self.gpa, presence_var);
+                            }
+                        }
+                    },
+                    .record_unbound => |fields| {
+                        const fields_slice = self.types.getRecordFieldsSlice(fields);
+                        for (fields_slice.items(.presence)) |presence| {
+                            try walk_stack.append(self.gpa, presence.typeVar());
+                            if (presence.presenceVar()) |presence_var| {
+                                try walk_stack.append(self.gpa, presence_var);
+                            }
+                        }
+                    },
+                    .tag_union => |tag_union| {
+                        try walk_stack.append(self.gpa, tag_union.ext);
+                        const tags = self.types.getTagsSlice(tag_union.tags);
+                        for (tags.items(.args)) |tag_args| {
+                            try walk_stack.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                        }
+                    },
+                    .empty_record, .empty_tag_union => {},
+                },
+                .alias => |alias| {
+                    try walk_stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                    var arg_iter = self.types.iterAliasArgs(alias);
+                    while (arg_iter.next()) |arg_var| {
+                        try walk_stack.append(self.gpa, arg_var);
+                    }
+                },
+                .flex, .rigid, .field_presence, .err => {},
+            }
+        }
+    }
+    if (mentions.items.len == 0) return;
+
+    // Reachability over the mention graph: a mention u->v participates in a
+    // recursive group exactly when v also reaches u.
+    const slot_count = slots.items.len;
+    const reach = try self.gpa.alloc(std.DynamicBitSetUnmanaged, slot_count);
+    var reach_initialized: usize = 0;
+    defer {
+        for (reach[0..reach_initialized]) |*row| row.deinit(self.gpa);
+        self.gpa.free(reach);
+    }
+    for (reach) |*row| {
+        row.* = try std.DynamicBitSetUnmanaged.initEmpty(self.gpa, slot_count);
+        reach_initialized += 1;
+    }
+    var adjacency = try self.gpa.alloc(std.ArrayListUnmanaged(u32), slot_count);
+    defer {
+        for (adjacency) |*list| list.deinit(self.gpa);
+        self.gpa.free(adjacency);
+    }
+    @memset(adjacency, .empty);
+    for (mentions.items) |mention| {
+        try adjacency[mention.from_slot].append(self.gpa, mention.to_slot);
+    }
+    var bfs_stack: std.ArrayListUnmanaged(u32) = .empty;
+    defer bfs_stack.deinit(self.gpa);
+    for (0..slot_count) |source| {
+        bfs_stack.clearRetainingCapacity();
+        try bfs_stack.append(self.gpa, @intCast(source));
+        while (bfs_stack.pop()) |slot| {
+            for (adjacency[slot].items) |next| {
+                if (reach[source].isSet(next)) continue;
+                reach[source].set(next);
+                try bfs_stack.append(self.gpa, next);
+            }
+        }
+    }
+
+    // Classify recursive mentions' arguments; report and poison at most once
+    // per declaration.
+    const reported = try self.gpa.alloc(bool, slot_count);
+    defer self.gpa.free(reported);
+    @memset(reported, false);
+
+    for (mentions.items) |mention| {
+        if (reported[mention.from_slot]) continue;
+        if (!reach[mention.to_slot].isSet(mention.from_slot)) continue;
+        const decl_idx = slots.items[mention.from_slot];
+        const decl = self.types.getNominalDecl(decl_idx);
+        const formals = self.types.sliceVars(decl.formals);
+
+        var grows = false;
+        for (self.types.sliceVars(mention.args)) |arg_var| {
+            const arg_root = self.types.resolveVar(arg_var);
+            switch (arg_root.desc.content) {
+                .rigid => {
+                    var is_formal = false;
+                    for (formals) |formal| {
+                        if (self.types.resolveVar(formal).var_ == arg_root.var_) {
+                            is_formal = true;
+                            break;
+                        }
+                    }
+                    if (!is_formal and try self.varContainsTypeVariable(arg_root.var_, &walk_stack, &visited)) {
+                        grows = true;
+                        break;
+                    }
+                },
+                .err => {},
+                else => {
+                    if (try self.varContainsTypeVariable(arg_root.var_, &walk_stack, &visited)) {
+                        grows = true;
+                        break;
+                    }
+                },
+            }
+        }
+        if (!grows) continue;
+
+        reported[mention.from_slot] = true;
+        const decl_var: Var = @enumFromInt(decl.statement());
+        const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, decl.backing);
+        _ = try self.problems.appendProblem(self.gpa, .{ .invalid_nominal_decl_recursion = .{
+            .decl_var = decl_var,
+            .snapshot = snapshot,
+            .type_name = decl.ident.ident_idx,
+            .kind = .growing_args,
+        } });
+        self.markTypeDeclInvalid(@enumFromInt(decl.statement()));
+        self.types.markNominalDeclInvalid(decl_idx);
+        try self.types.setVarContent(decl_var, .err);
+        try self.types.setVarContent(decl.backing, .err);
+    }
+}
+
+/// Whether any flex or rigid variable is reachable from `var_` through
+/// structural positions, alias backings and arguments, and nominal
+/// application arguments. Nominal backings are not entered: a mentioned
+/// declaration's template can only reference that declaration's own
+/// formals, never the caller's. `.err` content counts as variable-free so
+/// already-reported declarations are not re-reported through their poisoned
+/// types.
+fn varContainsTypeVariable(
+    self: *Self,
+    start: Var,
+    walk_stack: *std.ArrayListUnmanaged(Var),
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    visited.clearRetainingCapacity();
+    walk_stack.clearRetainingCapacity();
+    try walk_stack.append(self.gpa, start);
+    while (walk_stack.pop()) |var_| {
+        const root = self.types.resolveVar(var_);
+        if (visited.contains(root.var_)) continue;
+        try visited.put(root.var_, {});
+        switch (root.desc.content) {
+            .flex, .rigid => return true,
+            .structure => |flat_type| switch (flat_type) {
+                .nominal_type => |nominal_type| {
+                    var arg_iter = self.types.iterNominalArgs(nominal_type);
+                    while (arg_iter.next()) |arg_var| {
+                        try walk_stack.append(self.gpa, arg_var);
+                    }
+                },
+                .tuple => |tuple| {
+                    try walk_stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems));
+                },
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try walk_stack.append(self.gpa, func.ret);
+                    try walk_stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                },
+                .record => |record| {
+                    try walk_stack.append(self.gpa, record.ext);
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    for (fields.items(.presence)) |presence| {
+                        try walk_stack.append(self.gpa, presence.typeVar());
+                        if (presence.presenceVar()) |presence_var| {
+                            try walk_stack.append(self.gpa, presence_var);
+                        }
+                    }
+                },
+                .record_unbound => |fields| {
+                    const fields_slice = self.types.getRecordFieldsSlice(fields);
+                    for (fields_slice.items(.presence)) |presence| {
+                        try walk_stack.append(self.gpa, presence.typeVar());
+                        if (presence.presenceVar()) |presence_var| {
+                            try walk_stack.append(self.gpa, presence_var);
+                        }
+                    }
+                },
+                .tag_union => |tag_union| {
+                    try walk_stack.append(self.gpa, tag_union.ext);
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.args)) |tag_args| {
+                        try walk_stack.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                    }
+                },
+                .empty_record, .empty_tag_union => {},
+            },
+            .alias => |alias| {
+                try walk_stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                var arg_iter = self.types.iterAliasArgs(alias);
+                while (arg_iter.next()) |arg_var| {
+                    try walk_stack.append(self.gpa, arg_var);
+                }
+            },
+            .field_presence, .err => {},
+        }
+    }
+    return false;
 }
 
 fn resolvePendingTupleAccess(
