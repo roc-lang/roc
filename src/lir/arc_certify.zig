@@ -1409,6 +1409,22 @@ const State = struct {
             self.outcome_discriminants.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
         }
 
+        try self.maybe_uninitialized_unresolved.resize(
+            self.allocator,
+            source.maybe_uninitialized_unresolved.capacity(),
+            false,
+        );
+        self.maybe_uninitialized_unresolved.unsetAll();
+        self.maybe_uninitialized_unresolved.setUnion(source.maybe_uninitialized_unresolved);
+
+        try self.maybe_uninitialized_released.resize(
+            self.allocator,
+            source.maybe_uninitialized_released.capacity(),
+            false,
+        );
+        self.maybe_uninitialized_released.unsetAll();
+        self.maybe_uninitialized_released.setUnion(source.maybe_uninitialized_released);
+
         self.local_dense = source.local_dense;
         self.pool = source.pool;
         self.result_discriminant = source.result_discriminant;
@@ -7958,4 +7974,23 @@ test "certify rejects consuming Box.unbox after the ARC boundary" {
 
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "post-ARC LIR retained a consuming Box.unbox") != null);
+}
+
+test "reused certifier state copies maybe-uninitialized bits exactly" {
+    const local_dense = [_]u32{ 0, 1, 2, 3 };
+
+    var source = try State.init(testing.allocator, &local_dense, local_dense.len);
+    defer source.deinit();
+    source.maybe_uninitialized_unresolved.set(1);
+    source.maybe_uninitialized_released.set(2);
+
+    var reused = try State.init(testing.allocator, &local_dense, local_dense.len);
+    defer reused.deinit();
+    reused.maybe_uninitialized_unresolved.set(0);
+    reused.maybe_uninitialized_released.set(3);
+
+    try reused.refillFrom(&source);
+
+    try testing.expect(reused.maybe_uninitialized_unresolved.eql(source.maybe_uninitialized_unresolved));
+    try testing.expect(reused.maybe_uninitialized_released.eql(source.maybe_uninitialized_released));
 }
