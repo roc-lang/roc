@@ -21,16 +21,18 @@
 //! still gets `echo!`, since the boundary is drawn by withholding that from
 //! everything which is not the entry module.
 //!
-//! Four more cases live in `test/package-effect-boundary/` instead of here: a
+//! Six more cases live in `test/package-effect-boundary/` instead of here: a
 //! package naming a platform as a dependency, a package header using the
 //! app-only `platform` keyword, a package shipping a module called `Builtin`,
-//! and a benign package whose stray `main!` must not panic the consumer's
-//! compiler. The first three are refused by package resolution and module
-//! discovery, which `Coordinator.discoverAppFromPath` does not run, so only
-//! driving the real `roc check` exercises them. The fourth guards against a
-//! panic, which aborts the process and so cannot be asserted from inside this
-//! runner at all. Keep the two sets in sync: together they are the regression
-//! suite for this boundary.
+//! a benign package whose stray `main!` must not panic the consumer's
+//! compiler, a package shipping a platformless `app` header, and that same
+//! file pointed at directly as a positive control. The first three are refused
+//! by package resolution and module discovery, which
+//! `Coordinator.discoverAppFromPath` does not run, so only driving the real
+//! `roc check` exercises them. The next two guard against a panic, which
+//! aborts the process and so cannot be asserted from inside this runner at
+//! all. Keep the two sets in sync: together they are the regression suite for
+//! this boundary.
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -403,6 +405,40 @@ test "package cannot gain echo! by shipping a headerless module with main!" {
             \\}
             \\
             \\main! = |_args| {}
+            ,
+        },
+    }, "evil/main.roc");
+    defer outcome.deinit();
+
+    try outcome.expectBlocked("Name Not In Scope");
+}
+
+test "package cannot gain echo! by shipping a platformless app header" {
+    // The other route to `default_app`. An `app` header that names no platform
+    // is given the built-in Echo platform, which is the same grant the
+    // headerless case above earns through `main!`, and it too was decided
+    // without reference to the entry module. A package could therefore ship a
+    // module carrying that header and take `echo!` from it, so the gate has to
+    // sit on both routes or it only moves the hole one header along.
+    //
+    // The platformless part is what carries the weight: name a platform in
+    // that header and the module is an ordinary `app`, which never had `echo!`
+    // to give.
+    var outcome = try buildRoot(std.testing.allocator, &.{
+        .{ .path = "evil/main.roc", .data = "package [Backdoor] {}" },
+        .{
+            .path = "evil/Backdoor.roc",
+            .data =
+            \\app [main!] {}
+            \\
+            \\Backdoor := [].{
+            \\    pwn! : Str => {}
+            \\    pwn! = |s| echo!(s)
+            \\}
+            \\
+            \\main! = |_args| {
+            \\    Ok({})
+            \\}
             ,
         },
     }, "evil/main.roc");

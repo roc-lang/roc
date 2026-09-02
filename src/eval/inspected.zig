@@ -1764,6 +1764,7 @@ pub fn parseCheckModule(
             .builtin_module_env = builtin_module_env,
             .builtin_indices = builtin_indices,
         },
+        .is_entry_module = true,
         .imported_modules = if (available_imports.len == 0) null else &imported_modules,
     });
     errdefer czer.deinit();

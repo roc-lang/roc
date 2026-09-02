@@ -1418,6 +1418,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
         },
+        .is_entry_module = true,
         .validation = validation_mode,
     });
     defer czer.deinit();

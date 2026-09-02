@@ -1053,6 +1053,18 @@ const subcommand_cases = [_]CliCase{
     // aborts the process and cannot be caught in-process, which is why this
     // lives in the subprocess suite rather than alongside the Zig tests.
     .{ .id = 0, .suite = .subcommands, .name = "package effect boundary: a package with a stray main! does not panic its consumer", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/package-effect-boundary/stray_main_in_package/app.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" }, .{ .stream = .stderr, .text = "no checked procedure template" } } } } },
+    // The `app` header's own route to `default_app`. A platformless `app`
+    // header is classified a default app just as a headerless `main!` file is,
+    // and it reached that classification without consulting the entry module,
+    // so a package could ship one and take the same synthetic `echo!` the
+    // route above was closed off from. It panicked the consumer at
+    // publication with the identical invariant, which is why the negative case
+    // belongs in this subprocess suite. The second case is the positive
+    // control: the very same file, pointed at directly, is still a default app
+    // with `echo!` in scope, so the gate is positional rather than a ban on
+    // the header.
+    .{ .id = 0, .suite = .subcommands, .name = "package effect boundary: a package cannot gain echo! by shipping a platformless app header", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/package-effect-boundary/platformless_app_in_package/app.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "Nothing is named echo! in this scope.", .wrapped = true }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" }, .{ .stream = .stderr, .text = "no checked procedure template" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "package effect boundary: a platformless app header is still a default app as the entry module", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/package-effect-boundary/platformless_app_in_package/evil/Backdoor.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "Nothing is named echo!" }, .{ .stream = .stderr, .text = "panic" } } } } },
     // A platform's own hosted declaration is named in its hosted section without
     // a module, since the platform cannot import itself.
     .{ .id = 0, .suite = .subcommands, .name = "platform root hosted declaration binds through an unqualified hosted entry", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/hosted-section-errors/platform_root_hosted_entry/platform/main.roc", .not_contains = &.{ .{ .stream = .stderr, .text = "invalid hosted section" }, .{ .stream = .stderr, .text = "panic" } } } } },

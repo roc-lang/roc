@@ -290,6 +290,7 @@ pub fn canonicalizeAndTypeCheckModule(
             .builtin_module_env = builtin_module_env,
             .builtin_indices = builtin_indices,
         },
+        .is_entry_module = true,
         .imported_modules = module_envs_out,
     });
     czer.source_dir = source_dir;
