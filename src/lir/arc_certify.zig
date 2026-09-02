@@ -2506,10 +2506,14 @@ const Certifier = struct {
                 }
                 summary.abi_live = self.values.items[value].always_live;
                 if (summary.class != .unbound and summary.class != .representation) {
-                    summary.provenance = if (repr == dense)
-                        try self.makeSummaryProvenance(state, value)
-                    else
-                        self.summary_scratch.items[repr].provenance;
+                    if (repr == dense) {
+                        const made = try self.makeSummaryProvenance(state, value);
+                        summary.provenance = made.provenance;
+                        if (made.uncarried_live_lender) summary.abi_live = true;
+                    } else {
+                        summary.provenance = self.summary_scratch.items[repr].provenance;
+                        if (self.summary_scratch.items[repr].abi_live) summary.abi_live = true;
+                    }
                 }
             }
             summary.maybe_uninitialized_unresolved = state.maybeUninitializedIsUnresolved(dense);
@@ -2592,32 +2596,52 @@ const Certifier = struct {
     /// directly carried dependency stays as that representative so its own
     /// sparse provenance remains available. An unbound intermediate is
     /// reduced to the live carriers the existing certifier proof uses.
+    /// Appends the summarized carrier of every liveness anchor of
+    /// `dependency`, and reports whether each live anchor had one. A live
+    /// anchor with no summarized carrier cannot be referenced by the summary
+    /// at all; per the carried-into-join invariant it is either ABI-live or
+    /// fully claimed, so the caller records the liveness it proves on the
+    /// entry itself instead of through a dangling local reference.
     fn appendSummaryDependencyReprs(
         self: *Certifier,
         state: *const State,
         dependency: ValueId,
         reprs: *std.ArrayList(u32),
-    ) Allocator.Error!void {
+    ) Allocator.Error!bool {
         if (self.repr_scratch.get(dependency)) |repr| {
             try appendUniqueU32(reprs, self.allocator, repr);
-            return;
+            return true;
         }
 
-        if (!try self.collectBorrowSummaryAnchorValues(state, dependency, &self.provenance_value_scratch)) return;
+        if (!try self.collectBorrowSummaryAnchorValues(state, dependency, &self.provenance_value_scratch)) return true;
+        var all_carried = true;
         for (self.provenance_value_scratch.items) |anchor| {
-            const repr = self.repr_scratch.get(anchor) orelse self.denseOf(self.values.items[anchor].origin);
-            try appendUniqueU32(reprs, self.allocator, repr);
+            if (self.repr_scratch.get(anchor)) |repr| {
+                try appendUniqueU32(reprs, self.allocator, repr);
+            } else {
+                all_carried = false;
+            }
         }
+        return all_carried;
     }
 
     /// Builds the sparse provenance attached to one alias-class
     /// representative. Positive ownership balance does not suppress these
     /// edges: they become active if later statements spend the explicit unit.
+    const SummaryProvenanceResult = struct {
+        provenance: ?*const SummaryProvenance,
+        /// A live lender anchor had no summarized carrier local. Per the
+        /// carried-into-join invariant such an anchor is either ABI-live or
+        /// fully claimed, and both outlive every read of the borrow, so the
+        /// entry itself carries the liveness the dropped reference proved.
+        uncarried_live_lender: bool,
+    };
+
     fn makeSummaryProvenance(
         self: *Certifier,
         state: *const State,
         value: ValueId,
-    ) Allocator.Error!?*const SummaryProvenance {
+    ) Allocator.Error!SummaryProvenanceResult {
         const info = self.values.items[value];
         self.provenance_lender_scratch.clearRetainingCapacity();
         self.provenance_holder_scratch.clearRetainingCapacity();
@@ -2632,14 +2656,17 @@ const Certifier = struct {
                 break;
             }
         }
+        var uncarried_live_lender = false;
         if (lenders_live) {
             for (info.lenders) |lender| {
-                try self.appendSummaryDependencyReprs(state, lender, &self.provenance_lender_scratch);
+                if (!try self.appendSummaryDependencyReprs(state, lender, &self.provenance_lender_scratch)) {
+                    uncarried_live_lender = true;
+                }
             }
         }
         const holder = state.holderOf(value);
         if (holder != no_value and try self.valueIsLive(state, holder)) {
-            try self.appendSummaryDependencyReprs(state, holder, &self.provenance_holder_scratch);
+            _ = try self.appendSummaryDependencyReprs(state, holder, &self.provenance_holder_scratch);
         }
 
         const payload_source = if (info.payload_source == no_value or !try self.valueIsLive(state, info.payload_source))
@@ -2650,7 +2677,7 @@ const Certifier = struct {
             self.provenance_holder_scratch.items.len == 0 and
             payload_source == no_dense)
         {
-            return null;
+            return .{ .provenance = null, .uncarried_live_lender = uncarried_live_lender };
         }
 
         std.mem.sort(u32, self.provenance_lender_scratch.items, {}, comptime std.sort.asc(u32));
@@ -2669,7 +2696,9 @@ const Certifier = struct {
             candidate,
             .{},
         );
-        if (interned.found_existing) return interned.value_ptr.*;
+        if (interned.found_existing) {
+            return .{ .provenance = interned.value_ptr.*, .uncarried_live_lender = uncarried_live_lender };
+        }
         errdefer _ = self.provenance_interner.removeContext(candidate, .{});
 
         const arena = self.lender_arena.allocator();
@@ -2688,7 +2717,7 @@ const Certifier = struct {
         };
         interned.key_ptr.* = provenance.*;
         interned.value_ptr.* = provenance;
-        return provenance;
+        return .{ .provenance = provenance, .uncarried_live_lender = uncarried_live_lender };
     }
 
     /// The provenance both states prove, for widening a group at the cap.
@@ -4409,10 +4438,14 @@ const Certifier = struct {
                         }
                         summary.abi_live = self.values.items[value].always_live;
                         if (summary.class != .unbound and summary.class != .representation) {
-                            summary.provenance = if (repr == dense)
-                                try self.makeSummaryProvenance(state, value)
-                            else
-                                self.summary_scratch.items[repr].provenance;
+                            if (repr == dense) {
+                                const made = try self.makeSummaryProvenance(state, value);
+                                summary.provenance = made.provenance;
+                                if (made.uncarried_live_lender) summary.abi_live = true;
+                            } else {
+                                summary.provenance = self.summary_scratch.items[repr].provenance;
+                                if (self.summary_scratch.items[repr].abi_live) summary.abi_live = true;
+                            }
                         }
                     }
                 }

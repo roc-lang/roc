@@ -188,3 +188,46 @@ test "issue 10991: optimized pipeline also collapses List.fold to a call-free in
         expectFoldCollapsedToCallFreeIndexLoop,
     );
 }
+
+// A fold whose accumulator survives an arm as a borrowed alias of the loop
+// argument produces a loop-carried borrow whose anchor value is no longer
+// named by any local at the back edge. The certifier must express that
+// liveness on the crossing entry itself instead of referencing a local the
+// join summary does not carry; lowering this cleanly (the harness panics on
+// any certification failure) is the regression check.
+test "issue 10991: loop-carried borrow of a claimed payload certifies under the dev pipeline" {
+    try harness.expectLowersToLirWithOptions(
+        \\Transform := [
+        \\    Uppercase,
+        \\    Wrap(Str, Str),
+        \\    Prefix(Str),
+        \\].{
+        \\    apply : Transform, Str -> Str
+        \\    apply = |transform, val|
+        \\        match transform {
+        \\            Uppercase => {
+        \\                bytes = val.to_utf8().map(|b| if b >= 'a' and b <= 'z' b - 32 else b)
+        \\                match Str.from_utf8(bytes) {
+        \\                    Ok(upper) => upper
+        \\                    Err(_) => val
+        \\                }
+        \\            }
+        \\            Wrap(pre, suf) => "${pre}${val}${suf}"
+        \\            Prefix(p) => "${p}${val}"
+        \\        }
+        \\
+        \\    apply_all : List(Transform), Str -> Str
+        \\    apply_all = |transforms, val|
+        \\        transforms.fold(val, |acc, t| apply(t, acc))
+        \\}
+        \\
+        \\main! = |args| {
+        \\    transforms = [Prefix("pre "), Uppercase, Wrap("<", ">")]
+        \\    out = Transform.apply_all(transforms, "value ${args.len().to_str()}")
+        \\    echo!(out)
+        \\    Ok({})
+        \\}
+    ,
+        .{ .inline_mode = .wrappers, .spec_constr_clone_inlining = .iterator_fusion },
+    );
+}
