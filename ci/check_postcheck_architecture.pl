@@ -139,11 +139,23 @@ for my $rel (iter_zig_files()) {
         ++$line_no;
         chomp $line;
 
+        # `zig_code_line` walks the line one character at a time, so asking for
+        # it inside the rule loop repeats that walk for every rule the line is
+        # checked against. One line's stripped form is the same for all of
+        # them, so compute it at most once and hand the same string to each.
+        my $code_subject;
+
         for my $rule (@RULES) {
             next if $rule->{allowed}{$rel};
             # Architecture rules constrain Zig tokens, not prose or fixture
             # strings. A rule must opt in explicitly if raw source text matters.
-            my $subject = $rule->{raw_text} ? $line : zig_code_line($line);
+            my $subject;
+            if ($rule->{raw_text}) {
+                $subject = $line;
+            } else {
+                $code_subject = zig_code_line($line) unless defined $code_subject;
+                $subject = $code_subject;
+            }
             if ($subject =~ $rule->{regex}) {
                 push @violations, "$rel:$line_no: $rule->{category}: $line";
             }
