@@ -785,6 +785,16 @@ pub const Store = struct {
             defer allocator.free(cyclic_nodes);
             @memset(cyclic_nodes, false);
             try markCyclicNodes(allocator, graph, cyclic_nodes);
+            if (std.mem.indexOfScalar(bool, cyclic_nodes, true) == null) {
+                // Nothing to intern by key: acyclic nodes intern by shape at
+                // the uncached commit, so the partition is never consulted.
+                return .{
+                    .allocator = allocator,
+                    .node_blocks = &.{},
+                    .block_representatives = &.{},
+                    .block_keys = &.{},
+                };
+            }
 
             const node_blocks = try allocator.alloc(u32, node_count);
             errdefer allocator.free(node_blocks);
@@ -848,14 +858,15 @@ pub const Store = struct {
             for (self_analysis.block_keys) |maybe_key| {
                 if (maybe_key) |key| self_analysis.allocator.free(key);
             }
-            self_analysis.allocator.free(self_analysis.block_keys);
-            self_analysis.allocator.free(self_analysis.block_representatives);
-            self_analysis.allocator.free(self_analysis.node_blocks);
+            if (self_analysis.block_keys.len != 0) self_analysis.allocator.free(self_analysis.block_keys);
+            if (self_analysis.block_representatives.len != 0) self_analysis.allocator.free(self_analysis.block_representatives);
+            if (self_analysis.node_blocks.len != 0) self_analysis.allocator.free(self_analysis.node_blocks);
         }
 
         /// Interning key of the block a node belongs to, or `null` when that
         /// block takes part in no cycle.
         fn keyForNode(self_analysis: *const RecursiveGraphAnalysis, index: usize) ?[]const u8 {
+            if (self_analysis.node_blocks.len == 0) return null;
             return self_analysis.block_keys[self_analysis.node_blocks[index]];
         }
 
