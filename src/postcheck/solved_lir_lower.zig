@@ -207,18 +207,20 @@ fn specializationIdentityCaptureStart(span: CaptureSpanId) u32 {
     };
 }
 
+/// A capture record's lowered type depends only on the captures themselves:
+/// each field lowers the capture's own solved type, and its storage form is a
+/// property of the captured local. One record therefore serves every
+/// function type that carries the same capture span.
 const CaptureTypeKey = struct {
     source: CaptureSpanSource,
     start: u32,
     len: u32,
-    solved_fn_ty: SolvedType.TypeVarId,
 
-    fn from(span: CaptureSpanId, solved_fn_ty: SolvedType.TypeVarId) CaptureTypeKey {
+    fn from(span: CaptureSpanId) CaptureTypeKey {
         return .{
             .source = span.source,
             .start = span.start,
             .len = span.len,
-            .solved_fn_ty = solved_fn_ty,
         };
     }
 };
@@ -327,15 +329,13 @@ const CaptureSpanContext = struct {
         std.hash.autoHash(&hasher, span.source);
         std.hash.autoHash(&hasher, span.start);
         std.hash.autoHash(&hasher, span.len);
-        std.hash.autoHash(&hasher, @intFromEnum(span.solved_fn_ty));
         return hasher.final();
     }
 
     pub fn eql(_: CaptureSpanContext, lhs: CaptureTypeKey, rhs: CaptureTypeKey) bool {
         return lhs.source == rhs.source and
             lhs.start == rhs.start and
-            lhs.len == rhs.len and
-            lhs.solved_fn_ty == rhs.solved_fn_ty;
+            lhs.len == rhs.len;
     }
 };
 
@@ -1188,7 +1188,7 @@ const Lowerer = struct {
             .solved_fn_ty = root_fn_ty,
             .abi = abi,
             .captures = captures,
-            .capture_ty = if (capture_items.len == 0) null else try self.captureRecordType(captures, root_fn_ty),
+            .capture_ty = if (capture_items.len == 0) null else try self.captureRecordType(captures),
             .return_reuse = return_reuse,
         };
 
@@ -1611,12 +1611,8 @@ const Lowerer = struct {
         return false;
     }
 
-    fn captureRecordType(
-        self: *Lowerer,
-        captures: CaptureSpanId,
-        solved_fn_ty: SolvedType.TypeVarId,
-    ) Common.LowerError!Type.TypeId {
-        const id = CaptureTypeKey.from(captures, self.solved.types.root(solved_fn_ty));
+    fn captureRecordType(self: *Lowerer, captures: CaptureSpanId) Common.LowerError!Type.TypeId {
+        const id = CaptureTypeKey.from(captures);
         if (self.capture_types.get(id)) |existing| return existing;
 
         const capture_items = self.captureSpan(captures);
