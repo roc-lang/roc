@@ -424,6 +424,95 @@ pub const ReachableStmts = struct {
     }
 };
 
+/// Return one flag per store local identifying definitions reachable from
+/// `body`. Clone passes use this to give definitions fresh identities while
+/// retaining read-only external inputs.
+pub fn collectReachableDefinitions(store: *LirStore, body: CFStmtId) Allocator.Error![]bool {
+    const defined = try store.allocator.alloc(bool, store.localCount());
+    errdefer store.allocator.free(defined);
+    @memset(defined, false);
+
+    var walk = try ReachableStmts.init(store, body);
+    defer walk.deinit();
+    while (try walk.next()) |stmt_id| switch (store.getCFStmt(stmt_id)) {
+        inline .init_uninitialized,
+        .assign_ref,
+        .assign_literal,
+        .assign_packed_erased_fn,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_reuse_box,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_tag,
+        .assign_call_dict,
+        .assign_low_level,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        => |stmt| defined[@intFromEnum(stmt.target)] = true,
+        .assign_call => |stmt| {
+            defined[@intFromEnum(stmt.target)] = true;
+            if (stmt.out_desc) |out_desc| defined[@intFromEnum(out_desc)] = true;
+        },
+        .assign_call_erased => |stmt| {
+            defined[@intFromEnum(stmt.target)] = true;
+            if (stmt.out_desc) |out_desc| defined[@intFromEnum(out_desc)] = true;
+        },
+        .assign_boxy_tag_payload => |stmt| {
+            defined[@intFromEnum(stmt.target)] = true;
+            if (stmt.target_desc) |target_desc| defined[@intFromEnum(target_desc)] = true;
+        },
+        .join => |join| {
+            const params = store.getLocalSpan(join.params);
+            for (0..params.len) |index| defined[@intFromEnum(GuardedList.at(params, index))] = true;
+            const maybe_uninitialized = store.getLocalSpan(join.maybe_uninitialized_params);
+            for (0..maybe_uninitialized.len) |index| defined[@intFromEnum(GuardedList.at(maybe_uninitialized, index))] = true;
+        },
+        .str_match => |str_match| markStrMatchDefinitions(store, defined, str_match.steps),
+        .str_match_set => |str_match_set| {
+            const arms = store.getStrMatchArms(str_match_set.arms);
+            for (0..arms.len) |index| {
+                markStrMatchDefinitions(store, defined, GuardedList.at(arms, index).steps);
+            }
+        },
+        .store_struct,
+        .store_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .comptime_branch_taken,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        .switch_stmt,
+        .switch_initialized_payload,
+        .boxy_tag_match,
+        .loop_continue,
+        .loop_break,
+        .jump,
+        .ret,
+        .crash,
+        => {},
+    };
+    return defined;
+}
+
+fn markStrMatchDefinitions(store: *const LirStore, defined: []bool, span: LIR.StrMatchStepSpan) void {
+    const steps = store.getStrMatchSteps(span);
+    for (0..steps.len) |index| switch (GuardedList.at(steps, index).capture) {
+        .discard => {},
+        .view => |local| defined[@intFromEnum(local)] = true,
+    };
+}
+
 /// Whether every local in `chain` has exactly one read across the proc.
 ///
 /// This is the soundness guard for fusing a call with the statement that

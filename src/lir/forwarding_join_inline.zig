@@ -183,14 +183,17 @@ fn applyCandidate(store: *LirStore, proc_id: LIR.LirProcSpecId, candidate: Candi
     var cloner = try body_clone.BodyCloner(RetRewriter).initWithFreshDeclaredJoins(store, .{}, outer.body);
     defer cloner.deinit();
 
-    // This is a continuation move within one procedure, not a procedure-body
-    // clone. Existing locals keep their identities; only the eliminated outer
-    // parameter is substituted with the inner parameter that carried the same
-    // value.
+    const definitions = try body_clone.collectReachableDefinitions(store, outer.body);
+    defer store.allocator.free(definitions);
+
+    // Definitions in the cloned continuation need fresh identities because
+    // another reachable edge may share part of the source tail. Read-only
+    // frame locals remain external inputs, and the eliminated outer parameter
+    // is substituted with the inner parameter that carried the same value.
     const frame = store.getLocalSpan(store.getProcSpec(proc_id).frame_locals);
     for (0..frame.len) |index| {
         const local = GuardedList.at(frame, index);
-        cloner.local_map[@intFromEnum(local)] = local;
+        if (!definitions[@intFromEnum(local)]) cloner.local_map[@intFromEnum(local)] = local;
     }
     cloner.local_map[@intFromEnum(candidate.outer_param)] = candidate.inner_param;
 
@@ -222,11 +225,17 @@ test "forwarding join inline sinks the sole consumer without duplicating it" {
     const outer_param = try store.addLocal(.{ .layout_idx = .u64 });
     const inner_param = try store.addLocal(.{ .layout_idx = .u64 });
     const one = try store.addLocal(.{ .layout_idx = .u64 });
+    const copied = try store.addLocal(.{ .layout_idx = .u64 });
     var next_join_point: u32 = 0;
     const outer_id = testFreshJoinPointId(&next_join_point);
     const inner_id = testFreshJoinPointId(&next_join_point);
 
-    const outer_body = try store.addCFStmt(.{ .ret = .{ .value = outer_param } });
+    const outer_ret = try store.addCFStmt(.{ .ret = .{ .value = copied } });
+    const outer_body = try store.addCFStmt(.{ .assign_ref = .{
+        .target = copied,
+        .op = .{ .local = outer_param },
+        .next = outer_ret,
+    } });
     const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = outer_id } });
     const forward = try store.addCFStmt(.{ .set_local = .{
         .target = outer_param,
@@ -263,7 +272,7 @@ test "forwarding join inline sinks the sole consumer without duplicating it" {
         .args = LIR.LocalSpan.empty(),
         .iterator_fusion_scope = true,
         .body = outer_stmt,
-        .frame_locals = try store.addLocalSpan(&.{ outer_param, inner_param, one }),
+        .frame_locals = try store.addLocalSpan(&.{ outer_param, inner_param, one, copied }),
         .ret_layout = .u64,
     });
 
@@ -273,8 +282,12 @@ test "forwarding join inline sinks the sole consumer without duplicating it" {
     try testing.expect(rewritten_outer == .join);
     try testing.expectEqual(inner_id, rewritten_outer.join.id);
     const moved = store.getCFStmt(rewritten_outer.join.body);
-    try testing.expect(moved == .ret);
-    try testing.expectEqual(inner_param, moved.ret.value);
+    try testing.expect(moved == .assign_ref);
+    try testing.expect(moved.assign_ref.target != copied);
+    try testing.expectEqual(inner_param, moved.assign_ref.op.local);
+    const moved_ret = store.getCFStmt(moved.assign_ref.next);
+    try testing.expect(moved_ret == .ret);
+    try testing.expectEqual(moved.assign_ref.target, moved_ret.ret.value);
 }
 
 test "forwarding join inline preserves recursive outer join declarations" {

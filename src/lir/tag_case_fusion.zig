@@ -227,7 +227,7 @@ fn partialBranchesAreOwnershipNeutral(
 ) ResourceError!bool {
     for (builds) |build| {
         const branch = switchTarget(store, switch_stmt, build.discriminant);
-        const definitions = try collectBranchDefinitions(store, branch);
+        const definitions = try body_clone.collectReachableDefinitions(store, branch);
         defer store.allocator.free(definitions);
         for (definitions, 0..) |is_defined, local_index| {
             if (!is_defined) continue;
@@ -407,7 +407,7 @@ fn applyCandidate(
         } });
 
         const branch = switchTarget(store, switch_stmt, build.discriminant);
-        const branch_defs = try collectBranchDefinitions(store, branch);
+        const branch_defs = try body_clone.collectReachableDefinitions(store, branch);
         defer store.allocator.free(branch_defs);
         var cloner = try body_clone.BodyCloner(BranchRewriter).initWithFreshDeclaredJoins(store, .{
             .param = candidate.matched_value,
@@ -477,71 +477,6 @@ fn applyCandidate(
     const unique_len = body_clone.uniqueSortedLocals(frame.items);
     proc.frame_locals = try store.addLocalSpan(frame.items[0..unique_len]);
     if (store.procNeedsStackProbe(layouts, proc.*)) proc.stack_probe = .required;
-}
-
-/// Identify locals defined inside a cloned match arm. Every clone gives those
-/// definitions fresh identities; frame locals that are only read are external
-/// inputs and retain identity.
-fn collectBranchDefinitions(store: *LirStore, body: LIR.CFStmtId) ResourceError![]bool {
-    const defined = try store.allocator.alloc(bool, store.localCount());
-    errdefer store.allocator.free(defined);
-    @memset(defined, false);
-
-    var walk = try body_clone.ReachableStmts.init(store, body);
-    defer walk.deinit();
-    while (try walk.next()) |stmt_id| switch (store.getCFStmt(stmt_id)) {
-        inline .init_uninitialized,
-        .assign_ref,
-        .assign_literal,
-        .assign_call,
-        .assign_call_erased,
-        .assign_packed_erased_fn,
-        .assign_boxy_desc_ref,
-        .assign_boxy_dict_ref,
-        .assign_boxy_box,
-        .assign_boxy_reuse_box,
-        .assign_boxy_unbox,
-        .assign_boxy_adapt,
-        .assign_boxy_inspect,
-        .assign_boxy_eq,
-        .assign_boxy_tag,
-        .assign_boxy_tag_payload,
-        .assign_call_dict,
-        .assign_low_level,
-        .assign_list,
-        .assign_struct,
-        .assign_tag,
-        => |stmt| defined[@intFromEnum(stmt.target)] = true,
-        .join => |join| {
-            const params = store.getLocalSpan(join.params);
-            for (0..params.len) |index| defined[@intFromEnum(GuardedList.at(params, index))] = true;
-        },
-        .store_struct,
-        .store_tag,
-        .set_local,
-        .debug,
-        .expect,
-        .expect_err,
-        .runtime_error,
-        .comptime_exhaustiveness_failed,
-        .comptime_branch_taken,
-        .incref,
-        .decref,
-        .decref_if_initialized,
-        .free,
-        .switch_stmt,
-        .switch_initialized_payload,
-        .str_match,
-        .str_match_set,
-        .boxy_tag_match,
-        .loop_continue,
-        .loop_break,
-        .jump,
-        .ret,
-        .crash,
-        => {},
-    };
-    return defined;
 }
 
 fn findDest(dests: []const VariantDest, variant_index: u16, discriminant: u16) ?VariantDest {
