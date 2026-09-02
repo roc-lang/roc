@@ -160,7 +160,9 @@ pub const Constants = struct {
     ///     family for internal builtin types.
     /// 71: Annotation node payload packs its boolean flags into one byte and
     ///     records the source region of the annotated name.
-    pub const CACHE_VERSION = 71;
+    /// 72: Generated codec contracts retain structural body shapes and mark
+    ///     specialization-conditional method capabilities.
+    pub const CACHE_VERSION = 72;
 };
 
 /// Configuration for the Roc cache system.
