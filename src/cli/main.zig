@@ -123,6 +123,7 @@ comptime {
         std.testing.refAllDecls(@import("test/platform_config.zig"));
         std.testing.refAllDecls(@import("ReplLine.zig"));
         std.testing.refAllDecls(@import("ReplSession.zig"));
+        std.testing.refAllDecls(@import("macho/DyldExportStrip.zig"));
     }
 }
 const linker = @import("linker.zig");
@@ -11658,10 +11659,32 @@ test "runtime specialization strategy helpers" {
     try std.testing.expectEqualStrings("Lowering", loweringProgressLabel(.boxy));
 }
 
+test "post-check optimization scope per opt level" {
+    try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers, postCheckInlineModeForOpt(.speed));
+    try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers, postCheckInlineModeForOpt(.size));
+    try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers, postCheckInlineModeForOpt(.dev));
+    try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.none, postCheckInlineModeForOpt(.interpreter));
+    try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.all_calls, specConstrCloneInliningForOpt(.speed));
+    try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.all_calls, specConstrCloneInliningForOpt(.size));
+    try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.iterator_fusion, specConstrCloneInliningForOpt(.dev));
+}
+
 fn postCheckInlineModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineMode {
     return switch (opt) {
-        .size, .speed => .wrappers,
-        .dev, .interpreter => .none,
+        .size, .speed, .dev => .wrappers,
+        .interpreter => .none,
+    };
+}
+
+/// Optimized builds let SpecConstr's value-aware clones chase known values
+/// through any direct call; dev builds confine that chase to iterator
+/// pipelines, which keeps post-check time and emitted program size bounded
+/// while still collapsing `Iter` loops. The interpreter never reaches
+/// SpecConstr (its inline mode is `.none`), so its value here is inert.
+fn specConstrCloneInliningForOpt(opt: cli_args.OptLevel) postcheck.MonotypeLifted.SpecConstr.CloneInlining {
+    return switch (opt) {
+        .size, .speed => .all_calls,
+        .dev, .interpreter => .iterator_fusion,
     };
 }
 
@@ -11780,15 +11803,12 @@ fn lowerCheckedSourceToLir(
                 .test_plan => |plan| plan.metadata,
                 .platform_entrypoints, .linked_output => &.{},
             },
-            .procedure_template_root_grouping = switch (roots) {
-                .test_plan => .shared_adjacent,
-                .platform_entrypoints, .linked_output => .isolated,
-            },
         },
         .{
             .target_usize = target_usize,
             .specialization_strategy = specialization_strategy,
             .inline_mode = postCheckInlineModeForOpt(opt),
+            .spec_constr_clone_inlining = specConstrCloneInliningForOpt(opt),
             .consume_dead_boxes = switch (roots) {
                 .linked_output => true,
                 .platform_entrypoints => |artifact| artifact == .dev_run_image,
@@ -15730,7 +15750,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [22]
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [21]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [20]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Body contexts created", .count = body.body_contexts_created },
@@ -15742,7 +15762,6 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [21]p
         .{ .name = "Call expressions", .count = body.call_expressions },
         .{ .name = "Dispatch expressions", .count = body.dispatch_expressions },
         .{ .name = "Deferred template requests", .count = body.deferred_template_requests },
-        .{ .name = "Cross-root template reuses", .count = body.cross_root_template_reuses },
         .{ .name = "Caller-owned template bodies lowered", .count = body.caller_owned_template_bodies_lowered },
         .{ .name = "Deferred template reuses", .count = body.deferred_template_reuses },
         .{ .name = "Deferred template bodies lowered", .count = body.deferred_template_bodies_lowered },
@@ -15819,7 +15838,6 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
     diagnostics.body.deferred_template_reuses = 305;
-    diagnostics.body.cross_root_template_reuses = 306;
     diagnostics.body.nested_closures_prepared = 302;
 
     const specialization = monotypeSpecializationCounters(diagnostics);
@@ -15839,12 +15857,10 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 303), body[1].count);
     try std.testing.expectEqualStrings("Checked node cache hits", body[3].name);
     try std.testing.expectEqual(@as(u64, 301), body[3].count);
-    try std.testing.expectEqualStrings("Cross-root template reuses", body[9].name);
-    try std.testing.expectEqual(@as(u64, 306), body[9].count);
-    try std.testing.expectEqualStrings("Deferred template reuses", body[11].name);
-    try std.testing.expectEqual(@as(u64, 305), body[11].count);
-    try std.testing.expectEqualStrings("Nested closures prepared", body[20].name);
-    try std.testing.expectEqual(@as(u64, 302), body[20].count);
+    try std.testing.expectEqualStrings("Deferred template reuses", body[10].name);
+    try std.testing.expectEqual(@as(u64, 305), body[10].count);
+    try std.testing.expectEqualStrings("Nested closures prepared", body[19].name);
+    try std.testing.expectEqual(@as(u64, 302), body[19].count);
 }
 
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {

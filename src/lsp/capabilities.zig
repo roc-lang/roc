@@ -34,6 +34,7 @@ pub const ServerCapabilities = struct {
     documentHighlightProvider: bool = false,
     completionProvider: ?CompletionOptions = null,
     referencesProvider: bool = false,
+    inlayHintProvider: bool = false,
     renameProvider: ?RenameOptions = null,
 
     pub const TextDocumentSyncOptions = struct {
@@ -93,6 +94,7 @@ pub fn buildCapabilities() ServerCapabilities {
         .documentHighlightProvider = true,
         .completionProvider = .{},
         .referencesProvider = true,
+        .inlayHintProvider = true,
         .renameProvider = .{},
     };
 }

@@ -611,6 +611,12 @@ fn recordValueDecl(
     }
 
     const decl_idx = try self.decl_index.addDecl(record);
+    // Only a module-scope declaration is referenced ahead of itself: a block
+    // resolves names in order, and an associated block rejects destructuring
+    // declarations.
+    if (name_tok == null and self.decl_index.scopes.items[@intFromEnum(scope_idx)].kind == .module) {
+        try self.recordDestructuredValueNames(scope_idx, decl_idx, pattern_idx);
+    }
     if (self.currentPendingAnno()) |pending| {
         if (pending.*) |anno_idx| {
             const anno = self.decl_index.decls.items[@intFromEnum(anno_idx)];
@@ -620,6 +626,78 @@ fn recordValueDecl(
         }
         pending.* = null;
     }
+}
+
+/// Register every name a destructuring declaration pattern binds as a value
+/// the declaration declares, so that each resolves like a plainly named
+/// declaration when referenced ahead of it.
+///
+/// The walk is an explicit worklist (zero-recursion policy).
+fn recordDestructuredValueNames(
+    self: *Parser,
+    scope_idx: DeclIndex.ScopeIdx,
+    decl_idx: DeclIndex.DeclIdx,
+    root: AST.Pattern.Idx,
+) std.mem.Allocator.Error!void {
+    var pending: std.ArrayList(AST.Pattern.Idx) = .empty;
+    defer pending.deinit(self.gpa);
+    try pending.append(self.gpa, root);
+    while (pending.pop()) |pattern_idx| {
+        switch (self.store.getPattern(pattern_idx)) {
+            .ident => |p| try self.addDeclValueName(scope_idx, decl_idx, p.ident_tok),
+            .as => |p| {
+                try self.addDeclValueName(scope_idx, decl_idx, p.name);
+                try pending.append(self.gpa, p.pattern);
+            },
+            .record => |p| {
+                for (self.store.patternRecordFieldSlice(p.fields)) |field_idx| {
+                    const field = self.store.getPatternRecordField(field_idx);
+                    if (field.value) |value| {
+                        try pending.append(self.gpa, value);
+                    } else if (field.name) |name| {
+                        try self.addDeclValueName(scope_idx, decl_idx, name);
+                    }
+                }
+            },
+            .list_rest => |p| {
+                if (p.name) |name| try self.addDeclValueName(scope_idx, decl_idx, name);
+            },
+            .tag => |p| {
+                for (self.store.patternSlice(p.args)) |arg| try pending.append(self.gpa, arg);
+            },
+            .list => |p| {
+                for (self.store.patternSlice(p.patterns)) |item| try pending.append(self.gpa, item);
+            },
+            .tuple => |p| {
+                for (self.store.patternSlice(p.patterns)) |item| try pending.append(self.gpa, item);
+            },
+            // A `var` binder is rejected outside a block, where names are not
+            // referenced ahead of their declaration. Alternatives are rejected
+            // in a declaration pattern, and a string pattern cannot start a
+            // declaration, so neither binds a name here.
+            .var_ident,
+            .alternatives,
+            .int,
+            .frac,
+            .typed_int,
+            .typed_frac,
+            .string,
+            .single_quote,
+            .underscore,
+            .malformed,
+            => {},
+        }
+    }
+}
+
+fn addDeclValueName(
+    self: *Parser,
+    scope_idx: DeclIndex.ScopeIdx,
+    decl_idx: DeclIndex.DeclIdx,
+    name_tok: Token.Idx,
+) std.mem.Allocator.Error!void {
+    const ident = self.tok_buf.resolveIdentifier(name_tok) orelse return;
+    try self.decl_index.addValueName(scope_idx, ident, decl_idx);
 }
 
 fn addStatementWithTypeDependencies(

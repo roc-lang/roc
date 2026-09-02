@@ -317,6 +317,11 @@ const Read = struct {
     field_idx: u32,
 };
 
+const MentionEdge = struct {
+    stmt: u32,
+    next: u32,
+};
+
 const Candidate = struct {
     def_stmt: LIR.CFStmtId = @enumFromInt(no_index),
     def_count: u32 = 0,
@@ -360,6 +365,12 @@ const Analysis = struct {
     owned_demand: []bool,
     /// Same-value aliases propagate an owned demand back to their source.
     demand_aliases: std.ArrayList(struct { source: LIR.LocalId, target: LIR.LocalId }) = .empty,
+    /// Every operand mention of a solved-borrowed refcounted local, as a
+    /// per-local linked list into `mention_edges`. A binding borrowed through
+    /// a candidate's field read observes that field at each of its mentions,
+    /// so the take dataflow rejects takes such a mention could follow.
+    mention_heads: []u32,
+    mention_edges: std.ArrayList(MentionEdge) = .empty,
 
     fn deinit(self: *Analysis) void {
         var it = self.candidates.valueIterator();
@@ -369,6 +380,8 @@ const Analysis = struct {
         }
         self.candidates.deinit(self.gpa);
         self.gpa.free(self.alias_root);
+        self.gpa.free(self.mention_heads);
+        self.mention_edges.deinit(self.gpa);
         self.gpa.free(self.state);
         self.gpa.free(self.owned_demand);
         self.demand_aliases.deinit(self.gpa);
@@ -460,9 +473,21 @@ const Analysis = struct {
         self.state[index] = .ineligible;
     }
 
+    /// Records an operand mention of a solved-borrowed refcounted local.
+    fn noteMention(self: *Analysis, stmt: LIR.CFStmtId, local: LIR.LocalId) Error!void {
+        const index = @intFromEnum(local);
+        if (!self.rc_local[index] or !self.solution.isBorrowed(local)) return;
+        try self.mention_edges.append(self.gpa, .{
+            .stmt = @intFromEnum(stmt),
+            .next = self.mention_heads[index],
+        });
+        self.mention_heads[index] = @intCast(self.mention_edges.items.len - 1);
+    }
+
     /// Any occurrence that is not a field read: the local (or the container
     /// it aliases) cannot dismantle.
-    fn useWhole(self: *Analysis, local: LIR.LocalId) void {
+    fn useWhole(self: *Analysis, stmt: LIR.CFStmtId, local: LIR.LocalId) Error!void {
+        try self.noteMention(stmt, local);
         self.disqualify(local);
     }
 
@@ -470,6 +495,7 @@ const Analysis = struct {
     /// aggregate or a call, returned, or join-carried. The container stays
     /// eligible; the dataflow rejects takes that could run before it.
     fn useWholeAt(self: *Analysis, local: LIR.LocalId, stmt: LIR.CFStmtId) Error!void {
+        try self.noteMention(stmt, local);
         const root = self.resolveRoot(local);
         const candidate = (try self.entryOf(root)) orelse return;
         try candidate.whole_uses.append(self.gpa, stmt);
@@ -497,6 +523,9 @@ const Analysis = struct {
     }
 
     fn noteFieldRead(self: *Analysis, stmt: LIR.CFStmtId, source: LIR.LocalId, field_idx: u32, target: LIR.LocalId) Error!void {
+        // A refcounted field read through a borrowed source observes the
+        // source's stored unit at the read itself when the target retains.
+        if (self.rc_local[@intFromEnum(target)]) try self.noteMention(stmt, source);
         const root = self.resolveRoot(source);
         const candidate = (try self.entryOf(root)) orelse return;
         try candidate.reads.append(self.gpa, .{
@@ -879,11 +908,13 @@ pub fn compute(
         .projected_container = projected_container,
         .single_init_join = single_init_join,
         .owned_demand = try gpa.alloc(bool, store.localCount()),
+        .mention_heads = try gpa.alloc(u32, store.localCount()),
     };
     defer analysis.deinit();
     @memset(analysis.state, .unknown);
     @memset(analysis.alias_root, no_index);
     @memset(analysis.owned_demand, false);
+    @memset(analysis.mention_heads, no_index);
 
     // One linear scan over every reachable statement, classifying each
     // occurrence of each local. The switch is exhaustive so a new statement
@@ -905,7 +936,7 @@ pub fn compute(
         body_clone.countStmtReads(store, operand_read_counts, current_stmt);
         switch (current_stmt) {
             .init_uninitialized => |stmt| {
-                analysis.useWhole(stmt.target);
+                try analysis.useWhole(current, stmt.target);
                 try stack.append(gpa, stmt.next);
             },
             .assign_ref => |stmt| {
@@ -917,29 +948,29 @@ pub fn compute(
                     .local => |source| {
                         try analysis.noteDemandAlias(source, stmt.target);
                         if (stmt.target == source) {
-                            analysis.useWhole(source);
+                            try analysis.useWhole(current, source);
                         } else {
                             try analysis.noteAliasDef(current, stmt.target, source);
                         }
                     },
                     .discriminant => |op| {
-                        analysis.useWhole(op.source);
+                        try analysis.useWhole(current, op.source);
                         try analysis.noteDef(stmt.target, current);
                     },
                     .tag_payload => |op| {
-                        analysis.useWhole(op.source);
+                        try analysis.useWhole(current, op.source);
                         try analysis.noteDef(stmt.target, current);
                     },
                     .tag_payload_struct => |op| {
-                        analysis.useWhole(op.source);
+                        try analysis.useWhole(current, op.source);
                         try analysis.noteDef(stmt.target, current);
                     },
                     .list_reinterpret => |op| {
-                        analysis.useWhole(op.backing_ref);
+                        try analysis.useWhole(current, op.backing_ref);
                         analysis.disqualify(stmt.target);
                     },
                     .nominal => |op| {
-                        analysis.useWhole(op.backing_ref);
+                        try analysis.useWhole(current, op.backing_ref);
                         analysis.disqualify(stmt.target);
                     },
                 }
@@ -965,79 +996,79 @@ pub fn compute(
                 try stack.append(gpa, stmt.next);
             },
             .assign_call_erased => |stmt| {
-                analysis.useWhole(stmt.closure);
-                if (stmt.reuse_source) |reuse_source| analysis.useWhole(reuse_source);
+                try analysis.useWhole(current, stmt.closure);
+                if (stmt.reuse_source) |reuse_source| try analysis.useWhole(current, reuse_source);
                 const args = store.getLocalSpan(stmt.args);
                 for (0..GuardedList.borrowLen(args)) |i| try analysis.useWholeAt(GuardedList.at(args, i), current);
                 try analysis.noteDef(stmt.target, current);
                 try stack.append(gpa, stmt.next);
             },
             .assign_packed_erased_fn => |stmt| {
-                if (stmt.capture) |capture| analysis.useWhole(capture);
-                if (stmt.reuse) |reuse| analysis.useWhole(reuse);
+                if (stmt.capture) |capture| try analysis.useWhole(current, capture);
+                if (stmt.reuse) |reuse| try analysis.useWhole(current, reuse);
                 try analysis.noteDef(stmt.target, current);
                 try stack.append(gpa, stmt.next);
             },
             .assign_boxy_desc_ref => |stmt| {
-                if (stmt.desc.localOrNull()) |local| analysis.useWhole(local);
-                if (stmt.tag_residual_for) |desc| if (desc.localOrNull()) |local| analysis.useWhole(local);
+                if (stmt.desc.localOrNull()) |local| try analysis.useWhole(current, local);
+                if (stmt.tag_residual_for) |desc| if (desc.localOrNull()) |local| try analysis.useWhole(current, local);
                 const captures = store.getLocalSpan(stmt.captures);
-                for (0..GuardedList.borrowLen(captures)) |i| analysis.useWhole(GuardedList.at(captures, i));
+                for (0..GuardedList.borrowLen(captures)) |i| try analysis.useWhole(current, GuardedList.at(captures, i));
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
             .assign_boxy_dict_ref => |stmt| {
-                if (stmt.dict.localOrNull()) |local| analysis.useWhole(local);
+                if (stmt.dict.localOrNull()) |local| try analysis.useWhole(current, local);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
             .assign_boxy_box => |stmt| {
-                analysis.useWhole(stmt.payload);
+                try analysis.useWhole(current, stmt.payload);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
             .assign_boxy_reuse_box => |stmt| {
-                analysis.useWhole(stmt.source);
+                try analysis.useWhole(current, stmt.source);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
             .assign_boxy_unbox => |stmt| {
-                analysis.useWhole(stmt.source);
+                try analysis.useWhole(current, stmt.source);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
             .assign_boxy_adapt => |stmt| {
-                analysis.useWhole(stmt.source);
+                try analysis.useWhole(current, stmt.source);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
             .assign_boxy_inspect => |stmt| {
-                analysis.useWhole(stmt.source);
+                try analysis.useWhole(current, stmt.source);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
             .assign_boxy_eq => |stmt| {
-                analysis.useWhole(stmt.lhs);
-                analysis.useWhole(stmt.rhs);
+                try analysis.useWhole(current, stmt.lhs);
+                try analysis.useWhole(current, stmt.rhs);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
             .assign_boxy_tag => |stmt| {
-                if (stmt.payload) |payload| analysis.useWhole(payload);
+                if (stmt.payload) |payload| try analysis.useWhole(current, payload);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
             .assign_boxy_tag_payload => |stmt| {
-                analysis.useWhole(stmt.source);
+                try analysis.useWhole(current, stmt.source);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 if (stmt.target_desc) |target_desc| {
@@ -1047,13 +1078,13 @@ pub fn compute(
                 try stack.append(gpa, stmt.next);
             },
             .assign_call_dict => |stmt| {
-                if (stmt.dict.localOrNull()) |local| analysis.useWhole(local);
+                if (stmt.dict.localOrNull()) |local| try analysis.useWhole(current, local);
                 const args = store.getLocalSpan(stmt.args);
-                for (0..GuardedList.borrowLen(args)) |i| analysis.useWhole(GuardedList.at(args, i));
+                for (0..GuardedList.borrowLen(args)) |i| try analysis.useWhole(current, GuardedList.at(args, i));
                 const arg_descs = store.getLocalSpan(stmt.arg_descs);
-                for (0..GuardedList.borrowLen(arg_descs)) |i| analysis.useWhole(GuardedList.at(arg_descs, i));
+                for (0..GuardedList.borrowLen(arg_descs)) |i| try analysis.useWhole(current, GuardedList.at(arg_descs, i));
                 const hidden_args = store.getLocalSpan(stmt.hidden_args);
-                for (0..GuardedList.borrowLen(hidden_args)) |i| analysis.useWhole(GuardedList.at(hidden_args, i));
+                for (0..GuardedList.borrowLen(hidden_args)) |i| try analysis.useWhole(current, GuardedList.at(hidden_args, i));
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
@@ -1087,14 +1118,14 @@ pub fn compute(
                 try stack.append(gpa, stmt.next);
             },
             .store_struct => |stmt| {
-                analysis.useWhole(stmt.dest);
+                try analysis.useWhole(current, stmt.dest);
                 const fields = store.getLocalSpan(stmt.fields);
-                for (0..GuardedList.borrowLen(fields)) |i| analysis.useWhole(GuardedList.at(fields, i));
+                for (0..GuardedList.borrowLen(fields)) |i| try analysis.useWhole(current, GuardedList.at(fields, i));
                 try stack.append(gpa, stmt.next);
             },
             .store_tag => |stmt| {
-                analysis.useWhole(stmt.dest);
-                if (stmt.payload) |payload| analysis.useWhole(payload);
+                try analysis.useWhole(current, stmt.dest);
+                if (stmt.payload) |payload| try analysis.useWhole(current, payload);
                 try stack.append(gpa, stmt.next);
             },
             .set_local => |stmt| {
@@ -1102,43 +1133,43 @@ pub fn compute(
                 if (stmt.mode == .initialize_join_param and analysis.single_init_join[@intFromEnum(stmt.target)]) {
                     try analysis.noteDef(stmt.target, current);
                 } else {
-                    analysis.useWhole(stmt.target);
+                    try analysis.useWhole(current, stmt.target);
                 }
                 try stack.append(gpa, stmt.next);
             },
             .debug => |stmt| {
-                analysis.useWhole(stmt.message);
+                try analysis.useWhole(current, stmt.message);
                 try stack.append(gpa, stmt.next);
             },
             .expect => |stmt| {
-                analysis.useWhole(stmt.condition);
+                try analysis.useWhole(current, stmt.condition);
                 try stack.append(gpa, stmt.next);
             },
-            .expect_err => |stmt| analysis.useWhole(stmt.message),
+            .expect_err => |stmt| try analysis.useWhole(current, stmt.message),
             .runtime_error => {},
             .comptime_exhaustiveness_failed => {},
             .comptime_branch_taken => |stmt| try stack.append(gpa, stmt.next),
             // The input contract is RC-free LIR; if RC statements ever appear
             // here, classifying their operands as whole uses stays sound.
             .incref => |stmt| {
-                analysis.useWhole(stmt.value);
+                try analysis.useWhole(current, stmt.value);
                 try stack.append(gpa, stmt.next);
             },
             .decref => |stmt| {
-                analysis.useWhole(stmt.value);
+                try analysis.useWhole(current, stmt.value);
                 try stack.append(gpa, stmt.next);
             },
             .decref_if_initialized => |stmt| {
-                analysis.useWhole(stmt.cond);
-                analysis.useWhole(stmt.value);
+                try analysis.useWhole(current, stmt.cond);
+                try analysis.useWhole(current, stmt.value);
                 try stack.append(gpa, stmt.next);
             },
             .free => |stmt| {
-                analysis.useWhole(stmt.value);
+                try analysis.useWhole(current, stmt.value);
                 try stack.append(gpa, stmt.next);
             },
             .switch_stmt => |stmt| {
-                analysis.useWhole(stmt.cond);
+                try analysis.useWhole(current, stmt.cond);
                 const branches = store.getCFSwitchBranches(stmt.branches);
                 for (0..GuardedList.borrowLen(branches)) |i| {
                     try stack.append(gpa, GuardedList.at(branches, i).body);
@@ -1147,25 +1178,25 @@ pub fn compute(
                 if (stmt.continuation) |continuation| try stack.append(gpa, continuation);
             },
             .switch_initialized_payload => |stmt| {
-                analysis.useWhole(stmt.cond);
-                analysis.useWhole(stmt.payload);
+                try analysis.useWhole(current, stmt.cond);
+                try analysis.useWhole(current, stmt.payload);
                 try stack.append(gpa, stmt.initialized_branch);
                 try stack.append(gpa, stmt.uninitialized_branch);
             },
             .str_match => |stmt| {
-                analysis.useWhole(stmt.source);
+                try analysis.useWhole(current, stmt.source);
                 const steps = store.getStrMatchSteps(stmt.steps);
                 for (0..GuardedList.borrowLen(steps)) |i| {
                     switch (GuardedList.at(steps, i).capture) {
                         .discard => {},
-                        .view => |view_local| analysis.useWhole(view_local),
+                        .view => |view_local| try analysis.useWhole(current, view_local),
                     }
                 }
                 try stack.append(gpa, stmt.on_match);
                 try stack.append(gpa, stmt.on_miss);
             },
             .str_match_set => |stmt| {
-                analysis.useWhole(stmt.source);
+                try analysis.useWhole(current, stmt.source);
                 const arms = store.getStrMatchArms(stmt.arms);
                 for (0..GuardedList.borrowLen(arms)) |arm_index| {
                     const arm = GuardedList.at(arms, arm_index);
@@ -1173,7 +1204,7 @@ pub fn compute(
                     for (0..GuardedList.borrowLen(steps)) |i| {
                         switch (GuardedList.at(steps, i).capture) {
                             .discard => {},
-                            .view => |view_local| analysis.useWhole(view_local),
+                            .view => |view_local| try analysis.useWhole(current, view_local),
                         }
                     }
                     try stack.append(gpa, arm.on_match);
@@ -1181,7 +1212,7 @@ pub fn compute(
                 try stack.append(gpa, stmt.on_miss);
             },
             .boxy_tag_match => |stmt| {
-                analysis.useWhole(stmt.source);
+                try analysis.useWhole(current, stmt.source);
                 try stack.append(gpa, stmt.on_match);
                 try stack.append(gpa, stmt.on_miss);
             },
@@ -1234,6 +1265,24 @@ pub fn compute(
     defer flow_frames.deinit(gpa);
     var field_restitutions = std.ArrayList(FieldRestitution).empty;
     defer field_restitutions.deinit(gpa);
+
+    // The solved borrow forest, edges reversed: every binding borrowed
+    // through a candidate's field read observes that field at each of its
+    // mentions, and so does every binding borrowed onward from it.
+    const BorrowChildEdge = struct { local: u32, next: u32 };
+    var borrow_child_edges = std.ArrayList(BorrowChildEdge).empty;
+    defer borrow_child_edges.deinit(gpa);
+    const borrow_child_heads = try gpa.alloc(u32, store.localCount());
+    defer gpa.free(borrow_child_heads);
+    @memset(borrow_child_heads, no_index);
+    for (0..store.localCount()) |index| {
+        const source = solution.borrowSourceOf(@enumFromInt(@as(u32, @intCast(index)))) orelse continue;
+        const source_index = @intFromEnum(source);
+        try borrow_child_edges.append(gpa, .{ .local = @intCast(index), .next = borrow_child_heads[source_index] });
+        borrow_child_heads[source_index] = @intCast(borrow_child_edges.items.len - 1);
+    }
+    var borrow_stack = std.ArrayList(u32).empty;
+    defer borrow_stack.deinit(gpa);
 
     var it = analysis.candidates.iterator();
     candidates: while (it.next()) |entry| {
@@ -1374,6 +1423,43 @@ pub fn compute(
                 slot.value_ptr.* = .{ .bit = ~@as(u64, 0), .consuming = false };
             }
         }
+        // A borrowed field read binds a name that reads the field's stored
+        // unit at every later mention, without holding a unit of its own, and
+        // every binding borrowed onward from it does the same. Each such
+        // mention is a borrow observation of that field: a take of the field
+        // may not run before any of them on any path.
+        var forced_poison: u64 = 0;
+        for (candidate.reads.items) |read| {
+            const bit = @as(u64, 1) << @intCast(read.field_idx);
+            if (rc_mask & bit == 0) continue;
+            if (!solution.isBorrowed(read.target) or analysis.owned_demand[@intFromEnum(read.target)]) continue;
+            borrow_stack.clearRetainingCapacity();
+            try borrow_stack.append(gpa, @intFromEnum(read.target));
+            var borrow_steps: usize = 0;
+            while (borrow_stack.pop()) |borrower| {
+                borrow_steps += 1;
+                if (borrow_steps > store.localCount()) dismantleInvariant("ARC dismantle borrow forest contained a cycle");
+                var mention = analysis.mention_heads[borrower];
+                while (mention != no_index) {
+                    const edge = analysis.mention_edges.items[mention];
+                    const slot = try read_kinds.getOrPut(gpa, @enumFromInt(edge.stmt));
+                    if (!slot.found_existing) {
+                        slot.value_ptr.* = .{ .bit = bit, .consuming = false };
+                    } else if (slot.value_ptr.consuming) {
+                        forced_poison |= bit;
+                    } else {
+                        slot.value_ptr.bit |= bit;
+                    }
+                    mention = edge.next;
+                }
+                var child = borrow_child_heads[borrower];
+                while (child != no_index) {
+                    const child_edge = borrow_child_edges.items[child];
+                    try borrow_stack.append(gpa, child_edge.local);
+                    child = child_edge.next;
+                }
+            }
+        }
 
         var candidate_mask: u64 = 0;
         for (candidate.reads.items) |read| {
@@ -1500,6 +1586,7 @@ pub fn compute(
             if (!kind.visited) poison |= kind.bit;
         }
 
+        poison |= forced_poison;
         const taken_mask: u64 = candidate_mask & ~poison;
         if (taken_mask == 0) continue;
 

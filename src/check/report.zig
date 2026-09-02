@@ -86,6 +86,7 @@ const UnsupportedGeneratedMethod = problem_mod.UnsupportedGeneratedMethod;
 const AssociatedItemNotFound = problem_mod.AssociatedItemNotFound;
 const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
 const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
+const EffectfulComptimeExpression = problem_mod.EffectfulComptimeExpression;
 const EffectfulExpect = problem_mod.EffectfulExpect;
 const EffectfulFunctionName = problem_mod.EffectfulFunctionName;
 
@@ -1010,6 +1011,9 @@ pub const ReportBuilder = struct {
             },
             .effectful_top_level => |data| {
                 return self.buildEffectfulTopLevelReport(data);
+            },
+            .effectful_comptime_expression => |data| {
+                return self.buildEffectfulComptimeExpressionReport(data);
             },
             .effectful_expect => |data| {
                 return self.buildEffectfulExpectReport(data);
@@ -2954,7 +2958,10 @@ pub const ReportBuilder = struct {
         // Note: The unifier's actual/expected are opposite to display order.
         // We want to show "type has X" (from expected_snapshot) then "expected Y" (from actual_snapshot)
         return try self.makeMismatchReport(
-            .{ .simple = regionIdxFrom(ctx.constraint_var) },
+            if (ctx.source_region) |region|
+                .{ .direct = region }
+            else
+                .{ .simple = regionIdxFrom(ctx.constraint_var) },
             &.{
                 D.bytes("The"),
                 D.ident(ctx.method_name).withAnnotation(.inline_code),
@@ -4126,6 +4133,11 @@ pub const ReportBuilder = struct {
                 D.ident(type_name_ident).withAnnotation(.type_variable),
                 D.bytes("contains recursion that never passes back through a nominal type."),
             }, self, &report, &report.headline),
+            .growing_args => try D.renderSliceInto(&.{
+                D.bytes("The nominal type"),
+                D.ident(type_name_ident).withAnnotation(.type_variable),
+                D.bytes("passes changing type arguments to its own recursion, so it would need infinitely many instantiations."),
+            }, self, &report, &report.headline),
         }
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.decl_var)))) |region| {
@@ -4151,12 +4163,26 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        try D.renderSlice(&.{
-            D.bytes("Hint:").withAnnotation(.emphasized),
-            D.bytes("Recursion in a nominal type is only allowed inside a tag union payload or record field—for example"),
-            D.bytes("ConsList(a) := [Nil, Cons(a, ConsList(a))]").withAnnotation(.inline_code),
-            D.bytes(".").withNoPrecedingSpace(),
-        }, self, &report);
+        switch (data.kind) {
+            .infinite, .anonymous => try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("Recursion in a nominal type is only allowed inside a tag union payload or record field—for example"),
+                D.bytes("ConsList(a) := [Nil, Cons(a, ConsList(a))]").withAnnotation(.inline_code),
+                D.bytes(".").withNoPrecedingSpace(),
+            }, self, &report),
+            .growing_args => try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("A recursive use of a nominal type must pass each of its type parameters through unchanged, like"),
+                D.bytes("Tree(a) := [Leaf(a), Node(Tree(a), Tree(a))]").withAnnotation(.inline_code),
+                D.bytes(", or apply it to a type with no type variables, like").withNoPrecedingSpace(),
+                D.bytes("Chain(a) := [End, Link(a, Chain(Str))]").withAnnotation(.inline_code),
+                D.bytes(". An argument that wraps a type parameter, like").withNoPrecedingSpace(),
+                D.bytes("Nest(List(a))").withAnnotation(.inline_code),
+                D.bytes("inside the declaration of"),
+                D.bytes("Nest(a)").withAnnotation(.inline_code),
+                D.bytes(", would create a different type at every level of the recursion.").withNoPrecedingSpace(),
+            }, self, &report),
+        }
 
         return report;
     }
@@ -4476,6 +4502,20 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try D.renderSlice(&.{
             D.bytes("Move the effect into a function body so it runs when the function is called."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildEffectfulComptimeExpressionReport(self: *Self, data: EffectfulComptimeExpression) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Effectful Compile Time Expression", "This REPL expression performs an effect, but REPL expressions are evaluated at compile time.", .runtime_error);
+        errdefer report.deinit();
+
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Use a pure expression here, or run effectful code from a Roc application."),
         }, self, &report);
         return report;
     }

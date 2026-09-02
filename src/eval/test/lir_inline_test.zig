@@ -176,7 +176,6 @@ const LowerMonotypeOptions = struct {
     specialization_counters: ?*MonoLower.SpecializationCounters = null,
     diagnostics: ?*MonoLower.Diagnostics = null,
     root_selection: enum { all, test_expects } = .all,
-    procedure_template_root_grouping: postcheck.Common.ProcedureTemplateRootGrouping = .isolated,
 };
 
 fn lowerMonotypeModuleWithOptions(
@@ -221,7 +220,6 @@ fn lowerMonotypeModuleWithOptions(
         },
         .{
             .requests = root_requests,
-            .procedure_template_root_grouping = options.procedure_template_root_grouping,
         },
         .{
             .specialization_cache = options.specialization_cache,
@@ -435,6 +433,9 @@ const StructuralJsonLirStats = struct {
     procedures: usize,
     statements: usize,
     locals: usize,
+    reference_counting: usize,
+    decrefs: usize,
+    conditional_decrefs: usize,
 };
 
 fn structuralJsonLirStats(
@@ -449,10 +450,25 @@ fn structuralJsonLirStats(
     var lowered = try lowerModule(allocator, source, .wrappers);
     defer lowered.deinit(allocator);
     const store = &lowered.lowered.lir_result.store;
+    var reference_counting: usize = 0;
+    var decrefs: usize = 0;
+    var conditional_decrefs: usize = 0;
+    for (store.getCFStmts()) |stmt| {
+        if (stmt == .decref) {
+            reference_counting += 1;
+            decrefs += 1;
+        } else if (stmt == .decref_if_initialized) {
+            reference_counting += 1;
+            conditional_decrefs += 1;
+        }
+    }
     return .{
         .procedures = store.getProcSpecs().len,
         .statements = store.getCFStmts().len,
         .locals = store.getLocals().len,
+        .reference_counting = reference_counting,
+        .decrefs = decrefs,
+        .conditional_decrefs = conditional_decrefs,
     };
 }
 
@@ -965,7 +981,7 @@ fn liftModuleAfterSpecConstr(
     mono = undefined;
     errdefer lifted.deinit();
 
-    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
+    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted, .all_calls);
 
     return .{
         .resources = resources,
@@ -1170,7 +1186,7 @@ fn expectInlinePlanDecision(
     var lifted_owned = true;
     errdefer if (lifted_owned) lifted.deinit();
 
-    var procedure_usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted);
+    var procedure_usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted, .all_calls);
     defer procedure_usage.deinit();
 
     var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);
@@ -1878,6 +1894,125 @@ test "issue 10889 nested optional JSON parser specialization growth is bounded" 
     try std.testing.expect(nested_expression_growth <= flat_expression_growth * 2);
 }
 
+test "issue 10979 flat JSON record parser growth is linear in field count" {
+    const allocator = std.testing.allocator;
+    const eight = try structuralJsonMonotypeStats(allocator, 8, "Str", .parse);
+    const sixteen = try structuralJsonMonotypeStats(allocator, 16, "Str", .parse);
+    const thirty_two = try structuralJsonMonotypeStats(allocator, 32, "Str", .parse);
+    const sixty_four = try structuralJsonMonotypeStats(allocator, 64, "Str", .parse);
+
+    const narrow_per_field = (sixteen.expressions - eight.expressions) / 8;
+    const wide_per_field = (sixty_four.expressions - thirty_two.expressions) / 32;
+    if (wide_per_field > narrow_per_field * 2) {
+        std.debug.print(
+            "flat JSON parser per-field Monotype cost grew from {d} expressions per field in the 8->16 window " ++
+                "to {d} in the 32->64 window (expressions {d}/{d}/{d}/{d}, locals {d}/{d}/{d}/{d})\n",
+            .{
+                narrow_per_field,
+                wide_per_field,
+                eight.expressions,
+                sixteen.expressions,
+                thirty_two.expressions,
+                sixty_four.expressions,
+                eight.locals,
+                sixteen.locals,
+                thirty_two.locals,
+                sixty_four.locals,
+            },
+        );
+    }
+    try std.testing.expect(wide_per_field <= narrow_per_field * 2);
+}
+
+test "issue 10979 flat JSON record parser ARC growth is linear in field count" {
+    const allocator = std.testing.allocator;
+    const four = try structuralJsonLirStats(allocator, 4, "Str", .parse);
+    const eight = try structuralJsonLirStats(allocator, 8, "Str", .parse);
+    const sixteen = try structuralJsonLirStats(allocator, 16, "Str", .parse);
+
+    const narrow_per_field = (eight.reference_counting - four.reference_counting) / 4;
+    const wide_per_field = (sixteen.reference_counting - eight.reference_counting) / 8;
+    const narrow_statements_per_field = (eight.statements - four.statements) / 4;
+    const wide_statements_per_field = (sixteen.statements - eight.statements) / 8;
+    if (wide_per_field * 2 > narrow_per_field * 3 or
+        wide_statements_per_field * 2 > narrow_statements_per_field * 3)
+    {
+        std.debug.print(
+            "flat JSON parser per-field ARC cost grew from {d} statements per field in the 4->8 window " ++
+                "to {d} in the 8->16 window; total LIR grew from {d} to {d} statements per field " ++
+                "(RC statements {d}/{d}/{d}, decrefs {d}/{d}/{d}, conditional {d}/{d}/{d}, total statements {d}/{d}/{d})\n",
+            .{
+                narrow_per_field,
+                wide_per_field,
+                narrow_statements_per_field,
+                wide_statements_per_field,
+                four.reference_counting,
+                eight.reference_counting,
+                sixteen.reference_counting,
+                four.decrefs,
+                eight.decrefs,
+                sixteen.decrefs,
+                four.conditional_decrefs,
+                eight.conditional_decrefs,
+                sixteen.conditional_decrefs,
+                four.statements,
+                eight.statements,
+                sixteen.statements,
+            },
+        );
+    }
+    try std.testing.expect(wide_per_field * 2 <= narrow_per_field * 3);
+    try std.testing.expect(wide_statements_per_field * 2 <= narrow_statements_per_field * 3);
+}
+
+test "issue 10979 shared JSON record continuations preserve field semantics" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Shape : { f0 : Str, f1 : Str }
+        \\
+        \\main : Bool
+        \\main = {
+        \\    duplicate : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    duplicate = Json.parse("{ \"f0\": \"first\", \"f1\": \"middle\", \"f0\": \"last\" }")
+        \\    missing : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    missing = Json.parse("{ \"f0\": \"only\" }")
+        \\    invalid : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    invalid = Json.parse("{ \"f0\": \"started\", ")
+        \\    duplicate_ok = match duplicate {
+        \\        Ok(record) => record.f0 == "last" and record.f1 == "middle"
+        \\        Err(_) => False
+        \\    }
+        \\    missing_ok = match missing {
+        \\        Err(MissingRequiredField(field)) => field == "f1"
+        \\        _ => False
+        \\    }
+        \\    invalid_ok = match invalid {
+        \\        Err(InvalidJson(_)) => True
+        \\        _ => False
+        \\    }
+        \\    duplicate_ok and missing_ok and invalid_ok
+        \\}
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
+}
+
 test "issue 10121 structural JSON helper sharing survives LIR lowering" {
     const allocator = std.testing.allocator;
     const encoder_one = try structuralJsonLirStats(allocator, 1, "Try(Str, [Missing])", .encode);
@@ -2021,7 +2156,7 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
     });
 }
 
-test "test roots share template work only when explicitly grouped" {
+test "adjacent expect roots remain isolated and ordered" {
     const allocator = std.testing.allocator;
     const source =
         \\identity : a -> a
@@ -2033,23 +2168,22 @@ test "test roots share template work only when explicitly grouped" {
         \\main = 0
     ;
 
-    var isolated_diagnostics = MonoLower.Diagnostics{};
-    var isolated = try lowerMonotypeModuleWithOptions(allocator, source, .{
-        .diagnostics = &isolated_diagnostics,
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
         .root_selection = .test_expects,
     });
-    defer isolated.deinit(allocator);
+    defer lowered.deinit(allocator);
 
-    var shared_diagnostics = MonoLower.Diagnostics{};
-    var shared = try lowerMonotypeModuleWithOptions(allocator, source, .{
-        .diagnostics = &shared_diagnostics,
-        .root_selection = .test_expects,
-        .procedure_template_root_grouping = .shared_adjacent,
-    });
-    defer shared.deinit(allocator);
+    const roots = lowered.mono.rootsView();
+    try std.testing.expectEqual(@as(usize, 2), roots.len);
+    try std.testing.expect(roots[0].def != roots[1].def);
 
-    try std.testing.expectEqual(@as(u64, 0), isolated_diagnostics.body.cross_root_template_reuses);
-    try std.testing.expect(shared_diagnostics.body.cross_root_template_reuses > 0);
+    var root_index: usize = 0;
+    for (lowered.resources.checked_artifact.root_requests.requests) |request| {
+        if (request.kind != .test_expect) continue;
+        try std.testing.expectEqual(request.order, roots[root_index].request.order);
+        root_index += 1;
+    }
+    try std.testing.expectEqual(roots.len, root_index);
 }
 
 test "deferred specialization bodies queue once and drain at the wave boundary" {
@@ -7440,7 +7574,7 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
     mono_consumed = true;
     defer lifted.deinit();
 
-    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
+    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted, .all_calls);
 
     // The input program has no tuple nested directly inside another tuple, so a
     // nested tuple after specialization means the substituted aggregate leaked
@@ -7573,7 +7707,7 @@ test "custom literal field default gets an ordinary conversion root" {
         switch (conversion.kind) {
             .numeral_conversion => numeral_roots += 1,
             .quote_conversion => quote_roots += 1,
-            .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect => return error.TestUnexpectedResult,
+            .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect, .repl_expr => return error.TestUnexpectedResult,
         }
     }
     try std.testing.expectEqual(@as(usize, 1), numeral_roots);
@@ -9318,3 +9452,104 @@ test "wide loop-carried state scalarizes into flat join params" {
 // the loop. Its binding must survive into the loop body from the entry
 // edges alone; the fact-free first walk of the back edge can never
 // re-derive it, or the dominating length guard proves nothing.
+
+// A recursive mention at a constant argument (`Weird(Str)` inside the
+// declaration of `Weird(a)`) instantiates one backing per distinct argument
+// class and terminates: the mention's checked type is scope-independent, so
+// every nesting level presents the same argument cell and the second level
+// hits the placeholder registered by the first.
+test "recursive nominal mention at a constant argument lowers finitely" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Weird(a) := [End, Wrap(Weird(Str))].{
+        \\    make : a -> Weird(a)
+        \\    make = |_| End
+        \\
+        \\    wrap : Weird(Str) -> Weird(a)
+        \\    wrap = |w| Wrap(w)
+        \\}
+        \\
+        \\main : U8
+        \\main = {
+        \\    w : Weird(U8)
+        \\    w = Weird.wrap(Weird.make("s"))
+        \\    match w {
+        \\        Wrap(_) => 1
+        \\        End => 0
+        \\    }
+        \\}
+    ;
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+}
+
+// Mutually recursive declarations whose cross-mentions use constant
+// arguments are finite, but the declaration of `Alt(x)` also contains
+// `List(x)`, whose meaning depends on the enclosing formal binding. A
+// nested expansion of `Alt(Str)` reached through `Bare` must instantiate
+// `List(Str)` there, not reuse the outer expansion's `List(I64)`; the
+// checker-typed pattern match below meets that inner slot and exposes any
+// collapsed reuse as a type mismatch.
+test "nested expansion of a mutually recursive nominal keeps formal-dependent payloads per level" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Alt(x) := [Load(List(x)), Wrap(Bare(Str))].{
+        \\    load : x -> Alt(x)
+        \\    load = |v| Load([v])
+        \\}
+        \\
+        \\Bare(y) := [Tie(Alt(Str)), End]
+        \\
+        \\main : Str
+        \\main = {
+        \\    a = Alt.load(42)
+        \\    match a {
+        \\        Wrap(bare) => match bare {
+        \\            Tie(alt) => match alt {
+        \\                Load(strs) => strs.get(0) ?? "none"
+        \\                Wrap(_) => "wrap"
+        \\            }
+        \\            End => "end"
+        \\        }
+        \\        Load(_) => "load"
+        \\    }
+        \\}
+    ;
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+}
+
+// A constant-argument recursive nominal declared in an imported module
+// expands its backing inside a fresh cross-module instantiation context;
+// the recursive mention's closed checked type memoizes per context, so
+// nested expansion levels present one argument cell and the expansion
+// terminates there just as it does for a local declaration.
+test "imported recursive nominal at a constant argument lowers finitely" {
+    const allocator = std.testing.allocator;
+    const chain_module =
+        \\Chain(a) := [Stop, Link(Chain(Str))].{
+        \\    stop : a -> Chain(a)
+        \\    stop = |_| Stop
+        \\
+        \\    link : a, Chain(Str) -> Chain(a)
+        \\    link = |_, c| Link(c)
+        \\
+        \\    depth : Chain(a) -> U8
+        \\    depth = |c| match c {
+        \\        Stop => 0
+        \\        Link(_) => 1
+        \\    }
+        \\}
+    ;
+    const source =
+        \\import Chain
+        \\
+        \\main : U8
+        \\main = Chain.link(7, Chain.stop("s")).depth()
+    ;
+
+    const counters = try monotypeCountersForModuleWithImports(allocator, source, &.{
+        .{ .name = "Chain", .source = chain_module },
+    });
+    try std.testing.expect(counters.nominal_backing_instantiations >= 1);
+}
