@@ -193,6 +193,10 @@ jobs:
           command: zig build ${{ matrix.build_jobs_flag }} build-ci
           retry_count: 3
 
+      - name: Check ReleaseSafe machine-code shim support ownership
+        if: runner.os == 'Linux' && runner.arch == 'X64'
+        run: zig build ${{ matrix.build_jobs_flag }} run-check-machine-code-shim-archive -Doptimize=ReleaseSafe
+
       - name: Pack MiniCI build artifact
         shell: bash
         run: |

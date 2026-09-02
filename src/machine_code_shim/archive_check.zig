@@ -18,6 +18,15 @@ const elf = std.elf;
 
 const ar_magic = "!<arch>\n";
 
+const ArchiveCheckError = std.process.Args.ToSliceError ||
+    std.Io.Dir.ReadFileAllocError ||
+    error{
+        MissingPath,
+        NotAnArchive,
+        NoObjectMembers,
+        CompilerPrivateSymbolEscaped,
+    };
+
 /// Compiler-private symbols the shim archive may neither leave unresolved nor
 /// expose to the surrounding platform link.
 const compiler_private = [_]struct { name: []const u8, why: []const u8 }{
@@ -36,16 +45,13 @@ const Use = struct {
 
 /// Fails when the archive named by the first argument lets a compiler-private
 /// symbol escape as undefined or globally visible.
-pub fn main(init: std.process.Init) anyerror!void {
+pub fn main(init: std.process.Init) ArchiveCheckError!void {
     var arena_impl = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    var arg_iter = try std.process.Args.Iterator.initAllocator(init.minimal.args, arena);
-    defer arg_iter.deinit();
-    _ = arg_iter.skip();
-
-    const path = arg_iter.next() orelse {
+    const args = try init.minimal.args.toSlice(arena);
+    const path = if (args.len >= 2) args[1] else {
         std.debug.print("Usage: machine_code_shim_archive_check <archive path>\n", .{});
         return error.MissingPath;
     };
