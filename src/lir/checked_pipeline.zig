@@ -11,6 +11,7 @@ const check = @import("check");
 const core = @import("lir_core");
 
 const Arc = @import("arc.zig");
+const ImmortalLocals = @import("immortal_locals.zig");
 const Trmc = @import("trmc.zig");
 const BoxReuse = @import("box_reuse.zig");
 const ReturnSlot = @import("return_slot.zig");
@@ -61,17 +62,22 @@ pub const RootRequestSet = struct {
     /// Restore eligible stored constants as internal readonly static values.
     include_internal_static_data: bool = false,
     test_plan_metadata: []const postcheck.Common.RootTestPlanMetadata = &.{},
-    /// Explicitly select whether adjacent procedure-template roots share one
-    /// Monotype instantiation graph.
-    procedure_template_root_grouping: postcheck.Common.ProcedureTemplateRootGrouping = .isolated,
 };
 
 /// Target settings and checked module state for the checked-to-LIR pipeline.
 pub const TargetConfig = struct {
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     specialization_strategy: SpecializationStrategy = .lss,
+    /// Reuse checking workers for generic post-check tasks when available.
+    post_check_executor: ?base.post_check_task_executor.Executor = null,
     checked_module_state: CheckedModuleState = .complete,
     inline_mode: InlineMode = .none,
+    /// Direct-call inlining scope for SpecConstr's value-aware clones.
+    /// Optimized builds use `.all_calls`; dev builds use `.iterator_fusion`
+    /// so post-check time and emitted program size stay bounded. Consulted
+    /// only when `inline_mode` is not `.none`, since that is what gates
+    /// SpecConstr itself.
+    spec_constr_clone_inlining: SpecConstrCloneInlining = .all_calls,
     inline_expects: InlineExpectMode = .run,
     /// Whether ARC may consume a dead Box lender while unboxing.
     consume_dead_boxes: bool = false,
@@ -353,6 +359,7 @@ pub const RuntimeRecordSchema = postcheck.SolvedLirLower.RuntimeRecordSchema;
 pub const RuntimeTagSchema = postcheck.SolvedLirLower.RuntimeTagSchema;
 pub const RuntimeTagUnionSchema = postcheck.SolvedLirLower.RuntimeTagUnionSchema;
 pub const InlineMode = postcheck.SolvedInline.Mode;
+pub const SpecConstrCloneInlining = postcheck.MonotypeLifted.SpecConstr.CloneInlining;
 pub const InlineExpectMode = postcheck.SolvedLirLower.InlineExpectMode;
 pub const MonotypeCacheControl = postcheck.Monotype.Lower.SpecializationCacheControl;
 
@@ -527,6 +534,7 @@ pub fn lowerCheckedModulesToLir(
         .{
             .proc_debug_names = target.proc_debug_names or LirDump.filter() != null,
             .specialization_cache = target.monotype_cache,
+            .post_check_executor = target.post_check_executor,
             .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
             .target_usize = target.target_usize,
             .inline_expects = switch (target.inline_expects) {
@@ -560,7 +568,7 @@ pub fn lowerCheckedModulesToLir(
 
     var procedure_usage = if (target.inline_mode != .none) blk: {
         const spec_constr_started_ns = if (target.timing) |timing| timing.start() else 0;
-        const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted);
+        const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted, target.spec_constr_clone_inlining);
         if (target.timing) |timing| timing.finish(spec_constr_started_ns, .spec_constr);
         break :blk usage;
     } else postcheck.MonotypeLifted.SpecConstr.OwnedProcedureUsage.empty(allocator);
@@ -647,6 +655,10 @@ fn finishLoweredOutput(
         .consume_dead_boxes = target.consume_dead_boxes,
     });
     if (target.timing) |timing| timing.finish(arc_started_ns, .arc);
+
+    // After the certifier has checked ARC's ledger, so that what it verified
+    // is the placement ARC produced.
+    _ = try ImmortalLocals.elide(allocator, &lowered.lir_result.store);
 
     try LirDump.run(&lowered.lir_result);
 
@@ -821,7 +833,6 @@ fn rootRequests(
         .layout_requests = layout_requests,
         .static_data_requests = static_data_requests,
         .test_plan_metadata = roots.test_plan_metadata,
-        .procedure_template_root_grouping = roots.procedure_template_root_grouping,
     };
 }
 

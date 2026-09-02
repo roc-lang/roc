@@ -90,14 +90,7 @@ compute = {
 						(record-destruct (label "x") (ident "x")
 							(required
 								(p-assign (ident "x"))))))
-				(e-record
-					(fields
-						(field (name "x")
-							(e-num (value "1")))
-						(field (name "y")
-							(e-num (value "2")))
-						(field (name "z")
-							(e-num (value "3"))))))
+				(e-runtime-error (tag "erroneous_value_expr")))
 			(e-lookup-local
 				(p-assign (ident "x"))))
 		(annotation

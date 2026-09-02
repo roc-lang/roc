@@ -274,6 +274,9 @@ type_decl_invalid: std.ArrayListUnmanaged(bool) = .empty,
 type_decl_dependencies: std.ArrayListUnmanaged(TypeDeclDependency) = .empty,
 /// scratch vars used to build up intermediate lists, used for various things
 scratch_vars: base.Scratch(Var),
+/// scratch (parameter name, instantiated flex copy) pairs for the default
+/// parameter-constraint judgment (`checkDefaultParameterConstraints`)
+scratch_default_param_vars: base.Scratch(DefaultParamVar),
 /// scratch tags used to build up intermediate lists, used for various things
 scratch_tags: base.Scratch(types_mod.Tag),
 /// scratch record fields used to build up intermediate lists, used for various things
@@ -287,6 +290,13 @@ scratch_record_field_vars: base.Scratch(Var),
 scratch_static_dispatch_constraints: base.Scratch(ScratchStaticDispatchConstraint),
 /// scratch deferred static dispatch constraints
 scratch_deferred_static_dispatch_constraints: base.Scratch(DeferredConstraintCheck),
+/// Concrete generated-codec obligations parked until the module's single type
+/// finalization point. Their receiver can still gain nominal layers while
+/// later definitions are checked, so validating them earlier would publish a
+/// derivation for a shape that is no longer the call's final type.
+final_codec_dispatch_constraints: std.ArrayListUnmanaged(FinalCodecDispatchConstraint) = .empty,
+final_codec_dispatch_constraint_fns: std.AutoHashMapUnmanaged(Var, void) = .empty,
+checking_final_codec_dispatch_constraints: bool = false,
 // Cache for imported types. This cache lives for the entire type-checking session
 /// of a module, so the same imported type can be reused across the entire module.
 import_cache: ImportCache,
@@ -537,6 +547,16 @@ call_operand_type_error_exprs: std.ArrayListUnmanaged(bool),
 /// Tracks bindings whose defining expression is known erroneous and whose
 /// subsequent local lookups must therefore become explicit runtime errors.
 erroneous_value_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+/// Default expressions rejected by a finalize judgment (effectful,
+/// parameter-constraining) with the problem already reported. Explicit
+/// evidence for `checkDefaultRestrictions`: the residue walk skips them and
+/// the retirement sweep replaces them before the artifact boundary. A
+/// rejection is recorded here rather than by poisoning the default's var:
+/// unifying `.err` into a var that resolved to structure (or a
+/// constraint-carrying flex) is SUPPRESSED by the unifier, and marking the
+/// var's solved class erroneous directly would leak the poison into a
+/// shared monomorphic callee's scheme.
+rejected_default_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
 /// Every accepted explicit nominal constructor backing relation, for the
 /// settled-state re-decision in `recheckNominalConstructorBackings`.
 accepted_nominal_constructor_backings: std.ArrayListUnmanaged(AcceptedNominalConstructorBacking),
@@ -596,6 +616,14 @@ selected_hoisted_roots: std.ArrayListUnmanaged(hoist_roots.SelectedHoistedRoot),
 /// executable/eval root. Ordinary thunks may stay polymorphic; these roots may
 /// not leave static-dispatch obligations in their immediate result.
 executable_root_defs: std.ArrayListUnmanaged(CIR.Def.Idx),
+/// Executable roots whose zero-arg body is also an explicit compile-time root.
+/// This is producer metadata: checking uses it to reject effects before
+/// checked-artifact publication can schedule the body for evaluation.
+compile_time_executable_roots: std.ArrayListUnmanaged(struct {
+    def: CIR.Def.Idx,
+    lambda: CIR.Expr.Idx,
+    body: CIR.Expr.Idx,
+}),
 /// Most recently completed expression's temporary hoist result. This lets
 /// statement checking record a local binding candidate without storing a result
 /// on the checked expression itself.
@@ -1045,6 +1073,11 @@ const StructuralSchemeRequirementOrigin = struct {
 const SchemeDispatchRequirement = struct {
     receiver_var: Var,
     constraint: StaticDispatchConstraint,
+    /// This relation was concrete enough to leave the ordinary deferred queue,
+    /// but its final codec shape can still change through a nested variable in
+    /// the owning scheme. Instantiation must therefore copy the receiver's
+    /// structural spine even when the receiver root itself is monomorphic.
+    deferred_generated_codec: bool,
     /// The expression in this scheme whose use created the pending copy.
     /// Creation requirements already have exact constraint provenance; copied
     /// requirements need this separate use-site provenance because their
@@ -1060,6 +1093,7 @@ const InstantiatedSchemeDispatchRequirement = struct {
     receiver_var: Var,
     scheme_fn_var: Var,
     constraint: StaticDispatchConstraint,
+    deferred_generated_codec: bool,
     structural_origin: StructuralSchemeRequirementOrigin,
 };
 
@@ -1070,6 +1104,7 @@ const SchemeRequirementCandidate = struct {
     constraint: StaticDispatchConstraint,
     failure_expr: ?CIR.Expr.Idx,
     structural_origin: StructuralSchemeRequirementOrigin,
+    deferred_generated_codec: bool,
 
     source: Source,
 
@@ -1226,6 +1261,7 @@ fn recordSchemeRequirementCandidate(
     constraint: StaticDispatchConstraint,
     source: SchemeRequirementCandidate.Source,
     structural_origin: ?StructuralSchemeRequirementOrigin,
+    deferred_generated_codec: bool,
 ) Allocator.Error!void {
     if (self.constraintIsLiteralConversion(constraint)) return;
     std.debug.assert((source == .creation) == (structural_origin == null));
@@ -1253,6 +1289,7 @@ fn recordSchemeRequirementCandidate(
             .scheme_copy => self.discarded_binding_rhs_expr orelse self.instantiation_source_expr,
         },
         .source = source,
+        .deferred_generated_codec = deferred_generated_codec,
     });
     owner_entry.value_ptr.appendAssumeCapacity(candidate_idx);
 }
@@ -1326,7 +1363,10 @@ fn copySchemeDispatchRequirements(
         // Instantiation grows the type store but not `type_schemes`; copy
         // the record before doing either copy operation.
         const requirement = self.type_schemes.items[scheme_idx].dispatch_requirements.items[requirement_idx];
-        const receiver_var = try instantiator.instantiateVar(requirement.receiver_var);
+        const receiver_var = if (requirement.deferred_generated_codec)
+            try instantiator.instantiateTypeScheme(requirement.receiver_var)
+        else
+            try instantiator.instantiateVar(requirement.receiver_var);
         if (skip_shared_receiver_copies and
             self.types.resolveVar(receiver_var).var_ == self.types.resolveVar(requirement.receiver_var).var_)
         {
@@ -1338,6 +1378,7 @@ fn copySchemeDispatchRequirements(
             .receiver_var = receiver_var,
             .scheme_fn_var = requirement.constraint.fn_var,
             .constraint = constraint,
+            .deferred_generated_codec = requirement.deferred_generated_codec,
             .structural_origin = self.substitutedStructuralOrigin(requirement.structural_origin, instantiator.var_map),
         });
     }
@@ -1412,6 +1453,7 @@ fn registerInstantiatedSchemeRequirement(
         requirement.constraint,
         .scheme_copy,
         requirement.structural_origin,
+        requirement.deferred_generated_codec,
     );
 }
 
@@ -1437,7 +1479,7 @@ fn registerInstantiatedAttachedDispatch(
     // settle through the open-literal worklist (callers register the receiver
     // there), so the candidate index filters them.
     for (self.types.sliceStaticDispatchConstraints(constraints)) |constraint| {
-        try self.recordSchemeRequirementCandidate(receiver_var, constraint, .creation, null);
+        try self.recordSchemeRequirementCandidate(receiver_var, constraint, .creation, null, false);
     }
 }
 
@@ -2101,6 +2143,12 @@ const ScratchStaticDispatchConstraint = struct {
     state: enum { declared, completed },
 };
 
+const FinalCodecDispatchConstraint = struct {
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    failure_expr: StaticDispatchConstraint.Provenance.OptExprIdx,
+};
+
 const ReturnConstraint = struct {
     actual_expr: CIR.Expr.Idx,
     kind: ReturnConstraintKind,
@@ -2314,6 +2362,69 @@ fn initAssumePrepared(
         binding_scheme_nodes.set(binding_scheme.node_idx);
     }
 
+    // A checked environment can be deserialized and checked again. Initialize
+    // its checker-local TypeScheme index from the producer-authored codec table
+    // before any source checking or finalization can consume it.
+    var rehydrated_type_schemes: std.ArrayListUnmanaged(TypeScheme) = .empty;
+    errdefer {
+        for (rehydrated_type_schemes.items) |*scheme| {
+            scheme.indexed_vars.deinit(gpa);
+            scheme.dispatch_requirements.deinit(gpa);
+        }
+        rehydrated_type_schemes.deinit(gpa);
+    }
+    var rehydrated_type_scheme_by_var: std.AutoHashMapUnmanaged(Var, u32) = .empty;
+    errdefer rehydrated_type_scheme_by_var.deinit(gpa);
+    for (cir.binding_scheme_codec_requirements.items.items) |serialized_requirement| {
+        const scheme_root: Var = @enumFromInt(serialized_requirement.scheme_root);
+        const indexed_var: Var = @enumFromInt(serialized_requirement.node_idx);
+        const receiver_var: Var = @enumFromInt(serialized_requirement.receiver_var);
+        std.debug.assert(@intFromEnum(scheme_root) < types.len());
+        std.debug.assert(@intFromEnum(indexed_var) < types.len());
+        std.debug.assert(@intFromEnum(receiver_var) < types.len());
+
+        const scheme_idx: usize = if (rehydrated_type_scheme_by_var.get(scheme_root)) |existing_idx|
+            existing_idx
+        else blk: {
+            const new_idx: u32 = @intCast(rehydrated_type_schemes.items.len);
+            try rehydrated_type_schemes.append(gpa, .{
+                .root_var = scheme_root,
+                .capture_rank = .generalized,
+                .capture_group_index = null,
+            });
+            try rehydrated_type_schemes.items[new_idx].indexed_vars.append(gpa, scheme_root);
+            try rehydrated_type_scheme_by_var.put(gpa, scheme_root, new_idx);
+            break :blk new_idx;
+        };
+        if (!rehydrated_type_scheme_by_var.contains(indexed_var)) {
+            try rehydrated_type_schemes.items[scheme_idx].indexed_vars.append(gpa, indexed_var);
+            try rehydrated_type_scheme_by_var.put(gpa, indexed_var, @intCast(scheme_idx));
+        } else {
+            std.debug.assert(rehydrated_type_scheme_by_var.get(indexed_var).? == @as(u32, @intCast(scheme_idx)));
+        }
+
+        const constraint = types.getStaticDispatchConstraintAt(serialized_requirement.constraint_index);
+        const already_recorded = for (rehydrated_type_schemes.items[scheme_idx].dispatch_requirements.items) |existing| {
+            if (existing.receiver_var == receiver_var and
+                existing.constraint.fn_var == constraint.fn_var and
+                existing.constraint.fn_name.eql(constraint.fn_name))
+            {
+                break true;
+            }
+        } else false;
+        if (already_recorded) continue;
+        try rehydrated_type_schemes.items[scheme_idx].dispatch_requirements.append(gpa, .{
+            .receiver_var = receiver_var,
+            .constraint = constraint,
+            .deferred_generated_codec = true,
+            .failure_expr = null,
+            .structural_origin = .{
+                .receiver_var = receiver_var,
+                .constraint_fn_var = constraint.fn_var,
+            },
+        });
+    }
+
     // Rehydrate the durable rejection records onto their constraint callables'
     // equivalence classes, so a re-check of an env that already carries them
     // sees the same rejections a fresh check would.
@@ -2371,6 +2482,7 @@ fn initAssumePrepared(
         .scratch_record_field_vars = try base.Scratch(types_mod.Var).init(gpa),
         .scratch_static_dispatch_constraints = try base.Scratch(ScratchStaticDispatchConstraint).init(gpa),
         .scratch_deferred_static_dispatch_constraints = try base.Scratch(DeferredConstraintCheck).init(gpa),
+        .scratch_default_param_vars = try base.Scratch(DefaultParamVar).init(gpa),
         .import_cache = ImportCache{},
         .associated_lookup_cache = .empty,
         .bool_var = undefined,
@@ -2393,6 +2505,8 @@ fn initAssumePrepared(
         .enclosing_func_name = null,
         .def_group = try initNodeSlots(u32, gpa, node_count, no_def_group),
         .predeclared_scheme_vars = try initNodeSlots(?Var, gpa, node_count, null),
+        .type_schemes = rehydrated_type_schemes,
+        .type_scheme_by_var = rehydrated_type_scheme_by_var,
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
         .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, cir.getIdentStore(), null),
         .binding_scheme_nodes = binding_scheme_nodes,
@@ -2400,6 +2514,7 @@ fn initAssumePrepared(
         .erroneous_value_exprs = .empty,
         .call_operand_type_error_exprs = try initNodeSlots(bool, gpa, node_count, false),
         .erroneous_value_patterns = .empty,
+        .rejected_default_exprs = .empty,
         .accepted_nominal_constructor_backings = .empty,
         .hoist_frames = .empty,
         .hoist_expr_candidates = .empty,
@@ -2416,6 +2531,7 @@ fn initAssumePrepared(
         .hoist_invalidated_exprs = .{},
         .selected_hoisted_roots = .empty,
         .executable_root_defs = .empty,
+        .compile_time_executable_roots = .empty,
         .last_hoist_result = null,
         .has_can_diagnostics = if (cir.store.scratch) |scratch| scratch.diagnostics.top() > 0 else false,
         .instantiation_dispatchers = .empty,
@@ -2511,6 +2627,7 @@ pub fn deinit(self: *Self) void {
     self.erroneous_value_exprs.deinit(self.gpa);
     self.call_operand_type_error_exprs.deinit(self.gpa);
     self.erroneous_value_patterns.deinit(self.gpa);
+    self.rejected_default_exprs.deinit(self.gpa);
     self.accepted_nominal_constructor_backings.deinit(self.gpa);
     self.hoist_frames.deinit(self.gpa);
     self.hoist_expr_candidates.deinit(self.gpa);
@@ -2534,6 +2651,7 @@ pub fn deinit(self: *Self) void {
     }
     self.selected_hoisted_roots.deinit(self.gpa);
     self.executable_root_defs.deinit(self.gpa);
+    self.compile_time_executable_roots.deinit(self.gpa);
     self.env_pool.deinit();
     self.generalizer.deinit(self.gpa);
     self.var_map.deinit();
@@ -2564,6 +2682,9 @@ pub fn deinit(self: *Self) void {
     self.scratch_record_field_vars.deinit();
     self.scratch_static_dispatch_constraints.deinit();
     self.scratch_deferred_static_dispatch_constraints.deinit();
+    self.final_codec_dispatch_constraints.deinit(self.gpa);
+    self.final_codec_dispatch_constraint_fns.deinit(self.gpa);
+    self.scratch_default_param_vars.deinit();
     self.scratch_generated_codec_calls.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
     self.imported_method_schemes.deinit(self.gpa);
@@ -2658,6 +2779,30 @@ pub fn selectedHoistedRootIsTopLevel(self: *const Self, root: hoist_roots.Select
 /// caller; the checker never recovers roots from names or source shape.
 pub fn addExecutableRootDef(self: *Self, def_idx: CIR.Def.Idx) Allocator.Error!void {
     try self.executable_root_defs.append(self.gpa, def_idx);
+}
+
+/// Record a zero-arg executable root whose body will be evaluated during
+/// checked finalization rather than invoked at runtime.
+pub fn addCompileTimeExecutableRootDef(
+    self: *Self,
+    def_idx: CIR.Def.Idx,
+    lambda_idx: CIR.Expr.Idx,
+    body_expr: CIR.Expr.Idx,
+) Allocator.Error!void {
+    try self.addExecutableRootDef(def_idx);
+    try self.compile_time_executable_roots.append(self.gpa, .{
+        .def = def_idx,
+        .lambda = lambda_idx,
+        .body = body_expr,
+    });
+}
+
+/// Return the exact body identity supplied for a compile-time executable root.
+pub fn compileTimeExecutableRootBody(self: *const Self, def_idx: CIR.Def.Idx) ?CIR.Expr.Idx {
+    for (self.compile_time_executable_roots.items) |root| {
+        if (root.def == def_idx) return root.body;
+    }
+    return null;
 }
 
 fn beginHoistFrame(self: *Self, expr: CIR.Expr.Idx, binding_rhs: bool, hoist_position: HoistPosition) Allocator.Error!HoistFrameGuard {
@@ -5117,6 +5262,7 @@ fn finalizeTypeDeclarationValidity(self: *Self) std.mem.Allocator.Error!void {
     try self.poisonInvalidTypeDeclarations(poisoned);
 
     try self.validateNominalDeclRecursion();
+    try self.validateNominalDeclArgumentGrowth();
 
     self.propagateTypeDeclarationInvalidity(dependent_offsets, dependents, propagated, &worklist);
     try self.poisonInvalidTypeDeclarations(poisoned);
@@ -5184,6 +5330,498 @@ fn validateNominalDeclRecursion(self: *Self) std.mem.Allocator.Error!void {
         self.types.markNominalDeclInvalid(decl_idx);
         try self.types.setVarContent(decl_var, .err);
         try self.types.setVarContent(decl.backing, .err);
+    }
+}
+
+/// One nominal application found inside a local declaration's backing
+/// template that resolves to another local declaration.
+const NominalDeclMention = struct {
+    from_slot: u32,
+    to_slot: u32,
+    args: types_mod.Var.SafeList.Range,
+};
+
+/// One directed edge of the formal-flow graph: instantiating the mention
+/// that produced it substitutes something built from the source formal for
+/// the target formal—the formal itself passed straight through
+/// (`grows == false`) or a composite containing it (`grows == true`).
+const FormalFlowEdge = struct {
+    from_formal: u32,
+    to_formal: u32,
+    grows: bool,
+    owner_slot: u32,
+};
+
+/// Reject nominal declarations whose recursion admits no finite set of
+/// instantiations. Monomorphization instantiates a declaration's backing at
+/// every distinct argument tuple, so a declaration group is monomorphizable
+/// exactly when the argument tuples reachable from any application form a
+/// finite set. Two shapes break that:
+///
+/// - A formal that flows around a mention cycle while some step of the
+///   cycle wraps it in more structure (`Nest(a) := [More(Nest(List(a)))]`):
+///   each trip produces a strictly larger argument, so every expansion
+///   level is a distinct type. This is tracked exactly on the formal-flow
+///   graph—a mention argument that is a formal passed straight through
+///   adds a plain edge from the source formal to the mentioned
+///   declaration's formal, and one that embeds a formal inside a composite
+///   adds a growing edge—and a declaration is invalid exactly when one of
+///   its growing edges lies inside a formal-flow cycle. Growth that never
+///   returns to its origin stays finite (a mention cycle whose growing step
+///   is reached only through closed arguments resets every trip), so only
+///   cyclic growth is rejected.
+///
+/// - A recursive mention argument containing a variable that is no formal
+///   of the mentioning declaration: nothing binds it, so every expansion
+///   mints it fresh, and a mention whose target reaches back to its owner
+///   then re-enters at a new tuple every level. Outside a declaration
+///   cycle a stray variable cannot recur and is left to the diagnostics
+///   that own it.
+///
+/// Unbounded growth is a property of the declarations alone (mirroring the
+/// derived-codec growth rule), so it is reported here, once, at the
+/// declaration. Imported declarations were validated by their own module,
+/// and module imports are acyclic, so no recursive group spans modules.
+///
+/// Everything this rule admits terminates in Monotype lowering: a formal
+/// argument resolves in the innermost declaration scope to the enclosing
+/// instance's own cell and hits the backing cache's placeholder, a closed
+/// argument memoizes to one cell per instantiation context, and growing
+/// edges descend the formal-flow condensation, so every expansion draws its
+/// argument tuple from a finite universe of cells.
+fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const self_origin = self.cir.selfModuleIdentity();
+    const decl_count: u32 = @intCast(self.types.nominalDeclCount());
+
+    // Slot table: local, still-valid declarations with nominal content.
+    var slots: std.ArrayListUnmanaged(types_mod.NominalDecl.Idx) = .empty;
+    defer slots.deinit(self.gpa);
+    var slot_by_decl = std.AutoHashMap(types_mod.NominalDecl.Idx, u32).init(self.gpa);
+    defer slot_by_decl.deinit();
+
+    var decl_int: u32 = 0;
+    while (decl_int < decl_count) : (decl_int += 1) {
+        const decl_idx: types_mod.NominalDecl.Idx = @enumFromInt(decl_int);
+        const decl = self.types.getNominalDecl(decl_idx);
+        if (decl.origin_module != self_origin) continue;
+        if (!decl.isValid()) continue;
+        const decl_var: Var = @enumFromInt(decl.statement());
+        const resolved = self.types.resolveVar(decl_var).desc.content;
+        if (resolved != .structure or resolved.structure != .nominal_type) continue;
+        const slot: u32 = @intCast(slots.items.len);
+        try slots.append(self.gpa, decl_idx);
+        try slot_by_decl.put(decl_idx, slot);
+    }
+    if (slots.items.len == 0) return;
+    const slot_count = slots.items.len;
+
+    // Collect every local-declaration mention inside each backing template.
+    // The walk stays within the mentioning declaration's own template: a
+    // mentioned declaration's backing belongs to its own slot's analysis.
+    var mentions: std.ArrayListUnmanaged(NominalDeclMention) = .empty;
+    defer mentions.deinit(self.gpa);
+    var walk_stack: std.ArrayListUnmanaged(Var) = .empty;
+    defer walk_stack.deinit(self.gpa);
+    var visited = std.AutoHashMap(Var, void).init(self.gpa);
+    defer visited.deinit();
+
+    for (slots.items, 0..) |decl_idx, from_slot_usize| {
+        const from_slot: u32 = @intCast(from_slot_usize);
+        const decl = self.types.getNominalDecl(decl_idx);
+        visited.clearRetainingCapacity();
+        walk_stack.clearRetainingCapacity();
+        try walk_stack.append(self.gpa, decl.backing);
+        while (walk_stack.pop()) |var_| {
+            const root = self.types.resolveVar(var_);
+            if (visited.contains(root.var_)) continue;
+            try visited.put(root.var_, {});
+            switch (root.desc.content) {
+                .structure => |flat_type| switch (flat_type) {
+                    .nominal_type => |nominal_type| {
+                        if (self.types.lookupNominalDecl(nominal_type)) |target_idx| {
+                            if (slot_by_decl.get(target_idx)) |to_slot| {
+                                try mentions.append(self.gpa, .{
+                                    .from_slot = from_slot,
+                                    .to_slot = to_slot,
+                                    .args = nominal_type.args,
+                                });
+                            }
+                        }
+                        var arg_iter = self.types.iterNominalArgs(nominal_type);
+                        while (arg_iter.next()) |arg_var| {
+                            try walk_stack.append(self.gpa, arg_var);
+                        }
+                    },
+                    .tuple => |tuple| {
+                        try walk_stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems));
+                    },
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                        try walk_stack.append(self.gpa, func.ret);
+                        try walk_stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                        try walk_stack.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
+                    },
+                    .record => |record| {
+                        try walk_stack.append(self.gpa, record.ext);
+                        const fields = self.types.getRecordFieldsSlice(record.fields);
+                        for (fields.items(.presence)) |presence| {
+                            try walk_stack.append(self.gpa, presence.typeVar());
+                            if (presence.presenceVar()) |presence_var| {
+                                try walk_stack.append(self.gpa, presence_var);
+                            }
+                        }
+                    },
+                    .record_unbound => |fields| {
+                        const fields_slice = self.types.getRecordFieldsSlice(fields);
+                        for (fields_slice.items(.presence)) |presence| {
+                            try walk_stack.append(self.gpa, presence.typeVar());
+                            if (presence.presenceVar()) |presence_var| {
+                                try walk_stack.append(self.gpa, presence_var);
+                            }
+                        }
+                    },
+                    .tag_union => |tag_union| {
+                        try walk_stack.append(self.gpa, tag_union.ext);
+                        const tags = self.types.getTagsSlice(tag_union.tags);
+                        for (tags.items(.args)) |tag_args| {
+                            try walk_stack.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                        }
+                    },
+                    .empty_record, .empty_tag_union => {},
+                },
+                .alias => |alias| {
+                    try walk_stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                    var arg_iter = self.types.iterAliasArgs(alias);
+                    while (arg_iter.next()) |arg_var| {
+                        try walk_stack.append(self.gpa, arg_var);
+                    }
+                },
+                .flex, .rigid, .field_presence, .err => {},
+            }
+        }
+    }
+    if (mentions.items.len == 0) return;
+
+    // Declaration-graph components: a mention is recursive exactly when its
+    // target's component reaches back to its owner, i.e. both share one
+    // strongly connected component.
+    var decl_adjacency = try self.gpa.alloc(std.ArrayListUnmanaged(u32), slot_count);
+    defer {
+        for (decl_adjacency) |*list| list.deinit(self.gpa);
+        self.gpa.free(decl_adjacency);
+    }
+    @memset(decl_adjacency, .empty);
+    for (mentions.items) |mention| {
+        try decl_adjacency[mention.from_slot].append(self.gpa, mention.to_slot);
+    }
+    const decl_component = try self.gpa.alloc(u32, slot_count);
+    defer self.gpa.free(decl_component);
+    try self.stronglyConnectedComponents(decl_adjacency, decl_component);
+
+    // Flatten each declaration's resolved formal roots so mention arguments
+    // classify by direct var comparison.
+    var formal_base = try self.gpa.alloc(u32, slot_count + 1);
+    defer self.gpa.free(formal_base);
+    formal_base[0] = 0;
+    for (slots.items, 0..) |decl_idx, slot| {
+        const decl = self.types.getNominalDecl(decl_idx);
+        formal_base[slot + 1] = formal_base[slot] + @as(u32, @intCast(self.types.sliceVars(decl.formals).len));
+    }
+    const formal_count = formal_base[slot_count];
+    var formal_roots = try self.gpa.alloc(Var, formal_count);
+    defer self.gpa.free(formal_roots);
+    var max_decl_formals: usize = 0;
+    for (slots.items, 0..) |decl_idx, slot| {
+        const decl = self.types.getNominalDecl(decl_idx);
+        const formals = self.types.sliceVars(decl.formals);
+        max_decl_formals = @max(max_decl_formals, formals.len);
+        for (formals, formal_roots[formal_base[slot]..formal_base[slot + 1]]) |formal, *out| {
+            out.* = self.types.resolveVar(formal).var_;
+        }
+    }
+
+    const reported = try self.gpa.alloc(bool, slot_count);
+    defer self.gpa.free(reported);
+    @memset(reported, false);
+    const found_formals = try self.gpa.alloc(bool, max_decl_formals);
+    defer self.gpa.free(found_formals);
+
+    // Classify every mention argument into formal-flow edges, rejecting
+    // recursive mentions that carry unbindable variables outright.
+    var flow_edges: std.ArrayListUnmanaged(FormalFlowEdge) = .empty;
+    defer flow_edges.deinit(self.gpa);
+
+    mention_loop: for (mentions.items) |mention| {
+        if (reported[mention.from_slot]) continue;
+        const recursive = decl_component[mention.from_slot] == decl_component[mention.to_slot];
+        const owner_formals = formal_roots[formal_base[mention.from_slot]..formal_base[mention.from_slot + 1]];
+        const target_formal_count = formal_base[mention.to_slot + 1] - formal_base[mention.to_slot];
+        for (self.types.sliceVars(mention.args), 0..) |arg_var, position| {
+            // An arity mismatch against the declaration is diagnosed at the
+            // application; extra arguments carry no formal-flow meaning.
+            if (position >= target_formal_count) continue;
+            const to_formal = formal_base[mention.to_slot] + @as(u32, @intCast(position));
+            const arg_root = self.types.resolveVar(arg_var);
+            switch (arg_root.desc.content) {
+                .flex, .rigid => {
+                    var matched = false;
+                    for (owner_formals, 0..) |formal, formal_position| {
+                        if (formal == arg_root.var_) {
+                            try flow_edges.append(self.gpa, .{
+                                .from_formal = formal_base[mention.from_slot] + @as(u32, @intCast(formal_position)),
+                                .to_formal = to_formal,
+                                .grows = false,
+                                .owner_slot = mention.from_slot,
+                            });
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if (!matched and recursive) {
+                        reported[mention.from_slot] = true;
+                        try self.reportGrowingNominalDecl(slots.items[mention.from_slot]);
+                        continue :mention_loop;
+                    }
+                },
+                .err, .field_presence => {},
+                .structure, .alias => {
+                    @memset(found_formals[0..owner_formals.len], false);
+                    const saw_non_formal = try self.collectFormalOccurrences(
+                        arg_root.var_,
+                        owner_formals,
+                        found_formals,
+                        &walk_stack,
+                        &visited,
+                    );
+                    if (saw_non_formal and recursive) {
+                        reported[mention.from_slot] = true;
+                        try self.reportGrowingNominalDecl(slots.items[mention.from_slot]);
+                        continue :mention_loop;
+                    }
+                    for (found_formals[0..owner_formals.len], 0..) |occurred, formal_position| {
+                        if (!occurred) continue;
+                        try flow_edges.append(self.gpa, .{
+                            .from_formal = formal_base[mention.from_slot] + @as(u32, @intCast(formal_position)),
+                            .to_formal = to_formal,
+                            .grows = true,
+                            .owner_slot = mention.from_slot,
+                        });
+                    }
+                },
+            }
+        }
+    }
+    if (flow_edges.items.len == 0) return;
+
+    // A growing edge repeats exactly when it lies inside a formal-flow
+    // cycle, i.e. when its endpoints share a strongly connected component.
+    var flow_adjacency = try self.gpa.alloc(std.ArrayListUnmanaged(u32), formal_count);
+    defer {
+        for (flow_adjacency) |*list| list.deinit(self.gpa);
+        self.gpa.free(flow_adjacency);
+    }
+    @memset(flow_adjacency, .empty);
+    for (flow_edges.items) |edge| {
+        try flow_adjacency[edge.from_formal].append(self.gpa, edge.to_formal);
+    }
+    const flow_component = try self.gpa.alloc(u32, formal_count);
+    defer self.gpa.free(flow_component);
+    try self.stronglyConnectedComponents(flow_adjacency, flow_component);
+
+    for (flow_edges.items) |edge| {
+        if (!edge.grows) continue;
+        if (flow_component[edge.from_formal] != flow_component[edge.to_formal]) continue;
+        if (reported[edge.owner_slot]) continue;
+        reported[edge.owner_slot] = true;
+        try self.reportGrowingNominalDecl(slots.items[edge.owner_slot]);
+    }
+}
+
+/// Report one growing declaration and poison it exactly like the other
+/// invalid-recursion kinds: uses instantiate `.err` and are suppressed, and
+/// no later stage walks the template.
+fn reportGrowingNominalDecl(self: *Self, decl_idx: types_mod.NominalDecl.Idx) std.mem.Allocator.Error!void {
+    const decl = self.types.getNominalDecl(decl_idx);
+    const decl_var: Var = @enumFromInt(decl.statement());
+    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, decl.backing);
+    _ = try self.problems.appendProblem(self.gpa, .{ .invalid_nominal_decl_recursion = .{
+        .decl_var = decl_var,
+        .snapshot = snapshot,
+        .type_name = decl.ident.ident_idx,
+        .kind = .growing_args,
+    } });
+    self.markTypeDeclInvalid(@enumFromInt(decl.statement()));
+    self.types.markNominalDeclInvalid(decl_idx);
+    try self.types.setVarContent(decl_var, .err);
+    try self.types.setVarContent(decl.backing, .err);
+}
+
+/// Walk `start` recording which of `formals` (resolved roots) occur inside
+/// it and whether any variable outside that set occurs. Structural
+/// positions, alias backings and arguments, function effect dependencies,
+/// and nominal application arguments are traversed; nominal backings are
+/// not entered, because a mentioned declaration's template can only
+/// reference that declaration's own formals, never the caller's. `.err`
+/// counts as variable-free so already-poisoned declarations are not
+/// re-reported through their poisoned types. This deliberately treats a
+/// transparent alias of a formal as an occurrence inside a composite: the
+/// alias mention instantiates its own node per expansion level, so passing
+/// a formal through an alias does not preserve the argument cell the way a
+/// bare formal does.
+fn collectFormalOccurrences(
+    self: *Self,
+    start: Var,
+    formals: []const Var,
+    found: []bool,
+    walk_stack: *std.ArrayListUnmanaged(Var),
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    visited.clearRetainingCapacity();
+    walk_stack.clearRetainingCapacity();
+    try walk_stack.append(self.gpa, start);
+    var saw_non_formal = false;
+    while (walk_stack.pop()) |var_| {
+        const root = self.types.resolveVar(var_);
+        if (visited.contains(root.var_)) continue;
+        try visited.put(root.var_, {});
+        switch (root.desc.content) {
+            .flex, .rigid => {
+                var matched = false;
+                for (formals, 0..) |formal, position| {
+                    if (formal == root.var_) {
+                        found[position] = true;
+                        matched = true;
+                        break;
+                    }
+                }
+                if (!matched) saw_non_formal = true;
+            },
+            .structure => |flat_type| switch (flat_type) {
+                .nominal_type => |nominal_type| {
+                    var arg_iter = self.types.iterNominalArgs(nominal_type);
+                    while (arg_iter.next()) |arg_var| {
+                        try walk_stack.append(self.gpa, arg_var);
+                    }
+                },
+                .tuple => |tuple| {
+                    try walk_stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems));
+                },
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try walk_stack.append(self.gpa, func.ret);
+                    try walk_stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try walk_stack.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
+                },
+                .record => |record| {
+                    try walk_stack.append(self.gpa, record.ext);
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    for (fields.items(.presence)) |presence| {
+                        try walk_stack.append(self.gpa, presence.typeVar());
+                        if (presence.presenceVar()) |presence_var| {
+                            try walk_stack.append(self.gpa, presence_var);
+                        }
+                    }
+                },
+                .record_unbound => |fields| {
+                    const fields_slice = self.types.getRecordFieldsSlice(fields);
+                    for (fields_slice.items(.presence)) |presence| {
+                        try walk_stack.append(self.gpa, presence.typeVar());
+                        if (presence.presenceVar()) |presence_var| {
+                            try walk_stack.append(self.gpa, presence_var);
+                        }
+                    }
+                },
+                .tag_union => |tag_union| {
+                    try walk_stack.append(self.gpa, tag_union.ext);
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.args)) |tag_args| {
+                        try walk_stack.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                    }
+                },
+                .empty_record, .empty_tag_union => {},
+            },
+            .alias => |alias| {
+                try walk_stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                var arg_iter = self.types.iterAliasArgs(alias);
+                while (arg_iter.next()) |arg_var| {
+                    try walk_stack.append(self.gpa, arg_var);
+                }
+            },
+            .field_presence, .err => {},
+        }
+    }
+    return saw_non_formal;
+}
+
+/// Iterative Tarjan strongly-connected components over a dense node range.
+/// Two nodes receive the same component id exactly when each reaches the
+/// other through the adjacency lists.
+fn stronglyConnectedComponents(
+    self: *Self,
+    adjacency: []const std.ArrayListUnmanaged(u32),
+    component_of: []u32,
+) std.mem.Allocator.Error!void {
+    const node_count = adjacency.len;
+    const unvisited = std.math.maxInt(u32);
+    const index_of = try self.gpa.alloc(u32, node_count);
+    defer self.gpa.free(index_of);
+    @memset(index_of, unvisited);
+    const low_of = try self.gpa.alloc(u32, node_count);
+    defer self.gpa.free(low_of);
+    const on_stack = try self.gpa.alloc(bool, node_count);
+    defer self.gpa.free(on_stack);
+    @memset(on_stack, false);
+
+    var component_stack: std.ArrayListUnmanaged(u32) = .empty;
+    defer component_stack.deinit(self.gpa);
+    const WalkFrame = struct { node: u32, edge: u32 };
+    var walk_frames: std.ArrayListUnmanaged(WalkFrame) = .empty;
+    defer walk_frames.deinit(self.gpa);
+
+    var next_index: u32 = 0;
+    var next_component: u32 = 0;
+    for (0..node_count) |start| {
+        if (index_of[start] != unvisited) continue;
+        index_of[start] = next_index;
+        low_of[start] = next_index;
+        next_index += 1;
+        try component_stack.append(self.gpa, @intCast(start));
+        on_stack[start] = true;
+        try walk_frames.append(self.gpa, .{ .node = @intCast(start), .edge = 0 });
+        while (walk_frames.items.len != 0) {
+            const frame = &walk_frames.items[walk_frames.items.len - 1];
+            const node = frame.node;
+            if (frame.edge < adjacency[node].items.len) {
+                const next = adjacency[node].items[frame.edge];
+                frame.edge += 1;
+                if (index_of[next] == unvisited) {
+                    index_of[next] = next_index;
+                    low_of[next] = next_index;
+                    next_index += 1;
+                    try component_stack.append(self.gpa, next);
+                    on_stack[next] = true;
+                    try walk_frames.append(self.gpa, .{ .node = next, .edge = 0 });
+                } else if (on_stack[next]) {
+                    low_of[node] = @min(low_of[node], index_of[next]);
+                }
+                continue;
+            }
+            walk_frames.items.len -= 1;
+            if (walk_frames.items.len != 0) {
+                const parent = walk_frames.items[walk_frames.items.len - 1].node;
+                low_of[parent] = @min(low_of[parent], low_of[node]);
+            }
+            if (low_of[node] == index_of[node]) {
+                while (true) {
+                    const member = component_stack.pop().?;
+                    on_stack[member] = false;
+                    component_of[member] = next_component;
+                    if (member == node) break;
+                }
+                next_component += 1;
+            }
+        }
     }
 }
 
@@ -7184,6 +7822,12 @@ const OptionalFieldAccess = struct {
     presence_var: Var,
     field_name: Ident.Idx,
     region: Region,
+    /// Which construct produced this presence-evidence: a `.?` access or a
+    /// `x: _` unset. Both pin a still-flex kind to `optional` and reject a
+    /// kind resolved `required`/`defaulted`—the marker only selects which
+    /// problem the judgment reports (design.md "In Progress: Unsetting an
+    /// Optional Field").
+    use: enum { access, unset },
 };
 
 /// One record-literal field's minted kind var (see `literal_field_kinds`).
@@ -7197,6 +7841,23 @@ const LiteralFieldKind = struct {
 const PendingRecordUpdate = struct {
     presence_var: Var,
     region: Region,
+};
+
+/// One declaration type parameter of a defaulted field's instantiated type:
+/// the rigid's name and the fresh flex copy this instantiation minted for it
+/// (see `checkDefaultParameterConstraints`).
+const DefaultParamVar = struct {
+    name: Ident.Idx,
+    var_: Var,
+    /// The declaration's own rigid var (the instantiation map's key). Vars
+    /// are minted in source order, so sorting the snapshot by this key makes
+    /// every conviction below name parameters deterministically—hash-map
+    /// iteration order must never pick which parameter a report names.
+    rigid_var: Var,
+
+    fn rigidVarLessThan(_: void, lhs: DefaultParamVar, rhs: DefaultParamVar) bool {
+        return @intFromEnum(lhs.rigid_var) < @intFromEnum(rhs.rigid_var);
+    }
 };
 
 const PendingDefaultCheck = struct {
@@ -7425,6 +8086,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.checkBindingRootsForInfiniteTypes();
     try self.recheckNominalConstructorBackings(&env);
 
+    try self.rejectEffectfulCompileTimeExecutableRoots();
     try self.poisonErroneousValueUses();
     try self.poisonErroneousValueExprs();
 
@@ -7561,6 +8223,9 @@ fn poisonCheckedStrictDemandCycles(
         region: Region,
     };
 
+    var bindings = std.ArrayList(PatternBinding).empty;
+    defer bindings.deinit(self.gpa);
+
     for (eval_order.sccs) |scc| {
         if (!scc.is_recursive) continue;
 
@@ -7570,12 +8235,18 @@ fn poisonCheckedStrictDemandCycles(
         for (scc.defs) |def_idx| {
             const def = self.cir.store.getDef(def_idx);
             if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) continue;
-            const ident = self.getPatternIdent(def.pattern) orelse continue;
-            try defs_to_poison.append(self.gpa, .{
-                .def_idx = def_idx,
-                .ident = ident,
-                .region = self.cir.store.getPatternRegion(def.pattern),
-            });
+            // Every name the def binds is computed from the one cyclic
+            // value, so each is circular: the single name of a plain def,
+            // or each name a destructure binds.
+            bindings.clearRetainingCapacity();
+            try self.collectPatternBindings(def.pattern, &bindings);
+            for (bindings.items) |binding| {
+                try defs_to_poison.append(self.gpa, .{
+                    .def_idx = def_idx,
+                    .ident = binding.ident,
+                    .region = self.cir.store.getPatternRegion(binding.pattern_idx),
+                });
+            }
         }
 
         std.mem.sort(RecursiveNonFunctionDef, defs_to_poison.items, {}, struct {
@@ -7590,11 +8261,16 @@ fn poisonCheckedStrictDemandCycles(
             }
         }.lessThan);
 
+        var poisoned_defs: std.AutoHashMapUnmanaged(CIR.Def.Idx, void) = .{};
+        defer poisoned_defs.deinit(self.gpa);
         for (defs_to_poison.items) |def_to_poison| {
             _ = try self.problems.appendProblem(self.gpa, .{ .circular_value_definition = .{
                 .ident = def_to_poison.ident,
                 .region = def_to_poison.region,
             } });
+            // A destructuring def reports once per bound name but is poisoned once.
+            const poisoned = try poisoned_defs.getOrPut(self.gpa, def_to_poison.def_idx);
+            if (poisoned.found_existing) continue;
             try self.poisonRecursiveNonFunctionProcessingDef(.{
                 .def_idx = def_to_poison.def_idx,
                 .def_name = def_to_poison.ident,
@@ -10094,6 +10770,17 @@ fn reportPolymorphicExecutableRootResults(self: *Self) std.mem.Allocator.Error!v
     }
 }
 
+fn rejectEffectfulCompileTimeExecutableRoots(self: *Self) Allocator.Error!void {
+    for (self.compile_time_executable_roots.items) |root| {
+        if (!try self.lambdaBodyIsEffectful(root.lambda)) continue;
+
+        _ = try self.problems.appendProblem(self.gpa, .{ .effectful_comptime_expression = .{
+            .region = self.cir.store.getExprRegion(root.body),
+        } });
+        try self.erroneous_value_exprs.put(self.gpa, root.body, {});
+    }
+}
+
 fn reportPolymorphicConstrainedExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
     const expr_var = ModuleEnv.varFrom(expr_idx);
     if (self.varIsFunctionType(expr_var)) return;
@@ -11603,6 +12290,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     try self.judgeFieldKindsAtBoundary(&env);
     _ = try self.checkFlexVarConstraintCompatibility(expr_var, &env, true, .{});
     try self.validateResolvedOpenNumeralLiterals(&env);
+    try self.checkFinalGeneratedCodecConstraints(&env);
     try self.resolvePendingTupleAccesses(&env, true);
     try self.checkAllConstraints(&env);
     try self.checkDefaultRestrictions();
@@ -11774,7 +12462,10 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
     }
     try self.closeAbsentConstructedPayloadVars(def.expr, expr_var);
-    if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr)) and !self.defInCurrentRecursiveGroup(def_idx)) {
+    if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr)) and
+        !self.defInCurrentRecursiveGroup(def_idx) and
+        !self.isCompileTimeExecutableRootDef(def_idx))
+    {
         try self.checkEffectfulFunctionName(def.pattern, def.expr);
     }
 
@@ -11812,6 +12503,13 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
 fn isExecutableRootDef(self: *const Self, def_idx: CIR.Def.Idx) bool {
     for (self.executable_root_defs.items) |root_def_idx| {
         if (root_def_idx == def_idx) return true;
+    }
+    return false;
+}
+
+fn isCompileTimeExecutableRootDef(self: *const Self, def_idx: CIR.Def.Idx) bool {
+    for (self.compile_time_executable_roots.items) |root| {
+        if (root.def == def_idx) return true;
     }
     return false;
 }
@@ -13058,6 +13756,17 @@ fn generateAliasDecl(
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // A never-filled forward placeholder: a forward reference prepared this
+    // declaration, then its owner's associated block was skipped after an
+    // already-reported redeclaration/rejection, so the real declaration
+    // never filled it. There is no annotation to generate (`.placeholder`
+    // is the reserved node index 0, not a TypeAnno); poison the decl var so
+    // every reference resolves to `.err` and is suppressed.
+    if (alias.anno == .placeholder) {
+        try self.markErroneous(decl_var);
+        return;
+    }
+
     // Get the type header's args
     const header = self.cir.store.getTypeHeader(alias.header);
     const header_args = self.cir.store.sliceTypeAnnos(header.args);
@@ -13129,6 +13838,14 @@ fn generateWhereAliasDecl(
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // A never-filled forward placeholder (see `generateAliasDecl`): there is
+    // no receiver to generate; poison the decl var so every reference
+    // resolves to `.err` and is suppressed.
+    if (where_alias.receiver == .placeholder) {
+        try self.markErroneous(decl_var);
+        return;
+    }
+
     // A where alias is generated on demand, which can happen part way through
     // building a referencing signature's constraints. Its own scratch entries
     // must not land in that signature's range.
@@ -13165,6 +13882,16 @@ fn generateNominalDecl(
 ) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    // A never-filled forward placeholder (see `generateAliasDecl`): there is
+    // no backing annotation to generate, and the declaration was never
+    // registered in the nominal table, so it must not be marked invalid
+    // either (`poisonInvalidTypeDeclarations` requires a table entry).
+    // Poison the decl var so every reference instantiates `.err`.
+    if (nominal.anno == .placeholder) {
+        try self.unifyWithTargetRank(decl_var, .err, env);
+        return;
+    }
 
     // Get the type header's args
     const header = self.cir.store.getTypeHeader(nominal.header);
@@ -16093,154 +16820,261 @@ fn commitProjectedStoredValue(
     return true;
 }
 
-fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
-    const trace = tracy.trace(@src());
-    defer trace.end();
+const ExprCheckFrame = struct {
+    checker: *Self,
+    env: *Env,
+    expr_idx: CIR.Expr.Idx,
+    expr: CIR.Expr,
+    expr_region: Region,
+    expr_var_raw: Var,
+    expr_var: Var,
+    mb_anno_vars: ?AnnoVars,
+    nested_expected: Expected,
+    is_call_arg: bool,
+    is_immediate_callee: bool,
+    is_binding_rhs: bool,
+    previous_instantiation_source: ?CIR.Expr.Idx,
+    previous_instantiation_is_immediate_callee: bool,
+    previous_discarded_binding_rhs_expr: ?CIR.Expr.Idx,
+    previous_active_scheme_root: ?Var,
+    suppress_group_member_generalize: bool,
+    should_generalize: bool,
+    rank_pushed: bool,
+    hoist_frame: ?HoistFrameGuard,
+    active: bool = true,
+
+    fn deinit(self: *ExprCheckFrame) void {
+        if (!self.active) return;
+
+        if (self.hoist_frame) |*hoist_frame| {
+            hoist_frame.deinit();
+        }
+        if (self.rank_pushed) {
+            self.env.var_pool.popRank();
+        }
+        self.checker.active_scheme_root = self.previous_active_scheme_root;
+        self.checker.discarded_binding_rhs_expr = self.previous_discarded_binding_rhs_expr;
+        self.checker.instantiation_is_immediate_callee = self.previous_instantiation_is_immediate_callee;
+        self.checker.instantiation_source_expr = self.previous_instantiation_source;
+        self.checker.checking_binding_rhs_pattern = null;
+        self.active = false;
+    }
+
+    fn finish(self: *ExprCheckFrame, does_fx: bool) std.mem.Allocator.Error!void {
+        const checker = self.checker;
+        const env = self.env;
+
+        // Check if we have an annotation
+        if (self.mb_anno_vars) |anno_vars| {
+            // Unify the anno with the expr var
+            const annotation_result = try checker.unifyInContext(anno_vars.anno_var, self.expr_var, env, anno_vars.context);
+            if (annotation_result.isProblem()) {
+                // The diagnostic belongs to checking, but later stages need an
+                // explicit executable value. End-of-check poisoning replaces this
+                // expression with a runtime error while the binding retains the
+                // annotation's checked type for all independent consumers.
+                try checker.erroneous_value_exprs.put(checker.gpa, self.expr_idx, {});
+            }
+
+            // Check if the expression type contains any errors anywhere in its
+            // structure. If it does and we have an annotation, use the annotation
+            // type for the pattern instead of the expression type. This preserves
+            // the annotation type for other code that references this identifier,
+            // even when the expression has errors.
+            checker.var_set.clearRetainingCapacity();
+            if (try checker.varContainsError(self.expr_var, &checker.var_set)) {
+                // A method's callable wrapper is explicit input to method-template
+                // publication, so keep that wrapper around its already-erroneous
+                // child. Other annotated values are the executable boundary and
+                // must themselves become the runtime error.
+                const is_method_callable = isFunctionDef(&checker.cir.store, checker.cir.store.getExpr(self.expr_idx)) and
+                    checker.exprDefinesMethod(self.expr_idx);
+                if (!is_method_callable) {
+                    try checker.erroneous_value_exprs.put(checker.gpa, self.expr_idx, {});
+                }
+                // If there was an annotation AND the expr contains errors, then unify the
+                // raw expr var against the annotation
+                _ = try checker.unify(self.expr_var_raw, anno_vars.anno_var_backup, env);
+            } else {
+                // Otherwise, make the explicit annotation the checked root for
+                // this expression. The body has already constrained the
+                // annotation's backing and any underscore variables above.
+                _ = try checker.unify(self.expr_var_raw, anno_vars.anno_var, env);
+            }
+        }
+
+        checker.var_set.clearRetainingCapacity();
+        if (self.mb_anno_vars == null) {
+            if (try checker.varContainsError(self.expr_var, &checker.var_set)) {
+                try checker.erroneous_value_exprs.put(checker.gpa, self.expr_idx, {});
+                checker.call_operand_type_error_exprs.items[nodeSlot(self.expr_idx)] = true;
+            }
+        }
+
+        // Check any accumulated static dispatch constraints
+        try checker.checkStaticDispatchConstraints(env, false);
+
+        // If this type of expr should be generalized, generalize it!
+        if (self.should_generalize) {
+            // Bind pending record-destructure binders BEFORE boundary literal
+            // defaulting: a numeral flowing through a destructured field only
+            // becomes signature-reachable once the binder is unified through
+            // the row, and defaulting's reachability classification must see
+            // that link (see `judgeRecordDestructBinds`).
+            try checker.judgeRecordDestructBinds(env);
+            if (env.rank() == checker.currentGroupBoundaryRank()) {
+                // This frame is the enclosing group's generalization boundary (a
+                // singleton group's def RHS). Resolve dispatch obligations into
+                // unchecked groups before anything here generalizes (Invariant D),
+                // interleaved with boundary defaulting.
+                try checker.runGroupBoundary(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }}, env);
+            } else {
+                // Inner lambda: boundary defaulting runs first—it must see
+                // ranks BEFORE they are promoted to generalized. Pending dispatch
+                // obligations (pinned at the group's boundary rank) escape this
+                // frame and stay live for the group boundary.
+                try checker.defaultLiteralsAtGeneralizationBoundary(.{ .owner = self.expr_var_raw, .interface = self.expr_var }, env);
+            }
+            try checker.judgeFieldKindsAtBoundary(env);
+            try checker.generalizer.generalize(checker.gpa, &env.var_pool, env.rank());
+            try checker.deduplicateGeneralizedDispatchRequirements(self.expr_var_raw);
+            try checker.publishBindingScheme(self.expr_var_raw);
+            checker.retireNonGeneralizedTypeSchemes(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }});
+            try checker.retireStructurallyPublishedTypeSchemeRequirements(
+                &.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }},
+                env.rank(),
+            );
+            // The scheme's vars froze at generalized rank: judge this def's
+            // dispatch-constrained receivers now, while the judgment is a
+            // local question about one scheme (see
+            // `judgeAmbiguityCandidatesAtGeneralization`).
+            try checker.judgeAmbiguityCandidatesAtGeneralization(.{ .owner = self.expr_var_raw, .interface = self.expr_var });
+        }
+
+        try self.hoist_frame.?.finish(does_fx);
+        self.deinit();
+    }
+};
+
+fn beginExprCheckFrame(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    env: *Env,
+    expected: Expected,
+) std.mem.Allocator.Error!ExprCheckFrame {
+    const expr = self.cir.store.getExpr(expr_idx);
+    const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
+    const expr_var_raw = ModuleEnv.varFrom(expr_idx);
+    const previous_instantiation_source = self.instantiation_source_expr;
+    const previous_instantiation_is_immediate_callee = self.instantiation_is_immediate_callee;
+    const previous_discarded_binding_rhs_expr = self.discarded_binding_rhs_expr;
+    const previous_active_scheme_root = self.active_scheme_root;
+
+    var frame = ExprCheckFrame{
+        .checker = self,
+        .env = env,
+        .expr_idx = expr_idx,
+        .expr = expr,
+        .expr_region = expr_region,
+        .expr_var_raw = expr_var_raw,
+        .expr_var = undefined,
+        .mb_anno_vars = null,
+        .nested_expected = expected,
+        .is_call_arg = false,
+        .is_immediate_callee = false,
+        .is_binding_rhs = false,
+        .previous_instantiation_source = previous_instantiation_source,
+        .previous_instantiation_is_immediate_callee = previous_instantiation_is_immediate_callee,
+        .previous_discarded_binding_rhs_expr = previous_discarded_binding_rhs_expr,
+        .previous_active_scheme_root = previous_active_scheme_root,
+        .suppress_group_member_generalize = false,
+        .should_generalize = false,
+        .rank_pushed = false,
+        .hoist_frame = null,
+    };
+    errdefer frame.deinit();
 
     // Attribute any dispatcher instantiated while checking this expression to it,
     // so an ambiguity verdict can pinpoint the source of an unsatisfiable
     // body-forced where-clause. Restored on exit to track the innermost expr.
-    const prev_instantiation_source = self.instantiation_source_expr;
     self.instantiation_source_expr = expr_idx;
-    defer self.instantiation_source_expr = prev_instantiation_source;
 
-    const expr = self.cir.store.getExpr(expr_idx);
-    const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
-    const expr_var_raw = ModuleEnv.varFrom(expr_idx);
     // Expression nodes can be checked again after more constraints settle. The
     // dense slot always describes this check, so a prior error cannot retire a
     // parent after the expression has checked successfully.
     self.call_operand_type_error_exprs.items[nodeSlot(expr_idx)] = false;
 
-    // Consume the checking_call_arg flag: it applies only to this immediate
-    // checkExpr call and must not propagate to recursive calls (e.g. nested call
-    // arguments). Value-producing wrappers explicitly forward it only to the
-    // child that supplies their result (see `checkExprInCallPosition`), keeping
-    // an immediately called lambda from generalizing through a closure, block,
-    // conditional, or match.
-    const is_call_arg = self.checking_call_arg;
+    // Consume the call-position flags. Value-producing wrappers explicitly
+    // forward them only to the child that supplies their result.
+    frame.is_call_arg = self.checking_call_arg;
     self.checking_call_arg = false;
-
-    const is_immediate_callee = self.checking_immediate_callee;
+    frame.is_immediate_callee = self.checking_immediate_callee;
     self.checking_immediate_callee = false;
+    self.instantiation_is_immediate_callee = frame.is_immediate_callee;
 
-    const prev_instantiation_is_immediate_callee = self.instantiation_is_immediate_callee;
-    self.instantiation_is_immediate_callee = is_immediate_callee;
-    defer self.instantiation_is_immediate_callee = prev_instantiation_is_immediate_callee;
-
-    // Consume the binding-RHS flag: it applies only to this immediate checkExpr
-    // call and must not propagate into subexpressions.
-    const is_binding_rhs = self.checking_binding_rhs;
+    // Consume the binding-RHS flag: it applies only to this expression.
+    frame.is_binding_rhs = self.checking_binding_rhs;
     const binding_rhs_pattern = self.checking_binding_rhs_pattern;
     self.checking_binding_rhs = false;
     self.checking_binding_rhs_pattern = null;
-
-    const prev_discarded_binding_rhs_expr = self.discarded_binding_rhs_expr;
-    if (is_binding_rhs) {
+    if (frame.is_binding_rhs) {
         if (binding_rhs_pattern) |pattern_idx| {
             if (self.cir.store.getPattern(pattern_idx) == .underscore) {
                 self.discarded_binding_rhs_expr = expr_idx;
             }
         }
     }
-    defer self.discarded_binding_rhs_expr = prev_discarded_binding_rhs_expr;
 
     // A recursive group member's top-level RHS lives in the group's shared
     // rank frame and generalizes at the group boundary, not on its own.
-    // Consume-once; `e_closure` re-asserts it onto its inner lambda below.
-    const suppress_group_member_generalize = self.suppress_generalize_expr == expr_idx;
-    if (suppress_group_member_generalize) self.suppress_generalize_expr = null;
+    frame.suppress_group_member_generalize = self.suppress_generalize_expr == expr_idx;
+    if (frame.suppress_group_member_generalize) self.suppress_generalize_expr = null;
 
-    // Decide whether this binding generalizes—see `shouldGeneralize` for the
-    // three qualifying paths and why each is sound.
-    const should_generalize = !suppress_group_member_generalize and
-        self.shouldGeneralize(expr, expected.annotation, is_binding_rhs, is_call_arg);
+    frame.should_generalize = !frame.suppress_group_member_generalize and
+        self.shouldGeneralize(expr, expected.annotation, frame.is_binding_rhs, frame.is_call_arg);
+    if (frame.should_generalize) self.active_scheme_root = expr_var_raw;
 
-    // A generalizing expression owns every pending dispatch relation created
-    // while its body is checked. Save/restore makes nested generalized lambdas
-    // exact owners rather than folding their requirements into an enclosing
-    // scheme.
-    const previous_active_scheme_root = self.active_scheme_root;
-    if (should_generalize) self.active_scheme_root = expr_var_raw;
-    defer self.active_scheme_root = previous_active_scheme_root;
-
-    // Push/pop ranks based on if we should generalize
-    if (should_generalize) try env.var_pool.pushRank();
-    defer if (should_generalize) {
-        env.var_pool.popRank();
-    };
+    if (frame.should_generalize) {
+        try env.var_pool.pushRank();
+        frame.rank_pushed = true;
+    }
 
     try self.setVarRank(expr_var_raw, env);
 
-    // Generate the expr var and the expected type vars.
-    //
-    // If the current expression has an annotation, materialize it once here and
-    // pass children the resulting expected var. Children must not regenerate the
-    // same annotation, because that creates distinct rigid vars with the same
-    // source names.
-    const expr_var: Var, const mb_anno_vars: ?AnnoVars, const nested_expected: Expected = blk: {
+    // Materialize an annotation once at the expression frame that owns it.
+    frame.expr_var, frame.mb_anno_vars, frame.nested_expected = blk: {
         if (expr == .e_closure) {
-            // Closures delegate to their inner lambda's checkExpr, which handles
-            // annotation and generalization. Forward expected so the annotation
-            // type is created at the lambda's rank.
-            // (The e_closure-wraps-e_lambda invariant is asserted by isFunctionDef.)
             break :blk .{ expr_var_raw, null, expected };
         }
 
         if (expected.annotation) |annotation_idx| {
-            // Generate the type for the annotation
             try self.generateAnnotationType(annotation_idx, env);
             if (self.checking_predeclared_body_def) |predeclared_def_idx| {
                 try self.recordPredeclaredBodyAnnotationPairs(predeclared_def_idx, annotation_idx);
             }
             const anno_var = ModuleEnv.varFrom(annotation_idx);
-
-            // Copy/paste the variable. This will be used if the expr errors to
-            // preserve the type annotation for places that reference this def.
-            const anno_var_backup = try self.instantiateVarOrphan(
-                anno_var,
-                env,
-                env.rank(),
-                .use_last_var,
-            );
-
+            const anno_var_backup = try self.instantiateVarOrphan(anno_var, env, env.rank(), .use_last_var);
             break :blk .{
                 try self.fresh(env, expr_region),
-                .{
+                AnnoVars{
                     .anno_var = anno_var,
                     .anno_var_backup = anno_var_backup,
                     .context = .type_annotation,
                 },
-                // The annotation is also the expected result of any `if`/
-                // `match` at the body's root: each branch checks against it
-                // directly (instead of pairwise against the previous branch),
-                // so annotation-declared facts—e.g. an `optional` field
-                // kind—pin branch types before the branches merge
-                // (design.md "Field Kinds (All-Dynamic Optional Fields)").
                 expected.withMaterializedAnnotation(.{
                     .var_ = anno_var,
                     .context = .type_annotation,
                 }).withBranchResult(anno_var),
             };
         } else if (expected.expected_type) |expected_type| {
-            const expected_var_backup = try self.instantiateVarOrphan(
-                expected_type.var_,
-                env,
-                env.rank(),
-                .use_last_var,
-            );
-
+            const expected_var_backup = try self.instantiateVarOrphan(expected_type.var_, env, env.rank(), .use_last_var);
             break :blk .{
                 try self.fresh(env, expr_region),
-                .{
+                AnnoVars{
                     .anno_var = expected_type.var_,
                     .anno_var_backup = expected_var_backup,
                     .context = expected_type.context,
                 },
-                // As in the annotation path above: the expected type is the
-                // expected result of any `if`/`match` at the body's root, so
-                // branches check against it directly and annotation-declared
-                // facts pin branch types before the branches merge.
                 expected.withBranchResult(expected_type.var_),
             };
         } else {
@@ -16248,13 +17082,31 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         }
     };
 
+    self.checking_binding_rhs_pattern = binding_rhs_pattern;
+    frame.hoist_frame = try self.beginHoistFrame(expr_idx, frame.is_binding_rhs, frame.nested_expected.hoist_position);
+    self.checking_binding_rhs_pattern = null;
+
+    return frame;
+}
+
+fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    var frame = try self.beginExprCheckFrame(expr_idx, env, expected);
+    defer frame.deinit();
+
+    const expr = frame.expr;
+    const expr_region = frame.expr_region;
+    const expr_var_raw = frame.expr_var_raw;
+    const expr_var = frame.expr_var;
+    const mb_anno_vars = frame.mb_anno_vars;
+    const nested_expected = frame.nested_expected;
+    const is_call_arg = frame.is_call_arg;
+    const is_immediate_callee = frame.is_immediate_callee;
+    const suppress_group_member_generalize = frame.suppress_group_member_generalize;
     var does_fx = false; // Does this expression potentially perform any side effects?
     const child_expected = nested_expected.forStatement();
-    self.checking_binding_rhs_pattern = binding_rhs_pattern;
-    errdefer self.checking_binding_rhs_pattern = null;
-    var hoist_frame = try self.beginHoistFrame(expr_idx, is_binding_rhs, nested_expected.hoist_position);
-    self.checking_binding_rhs_pattern = null;
-    defer hoist_frame.deinit();
 
     switch (expr) {
         // str //
@@ -16594,10 +17446,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // pin as before. If no context decides a still-flex kind,
                     // the update judgment commits it to required before its
                     // owning generalization boundary.
-                    //
-                    // TODO(optional-fields): `{ x: _ }` UNSET syntax is
-                    // designed in design.md "Deferred: Unsetting an Optional
-                    // Field (`{ ..r, x: _ }`)".
                     const field_kind_var = try self.fresh(env, expr_region);
                     const projected_field_value = try self.fresh(env, expr_region);
                     try self.pending_record_updates.append(self.gpa, .{
@@ -16660,6 +17508,46 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         env,
                         update_context,
                     );
+                }
+
+                // Process each unset field. The probe mirrors `.?`-access
+                // EXACTLY (design.md "In Progress: Unsetting an Optional
+                // Field"): a kind-FLEXIBLE presence var—NOT a concrete
+                // `optional` demand, which width absorption would admit into
+                // a closed base that lacks the field, silently accepting
+                // typo'd unsets. The access is recorded and JUDGED at every
+                // generalization boundary (finalize as backstop): a kind
+                // resolved `required`/`defaulted` is rejected, a still-flex
+                // kind pins to `optional` BEFORE the scheme forms—an unset
+                // is presence-evidence for optionality, exactly like `.?`.
+                for (self.cir.store.sliceUnsetFields(e.unsets)) |field_idx| {
+                    const field = self.cir.store.getUnsetField(field_idx);
+                    const field_region = self.getRegionAt(ModuleEnv.varFrom(field_idx));
+
+                    const field_var = try self.fresh(env, expr_region);
+                    const presence_var = try self.fresh(env, expr_region);
+                    try self.optional_field_accesses.append(self.gpa, .{
+                        .presence_var = presence_var,
+                        .field_name = field.name,
+                        .region = field_region,
+                        .use = .unset,
+                    });
+                    const single_field_record = try self.freshFromContent(.{
+                        .structure = .{
+                            .record_unbound = try self.types.appendRecordFields(&.{types_mod.RecordField{
+                                .name = field.name,
+                                .presence = .unknown(presence_var, field_var),
+                            }}),
+                        },
+                    }, env, expr_region);
+
+                    // Unify this record update with the record we're updating
+                    _ = try self.unifyInContext(record_being_updated_var, single_field_record, env, .{ .record_update = .{
+                        .field_name = field.name,
+                        .field_region_idx = @enumFromInt(@intFromEnum(field_idx)),
+                        .record_region_idx = @enumFromInt(@intFromEnum(record_being_updated_var)),
+                        .record_name = record_being_updated_name,
+                    } });
                 }
 
                 // Then unify with the actual expression
@@ -16757,6 +17645,37 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     try self.scratch_record_fields.append(types_mod.RecordField{
                         .name = field.name,
                         .presence = .unknown(field_kind_var, field_value.var_),
+                    });
+                }
+
+                // Process each unset (ie absent) field: it joins the literal
+                // row directly with a kind-flexible presence var and a fresh
+                // flex payload var, and is enqueued in the SAME
+                // `optional_field_accesses` queue as `.?` and update unsets.
+                // Deliberately NOT in `literal_field_kinds`: that sweep
+                // commits never-pinned kinds to `required`, and an unset
+                // field's kind must default to `optional` instead—which the
+                // judgment's flex-pin does. An annotation demanding
+                // `required`/`defaulted` is rejected through the same
+                // judgment as updates (design.md "In Progress: Unsetting an
+                // Optional Field").
+                for (self.cir.store.sliceUnsetFields(e.unsets)) |field_idx| {
+                    const field = self.cir.store.getUnsetField(field_idx);
+                    const field_region = self.getRegionAt(ModuleEnv.varFrom(field_idx));
+
+                    const field_var = try self.fresh(env, expr_region);
+                    const presence_var = try self.fresh(env, expr_region);
+                    try self.optional_field_accesses.append(self.gpa, .{
+                        .presence_var = presence_var,
+                        .field_name = field.name,
+                        .region = field_region,
+                        .use = .unset,
+                    });
+
+                    // Append it to the scratch records array
+                    try self.scratch_record_fields.append(types_mod.RecordField{
+                        .name = field.name,
+                        .presence = .unknown(presence_var, field_var),
                     });
                 }
 
@@ -17819,6 +18738,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                     .presence_var = presence_var,
                                     .field_name = access.name,
                                     .region = access_region,
+                                    .use = .access,
                                 });
                                 saw_optional = true;
                                 break :blk .unknown(presence_var, access_var);
@@ -18245,98 +19165,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
     }
 
-    // Check if we have an annotation
-    if (mb_anno_vars) |anno_vars| {
-        // Unify the anno with the expr var
-        const annotation_result = try self.unifyInContext(anno_vars.anno_var, expr_var, env, anno_vars.context);
-        if (annotation_result.isProblem()) {
-            // The diagnostic belongs to checking, but later stages need an
-            // explicit executable value. End-of-check poisoning replaces this
-            // expression with a runtime error while the binding retains the
-            // annotation's checked type for all independent consumers.
-            try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
-        }
-
-        // Check if the expression type contains any errors anywhere in its
-        // structure. If it does and we have an annotation, use the annotation
-        // type for the pattern instead of the expression type. This preserves
-        // the annotation type for other code that references this identifier,
-        // even when the expression has errors.
-        //
-        // For example, if the annotation is `I64 -> Str` and the expression has
-        // an error in the return type (making it `I64 -> Error`), the pattern
-        // should still get `I64 -> Str` from the annotation.
-        self.var_set.clearRetainingCapacity();
-        if (try self.varContainsError(expr_var, &self.var_set)) {
-            // A method's callable wrapper is explicit input to method-template
-            // publication, so keep that wrapper around its already-erroneous
-            // child. Other annotated values are the executable boundary and
-            // must themselves become the runtime error.
-            const is_method_callable = isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr_idx)) and
-                self.exprDefinesMethod(expr_idx);
-            if (!is_method_callable) {
-                try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
-            }
-            // If there was an annotation AND the expr contains errors, then unify the
-            // raw expr var against the annotation
-            _ = try self.unify(expr_var_raw, anno_vars.anno_var_backup, env);
-        } else {
-            // Otherwise, make the explicit annotation the checked root for
-            // this expression. The body has already constrained the
-            // annotation's backing and any underscore variables above.
-            _ = try self.unify(expr_var_raw, anno_vars.anno_var, env);
-        }
-    }
-
-    self.var_set.clearRetainingCapacity();
-    if (mb_anno_vars == null) {
-        if (try self.varContainsError(expr_var, &self.var_set)) {
-            try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
-            self.call_operand_type_error_exprs.items[nodeSlot(expr_idx)] = true;
-        }
-    }
-
-    // Check any accumulated static dispatch constraints
-    try self.checkStaticDispatchConstraints(env, false);
-
-    // If this type of expr should be generalized, generalize it!
-    if (should_generalize) {
-        // Bind pending record-destructure binders BEFORE boundary literal
-        // defaulting: a numeral flowing through a destructured field only
-        // becomes signature-reachable once the binder is unified through
-        // the row, and defaulting's reachability classification must see
-        // that link (see `judgeRecordDestructBinds`).
-        try self.judgeRecordDestructBinds(env);
-        if (env.rank() == self.currentGroupBoundaryRank()) {
-            // This frame is the enclosing group's generalization boundary (a
-            // singleton group's def RHS). Resolve dispatch obligations into
-            // unchecked groups before anything here generalizes (Invariant D),
-            // interleaved with boundary defaulting.
-            try self.runGroupBoundary(&.{.{ .owner = expr_var_raw, .interface = expr_var }}, env);
-        } else {
-            // Inner lambda: boundary defaulting runs first—it must see
-            // ranks BEFORE they are promoted to generalized. Pending dispatch
-            // obligations (pinned at the group's boundary rank) escape this
-            // frame and stay live for the group boundary.
-            try self.defaultLiteralsAtGeneralizationBoundary(.{ .owner = expr_var_raw, .interface = expr_var }, env);
-        }
-        try self.judgeFieldKindsAtBoundary(env);
-        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
-        try self.deduplicateGeneralizedDispatchRequirements(expr_var_raw);
-        try self.publishBindingScheme(expr_var_raw);
-        self.retireNonGeneralizedTypeSchemes(&.{.{ .owner = expr_var_raw, .interface = expr_var }});
-        try self.retireStructurallyPublishedTypeSchemeRequirements(
-            &.{.{ .owner = expr_var_raw, .interface = expr_var }},
-            env.rank(),
-        );
-        // The scheme's vars froze at generalized rank: judge this def's
-        // dispatch-constrained receivers now, while the judgment is a
-        // local question about one scheme (see
-        // `judgeAmbiguityCandidatesAtGeneralization`).
-        try self.judgeAmbiguityCandidatesAtGeneralization(.{ .owner = expr_var_raw, .interface = expr_var });
-    }
-
-    try hoist_frame.finish(does_fx);
+    try frame.finish(does_fx);
     return does_fx;
 }
 
@@ -19454,6 +20283,10 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 else
                     try self.unify(decl_pattern_var, decl_expr_var, env);
 
+                if (decl_pattern_result.isProblem()) {
+                    try self.erroneous_value_exprs.put(self.gpa, decl_stmt.expr, {});
+                }
+
                 if (decl_pattern_result.isEstablished()) {
                     const needs_comptime_validation = try self.checkDestructureExhaustiveness(decl_stmt.pattern, decl_stmt.expr, decl_expr_var, env, stmt_region);
                     if (needs_comptime_validation) {
@@ -20061,7 +20894,196 @@ fn tagsCanUseSamePayloads(self: *Self, expected_tag: types_mod.Tag, actual_tag: 
 
 // if-else //
 
-/// Check the types for an if-else expr
+const IfCheckPhase = enum {
+    schedule_first_cond,
+    after_first_cond,
+    schedule_first_body,
+    after_first_body,
+    schedule_branch_cond,
+    after_branch_cond,
+    schedule_branch_body,
+    after_branch_body,
+    schedule_remaining_cond,
+    after_remaining_cond,
+    schedule_remaining_body,
+    after_remaining_body,
+    schedule_final_else,
+    after_final_else,
+    finish,
+};
+
+const IfCheckState = struct {
+    owns_expr_frame: bool,
+    if_expr_idx: CIR.Expr.Idx,
+    expr_region: Region,
+    if_: @FieldType(CIR.Expr, @tagName(.e_if)),
+    expected: Expected,
+    is_call_arg: bool,
+    is_immediate_callee: bool,
+    branch_acc: ?Var,
+    does_fx: bool = false,
+    branch_var: Var = undefined,
+    num_branches: u32,
+    last_if_branch: CIR.Expr.IfBranch.Idx,
+    branch_index: usize = 1,
+    remaining_index: usize = 0,
+    phase: IfCheckPhase = .schedule_first_cond,
+};
+
+const NestedIfCheck = struct {
+    state: IfCheckState,
+    expr_frame: ExprCheckFrame,
+};
+
+const IfChildResult = union(enum) {
+    checked: bool,
+    nested: NestedIfCheck,
+};
+
+fn initIfCheckState(
+    self: *Self,
+    owns_expr_frame: bool,
+    if_expr_idx: CIR.Expr.Idx,
+    expr_region: Region,
+    env: *Env,
+    if_: @FieldType(CIR.Expr, @tagName(.e_if)),
+    expected: Expected,
+    is_call_arg: bool,
+    is_immediate_callee: bool,
+) std.mem.Allocator.Error!IfCheckState {
+    const branches = self.cir.store.sliceIfBranches(if_.branches);
+    std.debug.assert(branches.len > 0);
+    const expected_branch_ret = expected.branch_result;
+    const branch_acc: ?Var = if (expected_branch_ret) |expected_ret|
+        try self.instantiateVarOrphanFlexed(expected_ret, env, .use_last_var)
+    else
+        null;
+
+    return .{
+        .owns_expr_frame = owns_expr_frame,
+        .if_expr_idx = if_expr_idx,
+        .expr_region = expr_region,
+        .if_ = if_,
+        .expected = expected,
+        .is_call_arg = is_call_arg,
+        .is_immediate_callee = is_immediate_callee,
+        .branch_acc = branch_acc,
+        .num_branches = @intCast(branches.len + 1),
+        .last_if_branch = branches[0],
+    };
+}
+
+fn checkIfChild(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    env: *Env,
+    expected: Expected,
+    forward_call_position: bool,
+    is_call_arg: bool,
+    is_immediate_callee: bool,
+) std.mem.Allocator.Error!IfChildResult {
+    if (self.cir.store.getExpr(expr_idx) != .e_if) {
+        if (forward_call_position) {
+            return .{ .checked = try self.checkExprInCallPosition(
+                expr_idx,
+                env,
+                expected,
+                is_call_arg,
+                is_immediate_callee,
+            ) };
+        }
+
+        const saved_checking_call_arg = self.checking_call_arg;
+        const saved_checking_immediate_callee = self.checking_immediate_callee;
+        self.checking_call_arg = false;
+        self.checking_immediate_callee = false;
+        defer self.checking_call_arg = saved_checking_call_arg;
+        defer self.checking_immediate_callee = saved_checking_immediate_callee;
+        return .{ .checked = try self.checkExpr(expr_idx, env, expected) };
+    }
+
+    const saved_checking_call_arg = self.checking_call_arg;
+    const saved_checking_immediate_callee = self.checking_immediate_callee;
+    self.checking_call_arg = if (forward_call_position) is_call_arg else false;
+    self.checking_immediate_callee = if (forward_call_position) is_immediate_callee else false;
+    defer self.checking_call_arg = saved_checking_call_arg;
+    defer self.checking_immediate_callee = saved_checking_immediate_callee;
+
+    var expr_frame = try self.beginExprCheckFrame(expr_idx, env, expected);
+    errdefer expr_frame.deinit();
+    return .{ .nested = .{
+        .state = try self.initIfCheckState(
+            true,
+            expr_idx,
+            expr_frame.expr_region,
+            env,
+            expr_frame.expr.e_if,
+            expr_frame.nested_expected,
+            expr_frame.is_call_arg,
+            expr_frame.is_immediate_callee,
+        ),
+        .expr_frame = expr_frame,
+    } };
+}
+
+fn descendIntoNestedIf(
+    frame_allocator: std.mem.Allocator,
+    parents: *std.ArrayList(IfCheckState),
+    expr_frames: *std.ArrayList(ExprCheckFrame),
+    parent: IfCheckState,
+    nested: NestedIfCheck,
+) std.mem.Allocator.Error!IfCheckState {
+    std.debug.assert(parents.items.len == expr_frames.items.len);
+    std.debug.assert(nested.state.owns_expr_frame);
+    var nested_frame = nested.expr_frame;
+    expr_frames.append(frame_allocator, nested_frame) catch |err| {
+        nested_frame.deinit();
+        return err;
+    };
+    parents.append(frame_allocator, parent) catch |err| {
+        var stored_frame = expr_frames.pop().?;
+        stored_frame.deinit();
+        return err;
+    };
+    std.debug.assert(parents.items.len == expr_frames.items.len);
+    return nested.state;
+}
+
+fn scheduleIfChild(
+    self: *Self,
+    frame_allocator: std.mem.Allocator,
+    parents: *std.ArrayList(IfCheckState),
+    expr_frames: *std.ArrayList(ExprCheckFrame),
+    current: *IfCheckState,
+    expr_idx: CIR.Expr.Idx,
+    env: *Env,
+    expected: Expected,
+    forward_call_position: bool,
+    is_call_arg: bool,
+    is_immediate_callee: bool,
+) std.mem.Allocator.Error!?bool {
+    switch (try self.checkIfChild(
+        expr_idx,
+        env,
+        expected,
+        forward_call_position,
+        is_call_arg,
+        is_immediate_callee,
+    )) {
+        .checked => |does_fx| return does_fx,
+        .nested => |nested| {
+            current.* = try descendIntoNestedIf(
+                frame_allocator,
+                parents,
+                expr_frames,
+                current.*,
+                nested,
+            );
+            return null;
+        },
+    }
+}
+
 fn checkIfElseExpr(
     self: *Self,
     if_expr_idx: CIR.Expr.Idx,
@@ -20074,188 +21096,304 @@ fn checkIfElseExpr(
 ) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
-    const expected_branch_ret = expected.branch_result;
-    const child_expected = expected.forStatement();
 
-    // Accumulator for the meet of all compatible branch bodies. Branches fold
-    // into this instead of into the shared `expected_ret`, which is unified
-    // with the whole expr (and hence the accumulator) exactly once, at the
-    // end. Seeded with an ORPHAN COPY of the expected type (never the shared
-    // var itself): the accumulator is the meet of the branches AND the
-    // annotation, so annotation-declared facts—e.g. an `optional` field
-    // kind—constrain every branch as it folds in, while the pristine
-    // `expected_ret` stays the untouched reference that step-(1) probes and
-    // error reports compare against (design.md "Field Kinds (All-Dynamic
-    // Optional Fields)").
-    const branch_acc: ?Var = if (expected_branch_ret) |expected_ret|
-        try self.instantiateVarOrphanFlexed(expected_ret, env, .use_last_var)
-    else
-        null;
+    var fallback_state = std.heap.stackFallback(4 * 1024, self.gpa);
+    const frame_allocator = fallback_state.get();
+    var parents: std.ArrayList(IfCheckState) = .empty;
+    defer parents.deinit(frame_allocator);
+    var expr_frames: std.ArrayList(ExprCheckFrame) = .empty;
+    defer expr_frames.deinit(frame_allocator);
 
-    const branches = self.cir.store.sliceIfBranches(if_.branches);
-
-    // Should never be 0
-    std.debug.assert(branches.len > 0);
-
-    // Get the first branch
-    const first_branch_idx = branches[0];
-    const first_branch = self.cir.store.getIfBranch(first_branch_idx);
-
-    // Check the condition of the 1st branch
-    var does_fx = try self.checkExpr(first_branch.cond, env, child_expected);
-    const first_cond_var: Var = ModuleEnv.varFrom(first_branch.cond);
-    const bool_var = try self.freshBool(env, expr_region);
-    const first_cond_result = try self.unifyInContext(bool_var, first_cond_var, env, .if_condition);
-    if (if_.warn_unused_branches and first_cond_result.isEstablished()) {
-        try self.warnIfComptimeConditionalExpr(first_branch.cond, .if_condition, expected);
-    }
-
-    // Then we check the 1st branch's body
-    does_fx = try self.checkExprInCallPosition(
-        first_branch.body,
+    var current = try self.initIfCheckState(
+        false,
+        if_expr_idx,
+        expr_region,
         env,
-        expected.forBranchBody(),
+        if_,
+        expected,
         is_call_arg,
         is_immediate_callee,
-    ) or does_fx;
-
-    if (expected_branch_ret) |expected_ret| {
-        const branch_ctx = problem.Context{ .if_branch = .{
-            .branch_index = 0,
-            .num_branches = @intCast(branches.len + 1),
-            .is_else = false,
-            .parent_if_expr = if_expr_idx,
-            .last_if_branch = first_branch_idx,
-        } };
-        try self.checkBranchBodyAgainstExpected(first_branch.body, expected_ret, branch_acc.?, branch_ctx, env);
+    );
+    var last_child: ?bool = null;
+    errdefer {
+        while (expr_frames.pop()) |frame| {
+            var owned_frame = frame;
+            owned_frame.deinit();
+        }
     }
 
-    // The 1st branch's body is the type all other branches must match (when no expected type)
-    const branch_var = @as(Var, ModuleEnv.varFrom(first_branch.body));
-
-    // Total number of branches (including final else)
-    const num_branches: u32 = @intCast(branches.len + 1);
-
-    var last_if_branch = first_branch_idx;
-    for (branches[1..], 1..) |branch_idx, cur_index| {
-        const branch = self.cir.store.getIfBranch(branch_idx);
-
-        // Check the branches condition
-        does_fx = try self.checkExpr(branch.cond, env, child_expected.suppressHoistSelection()) or does_fx;
-        const cond_var: Var = ModuleEnv.varFrom(branch.cond);
-        const branch_bool_var = try self.freshBool(env, expr_region);
-        const cond_result = try self.unifyInContext(branch_bool_var, cond_var, env, .if_condition);
-        if (if_.warn_unused_branches and cond_result.isEstablished()) {
-            try self.warnIfComptimeConditionalExpr(branch.cond, .if_condition, expected);
-        }
-
-        // Check the branch body
-        does_fx = try self.checkExprInCallPosition(
-            branch.body,
-            env,
-            expected.forBranchBody(),
-            is_call_arg,
-            is_immediate_callee,
-        ) or does_fx;
-
-        // Check against expected return type BEFORE pairwise unification
-        if (expected_branch_ret) |expected_ret| {
-            const branch_ctx = problem.Context{ .if_branch = .{
-                .branch_index = @intCast(cur_index),
-                .num_branches = num_branches,
-                .is_else = false,
-                .parent_if_expr = if_expr_idx,
-                .last_if_branch = last_if_branch,
-            } };
-            try self.checkBranchBodyAgainstExpected(branch.body, expected_ret, branch_acc.?, branch_ctx, env);
-        } else {
-            const body_var: Var = ModuleEnv.varFrom(branch.body);
-            const body_result = try self.unifyInContext(branch_var, body_var, env, .{ .if_branch = .{
-                .branch_index = @intCast(cur_index),
-                .num_branches = num_branches,
-                .is_else = false,
-                .parent_if_expr = if_expr_idx,
-                .last_if_branch = last_if_branch,
-            } });
-
-            if (!body_result.isAccepted()) {
-                // Check remaining branches to catch their individual errors
-                for (branches[cur_index + 1 ..]) |remaining_branch_idx| {
-                    const remaining_branch = self.cir.store.getIfBranch(remaining_branch_idx);
-
-                    does_fx = try self.checkExpr(remaining_branch.cond, env, child_expected.suppressHoistSelection()) or does_fx;
-                    const remaining_cond_var: Var = ModuleEnv.varFrom(remaining_branch.cond);
-
-                    const fresh_bool = try self.freshBool(env, expr_region);
-                    const remaining_cond_result = try self.unifyInContext(fresh_bool, remaining_cond_var, env, .if_condition);
-                    if (if_.warn_unused_branches and remaining_cond_result.isEstablished()) {
-                        try self.warnIfComptimeConditionalExpr(remaining_branch.cond, .if_condition, expected);
-                    }
-
-                    does_fx = try self.checkExprInCallPosition(
-                        remaining_branch.body,
-                        env,
-                        expected.forBranchBody(),
-                        is_call_arg,
-                        is_immediate_callee,
-                    ) or does_fx;
-                    try self.markErroneous(ModuleEnv.varFrom(remaining_branch.body));
+    if_kernel: while (true) {
+        std.debug.assert(parents.items.len == expr_frames.items.len);
+        std.debug.assert(current.owns_expr_frame == (expr_frames.items.len != 0));
+        const branches = self.cir.store.sliceIfBranches(current.if_.branches);
+        switch (current.phase) {
+            .schedule_first_cond => {
+                current.phase = .after_first_cond;
+                const first_branch = self.cir.store.getIfBranch(branches[0]);
+                last_child = try self.scheduleIfChild(
+                    frame_allocator,
+                    &parents,
+                    &expr_frames,
+                    &current,
+                    first_branch.cond,
+                    env,
+                    current.expected.forStatement(),
+                    false,
+                    false,
+                    false,
+                );
+            },
+            .after_first_cond => {
+                current.does_fx = last_child.? or current.does_fx;
+                last_child = null;
+                const first_branch = self.cir.store.getIfBranch(branches[0]);
+                const first_cond_var: Var = ModuleEnv.varFrom(first_branch.cond);
+                const bool_var = try self.freshBool(env, current.expr_region);
+                const result = try self.unifyInContext(bool_var, first_cond_var, env, .if_condition);
+                if (current.if_.warn_unused_branches and result.isEstablished()) {
+                    try self.warnIfComptimeConditionalExpr(first_branch.cond, .if_condition, current.expected);
                 }
-
-                // Break to avoid cascading errors
-                break;
-            }
+                current.phase = .schedule_first_body;
+            },
+            .schedule_first_body => {
+                current.phase = .after_first_body;
+                const first_branch = self.cir.store.getIfBranch(branches[0]);
+                last_child = try self.scheduleIfChild(
+                    frame_allocator,
+                    &parents,
+                    &expr_frames,
+                    &current,
+                    first_branch.body,
+                    env,
+                    current.expected.forBranchBody(),
+                    true,
+                    current.is_call_arg,
+                    current.is_immediate_callee,
+                );
+            },
+            .after_first_body => {
+                current.does_fx = last_child.? or current.does_fx;
+                last_child = null;
+                const first_branch_idx = branches[0];
+                const first_branch = self.cir.store.getIfBranch(first_branch_idx);
+                if (current.expected.branch_result) |expected_ret| {
+                    const branch_ctx = problem.Context{ .if_branch = .{
+                        .branch_index = 0,
+                        .num_branches = current.num_branches,
+                        .is_else = false,
+                        .parent_if_expr = current.if_expr_idx,
+                        .last_if_branch = first_branch_idx,
+                    } };
+                    try self.checkBranchBodyAgainstExpected(first_branch.body, expected_ret, current.branch_acc.?, branch_ctx, env);
+                }
+                current.branch_var = ModuleEnv.varFrom(first_branch.body);
+                current.phase = if (current.branch_index < branches.len) .schedule_branch_cond else .schedule_final_else;
+            },
+            .schedule_branch_cond => {
+                current.phase = .after_branch_cond;
+                const branch = self.cir.store.getIfBranch(branches[current.branch_index]);
+                last_child = try self.scheduleIfChild(
+                    frame_allocator,
+                    &parents,
+                    &expr_frames,
+                    &current,
+                    branch.cond,
+                    env,
+                    current.expected.forStatement().suppressHoistSelection(),
+                    false,
+                    false,
+                    false,
+                );
+            },
+            .after_branch_cond => {
+                current.does_fx = last_child.? or current.does_fx;
+                last_child = null;
+                const branch = self.cir.store.getIfBranch(branches[current.branch_index]);
+                const cond_var: Var = ModuleEnv.varFrom(branch.cond);
+                const bool_var = try self.freshBool(env, current.expr_region);
+                const result = try self.unifyInContext(bool_var, cond_var, env, .if_condition);
+                if (current.if_.warn_unused_branches and result.isEstablished()) {
+                    try self.warnIfComptimeConditionalExpr(branch.cond, .if_condition, current.expected);
+                }
+                current.phase = .schedule_branch_body;
+            },
+            .schedule_branch_body => {
+                current.phase = .after_branch_body;
+                const branch = self.cir.store.getIfBranch(branches[current.branch_index]);
+                last_child = try self.scheduleIfChild(
+                    frame_allocator,
+                    &parents,
+                    &expr_frames,
+                    &current,
+                    branch.body,
+                    env,
+                    current.expected.forBranchBody(),
+                    true,
+                    current.is_call_arg,
+                    current.is_immediate_callee,
+                );
+            },
+            .after_branch_body => {
+                current.does_fx = last_child.? or current.does_fx;
+                last_child = null;
+                const branch_idx = branches[current.branch_index];
+                const branch = self.cir.store.getIfBranch(branch_idx);
+                if (current.expected.branch_result) |expected_ret| {
+                    const branch_ctx = problem.Context{ .if_branch = .{
+                        .branch_index = @intCast(current.branch_index),
+                        .num_branches = current.num_branches,
+                        .is_else = false,
+                        .parent_if_expr = current.if_expr_idx,
+                        .last_if_branch = current.last_if_branch,
+                    } };
+                    try self.checkBranchBodyAgainstExpected(branch.body, expected_ret, current.branch_acc.?, branch_ctx, env);
+                } else {
+                    const body_var: Var = ModuleEnv.varFrom(branch.body);
+                    const result = try self.unifyInContext(current.branch_var, body_var, env, .{ .if_branch = .{
+                        .branch_index = @intCast(current.branch_index),
+                        .num_branches = current.num_branches,
+                        .is_else = false,
+                        .parent_if_expr = current.if_expr_idx,
+                        .last_if_branch = current.last_if_branch,
+                    } });
+                    if (!result.isAccepted()) {
+                        current.remaining_index = current.branch_index + 1;
+                        current.phase = if (current.remaining_index < branches.len)
+                            .schedule_remaining_cond
+                        else
+                            .schedule_final_else;
+                        continue :if_kernel;
+                    }
+                }
+                current.last_if_branch = branch_idx;
+                current.branch_index += 1;
+                current.phase = if (current.branch_index < branches.len) .schedule_branch_cond else .schedule_final_else;
+            },
+            .schedule_remaining_cond => {
+                current.phase = .after_remaining_cond;
+                const branch = self.cir.store.getIfBranch(branches[current.remaining_index]);
+                last_child = try self.scheduleIfChild(
+                    frame_allocator,
+                    &parents,
+                    &expr_frames,
+                    &current,
+                    branch.cond,
+                    env,
+                    current.expected.forStatement().suppressHoistSelection(),
+                    false,
+                    false,
+                    false,
+                );
+            },
+            .after_remaining_cond => {
+                current.does_fx = last_child.? or current.does_fx;
+                last_child = null;
+                const branch = self.cir.store.getIfBranch(branches[current.remaining_index]);
+                const cond_var: Var = ModuleEnv.varFrom(branch.cond);
+                const bool_var = try self.freshBool(env, current.expr_region);
+                const result = try self.unifyInContext(bool_var, cond_var, env, .if_condition);
+                if (current.if_.warn_unused_branches and result.isEstablished()) {
+                    try self.warnIfComptimeConditionalExpr(branch.cond, .if_condition, current.expected);
+                }
+                current.phase = .schedule_remaining_body;
+            },
+            .schedule_remaining_body => {
+                current.phase = .after_remaining_body;
+                const branch = self.cir.store.getIfBranch(branches[current.remaining_index]);
+                last_child = try self.scheduleIfChild(
+                    frame_allocator,
+                    &parents,
+                    &expr_frames,
+                    &current,
+                    branch.body,
+                    env,
+                    current.expected.forBranchBody(),
+                    true,
+                    current.is_call_arg,
+                    current.is_immediate_callee,
+                );
+            },
+            .after_remaining_body => {
+                current.does_fx = last_child.? or current.does_fx;
+                last_child = null;
+                const branch = self.cir.store.getIfBranch(branches[current.remaining_index]);
+                try self.markErroneous(ModuleEnv.varFrom(branch.body));
+                current.remaining_index += 1;
+                current.phase = if (current.remaining_index < branches.len)
+                    .schedule_remaining_cond
+                else
+                    .schedule_final_else;
+            },
+            .schedule_final_else => {
+                current.phase = .after_final_else;
+                last_child = try self.scheduleIfChild(
+                    frame_allocator,
+                    &parents,
+                    &expr_frames,
+                    &current,
+                    current.if_.final_else,
+                    env,
+                    current.expected.forBranchBody(),
+                    true,
+                    current.is_call_arg,
+                    current.is_immediate_callee,
+                );
+            },
+            .after_final_else => {
+                current.does_fx = last_child.? or current.does_fx;
+                last_child = null;
+                if (current.expected.branch_result) |expected_ret| {
+                    const branch_ctx = problem.Context{ .if_branch = .{
+                        .branch_index = current.num_branches - 1,
+                        .num_branches = current.num_branches,
+                        .is_else = true,
+                        .parent_if_expr = current.if_expr_idx,
+                        .last_if_branch = current.last_if_branch,
+                    } };
+                    try self.checkBranchBodyAgainstExpected(
+                        current.if_.final_else,
+                        expected_ret,
+                        current.branch_acc.?,
+                        branch_ctx,
+                        env,
+                    );
+                    const if_expr_var: Var = ModuleEnv.varFrom(current.if_expr_idx);
+                    _ = try self.unify(if_expr_var, current.branch_acc.?, env);
+                    _ = try self.unify(if_expr_var, expected_ret, env);
+                } else {
+                    const final_else_var: Var = ModuleEnv.varFrom(current.if_.final_else);
+                    _ = try self.unifyInContext(current.branch_var, final_else_var, env, .{ .if_branch = .{
+                        .branch_index = current.num_branches - 1,
+                        .num_branches = current.num_branches,
+                        .is_else = true,
+                        .parent_if_expr = current.if_expr_idx,
+                        .last_if_branch = current.last_if_branch,
+                    } });
+                    const if_expr_var: Var = ModuleEnv.varFrom(current.if_expr_idx);
+                    _ = try self.unify(if_expr_var, current.branch_var, env);
+                }
+                current.phase = .finish;
+            },
+            .finish => {
+                const does_fx = current.does_fx;
+                if (current.owns_expr_frame) {
+                    var expr_frame = expr_frames.pop().?;
+                    defer expr_frame.deinit();
+                    try expr_frame.finish(does_fx);
+                }
+                if (parents.pop()) |parent| {
+                    current = parent;
+                    last_child = does_fx;
+                    std.debug.assert(parents.items.len == expr_frames.items.len);
+                } else {
+                    return does_fx;
+                }
+            },
         }
-
-        last_if_branch = branch_idx;
     }
-
-    // Check the final else
-    does_fx = try self.checkExprInCallPosition(
-        if_.final_else,
-        env,
-        expected.forBranchBody(),
-        is_call_arg,
-        is_immediate_callee,
-    ) or does_fx;
-
-    // Check final else against expected return type before pairwise unification
-    if (expected_branch_ret) |expected_ret| {
-        const branch_ctx = problem.Context{ .if_branch = .{
-            .branch_index = num_branches - 1,
-            .num_branches = num_branches,
-            .is_else = true,
-            .parent_if_expr = if_expr_idx,
-            .last_if_branch = last_if_branch,
-        } };
-        try self.checkBranchBodyAgainstExpected(if_.final_else, expected_ret, branch_acc.?, branch_ctx, env);
-        const if_expr_var: Var = ModuleEnv.varFrom(if_expr_idx);
-        // Tie the whole expr to the accumulated branch meet, then to the shared
-        // expected return type. This is the ONLY place `expected_ret` is merged
-        // for the if-expr, and it runs in the load-bearing `(expr, expected)`
-        // operand order so `expected_ret` survives as the union-find root (see
-        // `store.union_`): flipping it ties recursive type parameters off to
-        // duplicate rigids of the same name, which then fail to unify.
-        _ = try self.unify(if_expr_var, branch_acc.?, env);
-        _ = try self.unify(if_expr_var, expected_ret, env);
-    } else {
-        const final_else_var: Var = ModuleEnv.varFrom(if_.final_else);
-        _ = try self.unifyInContext(branch_var, final_else_var, env, .{ .if_branch = .{
-            .branch_index = num_branches - 1,
-            .num_branches = num_branches,
-            .is_else = true,
-            .parent_if_expr = if_expr_idx,
-            .last_if_branch = last_if_branch,
-        } });
-
-        // Set the entire expr's type to be the type of the branch
-        const if_expr_var: Var = ModuleEnv.varFrom(if_expr_idx);
-        _ = try self.unify(if_expr_var, branch_var, env);
-    }
-
-    return does_fx;
 }
 
+/// Check the types for an if-else expr
 // match //
 
 /// Check the types for a match expr
@@ -21273,7 +22411,7 @@ fn mkBinopConstraint(
     );
 
     _ = try self.unify(constrained_var, lhs_var, env);
-    try self.recordSchemeRequirementCandidate(lhs_var, constraint, .creation, null);
+    try self.recordSchemeRequirementCandidate(lhs_var, constraint, .creation, null, false);
     try self.recordAmbiguityCandidate(lhs_var, .creation, constraintIntroExpr(constraint));
 }
 
@@ -21370,7 +22508,7 @@ fn mkUnaryOp(
     );
 
     _ = try self.unify(constrained_var, arg_var, env);
-    try self.recordSchemeRequirementCandidate(arg_var, constraint, .creation, null);
+    try self.recordSchemeRequirementCandidate(arg_var, constraint, .creation, null, false);
     try self.recordAmbiguityCandidate(arg_var, .creation, constraintIntroExpr(constraint));
 }
 
@@ -21591,7 +22729,7 @@ fn mkReceiverDispatchConstraint(
     );
 
     _ = try self.unify(constrained_var, receiver_var, env);
-    try self.recordSchemeRequirementCandidate(receiver_var, constraint, .creation, null);
+    try self.recordSchemeRequirementCandidate(receiver_var, constraint, .creation, null, false);
     try self.recordAmbiguityCandidate(receiver_var, .creation, constraintIntroExpr(constraint));
     return constraint_fn_var;
 }
@@ -21628,7 +22766,7 @@ fn mkTypeMethodCallConstraint(
     );
 
     _ = try self.unify(constrained_var, dispatcher_var, env);
-    try self.recordSchemeRequirementCandidate(dispatcher_var, constraint, .creation, null);
+    try self.recordSchemeRequirementCandidate(dispatcher_var, constraint, .creation, null, false);
     try self.recordAmbiguityCandidate(dispatcher_var, .creation, constraintIntroExpr(constraint));
     return constraint_fn_var;
 }
@@ -21860,6 +22998,73 @@ const ExternalType = struct {
     other_cir: *const ModuleEnv,
 };
 
+/// Import the generated-codec part of a binding's scheme under the same source
+/// to destination mapping that copied the binding root. A codec receiver may
+/// share only a nested generalized variable with that root, so resetting the
+/// map between these copies would sever the exact substitution relation this
+/// metadata exists to preserve.
+fn copyImportedBindingSchemeCodecRequirements(
+    self: *Self,
+    source_env: *const ModuleEnv,
+    source_node: CIR.Node.Idx,
+    copied_scheme_root: Var,
+) Allocator.Error!void {
+    const source_requirements = source_env.bindingSchemeCodecRequirementsForNode(source_node);
+    if (source_requirements.len == 0) return;
+
+    const scheme_idx = try self.ensureTypeScheme(copied_scheme_root, .generalized);
+    const first_new_var: usize = @intCast(self.types.len());
+    for (source_requirements) |source_requirement| {
+        const source_constraint = source_env.types.getStaticDispatchConstraintAt(source_requirement.constraint_index);
+
+        // Generated codec requirements cannot carry either metadata shape;
+        // both belong to other method families and would require their own
+        // source-node/value-pool rebasing rules at this boundary.
+        std.debug.assert(source_constraint.derived_map_plan == null);
+        std.debug.assert(!source_constraint.interpolation.isPresent());
+
+        const receiver_var = try copy_import.copyVar(
+            &source_env.types,
+            self.types,
+            @enumFromInt(source_requirement.receiver_var),
+            &self.var_map,
+            null,
+            source_env,
+            self.cir,
+            self.gpa,
+        );
+        var constraint = source_constraint;
+        constraint.fn_var = try copy_import.copyVar(
+            &source_env.types,
+            self.types,
+            source_constraint.fn_var,
+            &self.var_map,
+            null,
+            source_env,
+            self.cir,
+            self.gpa,
+        );
+        const method_text = source_env.getIdentStoreConst().getText(source_constraint.fn_name);
+        constraint.fn_name = try self.cir.insertIdent(Ident.for_text(method_text));
+        // Source expression indices are module-local. Every instantiated copy
+        // records its destination use expression separately as `failure_expr`.
+        constraint.provenance = .{};
+
+        if (self.typeSchemeHasRequirement(scheme_idx, receiver_var, constraint)) continue;
+        try self.type_schemes.items[scheme_idx].dispatch_requirements.append(self.gpa, .{
+            .receiver_var = receiver_var,
+            .constraint = constraint,
+            .deferred_generated_codec = true,
+            .failure_expr = null,
+            .structural_origin = .{
+                .receiver_var = receiver_var,
+                .constraint_fn_var = constraint.fn_var,
+            },
+        });
+    }
+    try self.postProcessCopiedVars(first_new_var, Region.zero());
+}
+
 /// Copy a variable from a different module into this module's types store.
 ///
 /// IMPORTANT: The caller must instantiate this variable before unifying
@@ -21901,6 +23106,14 @@ fn resolveVarFromExternal(
             std.debug.assert(@intFromEnum(imported_var) < other_module_env.types.len());
 
             const new_copy = try self.copyVar(imported_var, other_module_env, null);
+            if (other_module_env.nodeIsBindingScheme(target_node_idx)) {
+                try self.markBindingSchemeVar(new_copy);
+                try self.copyImportedBindingSchemeCodecRequirements(
+                    other_module_env,
+                    target_node_idx,
+                    new_copy,
+                );
+            }
             try self.import_cache.put(self.gpa, cache_key, new_copy);
             break :blk new_copy;
         };
@@ -22511,6 +23724,15 @@ fn poisonRecursiveNonFunctionProcessingDef(
     }
     try self.erroneous_value_exprs.put(self.gpa, def.expr, {});
     try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
+    // A use of a name reads the poisoned value through that name's own
+    // binder pattern, so every name the def binds is erroneous, not only
+    // the pattern as a whole.
+    var bindings = std.ArrayList(PatternBinding).empty;
+    defer bindings.deinit(self.gpa);
+    try self.collectPatternBindings(def.pattern, &bindings);
+    for (bindings.items) |binding| {
+        try self.erroneous_value_patterns.put(self.gpa, binding.pattern_idx, {});
+    }
 
     if (use_expr) |expr_idx| {
         if (self.cir.store.getExpr(expr_idx) != .e_runtime_error) {
@@ -22914,11 +24136,29 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
         const resolved = self.types.resolveVar(access.presence_var);
         switch (resolved.desc.content) {
             .field_presence => |field_presence| switch (field_presence) {
-                .required, .defaulted => {
-                    _ = try self.problems.appendProblem(self.gpa, .{ .optional_access_of_required_field = .{
-                        .region = access.region,
-                        .field_name = access.field_name,
-                    } });
+                .required => {
+                    _ = try self.problems.appendProblem(self.gpa, switch (access.use) {
+                        .access => .{ .optional_access_of_required_field = .{
+                            .region = access.region,
+                            .field_name = access.field_name,
+                        } },
+                        .unset => .{ .unset_of_required_field = .{
+                            .region = access.region,
+                            .field_name = access.field_name,
+                        } },
+                    });
+                },
+                .defaulted => {
+                    _ = try self.problems.appendProblem(self.gpa, switch (access.use) {
+                        .access => .{ .optional_access_of_required_field = .{
+                            .region = access.region,
+                            .field_name = access.field_name,
+                        } },
+                        .unset => .{ .unset_of_defaulted_field = .{
+                            .region = access.region,
+                            .field_name = access.field_name,
+                        } },
+                    });
                 },
                 .optional => {},
             },
@@ -23079,61 +24319,170 @@ fn defaultLiteralFieldKinds(self: *Self, env: *Env) std.mem.Allocator.Error!void
 /// every construction site that omits the field, so it must be pure.
 fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     for (self.pending_default_checks.items) |pending| {
-        const default_does_fx = try self.checkExpr(pending.default_expr, env, .{});
-        // BACKSTOP invariant: canonicalization restricts defaults to closed
-        // literals (design.md "Defaulted Fields"), and a literal is never
-        // effectful, so this branch is unreachable from source. It stays as
-        // a cheap guard because a default that somehow carried effects would
-        // be materialized at construction sites where running them is
-        // unpredictable.
+        // The default checks AT an instantiated copy of its field type,
+        // exactly like an annotated def's body checks at its annotation:
+        // the expected type steers interior numerals to the field's type
+        // instead of letting the defaulting rounds commit them blind
+        // (`?? 1 + 2` on a `U8` field checks both numerals at U8).
+        const expected_field_type = try self.instantiateVar(pending.field_type_var, env, .use_last_var);
+        // Snapshot the parameter-derived fresh vars of THIS instantiation
+        // before anything can repopulate `var_map`: an entry whose OLD var is
+        // rigid content is a declaration type parameter, and its NEW var is
+        // the flex copy the default is about to unify against. The rigid also
+        // names the parameter for the report.
+        const params_top = self.scratch_default_param_vars.top();
+        defer self.scratch_default_param_vars.clearFrom(params_top);
+        var param_iter = self.var_map.iterator();
+        while (param_iter.next()) |entry| {
+            switch (self.types.resolveVar(entry.key_ptr.*).desc.content) {
+                .rigid => |rigid| try self.scratch_default_param_vars.append(.{
+                    .name = rigid.name,
+                    .var_ = entry.value_ptr.*,
+                    .rigid_var = entry.key_ptr.*,
+                }),
+                .flex, .alias, .field_presence, .structure, .err => {},
+            }
+        }
+        // Source order for the judgment's reports (see `DefaultParamVar`):
+        // the hash map iterated in var-hash order, not declaration order.
+        std.mem.sort(
+            DefaultParamVar,
+            self.scratch_default_param_vars.sliceFromStart(params_top),
+            {},
+            DefaultParamVar.rigidVarLessThan,
+        );
+        const default_does_fx = try self.checkExpr(pending.default_expr, env, .{
+            .expected_type = .{ .var_ = expected_field_type, .context = .none },
+        });
+        // The LIVE purity judgment (design.md "Defaulted Fields"): a default
+        // is any pure expression, and the compiler materializes it at every
+        // construction site that omits the field—running effects at those
+        // unpredictable points is rejected here, after callee effects have
+        // resolved.
         if (default_does_fx) {
             _ = try self.problems.appendProblem(self.gpa, .{ .effectful_default_value = .{
                 .region = self.getRegionAt(ModuleEnv.varFrom(pending.default_expr)),
                 .field_name = pending.field_name,
             } });
-            // Diagnostic recovery after the reported problem (the standard
-            // poisoning convention): the default's var becomes `.err`, so
-            // downstream judgments treat it as an already-reported error
-            // instead of a well-typed default. Unifying the poisoned var
-            // against the field type would be a no-op (err absorbs), so
-            // skip it.
-            try self.unifyWith(ModuleEnv.varFrom(pending.default_expr), .err, env);
+            // Diagnostic recovery after the reported problem: record the
+            // rejection explicitly (see `rejected_default_exprs`), so the
+            // residue walk skips this default and the retirement sweep in
+            // `checkDefaultRestrictions` replaces it before the artifact
+            // boundary. The default is not unified against the field type:
+            // it is already rejected, and the judgment below must not see
+            // its residue as the field's.
+            try self.rejected_default_exprs.put(self.gpa, pending.default_expr, {});
             continue;
         }
-        const expected_field_type = try self.instantiateVar(pending.field_type_var, env, .use_last_var);
         _ = try self.unify(ModuleEnv.varFrom(pending.default_expr), expected_field_type, env);
+        // Judged HERE, before the numeric-defaulting rounds could commit a
+        // still-flex parameter copy: a default may constrain NO declaration
+        // type parameter (design.md "Defaulted Fields").
+        try self.checkDefaultParameterConstraints(pending, params_top, env);
     }
     // The list is kept for `checkDefaultRestrictions`, which runs after the
     // defaulting rounds and constraint validation settle the types.
 }
 
-/// Post-settlement restriction on defaults (design.md "Defaulted Fields"):
-/// the reusable field/default pair must be CONCRETE (the default is evaluated
-/// once at compile time and materialized at every construction site, so the
-/// field must have exactly one runtime representation—judged after the
-/// defaulting rounds so numeral defaults have committed). Checking only the
-/// default expression is insufficient: unifying a literal with an instantiated
-/// copy of a parametric field type can make that copy concrete while leaving
-/// the declared field polymorphic.
+/// Post-settlement cycle residue on defaults (design.md "Defaulted Fields"):
+/// canonicalization's end-of-module pass already rejected every
+/// name-resolvable materialization cycle (and dropped those defaults, so
+/// they never reach this list); what remains here are the edges only type
+/// checking can see—dispatch-resolved call targets and foreign-omission
+/// rows—judged after the defaulting rounds and constraint validation so
+/// dispatch targets have been stamped. (Concreteness is no longer judged:
+/// defaults materialize per specialization, so a parametric field lowers its
+/// default at each site's monotype.)
 fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
+    // Every judgment and retirement below is per pending default, so a
+    // module with none has nothing to build or sweep: gating here keeps the
+    // evidence indexes (and `dispatch_scheme_uses`' loud release-mode
+    // uniqueness panic) confined to modules actually using defaults.
+    // Rejection evidence is only ever recorded for a pending default, so an
+    // empty pending list means an empty rejection set.
+    if (self.pending_default_checks.items.len == 0) {
+        std.debug.assert(self.rejected_default_exprs.count() == 0);
+        return;
+    }
+
     var recursive_defaults: std.ArrayList(PendingDefaultCheck) = .empty;
     defer recursive_defaults.deinit(self.gpa);
 
-    for (self.pending_default_checks.items) |pending| {
-        // An erroring default already reported (effectful poisoning above, or
-        // a unify mismatch against its field type—both leave the var `.err`);
-        // judging concreteness of an err var would cascade a second problem
-        // onto the same default.
-        if (self.types.resolveVar(ModuleEnv.varFrom(pending.default_expr)).desc.content == .err) continue;
-        const default_is_concrete = try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(pending.default_expr));
-        const field_is_concrete = try self.varIsConcreteHoistedConstType(pending.field_type_var);
-        if (!default_is_concrete or !field_is_concrete) {
-            _ = try self.problems.appendProblem(self.gpa, .{ .non_concrete_default_value = .{
-                .region = self.getRegionAt(ModuleEnv.varFrom(pending.default_expr)),
-                .field_name = pending.field_name,
-            } });
+    var evidence = DefaultWalkEvidence{};
+    defer evidence.deinit(self.gpa);
+
+    // Top-level binder pattern -> def body, for following reference edges
+    // through def bodies during the residue walk. A destructuring def
+    // binds several names, each of which reads the def body.
+    var def_bindings = std.ArrayList(PatternBinding).empty;
+    defer def_bindings.deinit(self.gpa);
+    for (self.cir.store.sliceDefs(self.cir.all_defs)) |def_idx| {
+        const def = self.cir.store.getDef(def_idx);
+        def_bindings.clearRetainingCapacity();
+        try self.collectPatternBindings(def.pattern, &def_bindings);
+        for (def_bindings.items) |binding| {
+            try evidence.pattern_to_def_expr.put(self.gpa, binding.pattern_idx, def.expr);
         }
-        if (try self.defaultMaterializationIsRecursive(pending.default_expr)) {
+    }
+
+    // Scheme-use evidence indexes for the dispatch joins. A dispatch fired
+    // inside an INSTANTIATED scheme carries the instantiation copy's
+    // constraint var, never the var written at the body's dispatch site
+    // (generalization copies it per use), so var equality alone can only
+    // join monomorphic sites. The recorded scheme-use pairs are the exact
+    // (scheme var -> fresh copy) linkage:
+    //  - value_use / nested_function_use records key by their LOCAL
+    //    instantiating node, so any walked expression that instantiated a
+    //    scheme (a generic def lookup, a foreign helper lookup) seeds the
+    //    fresh copies of that scheme's constrained vars;
+    //  - dispatch_target records key by the discharged constraint's raw fn
+    //    var ("unique per constraint instantiation"), chaining a followed
+    //    target's OWN interior dispatches without node ambiguity (a
+    //    dispatch_target record's node_idx may be a foreign module's CIR
+    //    index and is never compared against local nodes here).
+    for (self.cir.scheme_uses.items.items, 0..) |record, record_index| {
+        const slot: ModuleEnv.SchemeUseRecord.Slot = @enumFromInt(record.slot_kind);
+        switch (slot) {
+            .value_use, .nested_function_use => {
+                const entry = try evidence.node_to_scheme_uses.getOrPut(self.gpa, record.node_idx);
+                if (!entry.found_existing) entry.value_ptr.* = .empty;
+                try entry.value_ptr.append(self.gpa, @intCast(record_index));
+            },
+            .dispatch_target => {
+                // Keyed by the discharged constraint's raw fn var, which is
+                // unique per constraint instantiation (see above). A clash
+                // would silently drop a dispatch chain link and let a real
+                // cycle through, so it must fail loudly, in release too.
+                const entry = try evidence.dispatch_scheme_uses.getOrPut(self.gpa, record.slot_data);
+                if (entry.found_existing) {
+                    std.debug.panic(
+                        "type checker invariant violated: two dispatch_target scheme-use records share constraint fn var {d}",
+                        .{record.slot_data},
+                    );
+                }
+                entry.value_ptr.* = @intCast(record_index);
+            },
+            // A shared use copies no vars (it shares the in-flight
+            // definition's), so it has no fresh pairs to seed; the walk
+            // reaches the shared body through the ordinary reference edge.
+            .shared_value_use => {},
+        }
+    }
+    for (self.dispatch_target_instantiations.items, 0..) |instantiation, index| {
+        const resolved = self.types.resolveVar(instantiation.constraint_fn_var).var_;
+        const entry = try evidence.instantiations_by_var.getOrPut(self.gpa, resolved);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(self.gpa, @intCast(index));
+    }
+
+    for (self.pending_default_checks.items) |pending| {
+        // An erroring default already reported (an explicitly recorded
+        // effectful/parameter-constraint rejection, or a unify mismatch
+        // against its field type, which leaves the var `.err`); walking it
+        // would cascade a second problem onto the same default. It is
+        // retired below instead.
+        if (self.defaultWasRejected(pending)) continue;
+        if (try self.defaultMaterializationIsRecursive(pending.default_expr, &evidence)) {
             try recursive_defaults.append(self.gpa, pending);
         }
     }
@@ -23148,47 +24497,271 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     defer self.gpa.free(omitted_defaults);
 
     for (recursive_defaults.items) |pending| {
-        const region = self.cir.store.getExprRegion(pending.default_expr);
         _ = try self.problems.appendProblem(self.gpa, .{ .recursive_default_value = .{
-            .region = region,
+            .region = self.cir.store.getExprRegion(pending.default_expr),
             .field_name = pending.field_name,
         } });
+        try self.retireRejectedDefault(pending, omitted_defaults);
+    }
 
-        // The checked-module pipeline still builds an artifact after type
-        // errors so it can render diagnostics. Replace the rejected default
-        // before that boundary; otherwise post-check lowering tries to
-        // materialize the same default forever.
-        const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
-            .region = region,
-        } });
-
-        // A construction that omits this rejected default would otherwise
-        // restore the replacement runtime-error expression during postcheck
-        // or compile-time evaluation. Match the checker's exact omission
-        // identity and replace those construction sites without reporting a
-        // second problem.
-        for (omitted_defaults) |omitted| {
-            if (omitted.origin_module != self.cir.selfModuleIdentity()) continue;
-            if (omitted.default_expr_node != @intFromEnum(pending.default_expr)) continue;
-            if (self.cir.store.getExpr(omitted.expr) == .e_runtime_error) continue;
-            try self.replaceExprWithRuntimeError(omitted.expr, diagnostic_idx);
-            try self.erroneous_value_exprs.put(self.gpa, omitted.expr, {});
-        }
-
-        try self.replaceExprWithRuntimeError(pending.default_expr, diagnostic_idx);
-        try self.erroneous_value_exprs.put(self.gpa, pending.default_expr, {});
+    // A default rejected by an earlier judgment (effectful, parameter-
+    // constraining, or mismatched against its field type) already reported;
+    // retire it the same way, without a second problem. Its expression's
+    // solved types can conflict with a construction site's monotype, so
+    // leaving it materializable would trade the reported diagnostic for a
+    // postcheck lowering invariant violation.
+    for (self.pending_default_checks.items) |pending| {
+        if (!self.defaultWasRejected(pending)) continue;
+        try self.retireRejectedDefault(pending, omitted_defaults);
     }
 
     self.pending_default_checks.clearRetainingCapacity();
+    self.rejected_default_exprs.clearRetainingCapacity();
 }
 
-/// Whether materializing `root` transitively omits a field carrying `root` as
-/// its own default. This is an explicit dependency walk over checked literal
-/// expressions and their solved record rows: every omitted defaulted field
-/// contributes its `DefaultId`, and local identities resolve directly to the
-/// corresponding CIR expression. Foreign defaults were already validated in
-/// their declaring module, and the module import graph cannot cycle.
-fn defaultMaterializationIsRecursive(self: *Self, root: CIR.Expr.Idx) std.mem.Allocator.Error!bool {
+/// Whether this default was rejected by an earlier judgment with its
+/// problem already reported: an explicitly recorded rejection (effectful,
+/// parameter-constraining—see `rejected_default_exprs`), or a unify
+/// mismatch against its field type, whose standard recovery left the
+/// default's var `.err`.
+fn defaultWasRejected(self: *const Self, pending: PendingDefaultCheck) bool {
+    if (self.rejected_default_exprs.contains(pending.default_expr)) return true;
+    return self.types.resolveVar(ModuleEnv.varFrom(pending.default_expr)).desc.content == .err;
+}
+
+/// Error recovery for one rejected default (its problem is already
+/// reported): the checked-module pipeline still builds an artifact after
+/// type errors so it can render diagnostics, so the default expression must
+/// be replaced with a runtime error before that boundary—otherwise
+/// post-check lowering materializes the rejected default (forever for a
+/// cycle, against a conflicting monotype for a poisoned one). A
+/// construction that omits this default would likewise restore it during
+/// postcheck or compile-time evaluation, so match the checker's exact
+/// omission identity and replace those construction sites too, without
+/// reporting a second problem.
+fn retireRejectedDefault(
+    self: *Self,
+    pending: PendingDefaultCheck,
+    omitted_defaults: []const ModuleEnv.RecordOmittedDefault,
+) std.mem.Allocator.Error!void {
+    const region = self.cir.store.getExprRegion(pending.default_expr);
+    const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+        .region = region,
+    } });
+
+    for (omitted_defaults) |omitted| {
+        if (omitted.origin_module != self.cir.selfModuleIdentity()) continue;
+        if (omitted.default_expr_node != @intFromEnum(pending.default_expr)) continue;
+        if (self.cir.store.getExpr(omitted.expr) == .e_runtime_error) continue;
+        try self.replaceExprWithRuntimeError(omitted.expr, diagnostic_idx);
+        try self.erroneous_value_exprs.put(self.gpa, omitted.expr, {});
+    }
+
+    try self.replaceExprWithRuntimeError(pending.default_expr, diagnostic_idx);
+    try self.erroneous_value_exprs.put(self.gpa, pending.default_expr, {});
+}
+
+/// The parameter-constraint judgment (design.md "Defaulted Fields"): a
+/// default must type-check while constraining the declaration's type
+/// parameters in NO way. Type declarations never carry written `where`
+/// clauses, and the compiler never infers such requirements onto a type—so
+/// a default that would require a capability of a parameter (a literal's
+/// `from_numeral`/`from_quote`, a constraint arriving through a referenced
+/// def's instantiated scheme, a where-constrained helper call) has no place
+/// to put that requirement, a default that STRUCTURALLY pins a
+/// parameter copy (unifies it with concrete structure, e.g. `?? []` on
+/// `value : a`) would silently decide the parameter for every
+/// specialization, and a default that ALIASES two parameters (unifies
+/// their copies together without pinning either, e.g. `?? (|x| (x, x))([])`
+/// on `(List(a), List(b))`) would silently demand `a = b` of every
+/// specialization. All three are rejected at the declaration.
+///
+/// Detection consumes the check's explicit constraint data, judged before
+/// the numeric-defaulting rounds could commit a parameter copy:
+///
+/// 1. A constraint that unified against a still-flex parameter copy PARKS
+///    in that flex's `constraints` (flex ~ flex merges union constraints).
+/// 2. A constraint that met concrete structure DEFERS into the env's list.
+///    `checkExpr`'s trailing drain settles concrete-rooted entries itself,
+///    so this scan is the backstop for any entry the drain retained; it
+///    scans the WHOLE list, which is exact—a parameter copy is a fresh var
+///    minted by THIS default's instantiation, so no pre-existing entry can
+///    share its root—where a length watermark could not index it, because
+///    that same drain rebuilds the list from scratch (settling
+///    pre-watermark entries in place).
+/// 3. A parameter copy that resolved to structure (or an alias) with no
+///    constraint evidence is the structural pin itself.
+/// 4. Two DISTINCT parameter copies whose vars resolved to the same root
+///    are the parameter aliasing: the instantiation minted one fresh flex
+///    copy per rigid root (`var_map` is keyed by resolved roots), so only
+///    the default's own check can have merged them—each copy passes rules
+///    1-3 in isolation (the merged root is still flex and unconstrained),
+///    but the merge demands the parameters be equal.
+///
+/// Unconstrained parametricity stays legal: `?? []` on `List(x)` parks
+/// nothing and leaves the parameter's copy flex.
+fn checkDefaultParameterConstraints(
+    self: *Self,
+    pending: PendingDefaultCheck,
+    params_top: u32,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const params = self.scratch_default_param_vars.sliceFromStart(params_top);
+    if (params.len == 0) return;
+
+    for (params) |param| {
+        switch (self.types.resolveVar(param.var_).desc.content) {
+            .flex => |flex| if (flex.constraints.len() > 0) {
+                const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+                return self.rejectDefaultParameterConstraint(pending, param.name, constraints[0].fn_name);
+            },
+            .rigid, .alias, .field_presence, .structure, .err => {},
+        }
+    }
+
+    for (env.deferred_static_dispatch_constraints.items.items) |entry| {
+        const entry_root = self.types.resolveVar(entry.var_).var_;
+        for (params) |param| {
+            if (self.types.resolveVar(param.var_).var_ != entry_root) continue;
+            const constraints = self.types.sliceStaticDispatchConstraints(entry.constraints);
+            // A deferred entry always carries at least one constraint (the
+            // same invariant `checkStaticDispatchConstraints` asserts); an
+            // empty one is a constraint-tracking compiler bug, and skipping
+            // it here keeps the indexing safe in release builds.
+            std.debug.assert(constraints.len > 0);
+            if (constraints.len == 0) continue;
+            return self.rejectDefaultParameterConstraint(pending, param.name, constraints[0].fn_name);
+        }
+    }
+
+    for (params) |param| {
+        switch (self.types.resolveVar(param.var_).desc.content) {
+            // The structural pin: the copy is fresh and started flex, so
+            // only the default's own check can have forced it to structure
+            // (or to an alias of one). Judged after the constraint evidence
+            // above so a constraint that met concrete structure keeps its
+            // method-named report.
+            .structure, .alias => return self.rejectDefaultParameterConstraint(pending, param.name, null),
+            // A copy the default demands nothing of stays flex (`?? []` on
+            // `List(x)`); `.err` is an already-reported mismatch (standard
+            // poison recovery); `.rigid`/`.field_presence` cannot occur for
+            // the instantiation copy of a rigid parameter.
+            .flex, .rigid, .field_presence, .err => {},
+        }
+    }
+
+    // The parameter aliasing: two distinct copies sharing one root. Each
+    // parameter's copy is individually flex and unconstrained here (rules
+    // 1-3 above passed), yet the default merged them, demanding the
+    // parameters be the same type in every specialization. Pairwise scan;
+    // a declaration's parameter count is tiny.
+    for (params, 0..) |param, i| {
+        const param_resolved = self.types.resolveVar(param.var_);
+        // An `.err` root is an already-reported mismatch (standard poison
+        // recovery, exactly as rules 1-3 pass it above): copies merged into
+        // one poison share a root without the default having demanded the
+        // parameters be equal, so reporting aliasing here would stack a
+        // second problem onto the same default.
+        if (param_resolved.desc.content == .err) continue;
+        const param_root = param_resolved.var_;
+        for (params[i + 1 ..]) |other| {
+            if (self.types.resolveVar(other.var_).var_ != param_root) continue;
+            return self.rejectDefaultParameterAliasing(pending, param.name, other.name);
+        }
+    }
+}
+
+/// Report one obligation rejection and poison the default (the standard
+/// diagnostic recovery, same as the effectful judgment above): downstream
+/// judgments and lowering treat the default as an already-reported error.
+/// `method_name` is the demanded method for a residual-dispatch rejection,
+/// or null for a structural pin (which demands no method).
+fn rejectDefaultParameterConstraint(
+    self: *Self,
+    pending: PendingDefaultCheck,
+    type_param: base.Ident.Idx,
+    method_name: ?base.Ident.Idx,
+) std.mem.Allocator.Error!void {
+    _ = try self.problems.appendProblem(self.gpa, .{ .default_constrains_type_parameter = .{
+        .region = self.cir.store.getExprRegion(pending.default_expr),
+        .field_name = pending.field_name,
+        .method_name = method_name,
+        .type_param = type_param,
+        .aliased_param = null,
+    } });
+    // Explicit rejection evidence (see `rejected_default_exprs`): the
+    // residue walk skips this default and the retirement sweep in
+    // `checkDefaultRestrictions` replaces it before the artifact boundary.
+    try self.rejected_default_exprs.put(self.gpa, pending.default_expr, {});
+}
+
+/// The parameter-aliasing arm of the same rejection: the default merged the
+/// copies of `type_param` and `aliased_param`, so the report names both.
+/// Recovery is identical to `rejectDefaultParameterConstraint`.
+fn rejectDefaultParameterAliasing(
+    self: *Self,
+    pending: PendingDefaultCheck,
+    type_param: base.Ident.Idx,
+    aliased_param: base.Ident.Idx,
+) std.mem.Allocator.Error!void {
+    _ = try self.problems.appendProblem(self.gpa, .{ .default_constrains_type_parameter = .{
+        .region = self.cir.store.getExprRegion(pending.default_expr),
+        .field_name = pending.field_name,
+        .method_name = null,
+        .type_param = type_param,
+        .aliased_param = aliased_param,
+    } });
+    // Explicit rejection evidence (see `rejected_default_exprs`): the
+    // residue walk skips this default and the retirement sweep in
+    // `checkDefaultRestrictions` replaces it before the artifact boundary.
+    try self.rejected_default_exprs.put(self.gpa, pending.default_expr, {});
+}
+
+/// Prebuilt evidence indexes for one `checkDefaultRestrictions` run (built
+/// once, shared by every default's residue walk).
+const DefaultWalkEvidence = struct {
+    pattern_to_def_expr: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
+    /// Local instantiating node -> scheme-use record indices
+    /// (`value_use`/`nested_function_use` slots only).
+    node_to_scheme_uses: std.AutoHashMapUnmanaged(u32, std.ArrayListUnmanaged(u32)) = .empty,
+    /// Discharged constraint's raw fn var -> its `dispatch_target`
+    /// scheme-use record index.
+    dispatch_scheme_uses: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+    /// Resolved constraint fn var -> `dispatch_target_instantiations` indices.
+    instantiations_by_var: std.AutoHashMapUnmanaged(Var, std.ArrayListUnmanaged(u32)) = .empty,
+
+    fn deinit(evidence: *DefaultWalkEvidence, gpa: std.mem.Allocator) void {
+        evidence.pattern_to_def_expr.deinit(gpa);
+        var node_lists = evidence.node_to_scheme_uses.valueIterator();
+        while (node_lists.next()) |list| list.deinit(gpa);
+        evidence.node_to_scheme_uses.deinit(gpa);
+        evidence.dispatch_scheme_uses.deinit(gpa);
+        var inst_lists = evidence.instantiations_by_var.valueIterator();
+        while (inst_lists.next()) |list| list.deinit(gpa);
+        evidence.instantiations_by_var.deinit(gpa);
+    }
+};
+
+/// Whether materializing `root` transitively reaches a construction omitting
+/// the field that carries `root` as its own default. The walk descends every
+/// expression form—except a lambda/closure body reached as a VALUE, which is
+/// not evaluated at materialization (canonicalization's DefaultCycles rule;
+/// bodies reached in INVOKED position still walk via the invoked-position
+/// drain in the loop below)—and follows the edges only type checking can
+/// resolve—
+/// same-module reference edges into def bodies (re-traversed by necessity: a
+/// mixed cycle needs its whole path, though purely name-resolvable cycles
+/// were already dropped by canonicalization's cycle pass), dispatch-resolved
+/// call targets (`dispatch_target_instantiations`, joined through scheme-use
+/// evidence, see `followDispatchSeed`), type-dispatch method bindings, and
+/// every omitted defaulted field on a construction's SOLVED row. Foreign
+/// defaults were validated in their declaring module, which cannot reference
+/// this one.
+fn defaultMaterializationIsRecursive(
+    self: *Self,
+    root: CIR.Expr.Idx,
+    evidence: *const DefaultWalkEvidence,
+) std.mem.Allocator.Error!bool {
     const target_expr_node: u32 = @intFromEnum(root);
     const self_module = self.cir.selfModuleIdentity();
 
@@ -23198,17 +24771,250 @@ fn defaultMaterializationIsRecursive(self: *Self, root: CIR.Expr.Idx) std.mem.Al
 
     var visited_defaults: std.AutoHashMapUnmanaged(u32, void) = .empty;
     defer visited_defaults.deinit(self.gpa);
+    var visited_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .empty;
+    defer visited_exprs.deinit(self.gpa);
+    var seed_work: std.ArrayList(Var) = .empty;
+    defer seed_work.deinit(self.gpa);
+    var visited_seed_vars: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer visited_seed_vars.deinit(self.gpa);
+    var visited_instantiations: std.AutoHashMapUnmanaged(u32, void) = .empty;
+    defer visited_instantiations.deinit(self.gpa);
+    // Expressions reached in INVOKED position (a call's direct callee, a
+    // dispatch-resolved target, a resolved method binding, and—per the
+    // conservative argument rule, see `appendArgsInvoked`—every argument of
+    // a walked call): their function body IS evaluated by the
+    // materialization that reaches the call, so a lambda/closure body walks
+    // here—unlike one reached as a value, which only creates the function
+    // value. Invoked-ness follows name-resolvable reference chains (calling
+    // through a def reference evaluates that def's body) and the RESULT
+    // positions of function-producing forms (block final expression,
+    // if/match branch results), with its own visited set so chains
+    // terminate.
+    var invoked_work: std.ArrayList(CIR.Expr.Idx) = .empty;
+    defer invoked_work.deinit(self.gpa);
+    var visited_invoked: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .empty;
+    defer visited_invoked.deinit(self.gpa);
+    // Local pattern bindings encountered during THIS walk: a block statement
+    // binding a pattern to an expression records the edge, so a lookup that
+    // resolves to a default-expression-local binder follows the same
+    // reference rules as a top-level def (`pattern_to_def_expr` covers only
+    // top-level defs). A block is always walked before any expression inside
+    // it, and a local lookup is only reachable from inside its binding block,
+    // so every consulted binding has been recorded by the time its lookup
+    // pops.
+    var local_pattern_to_expr: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty;
+    defer local_pattern_to_expr.deinit(self.gpa);
 
-    while (expr_work.pop()) |expr_idx| {
+    while (true) {
+        // Drain dispatch seeds: a seed var identifies a constraint whose
+        // discharge selected a method target. A LOCAL target's body joins
+        // the walk; either way, the target instantiation's own scheme-use
+        // pairs seed its interior constraint copies (the `slot_data` join,
+        // unique per constraint instantiation).
+        while (seed_work.pop()) |seed_var| {
+            const resolved_seed = self.types.resolveVar(seed_var).var_;
+            const seen_seed = try visited_seed_vars.getOrPut(self.gpa, resolved_seed);
+            if (seen_seed.found_existing) continue;
+            const inst_indices = evidence.instantiations_by_var.get(resolved_seed) orelse continue;
+            for (inst_indices.items) |inst_index| {
+                const seen_inst = try visited_instantiations.getOrPut(self.gpa, inst_index);
+                if (seen_inst.found_existing) continue;
+                const instantiation = self.dispatch_target_instantiations.items[inst_index];
+                if (instantiation.target_env == self.cir) {
+                    // A dispatch-resolved target is INVOKED by the walked
+                    // call, so its function body walks.
+                    try invoked_work.append(self.gpa, self.cir.store.getDef(instantiation.target_binding.def_idx).expr);
+                }
+                if (evidence.dispatch_scheme_uses.get(@intFromEnum(instantiation.constraint_fn_var))) |record_index| {
+                    const record = self.cir.scheme_uses.items.items[record_index];
+                    const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+                    for (pairs) |pair| {
+                        try seed_work.append(self.gpa, @enumFromInt(pair.fresh_var));
+                    }
+                }
+            }
+        }
+        // Drain invoked positions: every invoked expression also walks as an
+        // ordinary value (captures, scheme-use seeding, operands) via
+        // `expr_work`; invoked-ness adds only the function-body edge, and
+        // follows name-resolvable references to the function they name.
+        while (invoked_work.pop()) |invoked_idx| {
+            const seen_invoked = try visited_invoked.getOrPut(self.gpa, invoked_idx);
+            if (seen_invoked.found_existing) continue;
+            try expr_work.append(self.gpa, invoked_idx);
+            switch (self.cir.store.getExpr(invoked_idx)) {
+                .e_lambda => |lambda| try expr_work.append(self.gpa, lambda.body),
+                .e_closure => |closure| {
+                    // `lambda_idx` always names an `e_lambda`
+                    // (CIR.Expr.Closure); the closure's captures walk via
+                    // the ordinary `.e_closure` arm below.
+                    try expr_work.append(self.gpa, closure.lambda_idx);
+                    const lambda = self.cir.store.getExpr(closure.lambda_idx);
+                    try expr_work.append(self.gpa, lambda.e_lambda.body);
+                },
+                .e_lookup_local => |lookup| {
+                    if (evidence.pattern_to_def_expr.get(lookup.pattern_idx) orelse
+                        local_pattern_to_expr.get(lookup.pattern_idx)) |bound_expr|
+                    {
+                        try invoked_work.append(self.gpa, bound_expr);
+                    }
+                },
+                .e_lookup_associated_resolved => |lookup| {
+                    if (lookup.module_identity == self_module) {
+                        try invoked_work.append(self.gpa, self.cir.store.getDef(lookup.target_def_idx).expr);
+                    }
+                },
+                // An invoked expression that PRODUCES a function propagates
+                // invoked-ness into its RESULT positions: calling the
+                // produced function evaluates whichever final/branch
+                // expression built it. Statements, conditions, scrutinees,
+                // and guards are not result positions; they walk as values
+                // via the `expr_work` re-push above. An invoked block's
+                // statement BINDINGS are recorded here, ahead of the value
+                // walk: the invoked drain runs before `expr_work` pops the
+                // block, and the final expression's invoked lookups may
+                // consult them first.
+                .e_block => |block| {
+                    for (self.cir.store.sliceStatements(block.stmts)) |stmt_idx| {
+                        try self.recordDefaultWalkStmtBindings(stmt_idx, &local_pattern_to_expr);
+                    }
+                    try invoked_work.append(self.gpa, block.final_expr);
+                },
+                .e_if => |if_expr| {
+                    for (self.cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                        const branch = self.cir.store.getIfBranch(branch_idx);
+                        try invoked_work.append(self.gpa, branch.body);
+                    }
+                    try invoked_work.append(self.gpa, if_expr.final_else);
+                },
+                .e_match => |match_expr| {
+                    for (self.cir.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                        const branch = self.cir.store.getMatchBranch(branch_idx);
+                        try invoked_work.append(self.gpa, branch.value);
+                    }
+                },
+                // Any other invoked expression (a call result, a parameter,
+                // a field access) is not name-resolvable to a function
+                // body; those edges are the dispatch evidence's to close.
+                // Listed exhaustively so a new expression form forces an
+                // invoked-semantics decision here.
+                .e_num,
+                .e_frac_f32,
+                .e_frac_f64,
+                .e_dec,
+                .e_dec_small,
+                .e_num_from_numeral,
+                .e_typed_int,
+                .e_typed_frac,
+                .e_typed_num_from_numeral,
+                .e_str_segment,
+                .e_str,
+                .e_bytes_literal,
+                .e_lookup_external,
+                .e_lookup_associated_local,
+                .e_lookup_associated,
+                .e_lookup_required,
+                .e_list,
+                .e_empty_list,
+                .e_tuple,
+                .e_call,
+                .e_record,
+                .e_empty_record,
+                .e_tag,
+                .e_nominal,
+                .e_nominal_external,
+                .e_zero_argument_tag,
+                .e_binop,
+                .e_unary_minus,
+                .e_unary_not,
+                .e_field_access,
+                .e_method_call,
+                .e_dispatch_call,
+                .e_interpolation,
+                .e_structural_eq,
+                .e_structural_hash,
+                .e_method_eq,
+                .e_type_method_call,
+                .e_type_dispatch_call,
+                .e_tuple_access,
+                .e_runtime_error,
+                .e_crash,
+                .e_dbg,
+                .e_expect_err,
+                .e_expect,
+                .e_ellipsis,
+                .e_anno_only,
+                .e_derived_method,
+                .e_return,
+                .e_break,
+                .e_for,
+                .e_hosted_lambda,
+                .e_run_low_level,
+                => {},
+            }
+        }
+        const expr_idx = expr_work.pop() orelse break;
+        const seen = try visited_exprs.getOrPut(self.gpa, expr_idx);
+        if (seen.found_existing) continue;
+        // Any scheme instantiated AT this expression (a generic def lookup,
+        // a foreign helper lookup, a stored nested function) may have fired
+        // dispatch constraints; its recorded fresh copies seed the join.
+        // This is how a dispatch performed INSIDE an instantiated scheme
+        // body—local or foreign—reaches its stamped target: the body-side
+        // dispatch node carries the pristine scheme's var, never the copy.
+        if (evidence.node_to_scheme_uses.get(@intFromEnum(expr_idx))) |record_indices| {
+            for (record_indices.items) |record_index| {
+                const record = self.cir.scheme_uses.items.items[record_index];
+                const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+                for (pairs) |pair| {
+                    try seed_work.append(self.gpa, @enumFromInt(pair.fresh_var));
+                }
+            }
+        }
         const expr = self.cir.store.getExpr(expr_idx);
         switch (expr) {
-            .e_unary_minus => |unary| try expr_work.append(self.gpa, unary.expr),
-            .e_str => |str| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(str.span)),
-            .e_list => |list| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(list.elems)),
-            .e_tuple => |tuple| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(tuple.elems)),
-            .e_tag => |tag| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(tag.args)),
-            .e_nominal => |nominal| try expr_work.append(self.gpa, nominal.backing_expr),
-            .e_nominal_external => |nominal| try expr_work.append(self.gpa, nominal.backing_expr),
+            .e_lookup_local => |lookup| {
+                if (evidence.pattern_to_def_expr.get(lookup.pattern_idx) orelse
+                    local_pattern_to_expr.get(lookup.pattern_idx)) |bound_expr|
+                {
+                    try expr_work.append(self.gpa, bound_expr);
+                }
+            },
+            .e_lookup_associated_resolved => |lookup| {
+                if (lookup.module_identity == self_module) {
+                    try expr_work.append(self.gpa, self.cir.store.getDef(lookup.target_def_idx).expr);
+                }
+            },
+            .e_dispatch_call => |call| {
+                // The edge canonicalization cannot see: this call's stamped
+                // target(s). A monomorphic site's constraint var matches an
+                // instantiation directly; a site inside a generalized body
+                // reaches its per-use copies through the scheme-use seeds
+                // (see the drain loop above).
+                try seed_work.append(self.gpa, call.constraint_fn_var);
+                try expr_work.append(self.gpa, call.receiver);
+                try appendArgsInvoked(self.gpa, &invoked_work, self.cir.store.sliceExpr(call.args));
+            },
+            .e_type_dispatch_call => |call| {
+                if (self.cir.lookupMethodBindingForOwnerConst(call.type_dispatch_stmt, call.method_name)) |binding| {
+                    // A resolved method binding is INVOKED by this call.
+                    try invoked_work.append(self.gpa, self.cir.store.getDef(binding.def_idx).expr);
+                }
+                try appendArgsInvoked(self.gpa, &invoked_work, self.cir.store.sliceExpr(call.args));
+            },
+            .e_type_method_call => |call| {
+                if (self.cir.lookupMethodBindingForOwnerConst(call.type_dispatch_stmt, call.method_name)) |binding| {
+                    // A resolved method binding is INVOKED by this call.
+                    try invoked_work.append(self.gpa, self.cir.store.getDef(binding.def_idx).expr);
+                }
+                try appendArgsInvoked(self.gpa, &invoked_work, self.cir.store.sliceExpr(call.args));
+            },
+            .e_method_call => |call| {
+                // An unreplaced method call carries no stamped target (it is
+                // an already-diagnosed error form by finalize); walk operands.
+                try expr_work.append(self.gpa, call.receiver);
+                try appendArgsInvoked(self.gpa, &invoked_work, self.cir.store.sliceExpr(call.args));
+            },
             .e_empty_record => {
                 if (try self.appendOmittedDefaultDependencies(
                     expr_idx,
@@ -23221,18 +25027,116 @@ fn defaultMaterializationIsRecursive(self: *Self, root: CIR.Expr.Idx) std.mem.Al
             },
             .e_record => |record| {
                 const fields = self.cir.store.sliceRecordFields(record.fields);
-                if (try self.appendOmittedDefaultDependencies(
-                    expr_idx,
-                    fields,
-                    self_module,
-                    target_expr_node,
-                    &visited_defaults,
-                    &expr_work,
-                )) return true;
+                if (record.ext == null) {
+                    if (try self.appendOmittedDefaultDependencies(
+                        expr_idx,
+                        fields,
+                        self_module,
+                        target_expr_node,
+                        &visited_defaults,
+                        &expr_work,
+                    )) return true;
+                } else {
+                    // An UPDATE omits nothing: unmentioned fields copy from
+                    // the base value, which the walk reaches through `ext`.
+                    try expr_work.append(self.gpa, record.ext.?);
+                }
                 for (fields) |field_idx| {
                     try expr_work.append(self.gpa, self.cir.store.getRecordField(field_idx).value);
                 }
             },
+            .e_unary_minus => |unary| try expr_work.append(self.gpa, unary.expr),
+            .e_unary_not => |unary| try expr_work.append(self.gpa, unary.expr),
+            .e_str => |str| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(str.span)),
+            .e_list => |list| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(list.elems)),
+            .e_tuple => |tuple| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(tuple.elems)),
+            .e_tag => |tag| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(tag.args)),
+            .e_nominal => |nominal| try expr_work.append(self.gpa, nominal.backing_expr),
+            .e_nominal_external => |nominal| try expr_work.append(self.gpa, nominal.backing_expr),
+            .e_call => |call| {
+                // The callee is INVOKED by this call: a lambda/closure
+                // callee's body walks (canonicalization's DefaultCycles
+                // rule for immediately-invoked lambdas), and a
+                // name-resolvable callee reference walks the body of the
+                // def it names—materializing this call evaluates it. Every
+                // ARGUMENT is conservatively invoked too (see
+                // `appendArgsInvoked`).
+                try invoked_work.append(self.gpa, call.func);
+                try appendArgsInvoked(self.gpa, &invoked_work, self.cir.store.sliceExpr(call.args));
+            },
+            // A lambda reached as a VALUE only creates the function value;
+            // its body is not evaluated at materialization, so the body is
+            // not walked (the same rule as canonicalization's DefaultCycles
+            // pass). The places a body IS evaluated—a call's callee, a
+            // dispatch-resolved target, a resolved method binding—walk it
+            // through the invoked-position drain above.
+            .e_lambda => {},
+            // A closure reached as a VALUE materializes only its captured
+            // values—creating the function value does not run its body—so
+            // the captures' reference edges walk and the body does not.
+            .e_closure => |closure| {
+                for (self.cir.store.sliceCaptures(closure.captures)) |capture_idx| {
+                    const capture = self.cir.store.getCapture(capture_idx);
+                    if (evidence.pattern_to_def_expr.get(capture.pattern_idx) orelse
+                        local_pattern_to_expr.get(capture.pattern_idx)) |bound_expr|
+                    {
+                        try expr_work.append(self.gpa, bound_expr);
+                    }
+                }
+            },
+            .e_if => |if_expr| {
+                for (self.cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                    const branch = self.cir.store.getIfBranch(branch_idx);
+                    try expr_work.append(self.gpa, branch.cond);
+                    try expr_work.append(self.gpa, branch.body);
+                }
+                try expr_work.append(self.gpa, if_expr.final_else);
+            },
+            .e_match => |match_expr| {
+                try expr_work.append(self.gpa, match_expr.cond);
+                for (self.cir.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                    const branch = self.cir.store.getMatchBranch(branch_idx);
+                    try expr_work.append(self.gpa, branch.value);
+                    if (branch.guard) |guard_idx| try expr_work.append(self.gpa, guard_idx);
+                }
+            },
+            .e_block => |block| {
+                for (self.cir.store.sliceStatements(block.stmts)) |stmt_idx| {
+                    try self.appendDefaultWalkStmtExprs(stmt_idx, &expr_work, &local_pattern_to_expr);
+                }
+                try expr_work.append(self.gpa, block.final_expr);
+            },
+            .e_binop => |binop| {
+                try expr_work.append(self.gpa, binop.lhs);
+                try expr_work.append(self.gpa, binop.rhs);
+            },
+            .e_field_access => |access| try expr_work.append(self.gpa, access.receiver),
+            .e_tuple_access => |access| try expr_work.append(self.gpa, access.tuple),
+            .e_interpolation => |interpolation| {
+                try expr_work.append(self.gpa, interpolation.first);
+                try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(interpolation.parts));
+            },
+            .e_structural_eq => |eq| {
+                try expr_work.append(self.gpa, eq.lhs);
+                try expr_work.append(self.gpa, eq.rhs);
+            },
+            .e_structural_hash => |h| {
+                try expr_work.append(self.gpa, h.value);
+                try expr_work.append(self.gpa, h.hasher);
+            },
+            .e_method_eq => |eq| {
+                try expr_work.append(self.gpa, eq.lhs);
+                try expr_work.append(self.gpa, eq.rhs);
+            },
+            .e_dbg => |dbg| try expr_work.append(self.gpa, dbg.expr),
+            .e_expect_err => |expect_err| try expr_work.append(self.gpa, expect_err.expr),
+            .e_expect => |expect| try expr_work.append(self.gpa, expect.body),
+            .e_return => |ret| try expr_work.append(self.gpa, ret.expr),
+            .e_for => |for_expr| {
+                try expr_work.append(self.gpa, for_expr.expr);
+                try expr_work.append(self.gpa, for_expr.body);
+            },
+            .e_run_low_level => |run_ll| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(run_ll.args)),
             .e_num,
             .e_frac_f32,
             .e_frac_f64,
@@ -23243,55 +25147,134 @@ fn defaultMaterializationIsRecursive(self: *Self, root: CIR.Expr.Idx) std.mem.Al
             .e_typed_frac,
             .e_typed_num_from_numeral,
             .e_str_segment,
+            .e_bytes_literal,
             .e_empty_list,
             .e_zero_argument_tag,
-            => {},
-            // Canonicalization admits only the literal forms above. An error
-            // elsewhere can replace a child with another expression kind; it
-            // has already produced a diagnostic and contributes no usable
-            // default-materialization dependency.
-            .e_bytes_literal,
-            .e_lookup_local,
             .e_lookup_external,
             .e_lookup_associated_local,
             .e_lookup_associated,
-            .e_lookup_associated_resolved,
             .e_lookup_required,
-            .e_block,
-            .e_match,
-            .e_if,
-            .e_call,
-            .e_closure,
-            .e_lambda,
-            .e_binop,
-            .e_unary_not,
-            .e_field_access,
-            .e_method_call,
-            .e_dispatch_call,
-            .e_interpolation,
-            .e_structural_eq,
-            .e_structural_hash,
-            .e_method_eq,
-            .e_type_method_call,
-            .e_type_dispatch_call,
-            .e_tuple_access,
             .e_runtime_error,
             .e_crash,
-            .e_dbg,
-            .e_expect_err,
-            .e_expect,
             .e_ellipsis,
             .e_anno_only,
             .e_derived_method,
-            .e_return,
-            .e_for,
             .e_break,
             .e_hosted_lambda,
-            .e_run_low_level,
             => {},
         }
     }
     return false;
+}
+
+/// The CONSERVATIVE ARGUMENT RULE of the default-materialization residue
+/// walk (the same rule as canonicalization's DefaultCycles pass): every
+/// argument of a walked call is treated as invoked, because the callee may
+/// invoke a function-typed argument during materialization. Invoked-ness
+/// only ADDS function-body edges, so a non-function argument is unaffected
+/// (the invoked drain re-pushes it to the value walk), and a function
+/// argument the callee never actually calls still walks as invoked—a
+/// deliberate false positive, conservative by reachability, the same stance
+/// as omissions on dead branches. Arguments route ONLY through the invoked
+/// worklist; the drain's value re-push covers their value walk.
+fn appendArgsInvoked(
+    gpa: std.mem.Allocator,
+    invoked_work: *std.ArrayList(CIR.Expr.Idx),
+    args: []const CIR.Expr.Idx,
+) std.mem.Allocator.Error!void {
+    for (args) |arg| try invoked_work.append(gpa, arg);
+}
+
+/// Record one statement's pattern->expression binding (the reference-edge
+/// source for walk-local lookups) without descending its expressions. Called
+/// by `appendDefaultWalkStmtExprs` (the value walk's block descent) and by
+/// the invoked drain's `.e_block` arm, which must record bindings BEFORE the
+/// block's final expression drains as invoked (the value walk has not popped
+/// the block yet at that point).
+fn recordDefaultWalkStmtBindings(
+    self: *Self,
+    stmt_idx: CIR.Statement.Idx,
+    local_pattern_to_expr: *std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx),
+) std.mem.Allocator.Error!void {
+    switch (self.cir.store.getStatement(stmt_idx)) {
+        .s_decl => |decl| {
+            var bindings = std.ArrayList(PatternBinding).empty;
+            defer bindings.deinit(self.gpa);
+            try self.collectPatternBindings(decl.pattern, &bindings);
+            for (bindings.items) |binding| {
+                try local_pattern_to_expr.put(self.gpa, binding.pattern_idx, decl.expr);
+            }
+        },
+        .s_var => |var_stmt| try local_pattern_to_expr.put(self.gpa, var_stmt.pattern_idx, var_stmt.expr),
+        // No other statement form binds a pattern to an expression the walk
+        // can follow (a reassignment mutates an `s_var` binder already
+        // recorded above). Listed exhaustively so a new statement form
+        // forces a binding decision here.
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_alias_decl,
+        .s_nominal_decl,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => {},
+    }
+}
+
+/// Statement descent for the default-materialization residue walk. A
+/// statement that binds a pattern to an expression also records the edge in
+/// `local_pattern_to_expr` (via `recordDefaultWalkStmtBindings`), so lookups
+/// resolving to walk-local binders follow reference edges exactly like
+/// top-level defs (see `defaultMaterializationIsRecursive`).
+fn appendDefaultWalkStmtExprs(
+    self: *Self,
+    stmt_idx: CIR.Statement.Idx,
+    expr_work: *std.ArrayList(CIR.Expr.Idx),
+    local_pattern_to_expr: *std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx),
+) std.mem.Allocator.Error!void {
+    try self.recordDefaultWalkStmtBindings(stmt_idx, local_pattern_to_expr);
+    switch (self.cir.store.getStatement(stmt_idx)) {
+        .s_decl => |decl| try expr_work.append(self.gpa, decl.expr),
+        .s_var => |var_stmt| try expr_work.append(self.gpa, var_stmt.expr),
+        .s_reassign => |reassign| try expr_work.append(self.gpa, reassign.expr),
+        .s_dbg => |dbg| try expr_work.append(self.gpa, dbg.expr),
+        .s_expr => |expr_stmt| try expr_work.append(self.gpa, expr_stmt.expr),
+        .s_expect => |expect| try expr_work.append(self.gpa, expect.body),
+        .s_return => |ret| try expr_work.append(self.gpa, ret.expr),
+        .s_for => |for_stmt| {
+            try expr_work.append(self.gpa, for_stmt.expr);
+            try expr_work.append(self.gpa, for_stmt.body);
+        },
+        .s_while => |while_stmt| {
+            try expr_work.append(self.gpa, while_stmt.cond);
+            try expr_work.append(self.gpa, while_stmt.body);
+        },
+        .s_infinite_loop => |loop_stmt| try expr_work.append(self.gpa, loop_stmt.body),
+        .s_breakable_loop => |loop_stmt| try expr_work.append(self.gpa, loop_stmt.body),
+        .s_var_uninitialized,
+        .s_import,
+        .s_alias_decl,
+        .s_nominal_decl,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_crash,
+        .s_runtime_error,
+        .s_break,
+        => {},
+    }
 }
 
 fn recordLiteralSuppliesField(
@@ -23448,6 +25431,17 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     if (scope == .module) {
         try self.checkInstantiatedStaticDispatchConstraints(env, true);
         try self.checkGroundedStoredTypeSchemeRequirementsAtFinalization(env, true);
+        // Final codec validation can instantiate constrained method schemes,
+        // and the instantiated-dispatch fixpoint can in turn produce a codec
+        // obligation for a more concrete call-site receiver. Alternate the two
+        // exact worklists until neither produces another codec obligation.
+        while (self.final_codec_dispatch_constraints.items.len > 0) {
+            try self.checkFinalGeneratedCodecConstraints(env);
+            try self.checkInstantiatedStaticDispatchConstraints(env, true);
+            try self.checkGroundedStoredTypeSchemeRequirementsAtFinalization(env, true);
+        }
+    } else {
+        try self.checkFinalGeneratedCodecConstraints(env);
     }
     try self.resolvePendingTupleAccesses(env, true);
     try self.checkAllConstraints(env);
@@ -24352,6 +26346,18 @@ fn retireResolvedTypeSchemeRequirements(self: *Self) void {
 
         var write: usize = 0;
         for (scheme.dispatch_requirements.items) |requirement| {
+            // A successfully validated generated codec still belongs to the
+            // scheme: a later instantiation, including one in another module,
+            // can substitute a nested generalized variable and change the
+            // receiver's concrete shape. Checked-module finalization publishes
+            // this relation instead of retiring it as locally settled.
+            if (requirement.deferred_generated_codec and
+                !self.types.varStaticDispatchRejected(requirement.constraint.fn_var))
+            {
+                scheme.dispatch_requirements.items[write] = requirement;
+                write += 1;
+                continue;
+            }
             const still_pending = !self.settled_static_dispatch_constraint_fns.contains(requirement.constraint.fn_var) and
                 !self.types.varStaticDispatchRejected(requirement.constraint.fn_var);
             if (!still_pending) continue;
@@ -24433,6 +26439,11 @@ fn retireStructurallyPublishedTypeSchemeRequirements(
 
         var write: usize = 0;
         for (scheme.dispatch_requirements.items) |requirement| {
+            if (requirement.deferred_generated_codec) {
+                scheme.dispatch_requirements.items[write] = requirement;
+                write += 1;
+                continue;
+            }
             const structurally_published = self.requirementHasPublishedStructuralOrigin(
                 requirement,
                 &published_vars,
@@ -24450,19 +26461,50 @@ fn retireStructurallyPublishedTypeSchemeRequirements(
     }
 }
 
-/// TypeScheme is deliberately checker-local and is never serialized. At the
-/// checked-module boundary every requirement must therefore be either exactly
-/// discharged/rejected or absorbed into a receiver whose structural
-/// constraints generalized normally. Any remaining relation is an explicit
-/// unresolved-dispatch error; silently dropping it would make importing the
-/// module less constrained than checking it locally.
+/// Publish a final-codec relation for every source node that names its binding
+/// scheme. The exact constraint is placed in the serialized TypeStore once and
+/// every alias points to it; import copying later copies the scheme root,
+/// receiver, and callable under one substitution map.
+fn publishBindingSchemeCodecRequirement(
+    self: *Self,
+    scheme: *const TypeScheme,
+    requirement: SchemeDispatchRequirement,
+) Allocator.Error!void {
+    const range = try self.types.appendStaticDispatchConstraints(&.{requirement.constraint});
+    const constraint_index: u32 = @intFromEnum(range.start);
+    for (scheme.indexed_vars.items) |indexed_var| {
+        const raw_var: usize = @intFromEnum(indexed_var);
+        if (raw_var >= self.binding_scheme_nodes.bit_length) continue;
+        if (!self.binding_scheme_nodes.isSet(raw_var)) continue;
+        try self.cir.recordBindingSchemeCodecRequirement(
+            @enumFromInt(raw_var),
+            scheme.root_var,
+            requirement.receiver_var,
+            constraint_index,
+        );
+    }
+}
+
+/// Ordinary TypeScheme state is checker-local. At the checked-module boundary
+/// each ordinary requirement must be discharged/rejected or absorbed into a
+/// structurally constrained receiver. Generated-codec requirements are the
+/// deliberate exception: successful local validation does not prove every
+/// later specialization has the same concrete shape, so their exact relation
+/// is serialized on the binding scheme for downstream revalidation.
 fn finalizeTypeSchemeRequirementsAtCheckedBoundary(self: *Self) Allocator.Error!void {
     self.retireResolvedTypeSchemeRequirements();
+
+    self.cir.binding_scheme_codec_requirements.items.clearRetainingCapacity();
 
     for (self.type_schemes.items) |scheme| {
         const scheme_is_err = self.types.resolveVar(scheme.root_var).desc.content == .err;
         for (scheme.dispatch_requirements.items) |requirement| {
             if (self.types.varStaticDispatchRejected(requirement.constraint.fn_var)) continue;
+
+            if (requirement.deferred_generated_codec) {
+                try self.publishBindingSchemeCodecRequirement(&scheme, requirement);
+                continue;
+            }
 
             if (scheme_is_err) {
                 try self.markStaticDispatchRejected(requirement.constraint);
@@ -24524,9 +26566,12 @@ fn retireNonGeneralizedTypeSchemes(self: *Self, roots: []const BoundaryRoot) voi
 }
 
 /// Move every still-open dispatch relation owned by this generalization
-/// boundary into its explicit scheme. A relation needs the side table only
-/// while its receiver belongs to an outer rank. Captured candidates are
-/// removed immediately, so later boundaries never rescan completed sites.
+/// boundary into its explicit scheme. Ordinary relations need the side table
+/// while their receiver belongs to an outer rank. A generated codec relation
+/// also needs it when any part of its concrete receiver escapes, because the
+/// relation is deliberately validated only after source checking has finished.
+/// Captured candidates are removed immediately, so later boundaries never
+/// rescan completed sites.
 fn captureSchemeDispatchRequirements(
     self: *Self,
     roots: []const BoundaryRoot,
@@ -24538,10 +26583,14 @@ fn captureSchemeDispatchRequirements(
     if (self.probe_depth != 0) {
         @panic("scheme requirements cannot be captured inside a solver probe");
     }
+    var final_codec_receiver_vars = std.AutoHashMap(Var, void).init(self.gpa);
+    defer final_codec_receiver_vars.deinit();
+
     const rank = env.rank();
     for (roots) |root| {
         var owner_indices = (self.scheme_requirement_candidate_indices_by_owner.fetchRemove(root.owner) orelse continue).value;
         defer owner_indices.deinit(self.gpa);
+        var interface_reachable_collected = false;
         for (owner_indices.items) |candidate_idx| {
             const candidate = self.scheme_requirement_candidates.items[candidate_idx];
             std.debug.assert(candidate.owner_root == root.owner);
@@ -24550,14 +26599,42 @@ fn captureSchemeDispatchRequirements(
             // needs an explicit entry is decided here and never reconstructed
             // at a later enclosing boundary.
             const receiver = self.types.resolveVar(candidate.receiver_var);
-            if (receiver.desc.content != .flex) continue;
-            if (receiver.desc.rank == .generalized) continue;
-            const needs_explicit_requirement = switch (candidate.source) {
-                .creation => @intFromEnum(receiver.desc.rank) < @intFromEnum(rank),
-                // A copied relation is detached from its receiver descriptor.
-                // Its structural origin is retained separately so publication
-                // can prove when checked evidence makes this copy redundant.
-                .scheme_copy => true,
+            const final_codec = candidate.deferred_generated_codec or
+                self.final_codec_dispatch_constraint_fns.contains(candidate.constraint.fn_var);
+            const needs_explicit_requirement = if (final_codec) blk: {
+                // Unlike an unresolved flex relation, a concrete generated
+                // codec no longer lives on its receiver descriptor. Preserve
+                // it explicitly when any part of the receiver escapes through
+                // this scheme. That shared component is exactly where a later
+                // use can add a nominal layer before final validation.
+                if (!interface_reachable_collected) {
+                    self.var_set.clearRetainingCapacity();
+                    try self.collectReachableVars(root.interface, &self.var_set);
+                    interface_reachable_collected = true;
+                }
+                final_codec_receiver_vars.clearRetainingCapacity();
+                try self.collectReachableVars(candidate.receiver_var, &final_codec_receiver_vars);
+
+                const iterate_receiver = final_codec_receiver_vars.count() <= self.var_set.count();
+                var reachable_iter = if (iterate_receiver)
+                    final_codec_receiver_vars.keyIterator()
+                else
+                    self.var_set.keyIterator();
+                while (reachable_iter.next()) |reachable_var| {
+                    const other = if (iterate_receiver) &self.var_set else &final_codec_receiver_vars;
+                    if (other.contains(reachable_var.*)) break :blk true;
+                }
+                break :blk false;
+            } else blk: {
+                if (receiver.desc.content != .flex) break :blk false;
+                if (receiver.desc.rank == .generalized) break :blk false;
+                break :blk switch (candidate.source) {
+                    .creation => @intFromEnum(receiver.desc.rank) < @intFromEnum(rank),
+                    // A copied relation is detached from its receiver descriptor.
+                    // Its structural origin is retained separately so publication
+                    // can prove when checked evidence makes this copy redundant.
+                    .scheme_copy => true,
+                };
             };
             if (!needs_explicit_requirement) continue;
 
@@ -24572,6 +26649,7 @@ fn captureSchemeDispatchRequirements(
             try self.type_schemes.items[scheme_idx].dispatch_requirements.append(self.gpa, .{
                 .receiver_var = candidate.receiver_var,
                 .constraint = candidate.constraint,
+                .deferred_generated_codec = final_codec,
                 .failure_expr = candidate.failure_expr,
                 .structural_origin = candidate.structural_origin,
             });
@@ -26921,8 +28999,55 @@ fn recordSettledDeferredDispatchRelation(
 ) Allocator.Error!void {
     if (self.commit_probe_active) return;
     for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |constraint| {
+        if (self.final_codec_dispatch_constraint_fns.contains(constraint.fn_var)) continue;
         try self.settled_static_dispatch_constraint_fns.put(self.gpa, constraint.fn_var, {});
     }
+}
+
+/// Move one currently-concrete generated codec obligation out of the hot
+/// deferred queue. Later source checking can still add nominal layers inside
+/// its receiver, so the derivation is selected exactly once at the final type
+/// boundary instead of being repeatedly rechecked after every expression.
+fn deferGeneratedCodecConstraintToFinalization(
+    self: *Self,
+    deferred: DeferredConstraintCheck,
+    constraint: StaticDispatchConstraint,
+) Allocator.Error!bool {
+    if (self.probe_depth != 0 or self.checking_final_codec_dispatch_constraints) return false;
+
+    const entry = try self.final_codec_dispatch_constraint_fns.getOrPut(self.gpa, constraint.fn_var);
+    if (entry.found_existing) return true;
+    errdefer _ = self.final_codec_dispatch_constraint_fns.remove(constraint.fn_var);
+
+    try self.final_codec_dispatch_constraints.append(self.gpa, .{
+        .dispatcher_var = deferred.var_,
+        .constraint = constraint,
+        .failure_expr = deferred.failure_expr,
+    });
+    return true;
+}
+
+fn checkFinalGeneratedCodecConstraints(self: *Self, env: *Env) Allocator.Error!void {
+    if (self.final_codec_dispatch_constraints.items.len == 0) return;
+    std.debug.assert(self.probe_depth == 0);
+    std.debug.assert(!self.checking_final_codec_dispatch_constraints);
+
+    self.checking_final_codec_dispatch_constraints = true;
+    defer self.checking_final_codec_dispatch_constraints = false;
+
+    for (self.final_codec_dispatch_constraints.items) |pending| {
+        const range = try self.types.appendStaticDispatchConstraints(&.{pending.constraint});
+        try self.enqueueDeferredDispatchConstraint(env, .{
+            .var_ = pending.dispatcher_var,
+            .constraints = range,
+            .failure_expr = pending.failure_expr,
+        }, .current_group);
+    }
+    self.final_codec_dispatch_constraints.clearRetainingCapacity();
+    self.final_codec_dispatch_constraint_fns.clearRetainingCapacity();
+
+    try self.checkStaticDispatchConstraints(env, true);
+    try self.checkAllConstraints(env);
 }
 
 fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pass: bool) std.mem.Allocator.Error!void {
@@ -27171,14 +29296,16 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                         if (constraint.fn_name.eql(self.cir.idents.parser_for)) {
                             switch (try self.nominalSupportsDerivedParseShape(nominal_type, env, region)) {
-                                .supported => try self.satisfyImplicitParserConstraint(
-                                    deferred_constraint.var_,
-                                    constraint,
-                                    constraint.fn_var,
-                                    env,
-                                    region,
-                                    failure_expr,
-                                ),
+                                .supported => if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
+                                    try self.satisfyImplicitParserConstraint(
+                                        deferred_constraint.var_,
+                                        constraint,
+                                        constraint.fn_var,
+                                        env,
+                                        region,
+                                        failure_expr,
+                                    );
+                                },
                                 .unresolved => if (!is_numeric_default_pass or try self.deferredParseHasPendingOpenLiteral(deferred_constraint, env)) {
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
@@ -27205,13 +29332,15 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 continue;
                             };
                             switch (try self.nominalSupportsDerivedEncodeShape(nominal_type, encoding_var, env, region)) {
-                                .supported => try self.satisfyImplicitEncoderForConstraint(
-                                    deferred_constraint.var_,
-                                    constraint,
-                                    constraint.fn_var,
-                                    env,
-                                    region,
-                                ),
+                                .supported => if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
+                                    try self.satisfyImplicitEncoderForConstraint(
+                                        deferred_constraint.var_,
+                                        constraint,
+                                        constraint.fn_var,
+                                        env,
+                                        region,
+                                    );
+                                },
                                 .unresolved => if (!is_numeric_default_pass or try self.deferredEncodeHasPendingOpenLiteral(deferred_constraint, env)) {
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
@@ -27831,14 +29960,16 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         const region = self.getRegionAt(deferred_constraint.var_);
                         switch (try self.typeSupportsDerivedParse(dispatcher_content.structure, env, region)) {
                             .supported => {
-                                try self.satisfyImplicitParserConstraint(
-                                    deferred_constraint.var_,
-                                    constraint,
-                                    constraint.fn_var,
-                                    env,
-                                    region,
-                                    failure_expr,
-                                );
+                                if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
+                                    try self.satisfyImplicitParserConstraint(
+                                        deferred_constraint.var_,
+                                        constraint,
+                                        constraint.fn_var,
+                                        env,
+                                        region,
+                                        failure_expr,
+                                    );
+                                }
                             },
                             .unresolved => {
                                 if (!is_numeric_default_pass or try self.deferredParseHasPendingOpenLiteral(deferred_constraint, env)) {
@@ -27890,13 +30021,15 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         };
                         switch (try self.typeSupportsDerivedEncode(dispatcher_content.structure, encoding_var, env, region)) {
                             .supported => {
-                                try self.satisfyImplicitEncoderForConstraint(
-                                    deferred_constraint.var_,
-                                    constraint,
-                                    constraint.fn_var,
-                                    env,
-                                    region,
-                                );
+                                if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
+                                    try self.satisfyImplicitEncoderForConstraint(
+                                        deferred_constraint.var_,
+                                        constraint,
+                                        constraint.fn_var,
+                                        env,
+                                        region,
+                                    );
+                                }
                             },
                             .unresolved => {
                                 if (!is_numeric_default_pass or try self.deferredEncodeHasPendingOpenLiteral(deferred_constraint, env)) {
@@ -29444,17 +31577,46 @@ fn missingTryInfoFromNominal(
     };
 }
 
-/// A builtin `Try` whose error row is still an unbound flex var, as in a
-/// record field annotated `Try(ok, _)`. Such a field opts into the
-/// optional-field convention; parse derivation pins the row to `[Missing]`.
+/// A builtin `Try` whose error row can still be pinned to the optional-field
+/// marker. A field annotated `Try(ok, _)` starts with a flex error row, but a
+/// later use can constrain that row to `[Missing, ..flex]` before codec
+/// validation reaches its final-type boundary. Both states carry the same
+/// exact open relation; parse derivation closes it to `[Missing]`.
 fn unboundTryInfoFromNominal(
     self: *Self,
     nominal: types_mod.NominalType,
 ) Allocator.Error!?BuiltinTryInfo {
     const try_info = (try self.builtinTryInfoFromNominal(nominal)) orelse return null;
-    return switch (self.types.resolveVar(try_info.err_var).desc.content) {
-        .flex => try_info,
-        .rigid, .alias, .field_presence, .structure, .err => null,
+    return if (try self.varIsOpenOptionalParseError(try_info.err_var)) try_info else null;
+}
+
+fn varIsOpenOptionalParseError(self: *Self, var_: Var) Allocator.Error!bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .flex => true,
+        .alias => |alias| try self.varIsOpenOptionalParseError(self.types.getAliasBackingVar(alias)),
+        .structure => |structure| switch (structure) {
+            .tag_union => |tag_union| blk: {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                const tag_names = tags.items(.name);
+                const tag_args = tags.items(.args);
+                if (tag_names.len != 1) break :blk false;
+                if (self.types.sliceVars(tag_args[0]).len != 0) break :blk false;
+                if (self.types.resolveVar(tag_union.ext).desc.content != .flex) break :blk false;
+                const text = self.cir.getIdentStoreConst().getText(tag_names[0]);
+                break :blk Ident.textEql(text, "Missing");
+            },
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .empty_tag_union,
+            => false,
+        },
+        .rigid, .field_presence, .err => false,
     };
 }
 
@@ -30067,6 +32229,155 @@ test "literal dispatch finalization rejects a strict value cycle through from_nu
     try std.testing.expect(cycle_defs[0] != cycle_defs[1]);
     try std.testing.expect(test_env.module_env.hasTopLevelDemandDependency(cycle_defs[0], cycle_defs[1]));
     try std.testing.expect(test_env.module_env.hasTopLevelDemandDependency(cycle_defs[1], cycle_defs[0]));
+}
+
+test "top-level destructure bound through its own name is a circular value definition" {
+    const TestEnv = @import("test/TestEnv.zig");
+    // `{x}` on the right is a block returning `x`, so `x` is computed from
+    // itself through the destructure.
+    const source =
+        \\{x} = {x}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneCanError("Circular Value Definition");
+}
+
+/// Assert that canonicalization reported exactly one circular value
+/// definition for each expected name and nothing else, in any order.
+fn expectCircularValueDefinitions(test_env: anytype, expected_names: []const []const u8) error{ OutOfMemory, TestExpectedEqual, TestUnexpectedResult }!void {
+    const diagnostics = try test_env.module_env.getDiagnostics();
+    defer std.testing.allocator.free(diagnostics);
+    try std.testing.expectEqual(expected_names.len, diagnostics.len);
+    for (expected_names) |expected_name| {
+        const expected_ident = try test_env.module_env.common.idents.insert(std.testing.allocator, Ident.for_text(expected_name));
+        var reports: usize = 0;
+        for (diagnostics) |diagnostic| {
+            try std.testing.expect(diagnostic == .circular_value_definition);
+            if (diagnostic.circular_value_definition.ident.eql(expected_ident)) reports += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 1), reports);
+    }
+}
+
+test "top-level destructure in a value cycle with a plain def reports every name it binds" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\{a, b} = { a: c, b: 1 }
+        \\c = a
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try expectCircularValueDefinitions(&test_env, &.{ "a", "b", "c" });
+}
+
+test "top-level tuple destructure in a value cycle reports every name it binds" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\(a, b) = (c, 1)
+        \\c = a
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try expectCircularValueDefinitions(&test_env, &.{ "a", "b", "c" });
+}
+
+test "name bound by a nested top-level destructure in a value cycle is a circular value definition" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\{ outer: { inner } } = { outer: { inner: c } }
+        \\c = inner
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try expectCircularValueDefinitions(&test_env, &.{ "inner", "c" });
+}
+
+test "two top-level destructures in one value cycle are each a circular value definition" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\{b} = { b: c }
+        \\{a} = { a: b }
+        \\c = a
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try expectCircularValueDefinitions(&test_env, &.{ "b", "a", "c" });
+}
+
+test "mutually recursive functions through a top-level destructure check as one group" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\{ f } = { f: |x| g(x) }
+        \\g = |x| f(x)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "literal dispatch finalization rejects a strict value cycle through a top-level destructure" {
+    const TestEnv = @import("test/TestEnv.zig");
+    // `1` resolves to `MyNum.from_numeral` through `typed`, and that method
+    // reads `bump`, which reads `number` back out of the destructure.
+    const source =
+        \\MyNum := { value : U64 }.{
+        \\    from_numeral : Numeral -> Try(MyNum, [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Ok({ value: bump })
+        \\}
+        \\
+        \\{number} = { number: 1 }
+        \\
+        \\typed : MyNum
+        \\typed = number
+        \\
+        \\bump : U64
+        \\bump = number.value
+    ;
+    var test_env = try TestEnv.init("LiteralResolution", source);
+    defer test_env.deinit();
+
+    const problems = test_env.checker.problems.problems.items;
+    const expected_names = [_][]const u8{ "number", "bump" };
+    try std.testing.expectEqual(expected_names.len, problems.len);
+    for (expected_names) |expected_name| {
+        const expected_ident = try test_env.module_env.common.idents.insert(std.testing.allocator, Ident.for_text(expected_name));
+        var reports: usize = 0;
+        for (problems) |found_problem| {
+            try std.testing.expect(found_problem == .circular_value_definition);
+            if (found_problem.circular_value_definition.ident.eql(expected_ident)) reports += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 1), reports);
+    }
+}
+
+test "names bound by a top-level destructure resolve to their def for other defs" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\{x} = { x: 1 }
+        \\later = x + 1
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("Dec");
+}
+
+test "a lambda referring to a name bound by the same top-level destructure is not a strict cycle" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\{f, n} = { f: |s| Str.concat(s, n), n: "s" }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{});
 }
 
 test "literal strict demands flow through polymorphic called function summaries" {
@@ -33252,7 +35563,19 @@ fn validateDerivedParseNominal(
         return try self.reportDerivedParseMissingMethodAt(nominal_var, self.cir.idents.parser_for, constraint, env, failure_expr);
     };
 
-    const child_err_var = try self.fresh(env, region);
+    // A nested nominal whose `parser_for` is the compiler-generated structural
+    // parser has no declaration of its own to respect: the backing walk below
+    // validates that generated body against the ENCLOSING error row, so the
+    // signature it is validated at names that same row. The encoder side
+    // already builds its nested expectation from `err_var` this way. Doing the
+    // same here keeps a generated derivation's frozen callable types a function
+    // of the contract key it is looked up by (kind, shape, encoding, state,
+    // error row), so two contexts that agree on that key cannot freeze
+    // disagreeing contracts. A CUSTOM nominal parser instead keeps its own
+    // minimal error row, which `constrainDerivedParserErrorRowIncludes`
+    // composes into the parent below.
+    const generated_parser = isGeneratedStructuralCodecMethodBinding(method_lookup, .parser);
+    const child_err_var = if (generated_parser) err_var else try self.fresh(env, region);
     const expected_ret = try self.freshParseResultTryVar(nominal_var, state_var, child_err_var, env, region);
     const expected_runtime_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{state_var}, expected_ret), env, region);
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{encoding_var}, expected_runtime_fn), env, region);
@@ -33264,7 +35587,7 @@ fn validateDerivedParseNominal(
             .method_name = constraint.fn_name,
         },
     });
-    if (result.isEstablished() and isGeneratedStructuralCodecMethodBinding(method_lookup, .parser)) {
+    if (result.isEstablished() and generated_parser) {
         switch (try self.takeDerivedCodecBackingWalk(walk, nominal)) {
             .accounted_for => {},
             .unbounded => return .unsupported,
@@ -33314,6 +35637,10 @@ fn validateDerivedParseNominal(
         .ok => {},
         .unsupported, .reported_error => |validation| return validation,
     }
+    // A generated nested parser was validated at the parent's own row, so
+    // inclusion holds by construction and there is no child extension left to
+    // close.
+    if (generated_parser) return .ok;
     return try self.constrainDerivedParserErrorRowIncludes(err_var, child_err_var, env, region);
 }
 

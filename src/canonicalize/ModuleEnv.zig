@@ -849,6 +849,22 @@ pub const BindingScheme = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// One generated-codec dispatch relation that remains part of a binding's
+/// scheme across checked-module boundaries. `scheme_root` preserves alias
+/// identity when a cached checked environment is rechecked, and
+/// `constraint_index` names the exact `StaticDispatchConstraint` in this
+/// environment's serialized `TypeStore`; import copying therefore preserves
+/// the complete callable graph and metadata without reconstructing either from
+/// the receiver's final shape.
+pub const BindingSchemeCodecRequirement = extern struct {
+    node_idx: u32,
+    scheme_root: u32,
+    receiver_var: u32,
+    constraint_index: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 gpa: std.mem.Allocator,
 
 common: CommonEnv,
@@ -986,6 +1002,9 @@ scheme_use_pairs: SchemeUsePair.SafeList,
 /// Exact source bindings that checking generalized into rank-1 type schemes.
 /// Sorted by source node for allocation-free cross-module lookup.
 binding_schemes: BindingScheme.SafeList,
+/// Generated-codec relations carried by those schemes. Sorted by source node;
+/// multiple requirements for one binding occupy one contiguous run.
+binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList,
 /// Generated codec derivations validated by checking and consumed by checked
 /// artifact publication.
 generated_codec_derivations: GeneratedCodecDerivation.SafeList,
@@ -1124,6 +1143,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.provided_low_level_defs.relocate(offset);
     self.for_loop_dispatch_plans.relocate(offset);
     self.binding_schemes.relocate(offset);
+    self.binding_scheme_codec_requirements.relocate(offset);
     self.rejected_static_dispatches.relocate(offset);
     self.record_omitted_defaults.relocate(offset);
 
@@ -1225,6 +1245,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .scheme_uses = try SchemeUseRecord.SafeList.initCapacity(gpa, 8),
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
         .binding_schemes = try BindingScheme.SafeList.initCapacity(gpa, 8),
+        .binding_scheme_codec_requirements = try BindingSchemeCodecRequirement.SafeList.initCapacity(gpa, 4),
         .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
         .rejected_static_dispatches = try RejectedStaticDispatch.SafeList.initCapacity(gpa, 4),
@@ -1256,6 +1277,7 @@ pub fn deinit(self: *Self) void {
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
+    self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
@@ -1359,6 +1381,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
+    self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
@@ -2987,15 +3010,15 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        .record_default_not_literal => |data| blk: {
+        .record_default_reference_cycle => |data| blk: {
             const field_name = self.getIdent(data.field_name);
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = try Report.init(allocator, "Default Value Must Be A Literal", "", .runtime_error);
+            var report = try Report.init(allocator, "Default Value Cycle", "", .runtime_error);
             const owned_field_name = try report.addOwnedString(field_name);
             try report.headline.addReflowingText("The default value for the ");
             try report.headline.addRecordField(owned_field_name);
-            try report.headline.addReflowingText(" field is not a literal.");
+            try report.headline.addReflowingText(" field depends on itself.");
 
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
@@ -3009,7 +3032,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addReflowingText("A field default (");
             try report.document.addInlineCode("??");
-            try report.document.addReflowingText(") is materialized by the compiler at every construction site that omits the field, so it must be a literal: a number, an interpolation-free string, a tag, or a list, record, or tuple built only from literals. Anything that refers to another value could form an evaluation cycle the compiler will not chase.");
+            try report.document.addReflowingText(") is materialized at every construction site that omits the field. This default reaches itself again—through values it references, or through constructions that omit the field and would materialize it—so there is no value to start from. Break the cycle by supplying the field at one of the constructions involved, or by removing the self-dependent reference from the default.");
 
             break :blk report;
         },
@@ -3058,6 +3081,56 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getSourceAll(),
                 self.getLineStartsAll(),
             );
+
+            break :blk report;
+        },
+        .default_not_allowed_in_structural_record => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Default Not Allowed In Structural Record", "", .runtime_error);
+            try report.headline.addReflowingText("Field defaults (");
+            try report.headline.addInlineCode("??");
+            try report.headline.addReflowingText(") are only allowed on the fields of a nominal record type declaration's backing record, not in structural record types (type aliases, inline annotations, or nested records).");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" A default belongs to one named type, so declare a nominal type (with ");
+            try report.document.addInlineCode(":=");
+            try report.document.addReflowingText(") whose backing record carries the default, and use that type here.");
+
+            break :blk report;
+        },
+        .default_not_allowed_on_local_type_decl => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Default Not Allowed On Local Type Declaration", "", .runtime_error);
+            try report.headline.addReflowingText("Field defaults (");
+            try report.headline.addInlineCode("??");
+            try report.headline.addReflowingText(") are only allowed on nominal type declarations at the top level of a module, not on type declarations inside a function or block.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" A default is materialized at every construction site that omits the field, so it cannot depend on the locals of one function. Move the type declaration to the module top level, or remove the default.");
 
             break :blk report;
         },
@@ -3791,6 +3864,7 @@ pub const Serialized = extern struct {
     scheme_uses: SchemeUseRecord.SafeList.Serialized,
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
     binding_schemes: BindingScheme.SafeList.Serialized,
+    binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList.Serialized,
     generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
     rejected_static_dispatches: RejectedStaticDispatch.SafeList.Serialized,
@@ -3906,6 +3980,7 @@ pub const Serialized = extern struct {
         try self.scheme_uses.serialize(&env.scheme_uses, allocator, writer);
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
         try self.binding_schemes.serialize(&env.binding_schemes, allocator, writer);
+        try self.binding_scheme_codec_requirements.serialize(&env.binding_scheme_codec_requirements, allocator, writer);
         try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
         try self.rejected_static_dispatches.serialize(&env.rejected_static_dispatches, allocator, writer);
@@ -3976,6 +4051,7 @@ pub const Serialized = extern struct {
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
+            .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
@@ -4046,6 +4122,7 @@ pub const Serialized = extern struct {
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
+            .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
@@ -4118,6 +4195,7 @@ pub const Serialized = extern struct {
             .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
+            .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
@@ -4244,6 +4322,23 @@ fn sortedNodeSlot(comptime T: type, entries: []const T, raw_node: u32) usize {
     return low;
 }
 
+/// First index whose `node_idx` is greater than `raw_node` in a node-sorted
+/// table. This is the end of the contiguous run returned for multi-entry
+/// source-node metadata.
+fn sortedNodeEndSlot(comptime T: type, entries: []const T, raw_node: u32) usize {
+    var low: usize = 0;
+    var high: usize = entries.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (entries[mid].node_idx <= raw_node) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    return low;
+}
+
 /// Insert or replace `entry` in a node-sorted SafeList. Appends are O(1) when
 /// entries arrive in increasing node order (the common case—recording
 /// follows node allocation); out-of-order inserts shift the tail.
@@ -4292,6 +4387,61 @@ pub fn nodeIsBindingScheme(self: *const Self, node_idx: Node.Idx) bool {
         self.binding_schemes.items.items,
         @intFromEnum(node_idx),
     ) != null;
+}
+
+/// Record one exact generated-codec relation owned by a source binding scheme.
+/// Duplicate aliases are harmless but duplicate relations for the same alias
+/// would create redundant imported work, so exact entries are coalesced here.
+pub fn recordBindingSchemeCodecRequirement(
+    self: *Self,
+    node_idx: Node.Idx,
+    scheme_root: TypeVar,
+    receiver_var: TypeVar,
+    constraint_index: u32,
+) std.mem.Allocator.Error!void {
+    const entry = BindingSchemeCodecRequirement{
+        .node_idx = @intFromEnum(node_idx),
+        .scheme_root = @intFromEnum(scheme_root),
+        .receiver_var = @intFromEnum(receiver_var),
+        .constraint_index = constraint_index,
+    };
+    const entries = self.binding_scheme_codec_requirements.items.items;
+    const start = sortedNodeSlot(BindingSchemeCodecRequirement, entries, entry.node_idx);
+    const end = sortedNodeEndSlot(BindingSchemeCodecRequirement, entries, entry.node_idx);
+    for (entries[start..end]) |existing| {
+        if (existing.scheme_root == entry.scheme_root and
+            existing.receiver_var == entry.receiver_var and
+            existing.constraint_index == entry.constraint_index)
+        {
+            return;
+        }
+    }
+
+    if (end == entries.len) {
+        _ = try self.binding_scheme_codec_requirements.append(self.gpa, entry);
+        return;
+    }
+    _ = try self.binding_scheme_codec_requirements.append(self.gpa, entry);
+    const grown = self.binding_scheme_codec_requirements.items.items;
+    std.mem.copyBackwards(
+        BindingSchemeCodecRequirement,
+        grown[end + 1 ..],
+        grown[end .. grown.len - 1],
+    );
+    grown[end] = entry;
+}
+
+/// Return all generated-codec relations belonging to `node_idx`. The borrowed
+/// slice is allocation-free and remains valid until the table is mutated.
+pub fn bindingSchemeCodecRequirementsForNode(
+    self: *const Self,
+    node_idx: Node.Idx,
+) []const BindingSchemeCodecRequirement {
+    const entries = self.binding_scheme_codec_requirements.items.items;
+    const raw_node = @intFromEnum(node_idx);
+    const start = sortedNodeSlot(BindingSchemeCodecRequirement, entries, raw_node);
+    const end = sortedNodeEndSlot(BindingSchemeCodecRequirement, entries, raw_node);
+    return entries[start..end];
 }
 
 /// Return the digits before the decimal point for a recorded numeral.
@@ -4655,6 +4805,14 @@ pub fn addRecordField(self: *Self, expr: CIR.RecordField, region: Region) std.me
     return expr_idx;
 }
 
+/// Add a new unset record field (`name: _`) to the node store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addUnsetField(self: *Self, unset_field: CIR.UnsetField, region: Region) std.mem.Allocator.Error!CIR.UnsetField.Idx {
+    const unset_idx = try self.store.addUnsetField(unset_field, region);
+    self.debugAssertArraysInSync();
+    return unset_idx;
+}
+
 /// Add a new record destructuring to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addRecordDestruct(self: *Self, expr: CIR.Pattern.RecordDestruct, region: Region) std.mem.Allocator.Error!CIR.Pattern.RecordDestruct.Idx {
@@ -4787,6 +4945,17 @@ pub fn sliceExternalDecls(self: *const Self, span: CIR.ExternalDecl.Span) []cons
 /// Retrieves the text of an identifier by its index
 pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
     return self.getIdent(idx);
+}
+
+/// The coordinator-assigned package-qualified module identifier (e.g.
+/// `pf.Utils`), unique across the build's packages. Module identity
+/// comparisons in diagnostics must use this rather than the bare module
+/// name, which can collide between packages. Environments constructed
+/// outside the coordinator (unit tests) have no qualified ident; they are
+/// single-module worlds, so the bare name is their qualified name.
+pub fn qualifiedModuleName(self: *const Self) []const u8 {
+    if (self.qualified_module_ident.isNone()) return self.module_name;
+    return self.getIdent(self.qualified_module_ident);
 }
 
 /// Builds a mapping from platform for-clause alias ident indices to the

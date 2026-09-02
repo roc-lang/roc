@@ -1914,6 +1914,7 @@ test "boxy abi sidecar view initializes the global runtime from image bytes" {
     lowered.boxy_adapt_steps = .empty;
     lowered.boxy_payload_steps = .empty;
     lowered.boxy_method_slots = .empty;
+    lowered.boxy_worker_procs = .empty;
     lowered.boxy_method_arg_layouts = .empty;
     lowered.boxy_method_hidden_desc_sources = .empty;
     lowered.boxy_erased_arg_layouts = .empty;

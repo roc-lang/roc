@@ -11,6 +11,7 @@ The following requests are handled:
 - `textDocument/documentSymbol`
 - `textDocument/documentHighlight`
 - `textDocument/references`
+- `textDocument/inlayHint`
 - `textDocument/formatting`
 - `textDocument/foldingRange`
 - `textDocument/selectionRange`
@@ -23,6 +24,24 @@ The following notifications are handled:
 - `didChange` (same as `didOpen`, and supports incremental changes)
 
 Diagnostics are pushed as `textDocument/publishDiagnostics` when a document is opened or changed.
+
+### Inlay hints
+
+Roc infers most types, and an annotation can still leave parts to inference with `_`, so the
+type a binding actually has is often written nowhere in the file. `textDocument/inlayHint`
+renders it next to the name.
+
+Only plain bindings get a hint—one name, one type. Skipped are bindings that already carry a
+written annotation (their type is on screen), bindings marked unused with a leading `_`, and
+any pattern whose source text is not exactly the name: a compiler-synthesized binding has no
+name in the source, and `import "x" as name : Str` already spells its type.
+
+Labels are cut at 56 bytes with a trailing `…`, because a hint is drawn inside the line it
+annotates and an inferred Roc type can be far longer than the code it describes—a generic
+function carries its whole `where` clause. Hovering the same name gives the type in full.
+
+A document that does not build produces no hints, which leaves whatever the editor last drew
+in place rather than blanking every hint on each keystroke.
 
 ### References
 
