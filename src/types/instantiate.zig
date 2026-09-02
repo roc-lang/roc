@@ -287,6 +287,13 @@ pub const Instantiator = struct {
     /// is not quantified, so each use must see the same node, including a
     /// function node's effect kind and effect dependencies.
     copy_scheme_structure: bool = false,
+    /// Share every leaf (flex, rigid, field presence, error) whatever its
+    /// rank, copying only structure and resolving polarity markers. This is
+    /// the shape of a where-method signature's per-use instantiation: the
+    /// signature's other variables belong to the enclosing scheme (live
+    /// during the body check, generalized at a later requirement re-check)
+    /// and must stay the same variables; only the deferred rows are fresh.
+    share_leaves: bool = false,
 
     /// The `Ident.Idx` of `types.polarity_var_text` in `idents`, when the
     /// caller wants polarity-deferred tag union extensions recognized. Rigids
@@ -373,6 +380,12 @@ pub const Instantiator = struct {
         /// positions, so polarity composes correctly through functions
         /// embedded in alias bodies.
         resolve_by_polarity,
+        /// Like `resolve_by_polarity` for negative positions (closed), but a
+        /// marker in a positive position is copied as a fresh marker: the copy
+        /// is itself a deferred signature whose own uses decide (a where-alias
+        /// declaration's method signature copied into a referencing
+        /// annotation, or an alias body embedded in one).
+        defer_open,
     };
 
     const Self = @This();
@@ -619,13 +632,27 @@ pub const Instantiator = struct {
         // explicitly classified as a scheme instead copies the non-generalized
         // structural nodes from which a generalized leaf is reachable, so
         // generalized leaves at arbitrary depth remain reachable while every
-        // monomorphic node and leaf keeps its identity.
+        // monomorphic node and leaf keeps its identity. A polarity marker is
+        // never shared: it stands for "decided by this instantiation" whatever
+        // its rank (a where-method signature is instantiated per body use
+        // before the enclosing scheme generalizes).
+        const is_polarity_marker = self.polarity_var_ident != null and
+            resolved.desc.content == .rigid and
+            resolved.desc.content.rigid.name.eql(self.polarity_var_ident.?);
+        const is_leaf = switch (resolved.desc.content) {
+            .alias, .structure => false,
+            .flex, .rigid, .field_presence, .err => true,
+        };
+        if (!force_root_copy and self.share_leaves and is_leaf and !is_polarity_marker) {
+            try machine.value_stack.append(self.store.gpa, resolved_var);
+            return true;
+        }
         if (!force_root_copy and self.rank_behavior == .respect_rank and resolved.desc.rank != .generalized) {
             const copy_structure = self.copy_scheme_structure and switch (resolved.desc.content) {
                 .alias, .structure => machine.reach_state.get(resolved_var) orelse false,
                 .flex, .rigid, .field_presence, .err => false,
             };
-            if (!copy_structure) {
+            if (!copy_structure and !is_polarity_marker) {
                 try machine.value_stack.append(self.store.gpa, resolved_var);
                 return true;
             }
@@ -655,6 +682,10 @@ pub const Instantiator = struct {
                             .preserve => .{ .rigid = Rigid.init(rigid.name) },
                             .resolve_by_polarity => switch (self.current_polarity) {
                                 .pos => .{ .flex = Flex.init() },
+                                .neg => .{ .structure = .empty_tag_union },
+                            },
+                            .defer_open => switch (self.current_polarity) {
+                                .pos => .{ .rigid = Rigid.init(rigid.name) },
                                 .neg => .{ .structure = .empty_tag_union },
                             },
                         };
