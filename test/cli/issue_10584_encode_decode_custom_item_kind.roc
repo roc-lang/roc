@@ -19,7 +19,7 @@ ItemKind := [Text, Method].{
 		}
 	}
 
-	parser_for : encoding -> (state -> Try({ value : ItemKind, rest : state }, [TooShort, InvalidJson(Str), ..]))
+	parser_for : encoding -> (state -> Try({ value : ItemKind, rest : state }, [TooShort, InvalidJson(Str)]))
 		where [
 			encoding.parse_u32 : encoding, state -> Try({ value : U32, rest : state }, [InvalidJson(Str)]),
 		]

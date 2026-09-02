@@ -34,5 +34,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[Some(Dec), ..]"))
+(expr (type "[Some(Dec)]"))
 ~~~

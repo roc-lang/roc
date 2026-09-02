@@ -11,7 +11,7 @@ app [main!] { pf: platform "./platform/main.roc" }
 import pf.FallibleChannels
 import pf.Stdout
 
-main! : List(Str) => Try({}, [Exit(I32), ..])
+main! : List(Str) => Try({}, [Exit(I32)])
 main! = |_args| {
 	Stdout.line!("annotation: ${declared_row(FallibleChannels.via_annotation!({}))}")
 	Stdout.line!("argument: ${declared_row(FallibleChannels.via_argument!({}))}")

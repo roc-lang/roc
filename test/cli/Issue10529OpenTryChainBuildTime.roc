@@ -13,7 +13,7 @@ take7 = |b| Ok({ val: take6(b)?.val, rest: take6(b)?.rest })
 take8 = |b| Ok({ val: take7(b)?.val, rest: take7(b)?.rest })
 take9 = |b| Ok({ val: take8(b)?.val, rest: take8(b)?.rest })
 
-main! : List(Str) => Try({}, [Exit(I32), ..])
+main! : List(Str) => Try({}, [Exit(I32)])
 main! = |_args| {
 	_ = take9([1, 2, 3])
 	Ok({})
