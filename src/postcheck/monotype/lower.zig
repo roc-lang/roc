@@ -12587,6 +12587,11 @@ const RetainedCodecContract = struct {
     method_call_slots: []const CodecMethodCallSlot,
     grounding_call_index: ?u32,
     constructor_node: NodeId,
+
+    fn deinit(self: RetainedCodecContract, allocator: Allocator) void {
+        allocator.free(self.calls);
+        allocator.free(self.method_call_slots);
+    }
 };
 
 const CodecContractExpansion = struct {
@@ -13597,8 +13602,7 @@ const BodyDraftStore = struct {
             self.allocator.free(boundary.lexical.binders);
             self.allocator.free(boundary.lexical.local_procs);
             if (boundary.codec_contract) |contract| {
-                self.allocator.free(contract.calls);
-                self.allocator.free(contract.method_call_slots);
+                contract.deinit(self.allocator);
             }
         }
         for (self.deferred_inspects.items) |boundary| {
@@ -14302,6 +14306,9 @@ const BodyDraftStore = struct {
         for (self.deferred_callsite_intrinsics.items) |boundary| {
             self.allocator.free(boundary.lexical.binders);
             self.allocator.free(boundary.lexical.local_procs);
+            if (boundary.codec_contract) |contract| {
+                contract.deinit(self.allocator);
+            }
         }
         for (self.deferred_inspects.items) |boundary| {
             self.allocator.free(boundary.lexical.binders);
@@ -22594,8 +22601,7 @@ const BodyContext = struct {
                 var codec_contract_needs_cleanup = true;
                 errdefer if (codec_contract_needs_cleanup) {
                     if (codec_contract) |contract| {
-                        self.allocator.free(contract.calls);
-                        self.allocator.free(contract.method_call_slots);
+                        contract.deinit(self.allocator);
                     }
                 };
                 try self.draft.deferred_callsite_intrinsics.append(self.allocator, .{

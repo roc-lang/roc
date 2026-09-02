@@ -3193,15 +3193,20 @@ frozen prepared-call plan. They do not repeat method lookup, synthesize another
 specialization request, or interpret the shape to recover a call absent from
 `StaticDispatchPlanTable.generated_codec_derivations`. Debug compiler builds
 audit that every producer-required call was consumed and that repeated roles
-have exactly equal checked type graphs. Conditional capabilities are omitted
-from the consumption requirement unless the specialization selects their
-generated-code path. A format procedure's specialization identity names the
-complete derivation boundary and instantiated constructor, not the individual
-call edge that first reached it. Equivalent checked call edges therefore share
-one specialization, while the ordinary request type and checked evidence still
-distinguish genuinely different targets. The grounding call index remains only
-activation and debug metadata. These audits and their consumption bits are
-absent from release compiler builds.
+have exactly equal checked type graphs. A parent structural-call edge and its
+nested derivation independently snapshot one checker relation, so their debug
+audit requires equal checked root keys plus full graph equality under a bijective
+renaming of flex and rigid identities shared across both relation roots;
+variable sharing, constraints, defaults, and every non-variable payload remain
+exact. Conditional capabilities are
+omitted from the consumption requirement unless the specialization selects
+their generated-code path. A format procedure's specialization identity names
+the complete derivation boundary and instantiated constructor, not the
+individual call edge that first reached it. Equivalent checked call edges
+therefore share one specialization, while the ordinary request type and checked
+evidence still distinguish genuinely different targets. The grounding call
+index remains only activation and debug metadata. These audits and their
+consumption bits are absent from release compiler builds.
 
 If a format does not support a shape, checking reports the missing method as a
 static-dispatch error. Unsupported shapes are not represented as runtime parse
@@ -4707,10 +4712,14 @@ rejection or enter a later scheme.
 Instantiation copies the root type and every pending requirement under one
 substitution. The receiver follows ordinary rank behavior: an enclosing weak
 value stays shared, while a receiver quantified by an enclosing scheme is
-copied. The callable root is copied even though its outer receiver keeps that
-root below generalized rank; everything below the callable root follows
-ordinary rank behavior, so its generalized argument and result variables are
-fresh per use. Derived-shape validation is the one exception: it instantiates
+copied. A generated-codec requirement force-copies its receiver's monomorphic
+structural spine as well: the spine can contain a generalized descendant shared
+with the scheme root, and reusing the spine would leave the requirement attached
+to the definition's old descendant instead of the use's substitution. The
+callable root is copied even though its outer receiver keeps that root below
+generalized rank; everything below the callable root follows ordinary rank
+behavior, so its generalized argument and result variables are fresh per use.
+Derived-shape validation is the one exception: it instantiates
 a method's scheme only to narrow the root copy against an expected callable
 shape, it is not a value use, and no definition boundary owns the validation
 site. A validation instantiation therefore keeps a requirement whose receiver
@@ -4810,9 +4819,20 @@ counter, so a boundary that resolves pending dispatch targets by checking a
 sibling module-level group in a nested frame sees that group's schemes one rank
 deeper, and only the explicit capture-group identity keeps those live
 module-level schemes out of the closing boundary's nested-frame retirement.
-The checked-module boundary rejects
-any remaining checker-local requirement and empties the scheme index, so no
-import can observe a root type after its requirement was silently discarded.
+The checked-module boundary rejects any remaining ordinary checker-local
+requirement and empties the checker-local scheme index, so no import can observe
+a root type after such a requirement was silently discarded. A successfully
+validated generated-codec requirement is different: its current concrete shape
+can still change when a downstream use substitutes a nested generalized
+variable. Checking serializes that exact receiver and callable relation in a
+node-sorted binding-scheme side table, referencing the constraint already stored
+in the module's TypeStore and carrying the scheme root that groups all source
+aliases. Import copying copies the binding root, codec receiver, and callable
+through one shared source-to-destination substitution map and recreates the
+explicit TypeScheme requirement. Rechecking a deserialized checked environment
+uses that scheme root to rehydrate the same alias-indexed TypeScheme before
+source checking starts. No import stage infers a codec relation from the solved
+receiver shape or from method-name heuristics.
 
 Boundary literal defaulting protects variables in the callable relation but
 does not protect the receiver solely because it is the callable's first
