@@ -1,10 +1,10 @@
 //! Compiler-owned stack probing for the machine-code shim.
 //!
-//! Safe Zig builds emit calls to `__zig_probe_stack` for large x86 and x86_64
-//! ELF and Mach-O stack frames. The shim is linked into programs whose platform
-//! host need not carry Zig's compiler-rt, so the shim must define that helper
-//! itself. Local binding resolves the generated calls without exposing a
-//! compiler-private symbol to the platform link.
+//! ReleaseSafe Zig builds emit calls to `__zig_probe_stack` for large x86 and
+//! x86_64 ELF and Mach-O stack frames. The shim is linked into programs whose
+//! platform host need not carry Zig's compiler-rt, so the shim must define that
+//! helper itself. Local binding resolves the generated calls without exposing
+//! a compiler-private symbol to the platform link.
 
 const builtin = @import("builtin");
 
@@ -27,6 +27,7 @@ pub inline fn retain() void {
 /// Touch every page in a large stack allocation before the caller moves its
 /// stack pointer across the complete frame. The calling convention matches the
 /// helper emitted by Zig: the requested byte count arrives in eax/rax.
+/// The body mirrors Zig 0.16's `compiler_rt/stack_probe.zig` implementation.
 fn zigProbeStack() callconv(.naked) void {
     @setRuntimeSafety(false);
     if (!needs_zig_probe) unreachable;
@@ -74,7 +75,7 @@ fn zigProbeStack() callconv(.naked) void {
                 \\        pop    %%ecx
                 \\        ret
         );
-    } else {
-        unreachable;
     }
+
+    unreachable;
 }
