@@ -3236,9 +3236,7 @@ pub const SyntaxChecker = struct {
             actions.deinit(self.allocator);
         }
 
-        if (try self.buildAnnotationAction(module_env, start_offset, end_offset)) |action| {
-            try actions.append(self.allocator, action);
-        }
+        try self.appendAnnotationActions(module_env, start_offset, end_offset, &actions);
         if (try self.buildExpectTestAction(module_env, start_offset, end_offset)) |action| {
             try actions.append(self.allocator, action);
         }
@@ -3248,17 +3246,28 @@ pub const SyntaxChecker = struct {
         };
     }
 
-    /// Build the action that writes an inferred type above the binding it
-    /// belongs to, or null when the range names no binding that can take one.
-    fn buildAnnotationAction(
+    /// Add one action per binding in the range that can take an annotation,
+    /// in source order.
+    ///
+    /// A range covering several bindings has no one right answer, and the
+    /// protocol does not ask for one: `textDocument/codeAction` answers with a
+    /// menu. Every title names its binding, so the reader picks the intended
+    /// one instead of a rule guessing at it. Earlier rules did guess -- first
+    /// by the shortest name, then by the last position -- and each picked the
+    /// wrong binding for some arrangement of the same selection.
+    ///
+    /// A cursor, which is how the request usually arrives, touches one name and
+    /// so still produces one action.
+    fn appendAnnotationActions(
         self: *SyntaxChecker,
         module_env: *ModuleEnv,
         start_offset: u32,
         end_offset: u32,
-    ) Allocator.Error!?CodeAction {
+        actions: *std.ArrayList(CodeAction),
+    ) Allocator.Error!void {
         var bindings = try cir_queries.collectUnannotatedBindings(module_env, start_offset, end_offset, self.allocator);
         defer bindings.deinit(self.allocator);
-        if (bindings.items.len == 0) return null;
+        if (bindings.items.len == 0) return;
 
         // A lambda parameter and a destructured field are bindings too, and an
         // annotation belongs to neither: it is a line of its own above what
@@ -3266,44 +3275,41 @@ pub const SyntaxChecker = struct {
         var declared = try cir_queries.collectDeclaredPatterns(module_env, self.allocator);
         defer declared.deinit(self.allocator);
 
-        // A selection can cover several bindings at once, and the innermost is
-        // the one to annotate. A binding nested inside another is written after
-        // it, so the last name the selection reaches is the innermost one along
-        // that path. Name length says nothing about nesting: comparing it let
-        // an outer binding with a shorter name win over the inner one.
-        var chosen: ?cir_queries.UnannotatedBinding = null;
-        for (bindings.items) |binding| {
-            if (!patternListContains(declared.items, binding.pattern)) continue;
-            const current = chosen orelse {
-                chosen = binding;
-                continue;
+        // The walk finds bindings in traversal order; the menu reads better in
+        // the order the file writes them.
+        std.mem.sort(cir_queries.UnannotatedBinding, bindings.items, {}, bindingPrecedes);
+
+        for (bindings.items) |target| {
+            if (!patternListContains(declared.items, target.pattern)) continue;
+
+            var type_writer = try module_env.initTypeWriter();
+            defer type_writer.deinit();
+            type_writer.write(ModuleEnv.varFrom(target.pattern), .one_line) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => continue,
             };
-            if (binding.region.start.offset > current.region.start.offset) chosen = binding;
+
+            const rendered = type_writer.get();
+            if (rendered.len == 0) continue;
+
+            const edit = try self.annotationInsertion(module_env, target, rendered) orelse continue;
+            errdefer self.allocator.free(edit.new_text);
+
+            const name = module_env.common.source[target.region.start.offset..target.region.end.offset];
+            const title = try std.fmt.allocPrint(self.allocator, "Annotate '{s}' with its inferred type", .{name});
+
+            try actions.append(self.allocator, .{
+                .title = title,
+                .kind = refactor_rewrite_kind,
+                .range = edit.range,
+                .new_text = edit.new_text,
+            });
         }
-        const target = chosen orelse return null;
+    }
 
-        var type_writer = try module_env.initTypeWriter();
-        defer type_writer.deinit();
-        type_writer.write(ModuleEnv.varFrom(target.pattern), .one_line) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return null,
-        };
-
-        const rendered = type_writer.get();
-        if (rendered.len == 0) return null;
-
-        const edit = try self.annotationInsertion(module_env, target, rendered) orelse return null;
-        errdefer self.allocator.free(edit.new_text);
-
-        const name = module_env.common.source[target.region.start.offset..target.region.end.offset];
-        const title = try std.fmt.allocPrint(self.allocator, "Annotate '{s}' with its inferred type", .{name});
-
-        return CodeAction{
-            .title = title,
-            .kind = refactor_rewrite_kind,
-            .range = edit.range,
-            .new_text = edit.new_text,
-        };
+    /// Order two bindings by where their names are written.
+    fn bindingPrecedes(_: void, left: cir_queries.UnannotatedBinding, right: cir_queries.UnannotatedBinding) bool {
+        return left.region.start.offset < right.region.start.offset;
     }
 
     /// Build the action that writes an `expect` calling a top-level function,

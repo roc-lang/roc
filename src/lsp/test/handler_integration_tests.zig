@@ -344,7 +344,7 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "code actions do not annotate a lambda parameter", .run = codeActionsLeaveLambdaParametersAlone },
     .{ .name = "code actions leave out a test they cannot write", .run = codeActionsLeaveOutUnwritableTest },
     .{ .name = "code actions offer nothing for a document that does not compile", .run = codeActionsOfferNothingWithoutTypes },
-    .{ .name = "code actions annotate the innermost binding a selection reaches", .run = codeActionsAnnotateInnermostOfSeveral },
+    .{ .name = "code actions offer one annotation per binding a selection reaches", .run = codeActionsOfferOnePerBinding },
     .{ .name = "code actions leave a trailing comment on its own line", .run = codeActionsKeepTrailingComment },
     .{ .name = "the name on an annotation is a usable starting point", .run = annotationNameResolvesLikeAnyOccurrence },
     .{ .name = "positions are UTF-16 code units, not bytes", .run = positionsUseUtf16CodeUnits },
@@ -5787,18 +5787,20 @@ pub fn inlayHintsCarryTheirAnnotationEdit() integration_spec.SpecError!void {
     try std.testing.expect((try hintEdit(left_hint)) == null);
 }
 
-/// Verifies a selection covering several bindings annotates the innermost.
+/// Verifies a selection covering several bindings offers one action each.
 ///
-/// Reported by review on #11069. The choice used to be made by comparing name
-/// lengths, which says nothing about nesting: `outer` and `inner` are shorter
-/// than `doubled`, so the outermost binding won.
-pub fn codeActionsAnnotateInnermostOfSeveral() integration_spec.SpecError!void {
+/// Reported by review on #11069, twice. Choosing one of them by comparing name
+/// lengths annotated `outer`, because five characters is fewer than seven;
+/// choosing by the latest position annotated whichever sibling came last in the
+/// file. There is no rule that reads a reader's mind, and the protocol does not
+/// need one: a code action request is answered with a menu.
+pub fn codeActionsOfferOnePerBinding() integration_spec.SpecError!void {
     const allocator = test_env.allocator;
     var tmp = test_env.tmpDir(.{});
     defer tmp.cleanup();
     const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
     defer allocator.free(tmp_path);
-    const fixture = try renameFixture(allocator, tmp_path, "code_action_innermost.roc");
+    const fixture = try renameFixture(allocator, tmp_path, "code_action_several.roc");
     defer allocator.free(fixture.path);
     defer allocator.free(fixture.uri);
     const platform_path = try platformPath(allocator);
@@ -5836,12 +5838,31 @@ pub fn codeActionsAnnotateInnermostOfSeveral() integration_spec.SpecError!void {
     defer response.deinit();
     const actions = try response.result();
 
-    const annotate = try codeActionByPrefix(actions, "Annotate 'doubled'") orelse return error.TestUnexpectedResult;
-    try expectInsertionAt(try codeActionEdit(annotate, fixture.uri), 6, 0, "        doubled : Str\n");
+    // Every binding the range reaches is offered, none is chosen for the
+    // reader, and each edit goes above the line its own binding opens.
+    const outer = try codeActionByPrefix(actions, "Annotate 'outer'") orelse return error.TestUnexpectedResult;
+    try expectInsertionAt(try codeActionEdit(outer, fixture.uri), 4, 0, "    outer : Str\n");
 
-    // The outer bindings are in the range too, and neither is offered.
-    try std.testing.expect((try codeActionByPrefix(actions, "Annotate 'outer'")) == null);
-    try std.testing.expect((try codeActionByPrefix(actions, "Annotate 'inner'")) == null);
+    const inner = try codeActionByPrefix(actions, "Annotate 'inner'") orelse return error.TestUnexpectedResult;
+    try expectInsertionAt(try codeActionEdit(inner, fixture.uri), 5, 0, "    inner : Str\n");
+
+    const doubled = try codeActionByPrefix(actions, "Annotate 'doubled'") orelse return error.TestUnexpectedResult;
+    try expectInsertionAt(try codeActionEdit(doubled, fixture.uri), 6, 0, "        doubled : Str\n");
+
+    // A cursor on one name still answers with that one alone.
+    const narrow = try codeActionRequest(allocator, 3, fixture.uri, 6, 8, 6, 8);
+    defer allocator.free(narrow);
+    const narrow_responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{narrow});
+    defer {
+        for (narrow_responses) |body| allocator.free(body);
+        allocator.free(narrow_responses);
+    }
+    var narrow_response = try responseById(allocator, narrow_responses, 3);
+    defer narrow_response.deinit();
+    const narrow_actions = try narrow_response.result();
+    try std.testing.expect((try codeActionByPrefix(narrow_actions, "Annotate 'doubled'")) != null);
+    try std.testing.expect((try codeActionByPrefix(narrow_actions, "Annotate 'outer'")) == null);
+    try std.testing.expect((try codeActionByPrefix(narrow_actions, "Annotate 'inner'")) == null);
 }
 
 /// Verifies a generated test goes below a comment written after the value.
