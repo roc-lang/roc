@@ -1385,7 +1385,7 @@ const State = struct {
     }
 
     /// Overwrites a recycled state with `source`, keeping the buffers it
-    /// already owns. Every field a fresh clone would set is set here too.
+    /// already owns. `refilled_fields` holds this to every field of `State`.
     fn refillFrom(self: *State, source: *const State) Allocator.Error!void {
         if (self.local_value.len != source.local_value.len) {
             self.local_value = try self.allocator.realloc(self.local_value, source.local_value.len);
@@ -1430,6 +1430,49 @@ const State = struct {
         self.local_dense = source.local_dense;
         self.pool = source.pool;
         self.result_discriminant = source.result_discriminant;
+    }
+
+    /// Every field `refillFrom` copies out of the source state.
+    const refilled_fields = [_][]const u8{
+        "local_value",
+        "balance",
+        "holder",
+        "conditional_condition",
+        "conditional_condition_mask",
+        "maybe_uninitialized_unresolved",
+        "maybe_uninitialized_released",
+        "claims",
+        "outcome_discriminants",
+        "local_dense",
+        "pool",
+        "result_discriminant",
+    };
+
+    /// Fields a refill leaves as the recycled state already has them. Every
+    /// state in a pool is built with the certifier's allocator, so the one a
+    /// recycled state holds is already the source's.
+    const refill_exempt_fields = [_][]const u8{
+        "allocator",
+    };
+
+    // A recycled state keeps whatever the previous walk left in a field the
+    // refill skips, and a leftover fact reads as one this path established:
+    // the certifier then reports a finding against a path it never walked, or
+    // misses one it did. Neither shows up as a crash, so a field added to
+    // `State` fails to compile until it is accounted for above.
+    comptime {
+        for (@typeInfo(State).@"struct".fields) |field| {
+            var accounted = false;
+            for (refilled_fields) |name| {
+                if (std.mem.eql(u8, name, field.name)) accounted = true;
+            }
+            for (refill_exempt_fields) |name| {
+                if (std.mem.eql(u8, name, field.name)) accounted = true;
+            }
+            if (!accounted) @compileError(
+                "State." ++ field.name ++ " is neither copied by refillFrom nor listed as exempt",
+            );
+        }
     }
 
     fn copyList(
