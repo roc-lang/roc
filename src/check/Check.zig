@@ -19742,6 +19742,12 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 // the original assignment pattern, not the reassignment region
                 const reassign_pattern_result = try self.unify(reassign_pattern_var, reassign_expr_var, env);
 
+                if (reassign_pattern_result.isProblem() or
+                    self.types.resolveVar(reassign_expr_var).desc.content == .err)
+                {
+                    try self.erroneous_value_exprs.put(self.gpa, reassign.expr, {});
+                }
+
                 _ = try self.unify(stmt_var, reassign_expr_var, env);
 
                 if (reassign_pattern_result.isEstablished()) {

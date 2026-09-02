@@ -4,6 +4,34 @@ const std = @import("std");
 const CIR = @import("can").CIR;
 const TestEnv = @import("./TestEnv.zig");
 
+test "check - mismatched reassignment replaces its RHS with a runtime error" {
+    const src =
+        \\main! = |_| {
+        \\    var $list = [1, 2, 3]
+        \\    $list = List.set($list, 0, 5)
+        \\    Ok({})
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Type Mismatch");
+
+    var found_runtime_error = false;
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < test_env.module_env.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (test_env.module_env.store.nodes.get(node_idx).tag != .statement_reassign) continue;
+        const stmt_idx: CIR.Statement.Idx = @enumFromInt(raw_node_idx);
+        const stmt = test_env.module_env.store.getStatement(stmt_idx);
+        if (stmt == .s_reassign and test_env.module_env.store.getExpr(stmt.s_reassign.expr) == .e_runtime_error) {
+            found_runtime_error = true;
+        }
+    }
+    try std.testing.expect(found_runtime_error);
+}
+
 test "check - repro - issue 10365 - erroneous captured lambda poisons closure owner" {
     const src =
         \\wrap : U64, a -> Box(({} => a))
