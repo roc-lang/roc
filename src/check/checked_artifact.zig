@@ -3672,14 +3672,14 @@ fn checkedTypeRootExactEql(
 
 const CheckedTypeAlphaExactContext = struct {
     assumed: std.AutoHashMap(CheckedTypeExactPair, void),
-    left_variables: std.AutoHashMap(CheckedTypeId, CheckedTypeId),
-    right_variables: std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+    left_variables: collections.DenseMap(CheckedTypeId, CheckedTypeId),
+    right_variables: collections.DenseMap(CheckedTypeId, CheckedTypeId),
 
     fn init(allocator: Allocator) CheckedTypeAlphaExactContext {
         return .{
             .assumed = std.AutoHashMap(CheckedTypeExactPair, void).init(allocator),
-            .left_variables = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator),
-            .right_variables = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator),
+            .left_variables = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator),
+            .right_variables = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator),
         };
     }
 
@@ -3797,7 +3797,18 @@ fn checkedTypeRootAlphaExactEql(
             right_payload.rigid,
             context,
         ),
-        else => {},
+        .pending,
+        .err,
+        .empty_record,
+        .empty_tag_union,
+        .alias,
+        .record,
+        .record_unbound,
+        .tuple,
+        .nominal,
+        .function,
+        .tag_union,
+        => {},
     }
     if (left == right) return true;
     const pair = CheckedTypeExactPair{ .left = left, .right = right };
