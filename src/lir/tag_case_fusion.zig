@@ -387,8 +387,10 @@ fn applyCandidate(
     defer dests.deinit(store.allocator);
     var cloned_locals = std.ArrayList(LIR.LocalId).empty;
     defer cloned_locals.deinit(store.allocator);
-    var moved_branches = std.ArrayList(LIR.CFStmtId).empty;
-    defer moved_branches.deinit(store.allocator);
+    const source_local_count = store.localCount();
+    const moved_definition_locals = try store.allocator.alloc(bool, source_local_count);
+    defer store.allocator.free(moved_definition_locals);
+    @memset(moved_definition_locals, false);
     for (candidate.builds.items) |build| {
         if (findDest(dests.items, build.variant_index, build.discriminant) != null) continue;
         const payload_layout = variantPayloadLayout(store, layouts, candidate.param, build.variant_index) orelse unreachable;
@@ -409,15 +411,27 @@ fn applyCandidate(
         } });
 
         const branch = switchTarget(store, switch_stmt, build.discriminant);
-        // A complete fusion moves each source arm, so its first destination
-        // can retain the source locals. Several discriminants may select the
-        // same default arm, however; every additional copy needs fresh
-        // definition locals just like an arm retained by partial fusion.
-        const retain_source_locals = candidate.complete and
-            std.mem.findScalar(LIR.CFStmtId, moved_branches.items, branch) == null;
-        if (retain_source_locals) try moved_branches.append(store.allocator, branch);
-        const branch_defs = if (retain_source_locals) null else try collectBranchDefinitions(store, branch);
-        defer if (branch_defs) |definitions| store.allocator.free(definitions);
+        const branch_defs = try collectBranchDefinitions(store, branch);
+        defer store.allocator.free(branch_defs);
+        // A complete fusion moves each source definition, so its first
+        // destination can retain the source local. Distinct arm entries may
+        // converge on a shared suffix, however; any later clone whose
+        // reachable definitions overlap needs fresh locals just like an arm
+        // retained by partial fusion.
+        var retain_source_locals = candidate.complete;
+        if (retain_source_locals) {
+            for (branch_defs[0..source_local_count], moved_definition_locals) |is_defined, was_moved| {
+                if (is_defined and was_moved) {
+                    retain_source_locals = false;
+                    break;
+                }
+            }
+        }
+        if (retain_source_locals) {
+            for (branch_defs[0..source_local_count], moved_definition_locals) |is_defined, *was_moved| {
+                if (is_defined) was_moved.* = true;
+            }
+        }
         var cloner = try body_clone.BodyCloner(BranchRewriter).initWithFreshDeclaredJoins(store, .{
             .param = candidate.matched_value,
             .variant_index = build.variant_index,
@@ -429,7 +443,7 @@ fn applyCandidate(
         const frame = store.getLocalSpan(store.getProcSpec(candidate.proc).frame_locals);
         for (0..frame.len) |index| {
             const local = GuardedList.at(frame, index);
-            if (branch_defs == null or !branch_defs.?[@intFromEnum(local)]) cloner.local_map[@intFromEnum(local)] = local;
+            if (retain_source_locals or !branch_defs[@intFromEnum(local)]) cloner.local_map[@intFromEnum(local)] = local;
         }
         const body = try cloner.cloneStmt(branch);
         try cloned_locals.appendSlice(store.allocator, cloner.new_locals.items);
@@ -659,7 +673,7 @@ test "tag case fusion routes exact constructor edges without materializing tags"
     }
 }
 
-test "tag case fusion renames repeated copies of a shared default arm" {
+test "tag case fusion renames complete arms with a shared suffix" {
     const testing = std.testing;
     var store = LirStore.init(testing.allocator);
     defer store.deinit();
@@ -671,6 +685,8 @@ test "tag case fusion renames repeated copies of a shared default arm" {
     const disc = try store.addLocal(.{ .layout_idx = .u16 });
     const selector = try store.addLocal(.{ .layout_idx = .u16 });
     const zero = try store.addLocal(.{ .layout_idx = .u64 });
+    const one_prefix = try store.addLocal(.{ .layout_idx = .u64 });
+    const two_prefix = try store.addLocal(.{ .layout_idx = .u64 });
     const shared_default = try store.addLocal(.{ .layout_idx = .u64 });
     const join_id: LIR.JoinPointId = @enumFromInt(nextJoinPointRaw(&store));
 
@@ -686,10 +702,23 @@ test "tag case fusion renames repeated copies of a shared default arm" {
         .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u64 } },
         .next = ret_default,
     } });
+    const branch_one = try store.addCFStmt(.{ .assign_literal = .{
+        .target = one_prefix,
+        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+        .next = branch_default,
+    } });
+    const branch_two = try store.addCFStmt(.{ .assign_literal = .{
+        .target = two_prefix,
+        .value = .{ .i64_literal = .{ .value = 2, .layout_idx = .u64 } },
+        .next = branch_default,
+    } });
     const consume = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = disc,
-        .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = branch_zero }}),
-        .default_branch = branch_default,
+        .branches = try store.addCFSwitchBranches(&.{
+            .{ .value = 0, .body = branch_zero },
+            .{ .value = 1, .body = branch_one },
+        }),
+        .default_branch = branch_two,
     } });
     const read_disc = try store.addCFStmt(.{ .assign_ref = .{
         .target = disc,
@@ -740,7 +769,7 @@ test "tag case fusion renames repeated copies of a shared default arm" {
         .args = try store.addLocalSpan(&.{selector}),
         .iterator_fusion_scope = true,
         .body = body,
-        .frame_locals = try store.addLocalSpan(&.{ param, disc, selector, zero, shared_default }),
+        .frame_locals = try store.addLocalSpan(&.{ param, disc, selector, zero, one_prefix, two_prefix, shared_default }),
         .ret_layout = .u64,
     });
 
