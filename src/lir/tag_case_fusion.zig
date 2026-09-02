@@ -218,7 +218,7 @@ fn findCandidate(
 /// Before ARC, cloning scalar locals is ownership-neutral. Refcounted branch
 /// definitions require a full ownership-aware clone (including path-specific
 /// move facts), so partial fusion leaves those cases intact. Complete fusion
-/// moves rather than duplicates the only reachable branch definitions.
+/// replaces the original arms, so it does not duplicate their ownership paths.
 fn partialBranchesAreOwnershipNeutral(
     store: *LirStore,
     layouts: *const layout_mod.Store,
@@ -387,10 +387,6 @@ fn applyCandidate(
     defer dests.deinit(store.allocator);
     var cloned_locals = std.ArrayList(LIR.LocalId).empty;
     defer cloned_locals.deinit(store.allocator);
-    const source_local_count = store.localCount();
-    const moved_definition_locals = try store.allocator.alloc(bool, source_local_count);
-    defer store.allocator.free(moved_definition_locals);
-    @memset(moved_definition_locals, false);
     for (candidate.builds.items) |build| {
         if (findDest(dests.items, build.variant_index, build.discriminant) != null) continue;
         const payload_layout = variantPayloadLayout(store, layouts, candidate.param, build.variant_index) orelse unreachable;
@@ -413,25 +409,6 @@ fn applyCandidate(
         const branch = switchTarget(store, switch_stmt, build.discriminant);
         const branch_defs = try collectBranchDefinitions(store, branch);
         defer store.allocator.free(branch_defs);
-        // A complete fusion moves each source definition, so its first
-        // destination can retain the source local. Distinct arm entries may
-        // converge on a shared suffix, however; any later clone whose
-        // reachable definitions overlap needs fresh locals just like an arm
-        // retained by partial fusion.
-        var retain_source_locals = candidate.complete;
-        if (retain_source_locals) {
-            for (branch_defs[0..source_local_count], moved_definition_locals) |is_defined, was_moved| {
-                if (is_defined and was_moved) {
-                    retain_source_locals = false;
-                    break;
-                }
-            }
-        }
-        if (retain_source_locals) {
-            for (branch_defs[0..source_local_count], moved_definition_locals) |is_defined, *was_moved| {
-                if (is_defined) was_moved.* = true;
-            }
-        }
         var cloner = try body_clone.BodyCloner(BranchRewriter).initWithFreshDeclaredJoins(store, .{
             .param = candidate.matched_value,
             .variant_index = build.variant_index,
@@ -443,7 +420,7 @@ fn applyCandidate(
         const frame = store.getLocalSpan(store.getProcSpec(candidate.proc).frame_locals);
         for (0..frame.len) |index| {
             const local = GuardedList.at(frame, index);
-            if (retain_source_locals or !branch_defs[@intFromEnum(local)]) cloner.local_map[@intFromEnum(local)] = local;
+            if (!branch_defs[@intFromEnum(local)]) cloner.local_map[@intFromEnum(local)] = local;
         }
         const body = try cloner.cloneStmt(branch);
         try cloned_locals.appendSlice(store.allocator, cloner.new_locals.items);
@@ -502,9 +479,9 @@ fn applyCandidate(
     if (store.procNeedsStackProbe(layouts, proc.*)) proc.stack_probe = .required;
 }
 
-/// Identify locals defined inside a cloned match arm. Those locals must be
-/// alpha-renamed when the original arm remains as the partial-fusion path;
-/// frame locals that are only read are external inputs and retain identity.
+/// Identify locals defined inside a cloned match arm. Every clone gives those
+/// definitions fresh identities; frame locals that are only read are external
+/// inputs and retain identity.
 fn collectBranchDefinitions(store: *LirStore, body: LIR.CFStmtId) ResourceError![]bool {
     const defined = try store.allocator.alloc(bool, store.localCount());
     errdefer store.allocator.free(defined);
@@ -789,4 +766,6 @@ test "tag case fusion renames complete arms with a shared suffix" {
     }
     try testing.expectEqual(default_targets.len, default_count);
     try testing.expect(default_targets[0] != default_targets[1]);
+    try testing.expect(default_targets[0] != shared_default);
+    try testing.expect(default_targets[1] != shared_default);
 }
