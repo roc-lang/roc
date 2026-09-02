@@ -197,7 +197,10 @@ pub const Constants = struct {
     /// 91: A mismatched `if`/`match` branch or return value is reported at and
     ///     poisons the expression producing its value, leaving the expected
     ///     result type intact.
-    pub const CACHE_VERSION = 91;
+    /// 93: Tag unions in annotation output positions are implicitly open
+    ///     (polarity): extensionless unions there carry an anonymous rigid
+    ///     extension, and alias declaration bodies store a deferral marker.
+    pub const CACHE_VERSION = 93;
 };
 
 /// Configuration for the Roc cache system.
