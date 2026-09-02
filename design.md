@@ -10440,6 +10440,17 @@ no layout shape is treated as evidence that a variant is active.
 Ownership-complete aggregate reads and borrowed pure aliases form explicit
 ownership places. The place graph is solved to a fixpoint, so a nested read
 chain such as tag payload to struct field keeps the root aggregate's unit key.
+When one ownership place is projected repeatedly along a single control-flow
+path, dismantle analysis chooses the earliest same-root, same-layout projection
+that dominates each later projection and rewrites those later reads as explicit
+local aliases before ARC solving. Divergent projections remain separate places.
+This canonicalization is justified only by the committed projection shape and
+explicit CFG dominance; it never equates layouts or values heuristically. A borrowed
+projected struct whose complete root can own in the current emission may then
+receive that root unit and dismantle its own committed fields exactly like a
+directly owned struct. Both the transfer into the projected container and every
+later alias are present in LIR, so certification does not depend on the
+dismantle side table.
 If the final read result binds owned, that read moves the unit only when the
 root unit is present and the ownership place has no later RC-bearing use on
 that path; otherwise it retains exactly as an ordinary read would. This use

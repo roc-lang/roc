@@ -476,9 +476,17 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         // says it takes a field from a parameter overridden to owned. This is
         // part of the mandatory field-take variant, not optional inlining or
         // specialization.
-        for (domain.frame_locals) |local| {
-            const root = dismantles.ownedOnlyBindingRoot(local) orelse continue;
-            if (owned_binding_override.contains(root)) owned_binding_override.set(local);
+        var binding_override_changed = true;
+        while (binding_override_changed) {
+            binding_override_changed = false;
+            for (domain.frame_locals) |local| {
+                if (owned_binding_override.contains(local)) continue;
+                const root = dismantles.ownedOnlyBindingRoot(local) orelse continue;
+                if (owned_binding_override.contains(root)) {
+                    owned_binding_override.set(local);
+                    binding_override_changed = true;
+                }
+            }
         }
 
         const join_bodies = solution.joinBodiesOf(source_proc);
@@ -12515,6 +12523,56 @@ test "RC specialization: owned-only field take demands an owned variant" {
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     try f.expectRc(pair, 0, 0, 0);
     try testing.expectEqual(@as(usize, 1), f.countRc(field, .incref));
+}
+
+test "RC field takes through repeated dominating complete projections" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const wrapper_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = f.pair_list },
+        .{ .index = 1, .layout = .i64 },
+    });
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const scalar = try f.local(.i64);
+    const wrapper = try f.local(wrapper_layout);
+    const first_view = try f.local(f.pair_list);
+    const second_view = try f.local(f.pair_list);
+    const extracted_second = try f.local(f.list_i64);
+    const changed_second = try f.local(f.list_i64);
+    const extracted_first = try f.local(f.list_i64);
+    const result = try f.local(f.pair_list);
+
+    const ret = try f.ret(result);
+    const make_result = try f.assignStruct(result, &.{ extracted_first, changed_second }, ret);
+    const read_first = try f.assignRefField(extracted_first, second_view, 0, make_result);
+    const project_again = try f.assignRefField(second_view, wrapper, 0, read_first);
+    const reverse = try f.assignLowLevel(
+        changed_second,
+        &.{extracted_second},
+        LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+        project_again,
+    );
+    const read_second = try f.assignRefField(extracted_second, first_view, 1, reverse);
+    const project_first = try f.assignRefField(first_view, wrapper, 0, read_second);
+    const make_wrapper = try f.assignStruct(wrapper, &.{ pair, scalar }, project_first);
+    const assign_scalar = try f.assignI64(scalar, 0, make_wrapper);
+    const make_pair = try f.assignStruct(pair, &.{ first, second }, assign_scalar);
+    const make_second = try f.assignList(second, &.{}, make_pair);
+    const body = try f.assignList(first, &.{}, make_second);
+    _ = try f.addProc(&.{}, body, f.pair_list);
+
+    try f.run();
+
+    // The later projection is materialized as an explicit alias of the first.
+    // Both list fields move from that projected container without retains.
+    try testing.expectEqual(@as(usize, 0), f.countRc(extracted_first, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(extracted_second, .incref));
+    const second_projection_stmt = f.store.getCFStmt(project_again);
+    try testing.expect(second_projection_stmt == .assign_ref);
+    try testing.expectEqual(first_view, second_projection_stmt.assign_ref.op.local);
 }
 
 test "RC field take restores the exact aggregate field on checked failure without optional specialization" {

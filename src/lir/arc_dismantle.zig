@@ -344,6 +344,12 @@ const Analysis = struct {
     /// Proc parameters. A parameter solved borrowed may still qualify as an
     /// owned-only candidate: mode-specialized variants re-emit it owned.
     is_param: []const bool,
+    /// Root ownership unit for a borrowed struct reached through an explicit
+    /// chain of ownership-complete projections, `no_index` otherwise.
+    projected_root: []const u32,
+    /// Canonical projected struct binding for repeated complete reads of the
+    /// same root and committed layout.
+    projected_container: []const u32,
     /// Solved-borrowed bindings whose value reaches an explicitly owned
     /// direct-call or low-level operand. Field-take variants override exactly
     /// these bindings to owned instead of manufacturing a retain at that
@@ -396,7 +402,7 @@ const Analysis = struct {
         if (!self.rc_local[local_index]) return false;
         const local_layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
         if (local_layout.tag != .struct_) return false;
-        if (self.solution.isBorrowed(local) and !self.is_param[local_index]) return false;
+        if (self.solution.isBorrowed(local) and !self.is_param[local_index] and self.projected_root[local_index] == no_index) return false;
         if (self.solution.isJoinParam(local)) return false;
         if (self.solution.maybeUninitializedCondition(local) != null) return false;
 
@@ -433,6 +439,9 @@ const Analysis = struct {
     /// The container a source local stands for: itself, or its alias root.
     fn resolveRoot(self: *Analysis, local: LIR.LocalId) LIR.LocalId {
         const index = @intFromEnum(local);
+        if (self.projected_container[index] != no_index and self.projected_container[index] != index) {
+            return @enumFromInt(self.projected_container[index]);
+        }
         if (self.state[index] == .transparent_alias) {
             return @enumFromInt(self.alias_root[index]);
         }
@@ -467,6 +476,7 @@ const Analysis = struct {
     /// once by a value-producing assignment.
     fn noteDef(self: *Analysis, local: LIR.LocalId, stmt: LIR.CFStmtId) Error!void {
         const index = @intFromEnum(local);
+        if (self.projected_container[index] != no_index and self.projected_container[index] != index) return;
         if (self.state[index] == .transparent_alias) {
             // A second definition of an alias re-points it; the root can no
             // longer attribute its reads.
@@ -504,8 +514,9 @@ const Analysis = struct {
             return;
         }
         const root = self.resolveRoot(source);
+        const explicit_projected_alias = self.projected_container[target_index] == @intFromEnum(root);
         const transparent = self.solution.isBorrowed(target) and
-            self.solution.leaderOf(target) == root and
+            (explicit_projected_alias or self.solution.leaderOf(target) == root) and
             ((try self.entryOf(root)) != null);
         if (transparent) {
             // The alias target itself can never be a container.
@@ -663,10 +674,31 @@ fn restoredFieldMaskForDefault(
     return restored;
 }
 
+fn statementDominates(store: *const LirStore, allocator: Allocator, dominator: LIR.CFStmtId, target: LIR.CFStmtId) Error!bool {
+    if (dominator == target) return true;
+    var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.cfStmtCount());
+    defer seen.deinit(allocator);
+    var work = std.ArrayList(LIR.CFStmtId).empty;
+    defer work.deinit(allocator);
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+        if (proc.body) |body| try work.append(allocator, body);
+    }
+    while (work.pop()) |current| {
+        if (current == dominator) continue;
+        if (current == target) return false;
+        const index = @intFromEnum(current);
+        if (seen.isSet(index)) continue;
+        seen.set(index);
+        try body_clone.appendSuccessors(@constCast(store), &work, current);
+    }
+    return true;
+}
+
 /// Solve takes for every reachable statement in the store.
 pub fn compute(
     gpa: Allocator,
-    store: *const LirStore,
+    store: *LirStore,
     layouts: *const layout_mod.Store,
     rc_local: []const bool,
     solution: *const arc_solve.Solution,
@@ -707,6 +739,113 @@ pub fn compute(
         }
     }
 
+    // Establish reachability before classifying dismantle candidates. Complete
+    // projection roots must be known at the candidate gate: a borrowed payload
+    // struct can carry its parent's exact unit in an owned emission and is then
+    // a real dismantlable container, rather than an independently borrowed
+    // value with no unit to spend.
+    var reachable = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(gpa, store.cfStmtCount());
+    defer reachable.deinit(gpa);
+    var reach_work = std.ArrayList(LIR.CFStmtId).empty;
+    defer reach_work.deinit(gpa);
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+        if (proc.body) |body| try reach_work.append(gpa, body);
+    }
+    while (reach_work.pop()) |stmt_id| {
+        const index = @intFromEnum(stmt_id);
+        if (reachable.isSet(index)) continue;
+        reachable.set(index);
+        try body_clone.appendSuccessors(@constCast(store), &reach_work, stmt_id);
+    }
+
+    const projected_root = try gpa.alloc(u32, store.localCount());
+    defer gpa.free(projected_root);
+    @memset(projected_root, no_index);
+    const ProjectionEdge = struct { source: LIR.LocalId, target: LIR.LocalId, stmt: LIR.CFStmtId, is_projection: bool };
+    var projection_edges = std.ArrayList(ProjectionEdge).empty;
+    defer projection_edges.deinit(gpa);
+    for (0..store.cfStmtCount()) |stmt_index| {
+        if (!reachable.isSet(stmt_index)) continue;
+        const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+        if (stmt != .assign_ref) continue;
+        const assign = stmt.assign_ref;
+        const source: LIR.LocalId, const is_projection: bool = switch (assign.op) {
+            .local => |local| blk: {
+                if (!solution.isBorrowed(assign.target)) continue;
+                if (store.getLocal(local).layout_idx != store.getLocal(assign.target).layout_idx) continue;
+                break :blk .{ local, false };
+            },
+            .field, .tag_payload, .tag_payload_struct => blk: {
+                const projection = encodeProjection(assign.op).?;
+                const local = switch (assign.op) {
+                    .field => |op| op.source,
+                    .tag_payload => |op| op.source,
+                    .tag_payload_struct => |op| op.source,
+                    .local, .discriminant, .list_reinterpret, .nominal => unreachable,
+                };
+                if (!projectionOwnsAllRc(store, layouts, local, assign.target, projection)) continue;
+                break :blk .{ local, true };
+            },
+            .discriminant, .list_reinterpret, .nominal => continue,
+        };
+        try projection_edges.append(gpa, .{ .source = source, .target = assign.target, .stmt = @enumFromInt(@as(u32, @intCast(stmt_index))), .is_projection = is_projection });
+    }
+    var projection_changed = true;
+    while (projection_changed) {
+        projection_changed = false;
+        for (projection_edges.items) |edge| {
+            const source_index = @intFromEnum(edge.source);
+            const source_unit = solution.unitLocalOf(edge.source);
+            const source_root = if (projected_root[source_index] != no_index)
+                projected_root[source_index]
+            else if (edge.is_projection and (!solution.isBorrowed(source_unit) or is_param[@intFromEnum(source_unit)] or solution.isJoinParam(source_unit)))
+                @intFromEnum(source_unit)
+            else
+                no_index;
+            if (source_root == no_index) continue;
+            const target_index = @intFromEnum(edge.target);
+            if (projected_root[target_index] == no_index) {
+                projected_root[target_index] = source_root;
+                projection_changed = true;
+            } else if (projected_root[target_index] != source_root and projected_root[target_index] != no_index - 1) {
+                projected_root[target_index] = no_index - 1;
+                projection_changed = true;
+            }
+        }
+    }
+    for (projected_root) |*root| {
+        if (root.* == no_index - 1) root.* = no_index;
+    }
+    const projected_container = try gpa.alloc(u32, store.localCount());
+    defer gpa.free(projected_container);
+    @memset(projected_container, no_index);
+    const projected_stmt = try gpa.alloc(u32, store.localCount());
+    defer gpa.free(projected_stmt);
+    @memset(projected_stmt, no_index);
+    for (projection_edges.items) |edge| projected_stmt[@intFromEnum(edge.target)] = @intFromEnum(edge.stmt);
+    for (projected_root, 0..) |root, local_index| {
+        if (root == no_index) continue;
+        const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(local_index)));
+        const local_layout = layouts.getLayout(store.getLocal(local).layout_idx);
+        if (local_layout.tag != .struct_) continue;
+        const target_stmt_index = projected_stmt[local_index];
+        if (target_stmt_index == no_index) continue;
+        var representative: u32 = @intCast(local_index);
+        for (projected_root, 0..) |other_root, other_index| {
+            if (other_root != root or projected_stmt[other_index] == no_index) continue;
+            const other: LIR.LocalId = @enumFromInt(@as(u32, @intCast(other_index)));
+            if (store.getLocal(other).layout_idx != store.getLocal(local).layout_idx) continue;
+            const other_stmt: LIR.CFStmtId = @enumFromInt(projected_stmt[other_index]);
+            const target_stmt: LIR.CFStmtId = @enumFromInt(target_stmt_index);
+            if (!try statementDominates(store, gpa, other_stmt, target_stmt)) continue;
+            const representative_stmt: LIR.CFStmtId = @enumFromInt(projected_stmt[representative]);
+            if (try statementDominates(store, gpa, other_stmt, representative_stmt)) {
+                representative = @intCast(other_index);
+            }
+        }
+        projected_container[local_index] = representative;
+    }
     var analysis = Analysis{
         .gpa = gpa,
         .store = store,
@@ -717,6 +856,8 @@ pub fn compute(
         .alias_root = try gpa.alloc(u32, store.localCount()),
         .candidates = .empty,
         .is_param = is_param,
+        .projected_root = projected_root,
+        .projected_container = projected_container,
         .owned_demand = try gpa.alloc(bool, store.localCount()),
     };
     defer analysis.deinit();
@@ -1077,16 +1218,14 @@ pub fn compute(
         if (candidate.disqualified) continue;
         if (candidate.reads.items.len == 0) continue;
 
-        // Payload-read definitions (`assign_ref`) are excluded: a container
-        // that is itself a taken or claimable payload never holds its own
-        // certifier unit, so its dismantle's claims would have nothing to
-        // spend. Its whole release stays, itself claiming the outer field
-        // when the outer container dismantles.
+        // An ownership-complete projected struct can receive its root's exact
+        // unit in an owned emission. Other reference-defined containers remain
+        // excluded: they have no independent certifier unit to dismantle.
         const spine_start: LIR.CFStmtId = if (candidate.def_count == 1)
             switch (store.getCFStmt(candidate.def_stmt)) {
                 inline .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag => |stmt| stmt.next,
+                .assign_ref => |stmt| if (analysis.projected_root[@intFromEnum(local)] != no_index) stmt.next else continue :candidates,
                 .init_uninitialized,
-                .assign_ref,
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
@@ -1223,6 +1362,11 @@ pub fn compute(
 
         var poison: u64 = 0;
         join_bodies.clearRetainingCapacity();
+        for (0..store.cfStmtCount()) |stmt_index| {
+            if (!visited.isSet(stmt_index)) continue;
+            const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+            if (stmt == .join) try join_bodies.put(gpa, @intFromEnum(stmt.join.id), stmt.join.body);
+        }
         body_states.clearRetainingCapacity();
         flow_frames.clearRetainingCapacity();
         try flow_frames.append(gpa, .{ .cursor = spine_start, .state = .{ .may = 0, .must = 0 } });
@@ -1282,14 +1426,7 @@ pub fn compute(
                         // enclosing early exit—so it ends this path like a
                         // return would. Reads living past it are never
                         // visited, which keeps their fields residual.
-                        const body = join_bodies.get(@intFromEnum(stmt.target)) orelse {
-                            // A back edge can execute this region again with
-                            // its taken fields absent. The current closed
-                            // analysis rejects those takes; ordinary retains
-                            // remain the sound schedule.
-                            poison |= state.may;
-                            break :chain;
-                        };
+                        const body = join_bodies.get(@intFromEnum(stmt.target)) orelse break :chain;
                         const slot = try body_states.getOrPut(gpa, body);
                         if (slot.found_existing) {
                             const merged = FlowState.meet(slot.value_ptr.*, state);
@@ -1351,8 +1488,24 @@ pub fn compute(
         // A parameter solved borrowed dismantles only in emissions whose
         // demand vector overrides it to owned; everything else applies to
         // every emission of its proc.
-        const owned_only = solution.isBorrowed(local);
+        const projection_root_index = analysis.projected_root[@intFromEnum(local)];
+        const projected = projection_root_index != no_index;
+        const activation_root: LIR.LocalId = if (projected) @enumFromInt(projection_root_index) else local;
+        const owned_only = solution.isBorrowed(activation_root);
         const stored_fields = try result.arena.allocator().dupe(FieldPlace, fields.items);
+        if (projected) {
+            // The projection read itself moves the outer unit into this
+            // container in precisely those emissions where the root is owned.
+            // Publishing the binding edge makes the ordinary ARC transfer and
+            // certifier machinery carry that unit; no retain is suppressed
+            // without the explicit complete-projection receipt.
+            try result.complete_takes.put(gpa, candidate.def_stmt, activation_root);
+            if (owned_only) {
+                result.owned_only_binding_roots[@intFromEnum(local)] = @intFromEnum(activation_root);
+            } else {
+                result.take_bindings[@intFromEnum(local)] = true;
+            }
+        }
         for (candidate.reads.items) |read| {
             const bit = @as(u64, 1) << @intCast(read.field_idx);
             if (taken_mask & bit == 0) continue;
@@ -1365,7 +1518,7 @@ pub fn compute(
                 if (prior != no_index and prior != @intFromEnum(local)) {
                     dismantleInvariant("ARC owned-only field binding had conflicting parameter roots");
                 }
-                result.owned_only_binding_roots[target_index] = @intFromEnum(local);
+                result.owned_only_binding_roots[target_index] = @intFromEnum(activation_root);
             } else {
                 try result.takes.put(gpa, read.stmt, take);
                 result.take_bindings[@intFromEnum(read.target)] = true;
@@ -1395,6 +1548,21 @@ pub fn compute(
         } else {
             try result.containers.put(gpa, local, .{ .fields = stored_fields, .full_mask = rc_mask });
         }
+    }
+
+    // Materialize only equivalences whose representative actually acquired a
+    // committed dismantle plan. Lookup-only projections retain their original
+    // LIR and ownership schedule.
+    for (projected_container, 0..) |representative, local_index| {
+        if (representative == no_index or representative == local_index) continue;
+        const representative_local: LIR.LocalId = @enumFromInt(representative);
+        if (!result.containers.contains(representative_local) and
+            !result.owned_only_containers.contains(representative_local)) continue;
+        const stmt_index = projected_stmt[local_index];
+        if (stmt_index == no_index) continue;
+        const stmt = store.getCFStmtPtr(@enumFromInt(stmt_index));
+        if (stmt.* != .assign_ref) dismantleInvariant("projected alias definition stopped being a reference read");
+        stmt.assign_ref.op = .{ .local = representative_local };
     }
 
     // Variant admission consumes the exact owned-only benefit without
@@ -1435,6 +1603,19 @@ pub fn compute(
             }
             param_slot.value_ptr.* = .{ .proc = @intCast(proc_index), .position = @intCast(position) };
         }
+    }
+
+    // Projected dismantles activate from the parameter that owns their root,
+    // not from the borrowed projection binding itself.
+    var projected_containers = result.owned_only_containers.keyIterator();
+    while (projected_containers.next()) |local_ptr| {
+        const root_index = result.owned_only_binding_roots[@intFromEnum(local_ptr.*)];
+        if (root_index == no_index) continue;
+        const source_info = param_info.get(root_index) orelse continue;
+        if (source_info.proc == ambiguous_index) continue;
+        const source_proc: LIR.LirProcSpecId = @enumFromInt(source_info.proc);
+        if (solution.isPinnedProc(source_proc)) continue;
+        result.owned_only_param_benefits[source_info.proc] |= arc_sig.paramBit(source_info.position).?;
     }
 
     const PlaceOrigin = struct {
@@ -1562,6 +1743,7 @@ pub fn compute(
         if (origin.root == ambiguous_index or !origin.projected) continue;
         const local: LIR.LocalId = @enumFromInt(entry.key_ptr.*);
         if (!solution.isBorrowed(local) or solution.isJoinParam(local)) continue;
+        if (result.isTakeBinding(local) or result.owned_only_binding_roots[@intFromEnum(local)] != no_index) continue;
         try result.projection_units.put(gpa, local, @enumFromInt(origin.root));
     }
     for (place_edges.items) |edge| {
