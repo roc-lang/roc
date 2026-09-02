@@ -1202,6 +1202,7 @@ const ArcPlanStep = struct {
     pre_release_extra: std.ArrayList(ReleaseDecision) = .empty,
     pre_retain: std.ArrayList(LIR.LocalId) = .empty,
     retain_assign_ref_target: bool = true,
+    take_assign_ref_target: bool = false,
     /// Absent committed field places on a same-layout representation-shell
     /// alias, in the dismantle container's compact field-mask domain.
     residual_shell_absent_mask: u64 = 0,
@@ -1228,6 +1229,7 @@ const ArcPlanStep = struct {
         self.pre_release_extra.clearRetainingCapacity();
         self.pre_retain.clearRetainingCapacity();
         self.retain_assign_ref_target = true;
+        self.take_assign_ref_target = false;
         self.residual_shell_absent_mask = 0;
         self.residual_shell_all_rc_fields_absent = false;
         self.retain_set_target = true;
@@ -1855,6 +1857,7 @@ const Inserter = struct {
                 break :blk try self.store.addCFStmt(.{ .assign_ref = .{
                     .target = assign.target,
                     .op = assign.op,
+                    .take_kind = if (step.take_assign_ref_target) .take else .none,
                     .residual_shell_absent_fields = try self.materializeResidualShellAbsentFields(
                         assign,
                         step.residual_shell_absent_mask,
@@ -2289,6 +2292,7 @@ const Inserter = struct {
                             assign.next,
                         );
                         complete_moved_root = !transfer.retain_target;
+                        step.take_assign_ref_target = complete_moved_root;
                     } else {
                         switch (assign.op) {
                             .local => |source| {
@@ -2325,6 +2329,7 @@ const Inserter = struct {
                                 // moves only this stored unit and leaves the
                                 // exact residual shell behind.
                                 transfer.retain_target = false;
+                                step.take_assign_ref_target = true;
                                 segment.owned.takeResidualField(take_root, take.field_mask);
                             }
                         }
@@ -5145,6 +5150,7 @@ const Inserter = struct {
     /// An owned binding holds its own retained unit and is its own leader,
     /// so its later uses never depend on the place.
     fn localInOwnershipPlace(self: *const Inserter, local: LIR.LocalId, place: LIR.LocalId) bool {
+        if (self.owned_binding_override.contains(local)) return local == place;
         return self.solution.leaderOf(local) == place;
     }
 
@@ -7050,6 +7056,7 @@ const Inserter = struct {
                     .source = local,
                     .field_idx = @intCast(field.field_idx),
                 } },
+                .take_kind = .take,
                 .next = tail,
             } });
         }
