@@ -8094,6 +8094,9 @@ fn poisonCheckedStrictDemandCycles(
         region: Region,
     };
 
+    var bindings = std.ArrayList(PatternBinding).empty;
+    defer bindings.deinit(self.gpa);
+
     for (eval_order.sccs) |scc| {
         if (!scc.is_recursive) continue;
 
@@ -8103,12 +8106,18 @@ fn poisonCheckedStrictDemandCycles(
         for (scc.defs) |def_idx| {
             const def = self.cir.store.getDef(def_idx);
             if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) continue;
-            const ident = self.getPatternIdent(def.pattern) orelse continue;
-            try defs_to_poison.append(self.gpa, .{
-                .def_idx = def_idx,
-                .ident = ident,
-                .region = self.cir.store.getPatternRegion(def.pattern),
-            });
+            // Every name the def binds is computed from the one cyclic
+            // value, so each is circular: the single name of a plain def,
+            // or each name a destructure binds.
+            bindings.clearRetainingCapacity();
+            try self.collectPatternBindings(def.pattern, &bindings);
+            for (bindings.items) |binding| {
+                try defs_to_poison.append(self.gpa, .{
+                    .def_idx = def_idx,
+                    .ident = binding.ident,
+                    .region = self.cir.store.getPatternRegion(binding.pattern_idx),
+                });
+            }
         }
 
         std.mem.sort(RecursiveNonFunctionDef, defs_to_poison.items, {}, struct {
@@ -8123,11 +8132,16 @@ fn poisonCheckedStrictDemandCycles(
             }
         }.lessThan);
 
+        var poisoned_defs: std.AutoHashMapUnmanaged(CIR.Def.Idx, void) = .{};
+        defer poisoned_defs.deinit(self.gpa);
         for (defs_to_poison.items) |def_to_poison| {
             _ = try self.problems.appendProblem(self.gpa, .{ .circular_value_definition = .{
                 .ident = def_to_poison.ident,
                 .region = def_to_poison.region,
             } });
+            // A destructuring def reports once per bound name but is poisoned once.
+            const poisoned = try poisoned_defs.getOrPut(self.gpa, def_to_poison.def_idx);
+            if (poisoned.found_existing) continue;
             try self.poisonRecursiveNonFunctionProcessingDef(.{
                 .def_idx = def_to_poison.def_idx,
                 .def_name = def_to_poison.ident,
@@ -23484,6 +23498,15 @@ fn poisonRecursiveNonFunctionProcessingDef(
     }
     try self.erroneous_value_exprs.put(self.gpa, def.expr, {});
     try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
+    // A use of a name reads the poisoned value through that name's own
+    // binder pattern, so every name the def binds is erroneous, not only
+    // the pattern as a whole.
+    var bindings = std.ArrayList(PatternBinding).empty;
+    defer bindings.deinit(self.gpa);
+    try self.collectPatternBindings(def.pattern, &bindings);
+    for (bindings.items) |binding| {
+        try self.erroneous_value_patterns.put(self.gpa, binding.pattern_idx, {});
+    }
 
     if (use_expr) |expr_idx| {
         if (self.cir.store.getExpr(expr_idx) != .e_runtime_error) {
@@ -24163,10 +24186,17 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     defer evidence.deinit(self.gpa);
 
     // Top-level binder pattern -> def body, for following reference edges
-    // through def bodies during the residue walk.
+    // through def bodies during the residue walk. A destructuring def
+    // binds several names, each of which reads the def body.
+    var def_bindings = std.ArrayList(PatternBinding).empty;
+    defer def_bindings.deinit(self.gpa);
     for (self.cir.store.sliceDefs(self.cir.all_defs)) |def_idx| {
         const def = self.cir.store.getDef(def_idx);
-        try evidence.pattern_to_def_expr.put(self.gpa, def.pattern, def.expr);
+        def_bindings.clearRetainingCapacity();
+        try self.collectPatternBindings(def.pattern, &def_bindings);
+        for (def_bindings.items) |binding| {
+            try evidence.pattern_to_def_expr.put(self.gpa, binding.pattern_idx, def.expr);
+        }
     }
 
     // Scheme-use evidence indexes for the dispatch joins. A dispatch fired
@@ -24941,7 +24971,14 @@ fn recordDefaultWalkStmtBindings(
     local_pattern_to_expr: *std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx),
 ) std.mem.Allocator.Error!void {
     switch (self.cir.store.getStatement(stmt_idx)) {
-        .s_decl => |decl| try local_pattern_to_expr.put(self.gpa, decl.pattern, decl.expr),
+        .s_decl => |decl| {
+            var bindings = std.ArrayList(PatternBinding).empty;
+            defer bindings.deinit(self.gpa);
+            try self.collectPatternBindings(decl.pattern, &bindings);
+            for (bindings.items) |binding| {
+                try local_pattern_to_expr.put(self.gpa, binding.pattern_idx, decl.expr);
+            }
+        },
         .s_var => |var_stmt| try local_pattern_to_expr.put(self.gpa, var_stmt.pattern_idx, var_stmt.expr),
         // No other statement form binds a pattern to an expression the walk
         // can follow (a reassignment mutates an `s_var` binder already
@@ -31787,6 +31824,155 @@ test "literal dispatch finalization rejects a strict value cycle through from_nu
     try std.testing.expect(cycle_defs[0] != cycle_defs[1]);
     try std.testing.expect(test_env.module_env.hasTopLevelDemandDependency(cycle_defs[0], cycle_defs[1]));
     try std.testing.expect(test_env.module_env.hasTopLevelDemandDependency(cycle_defs[1], cycle_defs[0]));
+}
+
+test "top-level destructure bound through its own name is a circular value definition" {
+    const TestEnv = @import("test/TestEnv.zig");
+    // `{x}` on the right is a block returning `x`, so `x` is computed from
+    // itself through the destructure.
+    const source =
+        \\{x} = {x}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneCanError("Circular Value Definition");
+}
+
+/// Assert that canonicalization reported exactly one circular value
+/// definition for each expected name and nothing else, in any order.
+fn expectCircularValueDefinitions(test_env: anytype, expected_names: []const []const u8) error{ OutOfMemory, TestExpectedEqual, TestUnexpectedResult }!void {
+    const diagnostics = try test_env.module_env.getDiagnostics();
+    defer std.testing.allocator.free(diagnostics);
+    try std.testing.expectEqual(expected_names.len, diagnostics.len);
+    for (expected_names) |expected_name| {
+        const expected_ident = try test_env.module_env.common.idents.insert(std.testing.allocator, Ident.for_text(expected_name));
+        var reports: usize = 0;
+        for (diagnostics) |diagnostic| {
+            try std.testing.expect(diagnostic == .circular_value_definition);
+            if (diagnostic.circular_value_definition.ident.eql(expected_ident)) reports += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 1), reports);
+    }
+}
+
+test "top-level destructure in a value cycle with a plain def reports every name it binds" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\{a, b} = { a: c, b: 1 }
+        \\c = a
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try expectCircularValueDefinitions(&test_env, &.{ "a", "b", "c" });
+}
+
+test "top-level tuple destructure in a value cycle reports every name it binds" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\(a, b) = (c, 1)
+        \\c = a
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try expectCircularValueDefinitions(&test_env, &.{ "a", "b", "c" });
+}
+
+test "name bound by a nested top-level destructure in a value cycle is a circular value definition" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\{ outer: { inner } } = { outer: { inner: c } }
+        \\c = inner
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try expectCircularValueDefinitions(&test_env, &.{ "inner", "c" });
+}
+
+test "two top-level destructures in one value cycle are each a circular value definition" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\{b} = { b: c }
+        \\{a} = { a: b }
+        \\c = a
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try expectCircularValueDefinitions(&test_env, &.{ "b", "a", "c" });
+}
+
+test "mutually recursive functions through a top-level destructure check as one group" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\{ f } = { f: |x| g(x) }
+        \\g = |x| f(x)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "literal dispatch finalization rejects a strict value cycle through a top-level destructure" {
+    const TestEnv = @import("test/TestEnv.zig");
+    // `1` resolves to `MyNum.from_numeral` through `typed`, and that method
+    // reads `bump`, which reads `number` back out of the destructure.
+    const source =
+        \\MyNum := { value : U64 }.{
+        \\    from_numeral : Numeral -> Try(MyNum, [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Ok({ value: bump })
+        \\}
+        \\
+        \\{number} = { number: 1 }
+        \\
+        \\typed : MyNum
+        \\typed = number
+        \\
+        \\bump : U64
+        \\bump = number.value
+    ;
+    var test_env = try TestEnv.init("LiteralResolution", source);
+    defer test_env.deinit();
+
+    const problems = test_env.checker.problems.problems.items;
+    const expected_names = [_][]const u8{ "number", "bump" };
+    try std.testing.expectEqual(expected_names.len, problems.len);
+    for (expected_names) |expected_name| {
+        const expected_ident = try test_env.module_env.common.idents.insert(std.testing.allocator, Ident.for_text(expected_name));
+        var reports: usize = 0;
+        for (problems) |found_problem| {
+            try std.testing.expect(found_problem == .circular_value_definition);
+            if (found_problem.circular_value_definition.ident.eql(expected_ident)) reports += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 1), reports);
+    }
+}
+
+test "names bound by a top-level destructure resolve to their def for other defs" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\{x} = { x: 1 }
+        \\later = x + 1
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("Dec");
+}
+
+test "a lambda referring to a name bound by the same top-level destructure is not a strict cycle" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\{f, n} = { f: |s| Str.concat(s, n), n: "s" }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{});
 }
 
 test "literal strict demands flow through polymorphic called function summaries" {
