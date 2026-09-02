@@ -387,6 +387,8 @@ fn applyCandidate(
     defer dests.deinit(store.allocator);
     var cloned_locals = std.ArrayList(LIR.LocalId).empty;
     defer cloned_locals.deinit(store.allocator);
+    var moved_branches = std.ArrayList(LIR.CFStmtId).empty;
+    defer moved_branches.deinit(store.allocator);
     for (candidate.builds.items) |build| {
         if (findDest(dests.items, build.variant_index, build.discriminant) != null) continue;
         const payload_layout = variantPayloadLayout(store, layouts, candidate.param, build.variant_index) orelse unreachable;
@@ -407,7 +409,14 @@ fn applyCandidate(
         } });
 
         const branch = switchTarget(store, switch_stmt, build.discriminant);
-        const branch_defs = if (candidate.complete) null else try collectBranchDefinitions(store, branch);
+        // A complete fusion moves each source arm, so its first destination
+        // can retain the source locals. Several discriminants may select the
+        // same default arm, however; every additional copy needs fresh
+        // definition locals just like an arm retained by partial fusion.
+        const retain_source_locals = candidate.complete and
+            std.mem.findScalar(LIR.CFStmtId, moved_branches.items, branch) == null;
+        if (retain_source_locals) try moved_branches.append(store.allocator, branch);
+        const branch_defs = if (retain_source_locals) null else try collectBranchDefinitions(store, branch);
         defer if (branch_defs) |definitions| store.allocator.free(definitions);
         var cloner = try body_clone.BodyCloner(BranchRewriter).initWithFreshDeclaredJoins(store, .{
             .param = candidate.matched_value,
@@ -648,4 +657,107 @@ test "tag case fusion routes exact constructor edges without materializing tags"
         if (stmt == .assign_tag) try testing.expect(stmt.assign_tag.target != param);
         if (stmt == .assign_ref and stmt.assign_ref.target == disc) return error.TestUnexpectedResult;
     }
+}
+
+test "tag case fusion renames repeated copies of a shared default arm" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+
+    const tag_layout = try layouts.putTagUnion(&.{ .zst, .zst, .zst });
+    const param = try store.addLocal(.{ .layout_idx = tag_layout });
+    const disc = try store.addLocal(.{ .layout_idx = .u16 });
+    const selector = try store.addLocal(.{ .layout_idx = .u16 });
+    const zero = try store.addLocal(.{ .layout_idx = .u64 });
+    const shared_default = try store.addLocal(.{ .layout_idx = .u64 });
+    const join_id: LIR.JoinPointId = @enumFromInt(nextJoinPointRaw(&store));
+
+    const ret_zero = try store.addCFStmt(.{ .ret = .{ .value = zero } });
+    const branch_zero = try store.addCFStmt(.{ .assign_literal = .{
+        .target = zero,
+        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
+        .next = ret_zero,
+    } });
+    const ret_default = try store.addCFStmt(.{ .ret = .{ .value = shared_default } });
+    const branch_default = try store.addCFStmt(.{ .assign_literal = .{
+        .target = shared_default,
+        .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u64 } },
+        .next = ret_default,
+    } });
+    const consume = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = disc,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = branch_zero }}),
+        .default_branch = branch_default,
+    } });
+    const read_disc = try store.addCFStmt(.{ .assign_ref = .{
+        .target = disc,
+        .op = .{ .discriminant = .{ .source = param } },
+        .next = consume,
+    } });
+
+    const jump_zero = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const build_zero = try store.addCFStmt(.{ .assign_tag = .{
+        .target = param,
+        .variant_index = 0,
+        .discriminant = 0,
+        .payload = null,
+        .next = jump_zero,
+    } });
+    const jump_one = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const build_one = try store.addCFStmt(.{ .assign_tag = .{
+        .target = param,
+        .variant_index = 1,
+        .discriminant = 1,
+        .payload = null,
+        .next = jump_one,
+    } });
+    const jump_two = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const build_two = try store.addCFStmt(.{ .assign_tag = .{
+        .target = param,
+        .variant_index = 2,
+        .discriminant = 2,
+        .payload = null,
+        .next = jump_two,
+    } });
+    const choose = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = selector,
+        .branches = try store.addCFSwitchBranches(&.{
+            .{ .value = 0, .body = build_zero },
+            .{ .value = 1, .body = build_one },
+        }),
+        .default_branch = build_two,
+    } });
+    const body = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try store.addLocalSpan(&.{param}),
+        .body = read_disc,
+        .remainder = choose,
+    } });
+    const proc = try store.addProcSpec(.{
+        .name = LIR.Symbol.fromRaw(1),
+        .args = try store.addLocalSpan(&.{selector}),
+        .iterator_fusion_scope = true,
+        .body = body,
+        .frame_locals = try store.addLocalSpan(&.{ param, disc, selector, zero, shared_default }),
+        .ret_layout = .u64,
+    });
+
+    try run(&store, &layouts);
+
+    var default_targets: [2]LIR.LocalId = undefined;
+    var default_count: usize = 0;
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpec(proc).body.?);
+    defer walk.deinit();
+    while (try walk.next()) |stmt_id| {
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt != .assign_literal or stmt.assign_literal.value != .i64_literal) continue;
+        if (stmt.assign_literal.value.i64_literal.value != 7) continue;
+        try testing.expect(default_count < default_targets.len);
+        default_targets[default_count] = stmt.assign_literal.target;
+        default_count += 1;
+    }
+    try testing.expectEqual(default_targets.len, default_count);
+    try testing.expect(default_targets[0] != default_targets[1]);
 }
