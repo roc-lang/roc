@@ -19786,6 +19786,7 @@ const BodyContext = struct {
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .repl_expr,
             => saved_source_region_override,
         };
         const body = if (root.literalConversionKind() != null) blk: {
@@ -19797,6 +19798,7 @@ const BodyContext = struct {
             .hoisted_validation,
             .callable_binding,
             .expect,
+            .repl_expr,
             => try self.lowerComptimeRootExprAtCell(wrapper.body_expr, ret_cell),
             .numeral_conversion,
             .quote_conversion,

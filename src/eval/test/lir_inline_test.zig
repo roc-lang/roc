@@ -7707,7 +7707,7 @@ test "custom literal field default gets an ordinary conversion root" {
         switch (conversion.kind) {
             .numeral_conversion => numeral_roots += 1,
             .quote_conversion => quote_roots += 1,
-            .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect => return error.TestUnexpectedResult,
+            .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect, .repl_expr => return error.TestUnexpectedResult,
         }
     }
     try std.testing.expectEqual(@as(usize, 1), numeral_roots);

@@ -609,6 +609,14 @@ selected_hoisted_roots: std.ArrayListUnmanaged(hoist_roots.SelectedHoistedRoot),
 /// executable/eval root. Ordinary thunks may stay polymorphic; these roots may
 /// not leave static-dispatch obligations in their immediate result.
 executable_root_defs: std.ArrayListUnmanaged(CIR.Def.Idx),
+/// Executable roots whose zero-arg body is also an explicit compile-time root.
+/// This is producer metadata: checking uses it to reject effects before
+/// checked-artifact publication can schedule the body for evaluation.
+compile_time_executable_roots: std.ArrayListUnmanaged(struct {
+    def: CIR.Def.Idx,
+    lambda: CIR.Expr.Idx,
+    body: CIR.Expr.Idx,
+}),
 /// Most recently completed expression's temporary hoist result. This lets
 /// statement checking record a local binding candidate without storing a result
 /// on the checked expression itself.
@@ -2431,6 +2439,7 @@ fn initAssumePrepared(
         .hoist_invalidated_exprs = .{},
         .selected_hoisted_roots = .empty,
         .executable_root_defs = .empty,
+        .compile_time_executable_roots = .empty,
         .last_hoist_result = null,
         .has_can_diagnostics = if (cir.store.scratch) |scratch| scratch.diagnostics.top() > 0 else false,
         .instantiation_dispatchers = .empty,
@@ -2550,6 +2559,7 @@ pub fn deinit(self: *Self) void {
     }
     self.selected_hoisted_roots.deinit(self.gpa);
     self.executable_root_defs.deinit(self.gpa);
+    self.compile_time_executable_roots.deinit(self.gpa);
     self.env_pool.deinit();
     self.generalizer.deinit(self.gpa);
     self.var_map.deinit();
@@ -2675,6 +2685,30 @@ pub fn selectedHoistedRootIsTopLevel(self: *const Self, root: hoist_roots.Select
 /// caller; the checker never recovers roots from names or source shape.
 pub fn addExecutableRootDef(self: *Self, def_idx: CIR.Def.Idx) Allocator.Error!void {
     try self.executable_root_defs.append(self.gpa, def_idx);
+}
+
+/// Record a zero-arg executable root whose body will be evaluated during
+/// checked finalization rather than invoked at runtime.
+pub fn addCompileTimeExecutableRootDef(
+    self: *Self,
+    def_idx: CIR.Def.Idx,
+    lambda_idx: CIR.Expr.Idx,
+    body_expr: CIR.Expr.Idx,
+) Allocator.Error!void {
+    try self.addExecutableRootDef(def_idx);
+    try self.compile_time_executable_roots.append(self.gpa, .{
+        .def = def_idx,
+        .lambda = lambda_idx,
+        .body = body_expr,
+    });
+}
+
+/// Return the exact body identity supplied for a compile-time executable root.
+pub fn compileTimeExecutableRootBody(self: *const Self, def_idx: CIR.Def.Idx) ?CIR.Expr.Idx {
+    for (self.compile_time_executable_roots.items) |root| {
+        if (root.def == def_idx) return root.body;
+    }
+    return null;
 }
 
 fn beginHoistFrame(self: *Self, expr: CIR.Expr.Idx, binding_rhs: bool, hoist_position: HoistPosition) Allocator.Error!HoistFrameGuard {
@@ -7958,6 +7992,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.checkBindingRootsForInfiniteTypes();
     try self.recheckNominalConstructorBackings(&env);
 
+    try self.rejectEffectfulCompileTimeExecutableRoots();
     try self.poisonErroneousValueUses();
     try self.poisonErroneousValueExprs();
 
@@ -10627,6 +10662,17 @@ fn reportPolymorphicExecutableRootResults(self: *Self) std.mem.Allocator.Error!v
     }
 }
 
+fn rejectEffectfulCompileTimeExecutableRoots(self: *Self) Allocator.Error!void {
+    for (self.compile_time_executable_roots.items) |root| {
+        if (!try self.lambdaBodyIsEffectful(root.lambda)) continue;
+
+        _ = try self.problems.appendProblem(self.gpa, .{ .effectful_comptime_expression = .{
+            .region = self.cir.store.getExprRegion(root.body),
+        } });
+        try self.erroneous_value_exprs.put(self.gpa, root.body, {});
+    }
+}
+
 fn reportPolymorphicConstrainedExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
     const expr_var = ModuleEnv.varFrom(expr_idx);
     if (self.varIsFunctionType(expr_var)) return;
@@ -12307,7 +12353,10 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
     }
     try self.closeAbsentConstructedPayloadVars(def.expr, expr_var);
-    if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr)) and !self.defInCurrentRecursiveGroup(def_idx)) {
+    if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr)) and
+        !self.defInCurrentRecursiveGroup(def_idx) and
+        !self.isCompileTimeExecutableRootDef(def_idx))
+    {
         try self.checkEffectfulFunctionName(def.pattern, def.expr);
     }
 
@@ -12345,6 +12394,13 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
 fn isExecutableRootDef(self: *const Self, def_idx: CIR.Def.Idx) bool {
     for (self.executable_root_defs.items) |root_def_idx| {
         if (root_def_idx == def_idx) return true;
+    }
+    return false;
+}
+
+fn isCompileTimeExecutableRootDef(self: *const Self, def_idx: CIR.Def.Idx) bool {
+    for (self.compile_time_executable_roots.items) |root| {
+        if (root.def == def_idx) return true;
     }
     return false;
 }

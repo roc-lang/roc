@@ -46,6 +46,7 @@ pub const Problem = union(enum) {
     polymorphic_value: VarWithSnapshot,
     polymorphic_var_annotation: PolymorphicVarAnnotation,
     effectful_top_level: EffectfulTopLevel,
+    effectful_comptime_expression: EffectfulComptimeExpression,
     effectful_expect: EffectfulExpect,
     effectful_function_name: EffectfulFunctionName,
     annotation_only_value: AnnotationOnlyValue,
@@ -178,6 +179,12 @@ pub const PolymorphicVarAnnotation = struct {
 
 /// A top-level value definition performs effects while initializing.
 pub const EffectfulTopLevel = struct {
+    region: base.Region,
+};
+
+/// An explicitly selected interactive expression performs an effect even
+/// though its value must be produced during compile-time finalization.
+pub const EffectfulComptimeExpression = struct {
     region: base.Region,
 };
 

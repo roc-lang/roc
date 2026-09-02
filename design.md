@@ -11337,6 +11337,23 @@ checked CIR
   -> store eval result in ConstStore
 ```
 
+An interactive REPL expression is an explicit `.repl_expr` compile-time root
+whose checked body returns `Str.inspect(expression)`. The evaluation helper
+that generated the zero-argument wrapper resolves its asserted body once and
+puts that exact expression identity in the root request; `CheckedModuleBuilder`
+and `CompileTimeFinalization` consume the identity directly. Checking retains the zero-argument
+REPL-root context so inspecting an
+uncalled constrained polymorphic function does not force its body, but checking
+finalization evaluates the selected body itself and stores its `Str` result in
+the root payload. This payload is not a source-visible top-level constant and is
+not installed in the module's const-template tables. An effectful REPL body is a
+checking error; it is never silently demoted to a runtime root. Runtime backend
+selection and specialization settings therefore do not affect ordinary REPL
+expression evaluation. The finalizer replays `dbg` observations in root request
+order and forwards observations from the `.repl_expr` root to the REPL's
+structured event stream; observations from other compile-time roots are not
+misattributed to the current interactive expression.
+
 On native compiler hosts, every `compile_time_*` root uses the dev backend for
 compile-time evaluation: ordinary constants, selected hoisted constants,
 expects, callable eval roots, numeral conversions, and quote conversions. The
