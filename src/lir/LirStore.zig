@@ -1273,8 +1273,8 @@ test "body shard relocates nonzero local and body suffixes" {
     defer coordinator.deinit();
     const global = try coordinator.addLocal(.{ .layout_idx = .zst });
     _ = try coordinator.addLocalSpan(&.{global});
-    _ = try coordinator.addPattern(.{ .wildcard = .{ .layout_idx = .zst } });
-    _ = try coordinator.addPatternSpan(&.{@enumFromInt(0)});
+    const global_pattern = try coordinator.addPattern(.{ .wildcard = .{ .layout_idx = .zst } });
+    _ = try coordinator.addPatternSpan(&.{global_pattern});
     const body_name = try coordinator.insertString("body_local");
     const body_inline_scope = try coordinator.addInlineScope(.{
         .source_symbol = Symbol.fromRaw(123),
@@ -1338,8 +1338,8 @@ test "body shard relocates nonzero local and body suffixes" {
     _ = try coordinator.addLocalSpan(&.{destination_local});
     _ = try coordinator.addU64Span(&.{3});
     _ = try coordinator.addU32Span(&.{4});
-    _ = try coordinator.addCFStmt(.{ .ret = .{ .value = destination_local } });
-    _ = try coordinator.addCFSwitchBranches(&.{.{ .value = 0, .body = @enumFromInt(0) }});
+    const destination_stmt = try coordinator.addCFStmt(.{ .ret = .{ .value = destination_local } });
+    _ = try coordinator.addCFSwitchBranches(&.{.{ .value = 0, .body = destination_stmt }});
     _ = try coordinator.addStrMatchSteps(&.{.{
         .capture = .discard,
         .delimiter = .{ .backing = .none, .offset = 0, .len = 0 },
@@ -1348,11 +1348,11 @@ test "body shard relocates nonzero local and body suffixes" {
         .prefix = .{ .backing = .none, .offset = 0, .len = 0 },
         .steps = .{ .start = 0, .len = 1 },
         .end = .tail,
-        .on_match = @enumFromInt(0),
+        .on_match = destination_stmt,
     }});
-    _ = try coordinator.addJoinPointSpan(&.{.{ .id = @enumFromInt(99), .params = .empty(), .body = @enumFromInt(0) }});
-    _ = try coordinator.addPattern(.{ .wildcard = .{ .layout_idx = .zst } });
-    _ = try coordinator.addPatternSpan(&.{@enumFromInt(1)});
+    _ = try coordinator.addJoinPointSpan(&.{.{ .id = @enumFromInt(99), .params = .empty(), .body = destination_stmt }});
+    const destination_pattern = try coordinator.addPattern(.{ .wildcard = .{ .layout_idx = .zst } });
+    _ = try coordinator.addPatternSpan(&.{destination_pattern});
 
     const appended = try coordinator.appendBodyShard(shard, ret, frame);
     try std.testing.expectEqual(@as(u32, 1), @intFromEnum(appended.root.?));
@@ -1405,40 +1405,61 @@ test "body shard append preserves destination on every reserve-stage allocation 
             defer destination.deinit();
 
             const locals = [_]Local{.{ .layout_idx = .zst }} ** 9;
-            const local_ids = [_]LocalId{@enumFromInt(0)} ** 9;
             const u64s = [_]u64{7} ** 9;
             const u32s = [_]u32{11} ** 9;
-            const statements = [_]CFStmt{.{ .ret = .{ .value = @enumFromInt(0) } }} ** 9;
-            const branches = [_]CFSwitchBranch{.{ .value = 1, .body = @enumFromInt(0) }} ** 9;
             const steps = [_]StrMatchStep{.{ .capture = .discard, .delimiter = .{ .backing = .none, .offset = 0, .len = 0 } }} ** 9;
-            const arms = [_]StrMatchArm{.{ .prefix = .{ .backing = .none, .offset = 0, .len = 0 }, .steps = .{ .start = 0, .len = 1 }, .end = .exact, .on_match = @enumFromInt(0) }} ** 9;
-            const join_points = [_]JoinPoint{.{ .id = @enumFromInt(1), .params = .empty(), .body = @enumFromInt(0) }} ** 9;
 
-            for (locals) |local| _ = try source.addLocal(local);
+            var local_ids: [locals.len]LocalId = undefined;
+            for (locals, 0..) |local, index| local_ids[index] = try source.addLocal(local);
             _ = try source.addLocalSpan(&local_ids);
             _ = try source.addU64Span(&u64s);
             const offsets = try source.addU32Span(&u32s);
             for (0..9) |_| try source.erased_call_arg_plans.append(source.allocator, .{ .offsets = offsets, .size = 4, .alignment = 4 });
-            for (0..9) |_| _ = try source.addPattern(.{ .wildcard = .{ .layout_idx = .zst } });
-            _ = try source.addPatternSpan(&([_]LirPatternId{@enumFromInt(0)} ** 9));
-            for (statements) |statement| _ = try source.addCFStmt(statement);
-            _ = try source.addCFSwitchBranches(&branches);
+            var pattern_ids: [9]LirPatternId = undefined;
+            for (&pattern_ids) |*pattern_id| {
+                pattern_id.* = try source.addPattern(.{ .wildcard = .{ .layout_idx = .zst } });
+            }
+            _ = try source.addPatternSpan(&pattern_ids);
+            var source_stmt: CFStmtId = undefined;
+            for (0..9) |index| {
+                const stmt = try source.addCFStmt(.{ .ret = .{ .value = local_ids[0] } });
+                if (index == 0) source_stmt = stmt;
+            }
+            _ = try source.addCFSwitchBranches(&([_]CFSwitchBranch{.{ .value = 1, .body = source_stmt }} ** 9));
             _ = try source.addStrMatchSteps(&steps);
-            _ = try source.addStrMatchArms(&arms);
-            _ = try source.addJoinPointSpan(&join_points);
+            _ = try source.addStrMatchArms(&([_]StrMatchArm{.{
+                .prefix = .{ .backing = .none, .offset = 0, .len = 0 },
+                .steps = .{ .start = 0, .len = 1 },
+                .end = .exact,
+                .on_match = source_stmt,
+            }} ** 9));
+            _ = try source.addJoinPointSpan(&([_]JoinPoint{.{
+                .id = @enumFromInt(1),
+                .params = .empty(),
+                .body = source_stmt,
+            }} ** 9));
 
-            _ = try destination.addLocal(.{ .layout_idx = .zst });
-            _ = try destination.addLocalSpan(&.{@enumFromInt(0)});
+            const destination_local = try destination.addLocal(.{ .layout_idx = .zst });
+            _ = try destination.addLocalSpan(&.{destination_local});
             _ = try destination.addU64Span(&.{3});
             _ = try destination.addU32Span(&.{5});
             try destination.erased_call_arg_plans.append(destination.allocator, .{ .offsets = .{ .start = 0, .len = 1 }, .size = 4, .alignment = 4 });
-            _ = try destination.addPattern(.{ .wildcard = .{ .layout_idx = .zst } });
-            _ = try destination.addPatternSpan(&.{@enumFromInt(0)});
-            _ = try destination.addCFStmt(.{ .ret = .{ .value = @enumFromInt(0) } });
-            _ = try destination.addCFSwitchBranches(&.{.{ .value = 2, .body = @enumFromInt(0) }});
+            const destination_pattern = try destination.addPattern(.{ .wildcard = .{ .layout_idx = .zst } });
+            _ = try destination.addPatternSpan(&.{destination_pattern});
+            const destination_stmt = try destination.addCFStmt(.{ .ret = .{ .value = destination_local } });
+            _ = try destination.addCFSwitchBranches(&.{.{ .value = 2, .body = destination_stmt }});
             _ = try destination.addStrMatchSteps(&.{.{ .capture = .discard, .delimiter = .{ .backing = .none, .offset = 0, .len = 0 } }});
-            _ = try destination.addStrMatchArms(&.{.{ .prefix = .{ .backing = .none, .offset = 0, .len = 0 }, .steps = .{ .start = 0, .len = 1 }, .end = .exact, .on_match = @enumFromInt(0) }});
-            _ = try destination.addJoinPointSpan(&.{.{ .id = @enumFromInt(2), .params = .empty(), .body = @enumFromInt(0) }});
+            _ = try destination.addStrMatchArms(&.{.{
+                .prefix = .{ .backing = .none, .offset = 0, .len = 0 },
+                .steps = .{ .start = 0, .len = 1 },
+                .end = .exact,
+                .on_match = destination_stmt,
+            }});
+            _ = try destination.addJoinPointSpan(&.{.{
+                .id = @enumFromInt(2),
+                .params = .empty(),
+                .body = destination_stmt,
+            }});
 
             const shard = source.captureBodyShard(source_prefix) catch unreachable;
             var failing_allocator = std.testing.FailingAllocator.init(std.testing.allocator, .{
@@ -1467,7 +1488,7 @@ test "body shard append preserves destination on every reserve-stage allocation 
                 try std.testing.expectEqual(@as(u64, 2), destination.cf_switch_branches.get(0).value);
                 try std.testing.expectEqual(@as(u64, 3), destination.u64s.get(0));
                 try std.testing.expectEqual(@as(u32, 5), destination.u32s.get(0));
-                try std.testing.expectEqual(@as(u32, 0), @intFromEnum(destination.cf_stmts.get(0).ret.value));
+                try std.testing.expectEqual(destination_local, destination.cf_stmts.get(0).ret.value);
                 return true;
             };
             return false;
@@ -1487,6 +1508,7 @@ test "body shard reads coordinator prefix without copying it" {
     const global_span = try coordinator.addLocalSpan(&.{global});
     const global_stmt = try coordinator.addCFStmt(.{ .ret = .{ .value = global } });
     const global_offsets = try coordinator.addU32Span(&.{4});
+    const global_plan: ErasedCallArgsPlanId = @enumFromInt(@as(u32, @intCast(coordinator.erased_call_arg_plans.len())));
     try coordinator.erased_call_arg_plans.append(coordinator.allocator, .{
         .offsets = global_offsets,
         .size = 4,
@@ -1503,7 +1525,7 @@ test "body shard reads coordinator prefix without copying it" {
     try std.testing.expectEqual(global, worker.getCFStmt(global_stmt).ret.value);
     try std.testing.expectEqualStrings("global", worker.localName(global).?);
     try std.testing.expectEqual(coordinator.getLocalNameRaw(global), worker.getLocalNameRaw(global));
-    try std.testing.expectEqual(@as(u32, 4), worker.getErasedCallArgOffsets(worker.getErasedCallArgsPlan(@enumFromInt(0))).at(0));
+    try std.testing.expectEqual(@as(u32, 4), worker.getErasedCallArgOffsets(worker.getErasedCallArgsPlan(global_plan)).at(0));
 
     const suffix_local = try worker.addLocal(.{ .layout_idx = .zst });
     const suffix_span = try worker.addLocalSpan(&.{suffix_local});
