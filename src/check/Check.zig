@@ -290,6 +290,13 @@ scratch_record_field_vars: base.Scratch(Var),
 scratch_static_dispatch_constraints: base.Scratch(ScratchStaticDispatchConstraint),
 /// scratch deferred static dispatch constraints
 scratch_deferred_static_dispatch_constraints: base.Scratch(DeferredConstraintCheck),
+/// Concrete generated-codec obligations parked until the module's single type
+/// finalization point. Their receiver can still gain nominal layers while
+/// later definitions are checked, so validating them earlier would publish a
+/// derivation for a shape that is no longer the call's final type.
+final_codec_dispatch_constraints: std.ArrayListUnmanaged(FinalCodecDispatchConstraint) = .empty,
+final_codec_dispatch_constraint_fns: std.AutoHashMapUnmanaged(Var, void) = .empty,
+checking_final_codec_dispatch_constraints: bool = false,
 // Cache for imported types. This cache lives for the entire type-checking session
 /// of a module, so the same imported type can be reused across the entire module.
 import_cache: ImportCache,
@@ -1066,6 +1073,11 @@ const StructuralSchemeRequirementOrigin = struct {
 const SchemeDispatchRequirement = struct {
     receiver_var: Var,
     constraint: StaticDispatchConstraint,
+    /// This relation was concrete enough to leave the ordinary deferred queue,
+    /// but its final codec shape can still change through a nested variable in
+    /// the owning scheme. Instantiation must therefore copy the receiver's
+    /// structural spine even when the receiver root itself is monomorphic.
+    deferred_generated_codec: bool,
     /// The expression in this scheme whose use created the pending copy.
     /// Creation requirements already have exact constraint provenance; copied
     /// requirements need this separate use-site provenance because their
@@ -1081,6 +1093,7 @@ const InstantiatedSchemeDispatchRequirement = struct {
     receiver_var: Var,
     scheme_fn_var: Var,
     constraint: StaticDispatchConstraint,
+    deferred_generated_codec: bool,
     structural_origin: StructuralSchemeRequirementOrigin,
 };
 
@@ -1091,6 +1104,7 @@ const SchemeRequirementCandidate = struct {
     constraint: StaticDispatchConstraint,
     failure_expr: ?CIR.Expr.Idx,
     structural_origin: StructuralSchemeRequirementOrigin,
+    deferred_generated_codec: bool,
 
     source: Source,
 
@@ -1247,6 +1261,7 @@ fn recordSchemeRequirementCandidate(
     constraint: StaticDispatchConstraint,
     source: SchemeRequirementCandidate.Source,
     structural_origin: ?StructuralSchemeRequirementOrigin,
+    deferred_generated_codec: bool,
 ) Allocator.Error!void {
     if (self.constraintIsLiteralConversion(constraint)) return;
     std.debug.assert((source == .creation) == (structural_origin == null));
@@ -1274,6 +1289,7 @@ fn recordSchemeRequirementCandidate(
             .scheme_copy => self.discarded_binding_rhs_expr orelse self.instantiation_source_expr,
         },
         .source = source,
+        .deferred_generated_codec = deferred_generated_codec,
     });
     owner_entry.value_ptr.appendAssumeCapacity(candidate_idx);
 }
@@ -1347,7 +1363,10 @@ fn copySchemeDispatchRequirements(
         // Instantiation grows the type store but not `type_schemes`; copy
         // the record before doing either copy operation.
         const requirement = self.type_schemes.items[scheme_idx].dispatch_requirements.items[requirement_idx];
-        const receiver_var = try instantiator.instantiateVar(requirement.receiver_var);
+        const receiver_var = if (requirement.deferred_generated_codec)
+            try instantiator.instantiateTypeScheme(requirement.receiver_var)
+        else
+            try instantiator.instantiateVar(requirement.receiver_var);
         if (skip_shared_receiver_copies and
             self.types.resolveVar(receiver_var).var_ == self.types.resolveVar(requirement.receiver_var).var_)
         {
@@ -1359,6 +1378,7 @@ fn copySchemeDispatchRequirements(
             .receiver_var = receiver_var,
             .scheme_fn_var = requirement.constraint.fn_var,
             .constraint = constraint,
+            .deferred_generated_codec = requirement.deferred_generated_codec,
             .structural_origin = self.substitutedStructuralOrigin(requirement.structural_origin, instantiator.var_map),
         });
     }
@@ -1433,6 +1453,7 @@ fn registerInstantiatedSchemeRequirement(
         requirement.constraint,
         .scheme_copy,
         requirement.structural_origin,
+        requirement.deferred_generated_codec,
     );
 }
 
@@ -1458,7 +1479,7 @@ fn registerInstantiatedAttachedDispatch(
     // settle through the open-literal worklist (callers register the receiver
     // there), so the candidate index filters them.
     for (self.types.sliceStaticDispatchConstraints(constraints)) |constraint| {
-        try self.recordSchemeRequirementCandidate(receiver_var, constraint, .creation, null);
+        try self.recordSchemeRequirementCandidate(receiver_var, constraint, .creation, null, false);
     }
 }
 
@@ -2122,6 +2143,12 @@ const ScratchStaticDispatchConstraint = struct {
     state: enum { declared, completed },
 };
 
+const FinalCodecDispatchConstraint = struct {
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    failure_expr: StaticDispatchConstraint.Provenance.OptExprIdx,
+};
+
 const ReturnConstraint = struct {
     actual_expr: CIR.Expr.Idx,
     kind: ReturnConstraintKind,
@@ -2335,6 +2362,69 @@ fn initAssumePrepared(
         binding_scheme_nodes.set(binding_scheme.node_idx);
     }
 
+    // A checked environment can be deserialized and checked again. Initialize
+    // its checker-local TypeScheme index from the producer-authored codec table
+    // before any source checking or finalization can consume it.
+    var rehydrated_type_schemes: std.ArrayListUnmanaged(TypeScheme) = .empty;
+    errdefer {
+        for (rehydrated_type_schemes.items) |*scheme| {
+            scheme.indexed_vars.deinit(gpa);
+            scheme.dispatch_requirements.deinit(gpa);
+        }
+        rehydrated_type_schemes.deinit(gpa);
+    }
+    var rehydrated_type_scheme_by_var: std.AutoHashMapUnmanaged(Var, u32) = .empty;
+    errdefer rehydrated_type_scheme_by_var.deinit(gpa);
+    for (cir.binding_scheme_codec_requirements.items.items) |serialized_requirement| {
+        const scheme_root: Var = @enumFromInt(serialized_requirement.scheme_root);
+        const indexed_var: Var = @enumFromInt(serialized_requirement.node_idx);
+        const receiver_var: Var = @enumFromInt(serialized_requirement.receiver_var);
+        std.debug.assert(@intFromEnum(scheme_root) < types.len());
+        std.debug.assert(@intFromEnum(indexed_var) < types.len());
+        std.debug.assert(@intFromEnum(receiver_var) < types.len());
+
+        const scheme_idx: usize = if (rehydrated_type_scheme_by_var.get(scheme_root)) |existing_idx|
+            existing_idx
+        else blk: {
+            const new_idx: u32 = @intCast(rehydrated_type_schemes.items.len);
+            try rehydrated_type_schemes.append(gpa, .{
+                .root_var = scheme_root,
+                .capture_rank = .generalized,
+                .capture_group_index = null,
+            });
+            try rehydrated_type_schemes.items[new_idx].indexed_vars.append(gpa, scheme_root);
+            try rehydrated_type_scheme_by_var.put(gpa, scheme_root, new_idx);
+            break :blk new_idx;
+        };
+        if (!rehydrated_type_scheme_by_var.contains(indexed_var)) {
+            try rehydrated_type_schemes.items[scheme_idx].indexed_vars.append(gpa, indexed_var);
+            try rehydrated_type_scheme_by_var.put(gpa, indexed_var, @intCast(scheme_idx));
+        } else {
+            std.debug.assert(rehydrated_type_scheme_by_var.get(indexed_var).? == @as(u32, @intCast(scheme_idx)));
+        }
+
+        const constraint = types.getStaticDispatchConstraintAt(serialized_requirement.constraint_index);
+        const already_recorded = for (rehydrated_type_schemes.items[scheme_idx].dispatch_requirements.items) |existing| {
+            if (existing.receiver_var == receiver_var and
+                existing.constraint.fn_var == constraint.fn_var and
+                existing.constraint.fn_name.eql(constraint.fn_name))
+            {
+                break true;
+            }
+        } else false;
+        if (already_recorded) continue;
+        try rehydrated_type_schemes.items[scheme_idx].dispatch_requirements.append(gpa, .{
+            .receiver_var = receiver_var,
+            .constraint = constraint,
+            .deferred_generated_codec = true,
+            .failure_expr = null,
+            .structural_origin = .{
+                .receiver_var = receiver_var,
+                .constraint_fn_var = constraint.fn_var,
+            },
+        });
+    }
+
     // Rehydrate the durable rejection records onto their constraint callables'
     // equivalence classes, so a re-check of an env that already carries them
     // sees the same rejections a fresh check would.
@@ -2415,6 +2505,8 @@ fn initAssumePrepared(
         .enclosing_func_name = null,
         .def_group = try initNodeSlots(u32, gpa, node_count, no_def_group),
         .predeclared_scheme_vars = try initNodeSlots(?Var, gpa, node_count, null),
+        .type_schemes = rehydrated_type_schemes,
+        .type_scheme_by_var = rehydrated_type_scheme_by_var,
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
         .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, cir.getIdentStore(), null),
         .binding_scheme_nodes = binding_scheme_nodes,
@@ -2590,6 +2682,8 @@ pub fn deinit(self: *Self) void {
     self.scratch_record_field_vars.deinit();
     self.scratch_static_dispatch_constraints.deinit();
     self.scratch_deferred_static_dispatch_constraints.deinit();
+    self.final_codec_dispatch_constraints.deinit(self.gpa);
+    self.final_codec_dispatch_constraint_fns.deinit(self.gpa);
     self.scratch_default_param_vars.deinit();
     self.scratch_generated_codec_calls.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
@@ -12196,6 +12290,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     try self.judgeFieldKindsAtBoundary(&env);
     _ = try self.checkFlexVarConstraintCompatibility(expr_var, &env, true, .{});
     try self.validateResolvedOpenNumeralLiterals(&env);
+    try self.checkFinalGeneratedCodecConstraints(&env);
     try self.resolvePendingTupleAccesses(&env, true);
     try self.checkAllConstraints(&env);
     try self.checkDefaultRestrictions();
@@ -22316,7 +22411,7 @@ fn mkBinopConstraint(
     );
 
     _ = try self.unify(constrained_var, lhs_var, env);
-    try self.recordSchemeRequirementCandidate(lhs_var, constraint, .creation, null);
+    try self.recordSchemeRequirementCandidate(lhs_var, constraint, .creation, null, false);
     try self.recordAmbiguityCandidate(lhs_var, .creation, constraintIntroExpr(constraint));
 }
 
@@ -22413,7 +22508,7 @@ fn mkUnaryOp(
     );
 
     _ = try self.unify(constrained_var, arg_var, env);
-    try self.recordSchemeRequirementCandidate(arg_var, constraint, .creation, null);
+    try self.recordSchemeRequirementCandidate(arg_var, constraint, .creation, null, false);
     try self.recordAmbiguityCandidate(arg_var, .creation, constraintIntroExpr(constraint));
 }
 
@@ -22634,7 +22729,7 @@ fn mkReceiverDispatchConstraint(
     );
 
     _ = try self.unify(constrained_var, receiver_var, env);
-    try self.recordSchemeRequirementCandidate(receiver_var, constraint, .creation, null);
+    try self.recordSchemeRequirementCandidate(receiver_var, constraint, .creation, null, false);
     try self.recordAmbiguityCandidate(receiver_var, .creation, constraintIntroExpr(constraint));
     return constraint_fn_var;
 }
@@ -22671,7 +22766,7 @@ fn mkTypeMethodCallConstraint(
     );
 
     _ = try self.unify(constrained_var, dispatcher_var, env);
-    try self.recordSchemeRequirementCandidate(dispatcher_var, constraint, .creation, null);
+    try self.recordSchemeRequirementCandidate(dispatcher_var, constraint, .creation, null, false);
     try self.recordAmbiguityCandidate(dispatcher_var, .creation, constraintIntroExpr(constraint));
     return constraint_fn_var;
 }
@@ -22903,6 +22998,73 @@ const ExternalType = struct {
     other_cir: *const ModuleEnv,
 };
 
+/// Import the generated-codec part of a binding's scheme under the same source
+/// to destination mapping that copied the binding root. A codec receiver may
+/// share only a nested generalized variable with that root, so resetting the
+/// map between these copies would sever the exact substitution relation this
+/// metadata exists to preserve.
+fn copyImportedBindingSchemeCodecRequirements(
+    self: *Self,
+    source_env: *const ModuleEnv,
+    source_node: CIR.Node.Idx,
+    copied_scheme_root: Var,
+) Allocator.Error!void {
+    const source_requirements = source_env.bindingSchemeCodecRequirementsForNode(source_node);
+    if (source_requirements.len == 0) return;
+
+    const scheme_idx = try self.ensureTypeScheme(copied_scheme_root, .generalized);
+    const first_new_var: usize = @intCast(self.types.len());
+    for (source_requirements) |source_requirement| {
+        const source_constraint = source_env.types.getStaticDispatchConstraintAt(source_requirement.constraint_index);
+
+        // Generated codec requirements cannot carry either metadata shape;
+        // both belong to other method families and would require their own
+        // source-node/value-pool rebasing rules at this boundary.
+        std.debug.assert(source_constraint.derived_map_plan == null);
+        std.debug.assert(!source_constraint.interpolation.isPresent());
+
+        const receiver_var = try copy_import.copyVar(
+            &source_env.types,
+            self.types,
+            @enumFromInt(source_requirement.receiver_var),
+            &self.var_map,
+            null,
+            source_env,
+            self.cir,
+            self.gpa,
+        );
+        var constraint = source_constraint;
+        constraint.fn_var = try copy_import.copyVar(
+            &source_env.types,
+            self.types,
+            source_constraint.fn_var,
+            &self.var_map,
+            null,
+            source_env,
+            self.cir,
+            self.gpa,
+        );
+        const method_text = source_env.getIdentStoreConst().getText(source_constraint.fn_name);
+        constraint.fn_name = try self.cir.insertIdent(Ident.for_text(method_text));
+        // Source expression indices are module-local. Every instantiated copy
+        // records its destination use expression separately as `failure_expr`.
+        constraint.provenance = .{};
+
+        if (self.typeSchemeHasRequirement(scheme_idx, receiver_var, constraint)) continue;
+        try self.type_schemes.items[scheme_idx].dispatch_requirements.append(self.gpa, .{
+            .receiver_var = receiver_var,
+            .constraint = constraint,
+            .deferred_generated_codec = true,
+            .failure_expr = null,
+            .structural_origin = .{
+                .receiver_var = receiver_var,
+                .constraint_fn_var = constraint.fn_var,
+            },
+        });
+    }
+    try self.postProcessCopiedVars(first_new_var, Region.zero());
+}
+
 /// Copy a variable from a different module into this module's types store.
 ///
 /// IMPORTANT: The caller must instantiate this variable before unifying
@@ -22944,6 +23106,14 @@ fn resolveVarFromExternal(
             std.debug.assert(@intFromEnum(imported_var) < other_module_env.types.len());
 
             const new_copy = try self.copyVar(imported_var, other_module_env, null);
+            if (other_module_env.nodeIsBindingScheme(target_node_idx)) {
+                try self.markBindingSchemeVar(new_copy);
+                try self.copyImportedBindingSchemeCodecRequirements(
+                    other_module_env,
+                    target_node_idx,
+                    new_copy,
+                );
+            }
             try self.import_cache.put(self.gpa, cache_key, new_copy);
             break :blk new_copy;
         };
@@ -25261,6 +25431,17 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     if (scope == .module) {
         try self.checkInstantiatedStaticDispatchConstraints(env, true);
         try self.checkGroundedStoredTypeSchemeRequirementsAtFinalization(env, true);
+        // Final codec validation can instantiate constrained method schemes,
+        // and the instantiated-dispatch fixpoint can in turn produce a codec
+        // obligation for a more concrete call-site receiver. Alternate the two
+        // exact worklists until neither produces another codec obligation.
+        while (self.final_codec_dispatch_constraints.items.len > 0) {
+            try self.checkFinalGeneratedCodecConstraints(env);
+            try self.checkInstantiatedStaticDispatchConstraints(env, true);
+            try self.checkGroundedStoredTypeSchemeRequirementsAtFinalization(env, true);
+        }
+    } else {
+        try self.checkFinalGeneratedCodecConstraints(env);
     }
     try self.resolvePendingTupleAccesses(env, true);
     try self.checkAllConstraints(env);
@@ -26165,6 +26346,18 @@ fn retireResolvedTypeSchemeRequirements(self: *Self) void {
 
         var write: usize = 0;
         for (scheme.dispatch_requirements.items) |requirement| {
+            // A successfully validated generated codec still belongs to the
+            // scheme: a later instantiation, including one in another module,
+            // can substitute a nested generalized variable and change the
+            // receiver's concrete shape. Checked-module finalization publishes
+            // this relation instead of retiring it as locally settled.
+            if (requirement.deferred_generated_codec and
+                !self.types.varStaticDispatchRejected(requirement.constraint.fn_var))
+            {
+                scheme.dispatch_requirements.items[write] = requirement;
+                write += 1;
+                continue;
+            }
             const still_pending = !self.settled_static_dispatch_constraint_fns.contains(requirement.constraint.fn_var) and
                 !self.types.varStaticDispatchRejected(requirement.constraint.fn_var);
             if (!still_pending) continue;
@@ -26246,6 +26439,11 @@ fn retireStructurallyPublishedTypeSchemeRequirements(
 
         var write: usize = 0;
         for (scheme.dispatch_requirements.items) |requirement| {
+            if (requirement.deferred_generated_codec) {
+                scheme.dispatch_requirements.items[write] = requirement;
+                write += 1;
+                continue;
+            }
             const structurally_published = self.requirementHasPublishedStructuralOrigin(
                 requirement,
                 &published_vars,
@@ -26263,19 +26461,50 @@ fn retireStructurallyPublishedTypeSchemeRequirements(
     }
 }
 
-/// TypeScheme is deliberately checker-local and is never serialized. At the
-/// checked-module boundary every requirement must therefore be either exactly
-/// discharged/rejected or absorbed into a receiver whose structural
-/// constraints generalized normally. Any remaining relation is an explicit
-/// unresolved-dispatch error; silently dropping it would make importing the
-/// module less constrained than checking it locally.
+/// Publish a final-codec relation for every source node that names its binding
+/// scheme. The exact constraint is placed in the serialized TypeStore once and
+/// every alias points to it; import copying later copies the scheme root,
+/// receiver, and callable under one substitution map.
+fn publishBindingSchemeCodecRequirement(
+    self: *Self,
+    scheme: *const TypeScheme,
+    requirement: SchemeDispatchRequirement,
+) Allocator.Error!void {
+    const range = try self.types.appendStaticDispatchConstraints(&.{requirement.constraint});
+    const constraint_index: u32 = @intFromEnum(range.start);
+    for (scheme.indexed_vars.items) |indexed_var| {
+        const raw_var: usize = @intFromEnum(indexed_var);
+        if (raw_var >= self.binding_scheme_nodes.bit_length) continue;
+        if (!self.binding_scheme_nodes.isSet(raw_var)) continue;
+        try self.cir.recordBindingSchemeCodecRequirement(
+            @enumFromInt(raw_var),
+            scheme.root_var,
+            requirement.receiver_var,
+            constraint_index,
+        );
+    }
+}
+
+/// Ordinary TypeScheme state is checker-local. At the checked-module boundary
+/// each ordinary requirement must be discharged/rejected or absorbed into a
+/// structurally constrained receiver. Generated-codec requirements are the
+/// deliberate exception: successful local validation does not prove every
+/// later specialization has the same concrete shape, so their exact relation
+/// is serialized on the binding scheme for downstream revalidation.
 fn finalizeTypeSchemeRequirementsAtCheckedBoundary(self: *Self) Allocator.Error!void {
     self.retireResolvedTypeSchemeRequirements();
+
+    self.cir.binding_scheme_codec_requirements.items.clearRetainingCapacity();
 
     for (self.type_schemes.items) |scheme| {
         const scheme_is_err = self.types.resolveVar(scheme.root_var).desc.content == .err;
         for (scheme.dispatch_requirements.items) |requirement| {
             if (self.types.varStaticDispatchRejected(requirement.constraint.fn_var)) continue;
+
+            if (requirement.deferred_generated_codec) {
+                try self.publishBindingSchemeCodecRequirement(&scheme, requirement);
+                continue;
+            }
 
             if (scheme_is_err) {
                 try self.markStaticDispatchRejected(requirement.constraint);
@@ -26337,9 +26566,12 @@ fn retireNonGeneralizedTypeSchemes(self: *Self, roots: []const BoundaryRoot) voi
 }
 
 /// Move every still-open dispatch relation owned by this generalization
-/// boundary into its explicit scheme. A relation needs the side table only
-/// while its receiver belongs to an outer rank. Captured candidates are
-/// removed immediately, so later boundaries never rescan completed sites.
+/// boundary into its explicit scheme. Ordinary relations need the side table
+/// while their receiver belongs to an outer rank. A generated codec relation
+/// also needs it when any part of its concrete receiver escapes, because the
+/// relation is deliberately validated only after source checking has finished.
+/// Captured candidates are removed immediately, so later boundaries never
+/// rescan completed sites.
 fn captureSchemeDispatchRequirements(
     self: *Self,
     roots: []const BoundaryRoot,
@@ -26351,10 +26583,14 @@ fn captureSchemeDispatchRequirements(
     if (self.probe_depth != 0) {
         @panic("scheme requirements cannot be captured inside a solver probe");
     }
+    var final_codec_receiver_vars = std.AutoHashMap(Var, void).init(self.gpa);
+    defer final_codec_receiver_vars.deinit();
+
     const rank = env.rank();
     for (roots) |root| {
         var owner_indices = (self.scheme_requirement_candidate_indices_by_owner.fetchRemove(root.owner) orelse continue).value;
         defer owner_indices.deinit(self.gpa);
+        var interface_reachable_collected = false;
         for (owner_indices.items) |candidate_idx| {
             const candidate = self.scheme_requirement_candidates.items[candidate_idx];
             std.debug.assert(candidate.owner_root == root.owner);
@@ -26363,14 +26599,42 @@ fn captureSchemeDispatchRequirements(
             // needs an explicit entry is decided here and never reconstructed
             // at a later enclosing boundary.
             const receiver = self.types.resolveVar(candidate.receiver_var);
-            if (receiver.desc.content != .flex) continue;
-            if (receiver.desc.rank == .generalized) continue;
-            const needs_explicit_requirement = switch (candidate.source) {
-                .creation => @intFromEnum(receiver.desc.rank) < @intFromEnum(rank),
-                // A copied relation is detached from its receiver descriptor.
-                // Its structural origin is retained separately so publication
-                // can prove when checked evidence makes this copy redundant.
-                .scheme_copy => true,
+            const final_codec = candidate.deferred_generated_codec or
+                self.final_codec_dispatch_constraint_fns.contains(candidate.constraint.fn_var);
+            const needs_explicit_requirement = if (final_codec) blk: {
+                // Unlike an unresolved flex relation, a concrete generated
+                // codec no longer lives on its receiver descriptor. Preserve
+                // it explicitly when any part of the receiver escapes through
+                // this scheme. That shared component is exactly where a later
+                // use can add a nominal layer before final validation.
+                if (!interface_reachable_collected) {
+                    self.var_set.clearRetainingCapacity();
+                    try self.collectReachableVars(root.interface, &self.var_set);
+                    interface_reachable_collected = true;
+                }
+                final_codec_receiver_vars.clearRetainingCapacity();
+                try self.collectReachableVars(candidate.receiver_var, &final_codec_receiver_vars);
+
+                const iterate_receiver = final_codec_receiver_vars.count() <= self.var_set.count();
+                var reachable_iter = if (iterate_receiver)
+                    final_codec_receiver_vars.keyIterator()
+                else
+                    self.var_set.keyIterator();
+                while (reachable_iter.next()) |reachable_var| {
+                    const other = if (iterate_receiver) &self.var_set else &final_codec_receiver_vars;
+                    if (other.contains(reachable_var.*)) break :blk true;
+                }
+                break :blk false;
+            } else blk: {
+                if (receiver.desc.content != .flex) break :blk false;
+                if (receiver.desc.rank == .generalized) break :blk false;
+                break :blk switch (candidate.source) {
+                    .creation => @intFromEnum(receiver.desc.rank) < @intFromEnum(rank),
+                    // A copied relation is detached from its receiver descriptor.
+                    // Its structural origin is retained separately so publication
+                    // can prove when checked evidence makes this copy redundant.
+                    .scheme_copy => true,
+                };
             };
             if (!needs_explicit_requirement) continue;
 
@@ -26385,6 +26649,7 @@ fn captureSchemeDispatchRequirements(
             try self.type_schemes.items[scheme_idx].dispatch_requirements.append(self.gpa, .{
                 .receiver_var = candidate.receiver_var,
                 .constraint = candidate.constraint,
+                .deferred_generated_codec = final_codec,
                 .failure_expr = candidate.failure_expr,
                 .structural_origin = candidate.structural_origin,
             });
@@ -28734,8 +28999,55 @@ fn recordSettledDeferredDispatchRelation(
 ) Allocator.Error!void {
     if (self.commit_probe_active) return;
     for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |constraint| {
+        if (self.final_codec_dispatch_constraint_fns.contains(constraint.fn_var)) continue;
         try self.settled_static_dispatch_constraint_fns.put(self.gpa, constraint.fn_var, {});
     }
+}
+
+/// Move one currently-concrete generated codec obligation out of the hot
+/// deferred queue. Later source checking can still add nominal layers inside
+/// its receiver, so the derivation is selected exactly once at the final type
+/// boundary instead of being repeatedly rechecked after every expression.
+fn deferGeneratedCodecConstraintToFinalization(
+    self: *Self,
+    deferred: DeferredConstraintCheck,
+    constraint: StaticDispatchConstraint,
+) Allocator.Error!bool {
+    if (self.probe_depth != 0 or self.checking_final_codec_dispatch_constraints) return false;
+
+    const entry = try self.final_codec_dispatch_constraint_fns.getOrPut(self.gpa, constraint.fn_var);
+    if (entry.found_existing) return true;
+    errdefer _ = self.final_codec_dispatch_constraint_fns.remove(constraint.fn_var);
+
+    try self.final_codec_dispatch_constraints.append(self.gpa, .{
+        .dispatcher_var = deferred.var_,
+        .constraint = constraint,
+        .failure_expr = deferred.failure_expr,
+    });
+    return true;
+}
+
+fn checkFinalGeneratedCodecConstraints(self: *Self, env: *Env) Allocator.Error!void {
+    if (self.final_codec_dispatch_constraints.items.len == 0) return;
+    std.debug.assert(self.probe_depth == 0);
+    std.debug.assert(!self.checking_final_codec_dispatch_constraints);
+
+    self.checking_final_codec_dispatch_constraints = true;
+    defer self.checking_final_codec_dispatch_constraints = false;
+
+    for (self.final_codec_dispatch_constraints.items) |pending| {
+        const range = try self.types.appendStaticDispatchConstraints(&.{pending.constraint});
+        try self.enqueueDeferredDispatchConstraint(env, .{
+            .var_ = pending.dispatcher_var,
+            .constraints = range,
+            .failure_expr = pending.failure_expr,
+        }, .current_group);
+    }
+    self.final_codec_dispatch_constraints.clearRetainingCapacity();
+    self.final_codec_dispatch_constraint_fns.clearRetainingCapacity();
+
+    try self.checkStaticDispatchConstraints(env, true);
+    try self.checkAllConstraints(env);
 }
 
 fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pass: bool) std.mem.Allocator.Error!void {
@@ -28984,14 +29296,16 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                         if (constraint.fn_name.eql(self.cir.idents.parser_for)) {
                             switch (try self.nominalSupportsDerivedParseShape(nominal_type, env, region)) {
-                                .supported => try self.satisfyImplicitParserConstraint(
-                                    deferred_constraint.var_,
-                                    constraint,
-                                    constraint.fn_var,
-                                    env,
-                                    region,
-                                    failure_expr,
-                                ),
+                                .supported => if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
+                                    try self.satisfyImplicitParserConstraint(
+                                        deferred_constraint.var_,
+                                        constraint,
+                                        constraint.fn_var,
+                                        env,
+                                        region,
+                                        failure_expr,
+                                    );
+                                },
                                 .unresolved => if (!is_numeric_default_pass or try self.deferredParseHasPendingOpenLiteral(deferred_constraint, env)) {
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
@@ -29018,13 +29332,15 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 continue;
                             };
                             switch (try self.nominalSupportsDerivedEncodeShape(nominal_type, encoding_var, env, region)) {
-                                .supported => try self.satisfyImplicitEncoderForConstraint(
-                                    deferred_constraint.var_,
-                                    constraint,
-                                    constraint.fn_var,
-                                    env,
-                                    region,
-                                ),
+                                .supported => if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
+                                    try self.satisfyImplicitEncoderForConstraint(
+                                        deferred_constraint.var_,
+                                        constraint,
+                                        constraint.fn_var,
+                                        env,
+                                        region,
+                                    );
+                                },
                                 .unresolved => if (!is_numeric_default_pass or try self.deferredEncodeHasPendingOpenLiteral(deferred_constraint, env)) {
                                     try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
                                     break :dispatch_resolution;
@@ -29644,14 +29960,16 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         const region = self.getRegionAt(deferred_constraint.var_);
                         switch (try self.typeSupportsDerivedParse(dispatcher_content.structure, env, region)) {
                             .supported => {
-                                try self.satisfyImplicitParserConstraint(
-                                    deferred_constraint.var_,
-                                    constraint,
-                                    constraint.fn_var,
-                                    env,
-                                    region,
-                                    failure_expr,
-                                );
+                                if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
+                                    try self.satisfyImplicitParserConstraint(
+                                        deferred_constraint.var_,
+                                        constraint,
+                                        constraint.fn_var,
+                                        env,
+                                        region,
+                                        failure_expr,
+                                    );
+                                }
                             },
                             .unresolved => {
                                 if (!is_numeric_default_pass or try self.deferredParseHasPendingOpenLiteral(deferred_constraint, env)) {
@@ -29703,13 +30021,15 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         };
                         switch (try self.typeSupportsDerivedEncode(dispatcher_content.structure, encoding_var, env, region)) {
                             .supported => {
-                                try self.satisfyImplicitEncoderForConstraint(
-                                    deferred_constraint.var_,
-                                    constraint,
-                                    constraint.fn_var,
-                                    env,
-                                    region,
-                                );
+                                if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
+                                    try self.satisfyImplicitEncoderForConstraint(
+                                        deferred_constraint.var_,
+                                        constraint,
+                                        constraint.fn_var,
+                                        env,
+                                        region,
+                                    );
+                                }
                             },
                             .unresolved => {
                                 if (!is_numeric_default_pass or try self.deferredEncodeHasPendingOpenLiteral(deferred_constraint, env)) {
@@ -31257,17 +31577,46 @@ fn missingTryInfoFromNominal(
     };
 }
 
-/// A builtin `Try` whose error row is still an unbound flex var, as in a
-/// record field annotated `Try(ok, _)`. Such a field opts into the
-/// optional-field convention; parse derivation pins the row to `[Missing]`.
+/// A builtin `Try` whose error row can still be pinned to the optional-field
+/// marker. A field annotated `Try(ok, _)` starts with a flex error row, but a
+/// later use can constrain that row to `[Missing, ..flex]` before codec
+/// validation reaches its final-type boundary. Both states carry the same
+/// exact open relation; parse derivation closes it to `[Missing]`.
 fn unboundTryInfoFromNominal(
     self: *Self,
     nominal: types_mod.NominalType,
 ) Allocator.Error!?BuiltinTryInfo {
     const try_info = (try self.builtinTryInfoFromNominal(nominal)) orelse return null;
-    return switch (self.types.resolveVar(try_info.err_var).desc.content) {
-        .flex => try_info,
-        .rigid, .alias, .field_presence, .structure, .err => null,
+    return if (try self.varIsOpenOptionalParseError(try_info.err_var)) try_info else null;
+}
+
+fn varIsOpenOptionalParseError(self: *Self, var_: Var) Allocator.Error!bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .flex => true,
+        .alias => |alias| try self.varIsOpenOptionalParseError(self.types.getAliasBackingVar(alias)),
+        .structure => |structure| switch (structure) {
+            .tag_union => |tag_union| blk: {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                const tag_names = tags.items(.name);
+                const tag_args = tags.items(.args);
+                if (tag_names.len != 1) break :blk false;
+                if (self.types.sliceVars(tag_args[0]).len != 0) break :blk false;
+                if (self.types.resolveVar(tag_union.ext).desc.content != .flex) break :blk false;
+                const text = self.cir.getIdentStoreConst().getText(tag_names[0]);
+                break :blk Ident.textEql(text, "Missing");
+            },
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .empty_tag_union,
+            => false,
+        },
+        .rigid, .field_presence, .err => false,
     };
 }
 
