@@ -100,7 +100,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> [Err([BadInput, ..]), Ok(U64), ..]")))
+		(patt (type "Bool -> [Err([BadInput]), Ok(U64)]")))
 	(expressions
-		(expr (type "Bool -> [Err([BadInput, ..]), Ok(U64), ..]"))))
+		(expr (type "Bool -> [Err([BadInput]), Ok(U64)]"))))
 ~~~

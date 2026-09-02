@@ -9,7 +9,7 @@ Model : {
 
 program = { init!, render! }
 
-init! : Host => Try(Model, [Exit(I64), NotFound, ..])
+init! : Host => Try(Model, [Exit(I64), NotFound])
 init! = |host| {
     value = match host.read_env!("ROC_POSTCHECK_REGRESSION") {
         Ok(env_value) => env_value
@@ -22,5 +22,5 @@ init! = |host| {
     })
 }
 
-render! : Model, Host => Try(Model, [Exit(I64), ..])
+render! : Model, Host => Try(Model, [Exit(I64)])
 render! = |model, _host| Ok(model)

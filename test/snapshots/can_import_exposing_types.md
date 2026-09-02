@@ -333,7 +333,7 @@ Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })
 
 The first branch is:
 
-    [Ok({ body: Error, status: Error }), ..]
+    [Ok({ body: Error, status: Error })]
 
 But the previous branch results in:
 

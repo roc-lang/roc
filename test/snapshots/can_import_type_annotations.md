@@ -219,7 +219,7 @@ Ok(data) => Ok(Http.success(data))
 
 The first branch is:
 
-    [Ok(Error), ..]
+    [Ok(Error)]
 
 But the previous branch results in:
 

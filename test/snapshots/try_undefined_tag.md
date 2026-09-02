@@ -30,7 +30,7 @@ A?
 
 This expression has type:
 
-    [A, ..]
+    [A]
 
 Tip: Maybe wrap a value using Ok(value) or Err(value).
 

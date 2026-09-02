@@ -1,4 +1,4 @@
-main! : List(Str) => Try({}, [Exit(I8), ..])
+main! : List(Str) => Try({}, [Exit(I8)])
 main! = |_| {
 	match read_and_handle_message("") {
 		Ok({}) => Ok({}),
@@ -16,7 +16,7 @@ decode_message = |input| {
 	Ok(INFO)
 }
 
-read_and_handle_message : Str -> Try({}, [StdoutErr(Str), InvalidJson(Str), MissingRequiredField(Str), ..])
+read_and_handle_message : Str -> Try({}, [StdoutErr(Str), InvalidJson(Str), MissingRequiredField(Str)])
 read_and_handle_message = |input| {
 	message = decode_message(input)?
 	match message {

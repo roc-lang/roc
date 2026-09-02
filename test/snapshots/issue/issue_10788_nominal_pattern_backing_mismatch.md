@@ -28,7 +28,7 @@ f = |s| match s {
 
 The first pattern is trying to match:
 
-    [Pt(List(_b)), ..]
+    [Pt(List(_b))]
 
 But the expression between the match parenthesis has the type:
 

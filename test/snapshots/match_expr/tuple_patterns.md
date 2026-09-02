@@ -25,7 +25,7 @@ method.
 
 The value's type, which does not have a method named from_quote, is:
 
-    [Zero, ..]
+    [Zero]
 
 # TOKENS
 ~~~zig
@@ -122,5 +122,5 @@ match coord {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[Zero, ..]"))
+(expr (type "[Zero]"))
 ~~~

@@ -1,15 +1,15 @@
 ParserOldRecordFieldApi :: [].{}
 
 Format := [Default].{
-	parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError, ..])
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError])
 	parse_str = |_| Err(FormatError)
 
 	parse_record_field : State -> Try(
 		[
 			Field({ name : Str, value : State, rest : State }),
-			End({ rest : State, missing : [FormatError, ..] }),
+			End({ rest : State, missing : [FormatError] }),
 		],
-		[FormatError, ..],
+		[FormatError],
 	)
 	parse_record_field = |_| Err(FormatError)
 }

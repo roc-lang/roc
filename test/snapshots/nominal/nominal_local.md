@@ -29,7 +29,7 @@ Str.encode("hi", fmt)
 
 The value's type, which does not have a method named encode_str, is:
 
-    [Utf8Format, ..]
+    [Utf8Format]
 
 # TOKENS
 ~~~zig

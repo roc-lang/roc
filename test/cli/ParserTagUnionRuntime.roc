@@ -1,14 +1,14 @@
 ParserTagUnionRuntime :: [].{}
 
 Format := [Default].{
-	parse_str : Format, State -> Try({ value : Str, rest : State }, [MissingRequired, ..])
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [MissingRequired])
 	parse_str = |_, state|
 		match state {
 			FieldValue(value) => Ok({ value, rest: Done })
 			_ => Err(MissingRequired)
 		}
 
-	parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [MissingRequired, ..])
+	parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [MissingRequired])
 	parse_record_start = |_, state| Ok(Uncounted(state))
 
 	parse_record_field : Format, Encoding.FieldName.FieldNames(_shape), State -> Try(
@@ -19,7 +19,7 @@ Format := [Default].{
 			Continue(State),
 			Done(State),
 		],
-		[MissingRequired, ..],
+		[MissingRequired],
 	)
 	parse_record_field = |_, _, state|
 		match state {
@@ -28,10 +28,10 @@ Format := [Default].{
 			Tag(_) => Err(MissingRequired)
 		}
 
-	parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [MissingRequired, ..])
+	parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [MissingRequired])
 	parse_record_after_field = |_, state| Ok(Continue(state))
 
-	skip_record_field : Format, State -> Try(State, [MissingRequired, ..])
+	skip_record_field : Format, State -> Try(State, [MissingRequired])
 	skip_record_field = |_, _| Ok(Done)
 
 	missing_record_field : Format, Str, State -> [MissingRequired]
@@ -40,7 +40,7 @@ Format := [Default].{
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name
 
-	parse_tag_union : Format, Encoding.ParseTagUnionSpec(a), State -> Try({ value : a, rest : State }, [MissingRequired, ..])
+	parse_tag_union : Format, Encoding.ParseTagUnionSpec(a), State -> Try({ value : a, rest : State }, [MissingRequired])
 	parse_tag_union = |format, spec, state|
 		match state {
 			Tag(tag_name) => Encoding.ParseTagUnionSpec.parse(spec, {

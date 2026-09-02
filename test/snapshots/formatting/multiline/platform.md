@@ -25,8 +25,8 @@ platform "pf"
 # EXPECTED
 EXPOSED BUT NOT DEFINED - platform.md:14:3:14:29
 EXPOSED BUT NOT DEFINED - platform.md:15:3:15:29
-EXPOSED BUT NOT DEFINED - platform.md:6:3:6:5
 EXPOSED BUT NOT DEFINED - platform.md:7:3:7:5
+EXPOSED BUT NOT DEFINED - platform.md:6:3:6:5
 INVALID HOSTED SECTION - :0:0:0:0
 # PROBLEMS
 ── ✗ exposed but not defined ────────────────────────────────── platform.md:14:3
@@ -51,17 +51,6 @@ this mod.
 You can fix this by either defining pr2 in this mod, or by removing it from
 the list of exposed values.
 
-── ✗ exposed but not defined ─────────────────────────────────── platform.md:6:3
-
-The mod header says that E1 is exposed, but it is not defined anywhere in
-this mod.
-
-E1,
-^^
-
-You can fix this by either defining E1 in this mod, or by removing it from
-the list of exposed values.
-
 ── ✗ exposed but not defined ─────────────────────────────────── platform.md:7:3
 
 The mod header says that E2 is exposed, but it is not defined anywhere in
@@ -71,6 +60,17 @@ E2,
 ^^
 
 You can fix this by either defining E2 in this mod, or by removing it from
+the list of exposed values.
+
+── ✗ exposed but not defined ─────────────────────────────────── platform.md:6:3
+
+The mod header says that E1 is exposed, but it is not defined anywhere in
+this mod.
+
+E1,
+^^
+
+You can fix this by either defining E1 in this mod, or by removing it from
 the list of exposed values.
 
 ── ✗ invalid hosted section ────────────────────────────────────────────────────

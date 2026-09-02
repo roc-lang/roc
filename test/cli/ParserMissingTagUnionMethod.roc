@@ -1,7 +1,7 @@
 ParserMissingTagUnionMethod :: [].{}
 
 Format := [Default].{
-	parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError, ..])
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError])
 	parse_str = |_| Err(FormatError)
 }
 

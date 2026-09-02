@@ -7,7 +7,7 @@ app [main!] { pf: platform "./platform/main.roc" }
 
 import pf.FallibleHostStrErr
 
-main! : List(Str) => Try({}, [Exit(I32), ..])
+main! : List(Str) => Try({}, [Exit(I32)])
 main! = |_args| {
 	_ = FallibleHostStrErr.str_ok!({})
 	Ok({})
