@@ -8,7 +8,6 @@
 //! the structural passes without reconstructing source-level intent.
 
 const std = @import("std");
-const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 const body_clone = @import("body_clone.zig");
@@ -18,6 +17,7 @@ const LirStore = core.LirStore;
 const GuardedList = LirStore.GuardedList;
 const Allocator = std.mem.Allocator;
 
+/// Allocation failures produced while rewriting forwarding joins.
 pub const ResourceError = Allocator.Error;
 
 const Candidate = struct {
@@ -33,6 +33,7 @@ const RetRewriter = struct {
     }
 };
 
+/// Sink eligible one-use forwarding continuations in iterator-fusion scopes.
 pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!void {
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
@@ -91,11 +92,12 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
             const inner_param = GuardedList.at(inner_params, 0);
             if (!forwardsToJoin(store, inner.body, inner_param, outer_param, outer.id)) continue;
             const forwarding = store.getCFStmt(inner.body);
-            const terminal = switch (forwarding) {
-                .assign_ref => |assign| assign.next,
-                .set_local => |set| set.next,
-                else => unreachable,
-            };
+            const terminal = if (forwarding == .assign_ref)
+                forwarding.assign_ref.next
+            else if (forwarding == .set_local)
+                forwarding.set_local.next
+            else
+                unreachable;
             // Replacing only the inner join's body must make the forwarding
             // chain unreachable. LIR permits shared statement tails, so a
             // statement-occurrence count is insufficient: require both nodes
@@ -204,6 +206,12 @@ test "forwarding join inline declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
+fn testFreshJoinPointId(next_join_point: *u32) LIR.JoinPointId {
+    const id: LIR.JoinPointId = @enumFromInt(next_join_point.*);
+    next_join_point.* += 1;
+    return id;
+}
+
 test "forwarding join inline sinks the sole consumer without duplicating it" {
     const testing = std.testing;
     var store = LirStore.init(testing.allocator);
@@ -214,8 +222,9 @@ test "forwarding join inline sinks the sole consumer without duplicating it" {
     const outer_param = try store.addLocal(.{ .layout_idx = .u64 });
     const inner_param = try store.addLocal(.{ .layout_idx = .u64 });
     const one = try store.addLocal(.{ .layout_idx = .u64 });
-    const outer_id: LIR.JoinPointId = @enumFromInt(0);
-    const inner_id: LIR.JoinPointId = @enumFromInt(1);
+    var next_join_point: u32 = 0;
+    const outer_id = testFreshJoinPointId(&next_join_point);
+    const inner_id = testFreshJoinPointId(&next_join_point);
 
     const outer_body = try store.addCFStmt(.{ .ret = .{ .value = outer_param } });
     const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = outer_id } });
@@ -278,8 +287,9 @@ test "forwarding join inline preserves recursive outer join declarations" {
     const outer_param = try store.addLocal(.{ .layout_idx = .u64 });
     const inner_param = try store.addLocal(.{ .layout_idx = .u64 });
     const one = try store.addLocal(.{ .layout_idx = .u64 });
-    const outer_id: LIR.JoinPointId = @enumFromInt(0);
-    const inner_id: LIR.JoinPointId = @enumFromInt(1);
+    var next_join_point: u32 = 0;
+    const outer_id = testFreshJoinPointId(&next_join_point);
+    const inner_id = testFreshJoinPointId(&next_join_point);
 
     const outer_back_edge = try store.addCFStmt(.{ .jump = .{ .target = outer_id } });
     const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = outer_id } });
@@ -340,8 +350,9 @@ test "forwarding join inline preserves owning continuation parameters" {
     const outer_param = try store.addLocal(.{ .layout_idx = .str });
     const inner_param = try store.addLocal(.{ .layout_idx = .str });
     const source = try store.addLocal(.{ .layout_idx = .str });
-    const outer_id: LIR.JoinPointId = @enumFromInt(0);
-    const inner_id: LIR.JoinPointId = @enumFromInt(1);
+    var next_join_point: u32 = 0;
+    const outer_id = testFreshJoinPointId(&next_join_point);
+    const inner_id = testFreshJoinPointId(&next_join_point);
 
     const outer_body = try store.addCFStmt(.{ .ret = .{ .value = outer_param } });
     const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = outer_id } });

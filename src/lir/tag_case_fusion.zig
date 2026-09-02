@@ -18,6 +18,7 @@ const LirStore = core.LirStore;
 const GuardedList = LirStore.GuardedList;
 const Allocator = std.mem.Allocator;
 
+/// Allocation failures produced while cloning fused tag branches.
 pub const ResourceError = Allocator.Error;
 
 const BuildSite = struct {
@@ -63,37 +64,35 @@ const BranchRewriter = struct {
     pub fn interceptStmt(self: *BranchRewriter, cloner: anytype, stmt: LIR.CFStmt) ResourceError!?LIR.CFStmtId {
         if (stmt != .assign_ref) return null;
         const assign = stmt.assign_ref;
-        switch (assign.op) {
-            .tag_payload_struct => |payload| {
-                if (payload.source != self.param) return null;
-                std.debug.assert(payload.variant_index == self.variant_index);
-                cloner.local_map[@intFromEnum(assign.target)] = self.payload;
-                return try cloner.cloneStmt(assign.next);
-            },
-            .tag_payload => |payload| {
-                if (payload.source != self.param) return null;
-                std.debug.assert(payload.variant_index == self.variant_index);
-                const op: LIR.RefOp = switch (self.layouts.getLayout(self.payload_layout).tag) {
-                    .struct_ => .{ .field = .{
-                        .source = self.payload,
-                        .field_idx = payload.payload_idx,
-                    } },
-                    else => blk: {
-                        std.debug.assert(payload.payload_idx == 0);
-                        break :blk .{ .local = self.payload };
-                    },
-                };
-                return try cloner.store.addCFStmt(.{ .assign_ref = .{
-                    .target = try cloner.mapLocal(assign.target),
-                    .op = op,
-                    .next = try cloner.cloneStmt(assign.next),
-                } });
-            },
-            else => return null,
+        if (assign.op == .tag_payload_struct) {
+            const payload = assign.op.tag_payload_struct;
+            if (payload.source != self.param) return null;
+            std.debug.assert(payload.variant_index == self.variant_index);
+            cloner.local_map[@intFromEnum(assign.target)] = self.payload;
+            return try cloner.cloneStmt(assign.next);
         }
+        if (assign.op != .tag_payload) return null;
+        const payload = assign.op.tag_payload;
+        if (payload.source != self.param) return null;
+        std.debug.assert(payload.variant_index == self.variant_index);
+        const op: LIR.RefOp = if (self.layouts.getLayout(self.payload_layout).tag == .struct_)
+            .{ .field = .{
+                .source = self.payload,
+                .field_idx = payload.payload_idx,
+            } }
+        else blk: {
+            std.debug.assert(payload.payload_idx == 0);
+            break :blk .{ .local = self.payload };
+        };
+        return try cloner.store.addCFStmt(.{ .assign_ref = .{
+            .target = try cloner.mapLocal(assign.target),
+            .op = op,
+            .next = try cloner.cloneStmt(assign.next),
+        } });
     }
 };
 
+/// Fuse eligible tag-producing joins with their immediate case analysis.
 pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!void {
     for (0..store.procSpecCount()) |proc_index| {
         const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
@@ -263,17 +262,19 @@ fn classifyJoinTagUses(
         if (stmt_id == match_stmt) continue;
         const stmt = store.getCFStmt(stmt_id);
         if (stmt != .assign_ref) continue;
-        const projection = switch (stmt.assign_ref.op) {
-            .tag_payload_struct => |payload| if (payload.source == matched_value)
-                .{ payload.variant_index, payload.tag_discriminant }
+        const op = stmt.assign_ref.op;
+        const projection = if (op == .tag_payload_struct)
+            if (op.tag_payload_struct.source == matched_value)
+                .{ op.tag_payload_struct.variant_index, op.tag_payload_struct.tag_discriminant }
             else
-                null,
-            .tag_payload => |payload| if (payload.source == matched_value)
-                .{ payload.variant_index, payload.tag_discriminant }
+                null
+        else if (op == .tag_payload)
+            if (op.tag_payload.source == matched_value)
+                .{ op.tag_payload.variant_index, op.tag_payload.tag_discriminant }
             else
-                null,
-            else => null,
-        };
+                null
+        else
+            null;
         if (projection) |indices| {
             if (indices[0] >= info.variants.len) return null;
             allowed += 1;
@@ -324,21 +325,24 @@ fn branchesUseOnlyPayloads(
         while (try walk.next()) |stmt_id| {
             const stmt = store.getCFStmt(stmt_id);
             if (stmt != .assign_ref) continue;
-            switch (stmt.assign_ref.op) {
-                .tag_payload_struct => |payload| if (payload.source == matched_value and
+            const op = stmt.assign_ref.op;
+            if (op == .tag_payload_struct) {
+                const payload = op.tag_payload_struct;
+                if (payload.source == matched_value and
                     payload.variant_index == build.variant_index and
                     payload.tag_discriminant == build.discriminant)
                 {
                     allowed += 1;
-                },
-                .tag_payload => |payload| if (payload.source == matched_value and
+                }
+            } else if (op == .tag_payload) {
+                const payload = op.tag_payload;
+                if (payload.source == matched_value and
                     payload.variant_index == build.variant_index and
                     payload.tag_discriminant == build.discriminant)
                 {
                     if (layouts.getLayout(payload_layout).tag != .struct_ and payload.payload_idx != 0) return false;
                     allowed += 1;
-                },
-                else => {},
+                }
             }
         }
         if (build.payload == null and allowed != 0) return false;
@@ -574,7 +578,7 @@ test "tag case fusion routes exact constructor edges without materializing tags"
     const selector = try store.addLocal(.{ .layout_idx = .bool });
     const zero = try store.addLocal(.{ .layout_idx = .u64 });
     const one = try store.addLocal(.{ .layout_idx = .u64 });
-    const join_id: LIR.JoinPointId = @enumFromInt(0);
+    const join_id: LIR.JoinPointId = @enumFromInt(nextJoinPointRaw(&store));
 
     const ret_zero = try store.addCFStmt(.{ .ret = .{ .value = zero } });
     const branch_zero = try store.addCFStmt(.{ .assign_literal = .{
@@ -639,9 +643,9 @@ test "tag case fusion routes exact constructor edges without materializing tags"
 
     var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpec(proc).body.?);
     defer walk.deinit();
-    while (try walk.next()) |stmt_id| switch (store.getCFStmt(stmt_id)) {
-        .assign_tag => |assign| try testing.expect(assign.target != param),
-        .assign_ref => |assign| if (assign.target == disc) return error.TestUnexpectedResult,
-        else => {},
-    };
+    while (try walk.next()) |stmt_id| {
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt == .assign_tag) try testing.expect(stmt.assign_tag.target != param);
+        if (stmt == .assign_ref and stmt.assign_ref.target == disc) return error.TestUnexpectedResult;
+    }
 }

@@ -4544,13 +4544,11 @@ fn loopCarriedWrapperCount(lowered: *lir.CheckedPipeline.LoweredProgram) TestErr
     var count: usize = 0;
     for (0..params.len) |index| {
         const param_layout = layouts.getLayout(store.getLocal(GuardedList.at(params, index)).layout_idx);
-        switch (param_layout.tag) {
-            .struct_, .closure => count += 1,
-            .tag_union => {
-                const info = layouts.getTagUnionInfo(param_layout);
-                if (info.variants.len == 1) count += 1;
-            },
-            else => {},
+        if (param_layout.tag == .struct_ or param_layout.tag == .closure) {
+            count += 1;
+        } else if (param_layout.tag == .tag_union) {
+            const info = layouts.getTagUnionInfo(param_layout);
+            if (info.variants.len == 1) count += 1;
         }
     }
     return count;

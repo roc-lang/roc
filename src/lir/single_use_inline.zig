@@ -9,7 +9,6 @@
 //! therefore needs one inventory scan per call depth, not per call.
 
 const std = @import("std");
-const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 const body_clone = @import("body_clone.zig");
@@ -20,6 +19,7 @@ const LirStore = core.LirStore;
 const GuardedList = LirStore.GuardedList;
 const Allocator = std.mem.Allocator;
 
+/// Allocation failures produced while inventorying or cloning procedures.
 pub const ResourceError = Allocator.Error;
 
 const CallSite = struct {
@@ -86,22 +86,21 @@ const Inventory = struct {
             var walk = try body_clone.ReachableStmts.init(self.store, body);
             defer walk.deinit();
             while (try walk.next()) |stmt_id| {
-                switch (self.store.getCFStmt(stmt_id)) {
-                    .assign_call => |call| {
-                        const callee_index = @intFromEnum(call.proc);
-                        self.direct_calls[callee_index] += 1;
-                        self.unique_site[callee_index] = .{ .caller = caller, .stmt = stmt_id };
-                        try self.markReachable(call.proc);
-                    },
-                    .assign_packed_erased_fn => |packed_fn| {
-                        self.escapes[@intFromEnum(packed_fn.proc)] = true;
-                        try self.markReachable(packed_fn.proc);
-                    },
-                    .assign_literal => |literal| if (literal.value == .proc_ref) {
-                        self.escapes[@intFromEnum(literal.value.proc_ref)] = true;
-                        try self.markReachable(literal.value.proc_ref);
-                    },
-                    else => {},
+                const stmt = self.store.getCFStmt(stmt_id);
+                if (stmt == .assign_call) {
+                    const call = stmt.assign_call;
+                    const callee_index = @intFromEnum(call.proc);
+                    self.direct_calls[callee_index] += 1;
+                    self.unique_site[callee_index] = .{ .caller = caller, .stmt = stmt_id };
+                    try self.markReachable(call.proc);
+                } else if (stmt == .assign_packed_erased_fn) {
+                    const packed_fn = stmt.assign_packed_erased_fn;
+                    self.escapes[@intFromEnum(packed_fn.proc)] = true;
+                    try self.markReachable(packed_fn.proc);
+                } else if (stmt == .assign_literal and stmt.assign_literal.value == .proc_ref) {
+                    const proc = stmt.assign_literal.value.proc_ref;
+                    self.escapes[@intFromEnum(proc)] = true;
+                    try self.markReachable(proc);
                 }
             }
         }
@@ -155,6 +154,7 @@ fn eligibleCall(store: *const LirStore, call: @FieldType(LIR.CFStmt, "assign_cal
         !callee.is_static_initializer;
 }
 
+/// Inline every eligible, reachable, single-use procedure without code growth.
 pub fn run(result: *LirProgram.Result) ResourceError!void {
     while (true) {
         var inventory = try Inventory.init(result);
@@ -314,16 +314,16 @@ test "single-use inline keeps writable callee arguments distinct from caller ope
     var saw_distinct_write = false;
     var walk = try body_clone.ReachableStmts.init(store, store.getProcSpec(caller).body.?);
     defer walk.deinit();
-    while (try walk.next()) |stmt_id| switch (store.getCFStmt(stmt_id)) {
-        .assign_call => return error.TestUnexpectedResult,
-        .assign_ref => |assign| if (assign.op == .local and assign.op.local == caller_arg and assign.target != caller_arg) {
+    while (try walk.next()) |stmt_id| {
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt == .assign_call) return error.TestUnexpectedResult;
+        if (stmt == .assign_ref and stmt.assign_ref.op == .local and stmt.assign_ref.op.local == caller_arg and stmt.assign_ref.target != caller_arg) {
             saw_argument_copy = true;
-        },
-        .set_local => |set| if (set.value != caller_arg and set.target != caller_arg) {
+        }
+        if (stmt == .set_local and stmt.set_local.value != caller_arg and stmt.set_local.target != caller_arg) {
             saw_distinct_write = true;
-        },
-        else => {},
-    };
+        }
+    }
     try testing.expect(saw_argument_copy);
     try testing.expect(saw_distinct_write);
 }

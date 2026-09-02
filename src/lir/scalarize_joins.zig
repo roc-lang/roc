@@ -613,51 +613,49 @@ const Pass = struct {
     fn validSingleVariantRead(self: *const Pass, stmt_id: LIR.CFStmtId, payload_layout: layout_mod.Idx) bool {
         const stmt = self.store.getCFStmt(stmt_id);
         if (stmt != .assign_ref) return false;
-        return switch (stmt.assign_ref.op) {
-            .discriminant => true,
-            .tag_payload_struct => |op| op.variant_index == 0 and op.tag_discriminant == 0,
-            .tag_payload => |op| blk: {
-                if (op.variant_index != 0 or op.tag_discriminant != 0) break :blk false;
-                const payload = self.layouts.getLayout(payload_layout);
-                if (payload.tag == .struct_) {
-                    const info = self.layouts.getStructInfo(payload);
-                    var field_count: usize = 0;
-                    for (0..info.fields.len) |index| {
-                        field_count = @max(field_count, @as(usize, info.fields.get(@intCast(index)).index) + 1);
-                    }
-                    break :blk op.payload_idx < field_count;
-                }
-                break :blk op.payload_idx == 0;
-            },
-            else => false,
-        };
+        const op = stmt.assign_ref.op;
+        if (op == .discriminant) return true;
+        if (op == .tag_payload_struct) {
+            return op.tag_payload_struct.variant_index == 0 and op.tag_payload_struct.tag_discriminant == 0;
+        }
+        if (op != .tag_payload) return false;
+        const tag_payload = op.tag_payload;
+        if (tag_payload.variant_index != 0 or tag_payload.tag_discriminant != 0) return false;
+        const payload = self.layouts.getLayout(payload_layout);
+        if (payload.tag == .struct_) {
+            const info = self.layouts.getStructInfo(payload);
+            var field_count: usize = 0;
+            for (0..info.fields.len) |index| {
+                field_count = @max(field_count, @as(usize, info.fields.get(@intCast(index)).index) + 1);
+            }
+            return tag_payload.payload_idx < field_count;
+        }
+        return tag_payload.payload_idx == 0;
     }
 
     fn rewriteSingleVariantRead(self: *Pass, stmt_id: LIR.CFStmtId, payload: LIR.LocalId, payload_layout: layout_mod.Idx) void {
         const stmt = self.store.getCFStmtPtr(stmt_id);
         const assign = stmt.assign_ref;
-        switch (assign.op) {
-            .discriminant => {
-                stmt.* = .{ .assign_literal = .{
-                    .target = assign.target,
-                    .value = .{ .i64_literal = .{
-                        .value = 0,
-                        .layout_idx = self.store.getLocal(assign.target).layout_idx,
-                    } },
-                    .next = assign.next,
-                } };
-            },
-            .tag_payload_struct => {
-                stmt.assign_ref.op = .{ .local = payload };
-            },
-            .tag_payload => |op| {
-                stmt.assign_ref.op = if (self.layouts.getLayout(payload_layout).tag == .struct_)
-                    .{ .field = .{ .source = payload, .field_idx = op.payload_idx } }
-                else
-                    .{ .local = payload };
-            },
-            else => unreachable,
+        if (assign.op == .discriminant) {
+            stmt.* = .{ .assign_literal = .{
+                .target = assign.target,
+                .value = .{ .i64_literal = .{
+                    .value = 0,
+                    .layout_idx = self.store.getLocal(assign.target).layout_idx,
+                } },
+                .next = assign.next,
+            } };
+            return;
         }
+        if (assign.op == .tag_payload_struct) {
+            stmt.assign_ref.op = .{ .local = payload };
+            return;
+        }
+        std.debug.assert(assign.op == .tag_payload);
+        stmt.assign_ref.op = if (self.layouts.getLayout(payload_layout).tag == .struct_)
+            .{ .field = .{ .source = payload, .field_idx = assign.op.tag_payload.payload_idx } }
+        else
+            .{ .local = payload };
     }
 
     fn validateSingleVariantReads(
@@ -879,33 +877,36 @@ const Pass = struct {
         payload_layout: layout_mod.Idx,
     ) ScalarizeError!void {
         const old = self.store.getCFStmt(stmt_id);
-        const target: LIR.LocalId = switch (old) {
-            .set_local => |set| set.target,
-            .assign_ref => |assign| assign.target,
-            else => unreachable,
-        };
-        const next_after: LIR.CFStmtId = switch (old) {
-            .set_local => |set| set.next,
-            .assign_ref => |assign| assign.next,
-            else => unreachable,
-        };
+        const target: LIR.LocalId = if (old == .set_local)
+            old.set_local.target
+        else if (old == .assign_ref)
+            old.assign_ref.target
+        else
+            unreachable;
+        const next_after: LIR.CFStmtId = if (old == .set_local)
+            old.set_local.next
+        else if (old == .assign_ref)
+            old.assign_ref.next
+        else
+            unreachable;
         const target_layout = self.store.getLocal(target).layout_idx;
         const rebuilt = try self.store.addLocal(.{ .layout_idx = target_layout });
         try self.new_locals.append(self.allocator, rebuilt);
-        const forward = switch (old) {
-            .set_local => try self.store.addCFStmt(.{ .set_local = .{
+        const forward = if (old == .set_local)
+            try self.store.addCFStmt(.{ .set_local = .{
                 .target = target,
                 .value = rebuilt,
                 .mode = .initialize_join_param,
                 .next = next_after,
-            } }),
-            .assign_ref => try self.store.addCFStmt(.{ .assign_ref = .{
+            } })
+        else if (old == .assign_ref)
+            try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = target,
                 .op = .{ .local = rebuilt },
                 .next = next_after,
-            } }),
-            else => unreachable,
-        };
+            } })
+        else
+            unreachable;
         self.store.getCFStmtPtr(stmt_id).* = .{ .assign_tag = .{
             .target = rebuilt,
             .variant_index = 0,
@@ -1186,32 +1187,35 @@ const Pass = struct {
         fields: []const LIR.LocalId,
     ) ScalarizeError!void {
         const old = self.store.getCFStmt(stmt_id);
-        const target: LIR.LocalId = switch (old) {
-            .set_local => |set| set.target,
-            .assign_ref => |assign| assign.target,
-            else => unreachable,
-        };
-        const next_after: LIR.CFStmtId = switch (old) {
-            .set_local => |set| set.next,
-            .assign_ref => |assign| assign.next,
-            else => unreachable,
-        };
+        const target: LIR.LocalId = if (old == .set_local)
+            old.set_local.target
+        else if (old == .assign_ref)
+            old.assign_ref.target
+        else
+            unreachable;
+        const next_after: LIR.CFStmtId = if (old == .set_local)
+            old.set_local.next
+        else if (old == .assign_ref)
+            old.assign_ref.next
+        else
+            unreachable;
         const rebuilt = try self.store.addLocal(.{ .layout_idx = self.store.getLocal(target).layout_idx });
         try self.new_locals.append(self.allocator, rebuilt);
-        const forward = switch (old) {
-            .set_local => try self.store.addCFStmt(.{ .set_local = .{
+        const forward = if (old == .set_local)
+            try self.store.addCFStmt(.{ .set_local = .{
                 .target = target,
                 .value = rebuilt,
                 .mode = .initialize_join_param,
                 .next = next_after,
-            } }),
-            .assign_ref => try self.store.addCFStmt(.{ .assign_ref = .{
+            } })
+        else if (old == .assign_ref)
+            try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = target,
                 .op = .{ .local = rebuilt },
                 .next = next_after,
-            } }),
-            else => unreachable,
-        };
+            } })
+        else
+            unreachable;
         self.store.getCFStmtPtr(stmt_id).* = .{ .assign_struct = .{
             .target = rebuilt,
             .fields = try self.store.addLocalSpan(fields),
