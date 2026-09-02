@@ -89,6 +89,8 @@ const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
 const EffectfulComptimeExpression = problem_mod.EffectfulComptimeExpression;
 const EffectfulExpect = problem_mod.EffectfulExpect;
 const EffectfulFunctionName = problem_mod.EffectfulFunctionName;
+const TagUnionExtendedBeyondAnnotation = problem_mod.TagUnionExtendedBeyondAnnotation;
+const RedundantOpenTagUnion = problem_mod.RedundantOpenTagUnion;
 
 // Comptime errors
 const ComptimeOrigin = problem_mod.ComptimeOrigin;
@@ -1070,6 +1072,8 @@ pub const ReportBuilder = struct {
             .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
             .non_exhaustive_destructure => |data| return self.buildNonExhaustiveDestructureReport(data),
             .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
+            .tag_union_extended_beyond_annotation => |data| return self.buildTagUnionExtendedBeyondAnnotationReport(data),
+            .redundant_open_tag_union => |data| return self.buildRedundantOpenTagUnionReport(data),
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
             .unreachable_code => |data| return self.buildUnreachableCodeReport(data),
             .comptime_unused_branch => |data| return self.buildComptimeUnusedBranchReport(data),
@@ -2236,6 +2240,52 @@ pub const ReportBuilder = struct {
     }
 
     /// Build a report for a where constraint whose receiver is not owned by this annotation.
+    fn buildRedundantOpenTagUnionReport(self: *Self, data: RedundantOpenTagUnion) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Redundant Open Tag Union", "This tag union has an explicit `..`, but it is already implicitly open.", .warning);
+        errdefer report.deinit();
+
+        try self.addSourceWarningRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Tag unions in output positions, like the return type of a function, are automatically open. Remove the"),
+            D.bytes("..").withAnnotation(.inline_code),
+            D.bytes("or bind it to a named type variable like"),
+            D.bytes("..others").withAnnotation(.inline_code),
+            D.bytes("if you want to refer to the extension elsewhere."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildTagUnionExtendedBeyondAnnotationReport(self: *Self, data: TagUnionExtendedBeyondAnnotation) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Tag Not In Annotation", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
+            D.bytes("This definition can produce the tag"),
+            D.ident(data.tag_name).withAnnotation(.inline_code),
+            D.bytes("but the annotated tag union does not list it."),
+        }, self, &report, &report.headline);
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists. Add"),
+            D.ident(data.tag_name).withAnnotation(.inline_code),
+            D.bytes("to the tag union in the annotation."),
+        }, self, &report);
+
+        return report;
+    }
+
     fn buildWhereClauseReceiverNotIntroducedReport(
         self: *Self,
         data: WhereClauseReceiverNotIntroduced,
