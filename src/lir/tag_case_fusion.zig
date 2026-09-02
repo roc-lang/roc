@@ -94,13 +94,20 @@ const BranchRewriter = struct {
 
 /// Fuse eligible tag-producing joins with their immediate case analysis.
 pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!void {
+    var join_params = body_clone.JoinParamIndex.init(store.allocator);
+    defer join_params.deinit();
     for (0..store.procSpecCount()) |proc_index| {
         const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
         if (!store.getProcSpec(proc).iterator_fusion_scope) continue;
+        var indexed = false;
         while (try findCandidate(store, layouts, proc)) |found| {
+            if (!indexed) {
+                try join_params.indexReachable(store, store.getProcSpec(proc).body.?);
+                indexed = true;
+            }
             var candidate = found;
             defer candidate.deinit(store.allocator);
-            try applyCandidate(store, layouts, &candidate);
+            try applyCandidate(store, layouts, &join_params, &candidate);
         }
     }
 }
@@ -379,6 +386,7 @@ fn switchTarget(
 fn applyCandidate(
     store: *LirStore,
     layouts: *const layout_mod.Store,
+    join_params: *body_clone.JoinParamIndex,
     candidate: *const Candidate,
 ) ResourceError!void {
     const join = store.getCFStmt(candidate.join_stmt).join;
@@ -405,6 +413,7 @@ fn applyCandidate(
             .body = join.remainder,
             .remainder = join.remainder,
         } });
+        try join_params.record(store.getCFStmt(join_stmt).join);
 
         const branch = switchTarget(store, switch_stmt, build.discriminant);
         const branch_defs = try body_clone.collectReachableDefinitions(store, branch);
@@ -415,7 +424,7 @@ fn applyCandidate(
             .payload = payload_param orelse candidate.param,
             .payload_layout = payload_layout,
             .layouts = layouts,
-        }, branch);
+        }, branch, join_params);
         defer cloner.deinit();
         const frame = store.getLocalSpan(store.getProcSpec(candidate.proc).frame_locals);
         for (0..frame.len) |index| {

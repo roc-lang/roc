@@ -25,7 +25,7 @@ const Candidate = struct {
     outer_param: LIR.LocalId,
     inner_stmt: LIR.CFStmtId,
     inner_param: LIR.LocalId,
-    shared_tail_definitions: []bool,
+    fresh_definitions: []bool,
 };
 
 const RetRewriter = struct {
@@ -36,12 +36,19 @@ const RetRewriter = struct {
 
 /// Sink eligible one-use forwarding continuations in iterator-fusion scopes.
 pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!void {
+    var join_params = body_clone.JoinParamIndex.init(store.allocator);
+    defer join_params.deinit();
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
         if (!store.getProcSpec(proc_id).iterator_fusion_scope) continue;
+        var indexed = false;
         while (try findCandidate(store, layouts, proc_id)) |candidate| {
-            defer store.allocator.free(candidate.shared_tail_definitions);
-            try applyCandidate(store, layouts, proc_id, candidate);
+            if (!indexed) {
+                try join_params.indexReachable(store, store.getProcSpec(proc_id).body.?);
+                indexed = true;
+            }
+            defer store.allocator.free(candidate.fresh_definitions);
+            try applyCandidate(store, layouts, &join_params, proc_id, candidate);
         }
     }
 }
@@ -114,7 +121,7 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
                 .outer_param = outer_param,
                 .inner_stmt = inner_stmt,
                 .inner_param = inner_param,
-                .shared_tail_definitions = undefined,
+                .fresh_definitions = undefined,
             };
         }
 
@@ -124,7 +131,7 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
         // or bypass that source.
         if (incoming_count == 1) {
             if (selected) |*candidate| {
-                candidate.shared_tail_definitions = try collectSharedTailDefinitions(store, outer.body, incoming_edges);
+                candidate.fresh_definitions = try collectFreshDefinitions(store, outer.body, incoming_edges);
                 return candidate.*;
             }
         }
@@ -162,7 +169,7 @@ fn subtreeJumpsTo(store: *LirStore, body: LIR.CFStmtId, target: LIR.JoinPointId)
     return false;
 }
 
-fn collectSharedTailDefinitions(
+fn collectFreshDefinitions(
     store: *LirStore,
     root: LIR.CFStmtId,
     proc_incoming_edges: []const u32,
@@ -212,7 +219,12 @@ fn collectSharedTailDefinitions(
     errdefer store.allocator.free(shared_definitions);
     @memset(shared_definitions, false);
     for (nodes.items) |stmt_id| {
-        if (shared_stmts[@intFromEnum(stmt_id)]) {
+        // A cloned join declaration receives a fresh join-point identity, so
+        // its parameter binders must be alpha-renamed with it. Unlike ordinary
+        // statement targets, jump initialization is not represented by a
+        // structural successor edge to the declaration; retaining a parameter
+        // identity can therefore merge two distinct control-flow binders.
+        if (store.getCFStmt(stmt_id) == .join or shared_stmts[@intFromEnum(stmt_id)]) {
             body_clone.markStmtDefinitions(store, shared_definitions, stmt_id);
         }
     }
@@ -245,23 +257,24 @@ fn forwardsToJoin(
 fn applyCandidate(
     store: *LirStore,
     layouts: *const layout_mod.Store,
+    join_params: *body_clone.JoinParamIndex,
     proc_id: LIR.LirProcSpecId,
     candidate: Candidate,
 ) ResourceError!void {
     const outer = store.getCFStmt(candidate.outer_stmt).join;
 
-    var cloner = try body_clone.BodyCloner(RetRewriter).initWithFreshDeclaredJoins(store, .{}, outer.body);
+    var cloner = try body_clone.BodyCloner(RetRewriter).initWithFreshDeclaredJoins(store, .{}, outer.body, join_params);
     defer cloner.deinit();
 
-    // The exclusive prefix is moved, so its definitions keep their identities.
-    // A structurally shared suffix remains reachable through another
-    // predecessor; only definitions in such suffixes receive fresh identities
-    // in the clone. The eliminated outer parameter is substituted with the
-    // inner parameter that carried the same value.
+    // Ordinary definitions in the exclusive prefix are moved, so they keep
+    // their identities. Definitions in a structurally shared suffix and
+    // parameter binders of alpha-renamed joins receive fresh identities. The
+    // eliminated outer parameter is substituted with the inner parameter that
+    // carried the same value.
     const frame = store.getLocalSpan(store.getProcSpec(proc_id).frame_locals);
     for (0..frame.len) |index| {
         const local = GuardedList.at(frame, index);
-        if (!candidate.shared_tail_definitions[@intFromEnum(local)]) {
+        if (!candidate.fresh_definitions[@intFromEnum(local)]) {
             cloner.local_map[@intFromEnum(local)] = local;
         }
     }

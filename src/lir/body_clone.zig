@@ -27,6 +27,39 @@ pub const ForwardedAlias = struct {
     next: CFStmtId,
 };
 
+/// Runtime parameters associated with every join identity in the current LIR.
+/// Index each procedure once before rewriting it and update the index as the
+/// pass adds joins, so subtree clones can resolve external jump targets
+/// without rescanning the procedure for every cloned branch.
+pub const JoinParamIndex = struct {
+    params: collections.DenseMap(LIR.JoinPointId, LIR.LocalSpan),
+
+    pub fn init(allocator: Allocator) JoinParamIndex {
+        return .{ .params = collections.DenseMap(LIR.JoinPointId, LIR.LocalSpan).init(allocator) };
+    }
+
+    pub fn deinit(self: *JoinParamIndex) void {
+        self.params.deinit();
+    }
+
+    pub fn record(self: *JoinParamIndex, join: @FieldType(LIR.CFStmt, "join")) Allocator.Error!void {
+        try self.params.put(join.id, join.params);
+    }
+
+    pub fn indexReachable(self: *JoinParamIndex, store: *LirStore, body: CFStmtId) Allocator.Error!void {
+        var walk = try ReachableStmts.init(store, body);
+        defer walk.deinit();
+        while (try walk.next()) |stmt_id| {
+            const stmt = store.getCFStmt(stmt_id);
+            if (stmt == .join) try self.record(stmt.join);
+        }
+    }
+
+    fn get(self: *const JoinParamIndex, id: LIR.JoinPointId) ?LIR.LocalSpan {
+        return self.params.get(id);
+    }
+};
+
 /// Follow a straight-line chain of `assign_ref .local` aliases of `source`,
 /// returning the final aliased local and the first statement that is not such
 /// an alias. Only aliases that copy the tracked value into a same-layout local
@@ -654,12 +687,13 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         /// subtree, preserving jumps to lexically enclosing joins.
         join_remap: enum { none, all, declared },
         declared_joins: collections.DenseMap(LIR.JoinPointId, void),
+        join_params: ?*JoinParamIndex,
         join_map: collections.DenseMap(LIR.JoinPointId, LIR.JoinPointId),
         next_join_point: u32,
 
         /// Allocate the clone state sized for the store's current locals.
         pub fn init(store: *LirStore, rewriter: Rewriter) Allocator.Error!Self {
-            return initInternal(store, rewriter, LIR.InlineScopeId.none, .none);
+            return initInternal(store, rewriter, LIR.InlineScopeId.none, .none, null);
         }
 
         /// Allocate clone state and rebase every cloned source location below
@@ -670,7 +704,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             rewriter: Rewriter,
             outer: LIR.InlineScopeId,
         ) Allocator.Error!Self {
-            return initInternal(store, rewriter, outer, .all);
+            return initInternal(store, rewriter, outer, .all, null);
         }
 
         /// Clone a control-flow subtree within its current procedure. Join
@@ -680,8 +714,9 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             store: *LirStore,
             rewriter: Rewriter,
             body: CFStmtId,
+            join_params: *JoinParamIndex,
         ) Allocator.Error!Self {
-            var self = try initInternal(store, rewriter, LIR.InlineScopeId.none, .declared);
+            var self = try initInternal(store, rewriter, LIR.InlineScopeId.none, .declared, join_params);
             errdefer self.deinit();
             var walk = try ReachableStmts.init(store, body);
             defer walk.deinit();
@@ -697,6 +732,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             rewriter: Rewriter,
             outer: LIR.InlineScopeId,
             join_remap: @FieldType(Self, "join_remap"),
+            join_params: ?*JoinParamIndex,
         ) Allocator.Error!Self {
             const local_map = try store.allocator.alloc(?LocalId, store.localCount());
             errdefer store.allocator.free(local_map);
@@ -713,6 +749,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .inline_scope_map = inline_scope_map,
                 .join_remap = join_remap,
                 .declared_joins = collections.DenseMap(LIR.JoinPointId, void).init(store.allocator),
+                .join_params = join_params,
                 .join_map = collections.DenseMap(LIR.JoinPointId, LIR.JoinPointId).init(store.allocator),
                 .next_join_point = if (join_remap != .none) nextJoinPointRaw(store) else 0,
             };
@@ -1018,17 +1055,8 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .str_match_set => |s| try self.cloneStrMatchSet(s),
                 .loop_continue => try self.store.addCFStmt(.loop_continue),
                 .loop_break => try self.store.addCFStmt(.loop_break),
-                .join => |s| try self.store.addCFStmt(.{ .join = .{
-                    .id = try self.mapJoinPoint(s.id),
-                    .params = try self.mapLocalSpan(s.params),
-                    .retained = try self.mapLocalSpan(s.retained),
-                    .maybe_uninitialized_params = try self.mapLocalSpan(s.maybe_uninitialized_params),
-                    .maybe_uninitialized_conditions = try self.mapLocalSpan(s.maybe_uninitialized_conditions),
-                    .maybe_uninitialized_condition_masks = s.maybe_uninitialized_condition_masks,
-                    .body = try self.cloneStmt(s.body),
-                    .remainder = try self.cloneStmt(s.remainder),
-                } }),
-                .jump => |s| try self.store.addCFStmt(.{ .jump = .{ .target = try self.mapJoinPoint(s.target) } }),
+                .join => |s| try self.cloneJoin(s),
+                .jump => |s| try self.cloneJump(s),
                 .ret => |s| try self.rewriter.cloneRet(self, s.value),
                 .crash => |s| try self.store.addCFStmt(.{ .crash = .{ .msg = switch (s.msg) {
                     .literal => |literal| .{ .literal = literal },
@@ -1038,6 +1066,57 @@ pub fn BodyCloner(comptime Rewriter: type) type {
 
             try self.stmt_map.put(old_id, cloned);
             return cloned;
+        }
+
+        fn cloneJoin(self: *Self, join: @FieldType(LIR.CFStmt, "join")) Allocator.Error!CFStmtId {
+            const cloned = try self.store.addCFStmt(.{ .join = .{
+                .id = try self.mapJoinPoint(join.id),
+                .params = try self.mapLocalSpan(join.params),
+                .retained = try self.mapLocalSpan(join.retained),
+                .maybe_uninitialized_params = try self.mapLocalSpan(join.maybe_uninitialized_params),
+                .maybe_uninitialized_conditions = try self.mapLocalSpan(join.maybe_uninitialized_conditions),
+                .maybe_uninitialized_condition_masks = join.maybe_uninitialized_condition_masks,
+                .body = try self.cloneStmt(join.body),
+                .remainder = try self.cloneStmt(join.remainder),
+            } });
+            if (self.join_params) |params| try params.record(self.store.getCFStmt(cloned).join);
+            return cloned;
+        }
+
+        /// A declared-subtree clone can alpha-rename a local that is also a
+        /// parameter of an enclosing join. Jumps encode their arguments as
+        /// preceding writes, so bridge each remapped value back into the
+        /// enclosing join's original parameter before leaving the clone.
+        fn cloneJump(self: *Self, jump: @FieldType(LIR.CFStmt, "jump")) Allocator.Error!CFStmtId {
+            var next = try self.store.addCFStmt(.{ .jump = .{ .target = try self.mapJoinPoint(jump.target) } });
+            if (self.join_remap != .declared or self.declared_joins.contains(jump.target)) return next;
+
+            const params = self.join_params.?.get(jump.target) orelse
+                @panic("subtree clone jumped to an unknown external join");
+            next = try self.bridgeExternalJoinParams(params, next);
+            return next;
+        }
+
+        fn bridgeExternalJoinParams(self: *Self, span: LIR.LocalSpan, tail: CFStmtId) Allocator.Error!CFStmtId {
+            var next = tail;
+            const params = self.store.getLocalSpan(span);
+            var index = params.len;
+            while (index > 0) {
+                index -= 1;
+                const param = GuardedList.at(params, index);
+                const mapped = self.local_map[@intFromEnum(param)] orelse {
+                    self.local_map[@intFromEnum(param)] = param;
+                    continue;
+                };
+                if (mapped == param) continue;
+                next = try self.store.addCFStmt(.{ .set_local = .{
+                    .target = param,
+                    .value = mapped,
+                    .mode = .initialize_join_param,
+                    .next = next,
+                } });
+            }
+            return next;
         }
 
         /// True when `next` is a `ret` of exactly `value`, marking a direct
@@ -1250,6 +1329,57 @@ fn nextJoinPointRaw(store: *const LirStore) u32 {
         next = @max(next, raw + 1);
     }
     return next;
+}
+
+const TestRetRewriter = struct {
+    pub fn cloneRet(_: *TestRetRewriter, cloner: anytype, value: LocalId) Allocator.Error!CFStmtId {
+        return try cloner.store.addCFStmt(.{ .ret = .{ .value = try cloner.mapLocal(value) } });
+    }
+};
+
+test "subtree clone bridges renamed parameters before an external join" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+
+    const shared_param = try store.addLocal(.{ .layout_idx = .u64 });
+    const external_id: LIR.JoinPointId = @enumFromInt(1);
+    const internal_id: LIR.JoinPointId = @enumFromInt(2);
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = shared_param } });
+    const jump_external = try store.addCFStmt(.{ .jump = .{ .target = external_id } });
+    const jump_internal = try store.addCFStmt(.{ .jump = .{ .target = internal_id } });
+    const internal_stmt = try store.addCFStmt(.{ .join = .{
+        .id = internal_id,
+        .params = try store.addLocalSpan(&.{shared_param}),
+        .body = jump_external,
+        .remainder = jump_internal,
+    } });
+    const external_stmt = try store.addCFStmt(.{ .join = .{
+        .id = external_id,
+        .params = try store.addLocalSpan(&.{shared_param}),
+        .body = ret,
+        .remainder = internal_stmt,
+    } });
+
+    var join_params = JoinParamIndex.init(testing.allocator);
+    defer join_params.deinit();
+    try join_params.indexReachable(&store, external_stmt);
+    var cloner = try BodyCloner(TestRetRewriter).initWithFreshDeclaredJoins(&store, .{}, internal_stmt, &join_params);
+    defer cloner.deinit();
+    const cloned_stmt = try cloner.cloneStmt(internal_stmt);
+    const cloned = store.getCFStmt(cloned_stmt).join;
+    const cloned_param = GuardedList.at(store.getLocalSpan(cloned.params), 0);
+
+    try testing.expect(cloned.id != internal_id);
+    try testing.expect(cloned_param != shared_param);
+    try testing.expectEqual(cloned.id, store.getCFStmt(cloned.remainder).jump.target);
+
+    const bridge = store.getCFStmt(cloned.body).set_local;
+    try testing.expectEqual(shared_param, bridge.target);
+    try testing.expectEqual(cloned_param, bridge.value);
+    try testing.expectEqual(LIR.SetLocalWriteMode.initialize_join_param, bridge.mode);
+    try testing.expectEqual(external_id, store.getCFStmt(bridge.next).jump.target);
 }
 
 test "chainIsSingleUse rejects an extra read of any link" {
