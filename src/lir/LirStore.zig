@@ -1397,7 +1397,7 @@ test "body shard relocates nonzero local and body suffixes" {
 
 test "body shard append preserves destination on every reserve-stage allocation failure" {
     const Helper = struct {
-        fn run(fail_index: usize) !bool {
+        fn run(fail_index: usize) (Allocator.Error || error{TestExpectedEqual})!bool {
             var source = Self.init(std.testing.allocator);
             defer source.deinit();
             const source_prefix = source.captureBodyPrefix();
