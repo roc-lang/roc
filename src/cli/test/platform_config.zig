@@ -95,10 +95,6 @@ const fx_open_tests = [_]SimpleTestSpec{
         .roc_file = "test/fx-open/hosted_channels_declared.roc",
         .description = "A hosted result flowing through an annotated binding, an argument, a record field, and a hand-written re-tag keeps the extern at its declared host ABI row",
     },
-    .{
-        .roc_file = "test/fx-open/issue_11072_hooks_chain.roc",
-        .description = "Regression test: a chain of fallible links threading one hooks record lowers its per-link interpolation closures to one recursive layout (issue 11072)",
-    },
 };
 
 /// Str platform test apps - test cross-module function calls

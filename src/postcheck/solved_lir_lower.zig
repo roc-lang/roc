@@ -200,30 +200,16 @@ const CaptureSpanId = struct {
     }
 };
 
+/// A capture span identifies its captures structurally (source, start and
+/// length) rather than as a dense index, so it is a hashable key.
+const CaptureSpanKey = CaptureSpanId;
+
 fn specializationIdentityCaptureStart(span: CaptureSpanId) u32 {
     return switch (span.source) {
         .solved => span.start,
         .own => 0,
     };
 }
-
-/// A capture record's lowered type depends only on the captures themselves:
-/// each field lowers the capture's own solved type, and its storage form is a
-/// property of the captured local. One record therefore serves every
-/// function type that carries the same capture span.
-const CaptureTypeKey = struct {
-    source: CaptureSpanSource,
-    start: u32,
-    len: u32,
-
-    fn from(span: CaptureSpanId) CaptureTypeKey {
-        return .{
-            .source = span.source,
-            .start = span.start,
-            .len = span.len,
-        };
-    }
-};
 
 const ErasedReturnReuse = union(enum) {
     none,
@@ -318,24 +304,6 @@ const FnSpecContext = struct {
             lhs.captures.len == rhs.captures.len and
             lhs.capture_ty == rhs.capture_ty and
             std.meta.eql(lhs.return_reuse, rhs.return_reuse);
-    }
-};
-
-const CaptureTypeMap = std.HashMap(CaptureTypeKey, Type.TypeId, CaptureSpanContext, std.hash_map.default_max_load_percentage);
-
-const CaptureSpanContext = struct {
-    pub fn hash(_: CaptureSpanContext, span: CaptureTypeKey) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        std.hash.autoHash(&hasher, span.source);
-        std.hash.autoHash(&hasher, span.start);
-        std.hash.autoHash(&hasher, span.len);
-        return hasher.final();
-    }
-
-    pub fn eql(_: CaptureSpanContext, lhs: CaptureTypeKey, rhs: CaptureTypeKey) bool {
-        return lhs.source == rhs.source and
-            lhs.start == rhs.start and
-            lhs.len == rhs.len;
     }
 };
 
@@ -472,7 +440,10 @@ const Lowerer = struct {
     /// recorded (Debug only) so the Lambda Mono verifier replays them.
     folded_map_matches: std.ArrayList(Lifted.Program.FoldedMatch),
     source_symbols: std.AutoHashMap(Common.Symbol, Lifted.FnId),
-    capture_types: CaptureTypeMap,
+    /// Lowered capture record of every capture span seen so far. A capture
+    /// record depends only on its captures, so one record serves every
+    /// function type that carries the same span.
+    capture_types: std.AutoHashMap(CaptureSpanKey, Type.TypeId),
     captures: collections.DenseMap(Lifted.LocalId, CaptureBinding),
     recursive_value_locals: collections.DenseMap(Lifted.LocalId, void),
     recursive_value_capture_ids: collections.DenseMap(check.CheckedModule.CaptureId, void),
@@ -638,7 +609,7 @@ const Lowerer = struct {
             .root_requests = .{ .test_plan_metadata = options.test_plan_metadata },
             .folded_map_matches = .empty,
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
-            .capture_types = CaptureTypeMap.initContext(allocator, .{}),
+            .capture_types = std.AutoHashMap(CaptureSpanKey, Type.TypeId).init(allocator),
             .captures = collections.DenseMap(Lifted.LocalId, CaptureBinding).init(allocator),
             .recursive_value_locals = recursive_value_locals,
             .recursive_value_capture_ids = recursive_value_capture_ids,
@@ -1612,8 +1583,7 @@ const Lowerer = struct {
     }
 
     fn captureRecordType(self: *Lowerer, captures: CaptureSpanId) Common.LowerError!Type.TypeId {
-        const id = CaptureTypeKey.from(captures);
-        if (self.capture_types.get(id)) |existing| return existing;
+        if (self.capture_types.get(captures)) |existing| return existing;
 
         const capture_items = self.captureSpan(captures);
         const fields = try self.allocator.alloc(Type.CaptureField, capture_items.len);
@@ -1630,7 +1600,7 @@ const Lowerer = struct {
             };
         }
         const ty = try self.types.add(.{ .capture_record = try self.types.addCaptureFields(fields) });
-        try self.capture_types.put(id, ty);
+        try self.capture_types.put(captures, ty);
         return ty;
     }
 

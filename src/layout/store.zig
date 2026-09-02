@@ -768,15 +768,23 @@ pub const Store = struct {
     /// graph was entered from.
     const RecursiveGraphAnalysis = struct {
         allocator: Allocator,
-        /// Block of every node in the coarsest partition of the graph into
-        /// interchangeable nodes.
-        node_blocks: []u32,
-        /// One member of every block, used to read the block's shape.
-        block_representatives: []GraphNodeId,
-        /// Interning key of every block that contains a node on a cycle and
-        /// is not a nominal wrapper; `null` for every other block.
-        block_keys: []?[]u8,
+        /// Present only when the graph has a cycle: a graph without one has
+        /// nothing to intern by key, since its nodes intern by shape at the
+        /// uncached commit.
+        partition: ?Partition,
 
+        const Partition = struct {
+            /// Block of every node reachable from a cycle; `outside` for the
+            /// rest, whose blocks nothing consults.
+            node_blocks: []u32,
+            /// One member of every block, used to read the block's shape.
+            block_representatives: []GraphNodeId,
+            /// Interning key of every block that contains a node on a cycle
+            /// and is not a nominal wrapper; `null` for every other block.
+            block_keys: []?[]u8,
+        };
+
+        const outside = std.math.maxInt(u32);
         const unvisited = std.math.maxInt(u32);
 
         fn init(allocator: Allocator, graph: *const LayoutGraph) Allocator.Error!RecursiveGraphAnalysis {
@@ -784,36 +792,29 @@ pub const Store = struct {
             const cyclic_nodes = try allocator.alloc(bool, node_count);
             defer allocator.free(cyclic_nodes);
             @memset(cyclic_nodes, false);
-            try markCyclicNodes(allocator, graph, cyclic_nodes);
-            if (std.mem.indexOfScalar(bool, cyclic_nodes, true) == null) {
-                // Nothing to intern by key: acyclic nodes intern by shape at
-                // the uncached commit, so the partition is never consulted.
-                return .{
-                    .allocator = allocator,
-                    .node_blocks = &.{},
-                    .block_representatives = &.{},
-                    .block_keys = &.{},
-                };
+            if (!try markCyclicNodes(allocator, graph, cyclic_nodes)) {
+                return .{ .allocator = allocator, .partition = null };
             }
+
+            // Only nodes reachable from a cycle can share a block with a keyed
+            // node or appear in a key, so the partition covers exactly those.
+            const scope = try collectReachableFromCycles(allocator, graph, cyclic_nodes);
+            defer allocator.free(scope);
 
             const node_blocks = try allocator.alloc(u32, node_count);
             errdefer allocator.free(node_blocks);
-            const block_count = try refineBlocks(allocator, graph, node_blocks);
+            @memset(node_blocks, outside);
+            const block_count = try refineBlocks(allocator, graph, scope, node_blocks);
 
             const block_representatives = try allocator.alloc(GraphNodeId, block_count);
             errdefer allocator.free(block_representatives);
             const block_cyclic = try allocator.alloc(bool, block_count);
             defer allocator.free(block_cyclic);
             @memset(block_cyclic, false);
-            const block_filled = try allocator.alloc(bool, block_count);
-            defer allocator.free(block_filled);
-            @memset(block_filled, false);
-            for (node_blocks, 0..) |block, i| {
-                if (!block_filled[block]) {
-                    block_filled[block] = true;
-                    block_representatives[block] = @enumFromInt(i);
-                }
-                block_cyclic[block] = block_cyclic[block] or cyclic_nodes[i];
+            for (scope) |node| {
+                const block = node_blocks[node];
+                block_representatives[block] = @enumFromInt(node);
+                block_cyclic[block] = block_cyclic[block] or cyclic_nodes[node];
             }
 
             const block_keys = try allocator.alloc(?[]u8, block_count);
@@ -843,36 +844,47 @@ pub const Store = struct {
             for (block_cyclic, 0..) |is_cyclic, block| {
                 if (!is_cyclic) continue;
                 if (graph.getNode(block_representatives[block]) == .nominal) continue;
-                block_keys[block] = try walker.keyForBlock(@intCast(block));
+                block_keys[block] = try walker.keyFromNode(block_representatives[block]);
+            }
+
+            if (comptime builtin.mode == .Debug) {
+                // Every member of a keyed block must spell the block's key:
+                // the partition may only merge nodes whose shapes agree.
+                for (scope) |node| {
+                    const expected = block_keys[node_blocks[node]] orelse continue;
+                    const actual = try walker.keyFromNode(@enumFromInt(node));
+                    defer allocator.free(actual);
+                    std.debug.assert(std.mem.eql(u8, expected, actual));
+                }
             }
 
             return .{
                 .allocator = allocator,
-                .node_blocks = node_blocks,
-                .block_representatives = block_representatives,
-                .block_keys = block_keys,
+                .partition = .{
+                    .node_blocks = node_blocks,
+                    .block_representatives = block_representatives,
+                    .block_keys = block_keys,
+                },
             };
         }
 
         fn deinit(self_analysis: *RecursiveGraphAnalysis) void {
-            for (self_analysis.block_keys) |maybe_key| {
+            const partition = self_analysis.partition orelse return;
+            for (partition.block_keys) |maybe_key| {
                 if (maybe_key) |key| self_analysis.allocator.free(key);
             }
-            if (self_analysis.block_keys.len != 0) self_analysis.allocator.free(self_analysis.block_keys);
-            if (self_analysis.block_representatives.len != 0) self_analysis.allocator.free(self_analysis.block_representatives);
-            if (self_analysis.node_blocks.len != 0) self_analysis.allocator.free(self_analysis.node_blocks);
+            self_analysis.allocator.free(partition.block_keys);
+            self_analysis.allocator.free(partition.block_representatives);
+            self_analysis.allocator.free(partition.node_blocks);
         }
 
         /// Interning key of the block a node belongs to, or `null` when that
         /// block takes part in no cycle.
         fn keyForNode(self_analysis: *const RecursiveGraphAnalysis, index: usize) ?[]const u8 {
-            if (self_analysis.node_blocks.len == 0) return null;
-            return self_analysis.block_keys[self_analysis.node_blocks[index]];
-        }
-
-        fn appendValue(key: *std.ArrayList(u8), allocator: Allocator, value: anytype) Allocator.Error!void {
-            var copy = value;
-            try key.appendSlice(allocator, std.mem.asBytes(&copy));
+            const partition = self_analysis.partition orelse return null;
+            const block = partition.node_blocks[index];
+            if (block == outside) return null;
+            return partition.block_keys[block];
         }
 
         fn resolveNominalRef(graph: *const LayoutGraph, start: GraphRef) GraphRef {
@@ -890,62 +902,132 @@ pub const Store = struct {
             std.debug.panic("layout.Store invariant violated: logical layout graph contained a nominal-only cycle", .{});
         }
 
-        /// Partition the graph's nodes into blocks of interchangeable nodes,
-        /// writing each node's block into `node_blocks` and returning the block
-        /// count. Two nodes are interchangeable when they have the same shape
-        /// and, edge by edge, their children are interchangeable. Starting from
-        /// one block, every round redescribes each node by its own shape plus
-        /// the current block of each child (canonical children by their layout
+        /// Every node reachable from a cyclic node (the cyclic nodes
+        /// themselves included), in ascending node order.
+        fn collectReachableFromCycles(allocator: Allocator, graph: *const LayoutGraph, cyclic_nodes: []const bool) Allocator.Error![]u32 {
+            const reachable = try allocator.alloc(bool, cyclic_nodes.len);
+            defer allocator.free(reachable);
+            @memcpy(reachable, cyclic_nodes);
+
+            var work = std.ArrayList(GraphNodeId).empty;
+            defer work.deinit(allocator);
+            for (cyclic_nodes, 0..) |is_cyclic, i| {
+                if (is_cyclic) try work.append(allocator, @enumFromInt(i));
+            }
+            while (work.pop()) |node_id| {
+                var sink = ReachSink{ .allocator = allocator, .reachable = reachable, .work = &work };
+                try emitShape(graph, node_id, &sink);
+            }
+
+            var scope = std.ArrayList(u32).empty;
+            errdefer scope.deinit(allocator);
+            for (reachable, 0..) |is_reachable, i| {
+                if (is_reachable) try scope.append(allocator, @intCast(i));
+            }
+            return try scope.toOwnedSlice(allocator);
+        }
+
+        const ReachSink = struct {
+            allocator: Allocator,
+            reachable: []bool,
+            work: *std.ArrayList(GraphNodeId),
+
+            fn meta(_: *ReachSink, _: u64) Allocator.Error!void {}
+
+            fn child(self_sink: *ReachSink, ref: GraphRef) Allocator.Error!void {
+                switch (ref) {
+                    .canonical => {},
+                    .local => |node_id| {
+                        const index = @intFromEnum(node_id);
+                        if (self_sink.reachable[index]) return;
+                        self_sink.reachable[index] = true;
+                        try self_sink.work.append(self_sink.allocator, node_id);
+                    },
+                }
+            }
+        };
+
+        /// The one description of a node's shape that both the partition and
+        /// the interning key are built from: its kind and own metadata go to
+        /// `sink.meta`, and every child edge, in order, goes to `sink.child`
+        /// unresolved. Two nodes are interchangeable exactly when this emits
+        /// the same metadata for both and interchangeable children edge by
+        /// edge.
+        fn emitShape(graph: *const LayoutGraph, node_id: GraphNodeId, sink: anytype) Allocator.Error!void {
+            const node = graph.getNode(node_id);
+            try sink.meta(@intFromEnum(std.meta.activeTag(node)));
+            switch (node) {
+                .pending, .erased_callable => {},
+                .nominal, .box, .list, .closure => |child| try sink.child(child),
+                .struct_ => |span| {
+                    const fields = graph.getFields(span);
+                    try sink.meta(@intFromEnum(span.order));
+                    try sink.meta(fields.len);
+                    for (fields) |field| {
+                        try sink.meta(field.index);
+                        try sink.meta(@intFromBool(field.is_padding));
+                        try sink.child(field.child);
+                    }
+                },
+                .tag_union => |span| {
+                    const refs = graph.getRefs(span);
+                    try sink.meta(refs.len);
+                    for (refs) |child| try sink.child(child);
+                },
+            }
+        }
+
+        /// Partition the nodes in `scope` (a successor-closed set) into
+        /// blocks of interchangeable nodes, writing each one's block into
+        /// `node_blocks` and returning the block count. Starting from one
+        /// block, every round redescribes each node by its own shape plus the
+        /// current block of each child (canonical children by their layout
         /// index) and splits blocks whose members now differ; every round
         /// refines the previous partition, so the first round that splits
         /// nothing has reached the coarsest such partition.
-        fn refineBlocks(allocator: Allocator, graph: *const LayoutGraph, node_blocks: []u32) Allocator.Error!u32 {
-            const node_count = node_blocks.len;
-            if (node_count == 0) return 0;
-            @memset(node_blocks, 0);
+        fn refineBlocks(allocator: Allocator, graph: *const LayoutGraph, scope: []const u32, node_blocks: []u32) Allocator.Error!u32 {
+            if (scope.len == 0) return 0;
+            for (scope) |node| node_blocks[node] = 0;
             var block_count: u32 = 1;
 
             var words = std.ArrayList(u64).empty;
             defer words.deinit(allocator);
-            const starts = try allocator.alloc(usize, node_count + 1);
+            const starts = try allocator.alloc(usize, scope.len + 1);
             defer allocator.free(starts);
-            const order = try allocator.alloc(u32, node_count);
+            const order = try allocator.alloc(u32, scope.len);
             defer allocator.free(order);
-            const next_blocks = try allocator.alloc(u32, node_count);
-            defer allocator.free(next_blocks);
 
             while (true) {
                 words.clearRetainingCapacity();
-                for (0..node_count) |i| {
-                    starts[i] = words.items.len;
-                    try appendSignature(graph, allocator, &words, node_blocks, @enumFromInt(i));
+                for (scope, 0..) |node, position| {
+                    starts[position] = words.items.len;
+                    var sink = SignatureSink{ .allocator = allocator, .graph = graph, .words = &words, .node_blocks = node_blocks };
+                    try emitShape(graph, @enumFromInt(node), &sink);
                 }
-                starts[node_count] = words.items.len;
+                starts[scope.len] = words.items.len;
 
-                for (order, 0..) |*slot, i| slot.* = @intCast(i);
+                for (order, 0..) |*slot, position| slot.* = @intCast(position);
                 const context = SignatureOrder{ .words = words.items, .starts = starts };
                 std.mem.sort(u32, order, context, SignatureOrder.lessThan);
 
                 var next_count: u32 = 0;
-                var previous: ?u32 = null;
-                for (order) |node| {
-                    if (previous == null or context.compare(previous.?, node) != .eq) next_count += 1;
-                    next_blocks[node] = next_count - 1;
-                    previous = node;
+                for (order, 0..) |position, rank| {
+                    if (rank == 0 or context.compare(order[rank - 1], position) != .eq) next_count += 1;
+                    node_blocks[scope[position]] = next_count - 1;
                 }
 
-                @memcpy(node_blocks, next_blocks);
                 if (next_count == block_count) return block_count;
                 block_count = next_count;
             }
         }
 
+        /// Orders the nodes of one refinement round by their signature words.
         const SignatureOrder = struct {
             words: []const u64,
             starts: []const usize,
 
-            fn signature(self_order: SignatureOrder, node: u32) []const u64 {
-                return self_order.words[self_order.starts[node]..self_order.starts[node + 1]];
+            fn signature(self_order: SignatureOrder, position: u32) []const u64 {
+                return self_order.words[self_order.starts[position]..self_order.starts[position + 1]];
             }
 
             fn compare(self_order: SignatureOrder, lhs: u32, rhs: u32) std.math.Order {
@@ -957,51 +1039,33 @@ pub const Store = struct {
             }
         };
 
-        fn childWord(graph: *const LayoutGraph, node_blocks: []const u32, unresolved_ref: GraphRef) u64 {
-            return switch (resolveNominalRef(graph, unresolved_ref)) {
-                .canonical => |layout_idx| 0x8000_0000_0000_0000 | @as(u64, @intFromEnum(layout_idx)),
-                .local => |node_id| node_blocks[@intFromEnum(node_id)],
-            };
-        }
-
-        /// One node's shape for a refinement round: its kind, its own metadata,
-        /// and one word per child edge naming the child's current block or
-        /// canonical layout, with nominal wrappers looked through exactly as
-        /// the key walk looks through them.
-        fn appendSignature(
-            graph: *const LayoutGraph,
+        /// Spells one node's shape for a refinement round as words: metadata
+        /// verbatim, and every child as its current block or canonical layout
+        /// index, with nominal wrappers looked through exactly as the key walk
+        /// looks through them.
+        const SignatureSink = struct {
             allocator: Allocator,
+            graph: *const LayoutGraph,
             words: *std.ArrayList(u64),
             node_blocks: []const u32,
-            node_id: GraphNodeId,
-        ) Allocator.Error!void {
-            const node = graph.getNode(node_id);
-            try words.append(allocator, @intFromEnum(std.meta.activeTag(node)));
-            switch (node) {
-                .pending, .erased_callable => {},
-                .nominal, .box, .list, .closure => |child| try words.append(allocator, childWord(graph, node_blocks, child)),
-                .struct_ => |span| {
-                    const fields = graph.getFields(span);
-                    try words.append(allocator, @intFromEnum(span.order));
-                    try words.append(allocator, fields.len);
-                    for (fields) |field| {
-                        try words.append(allocator, field.index);
-                        try words.append(allocator, @intFromBool(field.is_padding));
-                        try words.append(allocator, childWord(graph, node_blocks, field.child));
-                    }
-                },
-                .tag_union => |span| {
-                    const refs = graph.getRefs(span);
-                    try words.append(allocator, refs.len);
-                    for (refs) |child| try words.append(allocator, childWord(graph, node_blocks, child));
-                },
+
+            fn meta(self_sink: *SignatureSink, value: u64) Allocator.Error!void {
+                try self_sink.words.append(self_sink.allocator, value);
             }
-        }
+
+            fn child(self_sink: *SignatureSink, ref: GraphRef) Allocator.Error!void {
+                const word: u64 = switch (resolveNominalRef(self_sink.graph, ref)) {
+                    .canonical => |layout_idx| 0x8000_0000_0000_0000 | @as(u64, @intFromEnum(layout_idx)),
+                    .local => |node_id| self_sink.node_blocks[@intFromEnum(node_id)],
+                };
+                try self_sink.words.append(self_sink.allocator, word);
+            }
+        };
 
         /// Builds one block's interning key by walking the block graph from
-        /// that block: every block is written out the first time the walk
-        /// reaches it and referenced by its visit number afterwards, so the
-        /// key spells out the block's whole reachable shape once.
+        /// one of its nodes: every block is spelled out the first time the
+        /// walk reaches it and referenced by its visit number afterwards, so
+        /// the key describes the block's whole reachable shape once.
         const BlockKeyWalker = struct {
             allocator: Allocator,
             graph: *const LayoutGraph,
@@ -1011,84 +1075,60 @@ pub const Store = struct {
             touched: std.ArrayList(u32),
             key: std.ArrayList(u8),
 
-            fn keyForBlock(self_walker: *BlockKeyWalker, block: u32) Allocator.Error![]u8 {
+            const canonical_tag: u8 = 0;
+            const backref_tag: u8 = 1;
+            const visit_tag: u8 = 2;
+
+            fn keyFromNode(self_walker: *BlockKeyWalker, node_id: GraphNodeId) Allocator.Error![]u8 {
                 defer {
                     for (self_walker.touched.items) |touched_block| self_walker.visited[touched_block] = unvisited;
                     self_walker.touched.clearRetainingCapacity();
                     self_walker.key.clearRetainingCapacity();
                 }
                 try self_walker.key.append(self_walker.allocator, 2); // Recursive graph key format version.
-                try self_walker.appendBlockRef(block);
+                try self_walker.enterBlock(self_walker.node_blocks[@intFromEnum(node_id)], node_id);
                 return try self_walker.allocator.dupe(u8, self_walker.key.items);
             }
 
-            fn appendRef(self_walker: *BlockKeyWalker, unresolved_ref: GraphRef) Allocator.Error!void {
-                const allocator = self_walker.allocator;
-                switch (resolveNominalRef(self_walker.graph, unresolved_ref)) {
+            fn meta(self_walker: *BlockKeyWalker, value: u64) Allocator.Error!void {
+                try self_walker.appendValue(value);
+            }
+
+            fn child(self_walker: *BlockKeyWalker, ref: GraphRef) Allocator.Error!void {
+                switch (resolveNominalRef(self_walker.graph, ref)) {
                     .canonical => |layout_idx| {
-                        try self_walker.key.append(allocator, 0);
-                        try appendValue(&self_walker.key, allocator, @as(u32, @intFromEnum(layout_idx)));
+                        try self_walker.key.append(self_walker.allocator, canonical_tag);
+                        try self_walker.appendValue(@intFromEnum(layout_idx));
                     },
-                    .local => |node_id| try self_walker.appendBlockRef(self_walker.node_blocks[@intFromEnum(node_id)]),
+                    .local => |node_id| {
+                        const block = self_walker.node_blocks[@intFromEnum(node_id)];
+                        if (self_walker.visited[block] != unvisited) {
+                            try self_walker.key.append(self_walker.allocator, backref_tag);
+                            try self_walker.appendValue(self_walker.visited[block]);
+                            return;
+                        }
+                        try self_walker.enterBlock(block, self_walker.block_representatives[block]);
+                    },
                 }
             }
 
-            fn appendBlockRef(self_walker: *BlockKeyWalker, block: u32) Allocator.Error!void {
-                const allocator = self_walker.allocator;
-                if (self_walker.visited[block] != unvisited) {
-                    try self_walker.key.append(allocator, 1);
-                    try appendValue(&self_walker.key, allocator, self_walker.visited[block]);
-                    return;
-                }
-
+            fn enterBlock(self_walker: *BlockKeyWalker, block: u32, node_id: GraphNodeId) Allocator.Error!void {
                 const visit_id: u32 = @intCast(self_walker.touched.items.len);
                 self_walker.visited[block] = visit_id;
-                try self_walker.touched.append(allocator, block);
-                try self_walker.key.append(allocator, 2);
-                try appendValue(&self_walker.key, allocator, visit_id);
-                try self_walker.appendNode(self_walker.block_representatives[block]);
+                try self_walker.touched.append(self_walker.allocator, block);
+                try self_walker.key.append(self_walker.allocator, visit_tag);
+                try self_walker.appendValue(visit_id);
+                try emitShape(self_walker.graph, node_id, self_walker);
             }
 
-            fn appendNode(self_walker: *BlockKeyWalker, node_id: GraphNodeId) Allocator.Error!void {
-                const allocator = self_walker.allocator;
-                const graph = self_walker.graph;
-                switch (graph.getNode(node_id)) {
-                    .pending, .nominal => unreachable,
-                    .box => |child| {
-                        try self_walker.key.append(allocator, 0);
-                        try self_walker.appendRef(child);
-                    },
-                    .list => |child| {
-                        try self_walker.key.append(allocator, 1);
-                        try self_walker.appendRef(child);
-                    },
-                    .closure => |child| {
-                        try self_walker.key.append(allocator, 2);
-                        try self_walker.appendRef(child);
-                    },
-                    .erased_callable => try self_walker.key.append(allocator, 3),
-                    .struct_ => |span| {
-                        try self_walker.key.append(allocator, 4);
-                        const fields = graph.getFields(span);
-                        try self_walker.key.append(allocator, @intFromEnum(span.order));
-                        try appendValue(&self_walker.key, allocator, @as(u16, @intCast(fields.len)));
-                        for (fields) |field| {
-                            try appendValue(&self_walker.key, allocator, field.index);
-                            try self_walker.key.append(allocator, @intFromBool(field.is_padding));
-                            try self_walker.appendRef(field.child);
-                        }
-                    },
-                    .tag_union => |span| {
-                        try self_walker.key.append(allocator, 5);
-                        const refs = graph.getRefs(span);
-                        try appendValue(&self_walker.key, allocator, @as(u16, @intCast(refs.len)));
-                        for (refs) |child| try self_walker.appendRef(child);
-                    },
-                }
+            fn appendValue(self_walker: *BlockKeyWalker, value: u64) Allocator.Error!void {
+                var copy = value;
+                try self_walker.key.appendSlice(self_walker.allocator, std.mem.asBytes(&copy));
             }
         };
 
-        fn markCyclicNodes(allocator: Allocator, graph: *const LayoutGraph, cyclic_nodes: []bool) Allocator.Error!void {
+        /// Mark every node that lies on a cycle and report whether any does.
+        fn markCyclicNodes(allocator: Allocator, graph: *const LayoutGraph, cyclic_nodes: []bool) Allocator.Error!bool {
             const visit_index = try allocator.alloc(i32, graph.nodes.items.len);
             defer allocator.free(visit_index);
             const lowlink = try allocator.alloc(i32, graph.nodes.items.len);
@@ -1111,6 +1151,7 @@ pub const Store = struct {
                 stack: *std.ArrayList(GraphNodeId),
                 cyclic_nodes: []bool,
                 next_index: i32 = 0,
+                any_cyclic: bool = false,
 
                 fn visitRef(self_finder: *@This(), child: GraphRef, parent_index: usize) Allocator.Error!void {
                     const child_id = switch (child) {
@@ -1189,6 +1230,7 @@ pub const Store = struct {
                     }
 
                     if (component.items.len > 1 or self_finder.hasSelfEdge(node_id)) {
+                        self_finder.any_cyclic = true;
                         for (component.items) |member| {
                             self_finder.cyclic_nodes[@intFromEnum(member)] = true;
                         }
@@ -1208,6 +1250,7 @@ pub const Store = struct {
             for (graph.nodes.items, 0..) |_, i| {
                 if (visit_index[i] == -1) try finder.strongConnect(@enumFromInt(i));
             }
+            return finder.any_cyclic;
         }
     };
 
@@ -1339,27 +1382,20 @@ pub const Store = struct {
             }
         }
 
-        if (comptime builtin.mode == .Debug) {
-            // Every node of a keyed block was mapped to one working node (or
-            // one interned layout), so the block has exactly one value layout.
-            for (analysis.node_blocks, 0..) |block, i| {
-                if (analysis.block_keys[block] == null) continue;
-                const representative = analysis.block_representatives[block];
-                std.debug.assert(value_layouts[i] == value_layouts[@intFromEnum(representative)]);
-            }
-        }
-        for (analysis.block_keys, 0..) |maybe_key, block| {
-            const key = maybe_key orelse continue;
-            const value_layout = value_layouts[@intFromEnum(analysis.block_representatives[block])];
-            if (self.interned_recursive_graphs.get(key)) |existing| {
-                if (comptime builtin.mode == .Debug) {
-                    std.debug.assert(existing == value_layout);
-                } else if (existing != value_layout) {
-                    unreachable;
+        if (analysis.partition) |*partition| {
+            for (partition.block_keys, 0..) |maybe_key, block| {
+                const key = maybe_key orelse continue;
+                const value_layout = value_layouts[@intFromEnum(partition.block_representatives[block])];
+                if (self.interned_recursive_graphs.get(key)) |existing| {
+                    if (comptime builtin.mode == .Debug) {
+                        std.debug.assert(existing == value_layout);
+                    } else if (existing != value_layout) {
+                        unreachable;
+                    }
+                } else {
+                    try self.interned_recursive_graphs.put(key, value_layout);
+                    partition.block_keys[block] = null;
                 }
-            } else {
-                try self.interned_recursive_graphs.put(key, value_layout);
-                analysis.block_keys[block] = null;
             }
         }
 
