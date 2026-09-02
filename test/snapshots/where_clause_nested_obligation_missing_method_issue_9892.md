@@ -17,15 +17,15 @@ main : Str
 main = run(Wrap.W(42.U8))
 ~~~
 # EXPECTED
-MISSING METHOD - where_clause_nested_obligation_missing_method_issue_9892.md:3:28:3:38
+MISSING METHOD - where_clause_nested_obligation_missing_method_issue_9892.md:2:36:2:59
 # PROBLEMS
-── ✗ missing method ─ where_clause_nested_obligation_missing_method_issue_9892.md:3:28
+── ✗ missing method ─ where_clause_nested_obligation_missing_method_issue_9892.md:2:36
 
 This frobnicate method is being called on a value whose type doesn't have that
 method.
 
-unwrap = |Wrap.W(x)| x.frobnicate()
-                       ^^^^^^^^^^
+unwrap : Wrap(a) -> Str where [a.frobnicate : a -> Str]
+                               ^^^^^^^^^^^^^^^^^^^^^^^
 
 The value's type, which does not have a method named frobnicate, is:
 
@@ -152,7 +152,7 @@ main = run(Wrap.W(42.U8))
 		(e-lambda
 			(args
 				(p-assign (ident "v")))
-			(e-dispatch-call (method "unwrap") (constraint-fn-var 296)
+			(e-dispatch-call (method "unwrap") (constraint-fn-var 298)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "v"))))

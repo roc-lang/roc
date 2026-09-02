@@ -148,7 +148,7 @@ main! = |_| go!(Task.Task)
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 313)
+			(e-call (constraint-fn-var 318)
 				(e-lookup-local
 					(p-assign (ident "go!")))
 				(e-nominal (nominal "Task")

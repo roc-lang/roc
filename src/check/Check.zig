@@ -6180,6 +6180,49 @@ fn instantiateVar(
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false);
 }
 
+/// Instantiate a where-method signature for one use (design.md "Polarity"):
+/// the signature is a scheme the constrained body instantiates at each use,
+/// exactly like a call of an annotated function. Only its polarity markers
+/// change — each resolves to a fresh flex in an output position, so this use
+/// may match the result exhaustively or widen it independently of every
+/// other use — while every other leaf (the receiver rigid, the enclosing
+/// scheme's other variables) stays the same variable whatever its rank: the
+/// signature belongs to the enclosing scheme, whether that scheme is still
+/// being checked (a body use) or already generalized (a requirement on the
+/// rigid re-checked at a later boundary). Copying a generalized receiver
+/// would mint a fresh flex carrying its constraints, which re-defers them
+/// onto the rigid and never settles. Obligations at the enclosing scheme's
+/// instantiation sites close the same markers (`PolarityVarBehavior.close`),
+/// bounding implementations by the listed tags.
+fn instantiateWhereMethodForUse(self: *Self, signature_var: Var, env: *Env, region: Region) std.mem.Allocator.Error!Var {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    var instantiator = Instantiator{
+        .store = self.types,
+        .idents = self.cir.getIdentStoreConst(),
+        .var_map = &self.var_map,
+        .current_rank = env.rank(),
+        // Every leaf is shared whatever its rank (rigid behavior is moot);
+        // structure is copied so the fresh rows live in a fresh signature.
+        .rigid_behavior = .fresh_flex,
+        .rank_behavior = .ignore_rank,
+        .share_leaves = true,
+        .polarity_var_ident = self.cir.idents.polarity_var,
+        .anonymous_ext_ident = self.cir.idents.open_ext,
+        .polarity_var_behavior = .resolve_by_polarity,
+        .current_polarity = .pos,
+    };
+    self.var_map.clearRetainingCapacity();
+    const use_var = try instantiator.instantiateVar(signature_var);
+    var copied_iter = instantiator.var_map.valueIterator();
+    while (copied_iter.next()) |copied| {
+        try self.fillInRegionsThrough(copied.*);
+        self.setRegionAt(copied.*, region);
+    }
+    return use_var;
+}
+
 /// Instantiate a type declaration's var for use in a type annotation,
 /// resolving polarity vars (the deferred tag-union extensions of alias
 /// declaration bodies) per `polarity_behavior`, starting the polarity walk at
@@ -14547,7 +14590,18 @@ const GenTypeAnnoCtx = union(enum) {
         /// unification, so those rows keep their written, closed meaning.
         opening: OpeningBehavior,
 
-        pub const OpeningBehavior = enum { implicit_open, as_written };
+        pub const OpeningBehavior = enum {
+            /// An output-position union gets a fresh flex ext, recorded for
+            /// the post-body audit.
+            implicit_open,
+            /// An output-position union gets the polarity marker: the
+            /// annotation is a where-method signature, a scheme the
+            /// constrained body instantiates per use (fresh flex) and every
+            /// obligation closes (`[]`). See `instantiateWhereMethodForUse`.
+            per_use,
+            /// Rows are generated as written (host boundaries).
+            as_written,
+        };
     };
 
     /// How polarity vars in referenced type declarations should be
@@ -14556,6 +14610,10 @@ const GenTypeAnnoCtx = union(enum) {
         return switch (self) {
             .annotation => |anno_ctx| switch (anno_ctx.opening) {
                 .implicit_open => .resolve_by_polarity,
+                // A referenced alias's markers stay deferred inside a
+                // where-method signature: the signature's own instantiation
+                // decides them.
+                .per_use => .defer_open,
                 .as_written => .close,
             },
             // An alias body keeps the decision deferred (its own use sites
@@ -14772,25 +14830,37 @@ fn completeOwnedStaticDispatchConstraint(
         return;
     }
 
-    // The receiver is a rigid var anno; polarity is irrelevant for it.
-    try self.generateAnnoTypeInPlace(method.var_, env, ctx, .neg);
+    // A where-method signature is a SCHEME the constrained body instantiates
+    // at each use, exactly like a call of an annotated function, and that
+    // every obligation instantiates closed. Its implicitly opened output
+    // rows are therefore generated as polarity markers (`.per_use`): a body
+    // use resolves them to fresh flex vars (`instantiateWhereMethodForUse`),
+    // so the body may match the result exhaustively or widen it per use, and
+    // an obligation at the enclosing scheme's instantiation sites closes
+    // them, bounding an implementation by the listed tags. The signature is
+    // walked like any function annotation: its arguments are inputs (closed
+    // as written) and its return an output.
+    const method_ctx: GenTypeAnnoCtx = switch (ctx) {
+        .annotation => |anno_ctx| .{ .annotation = .{
+            .where = anno_ctx.where,
+            .opening = switch (anno_ctx.opening) {
+                .implicit_open, .per_use => .per_use,
+                .as_written => .as_written,
+            },
+        } },
+        .type_decl => ctx,
+    };
 
-    // A where-method signature is a function the constrained code RECEIVES
-    // (a callback passed implicitly with the type), so it sits in negative
-    // position: its arguments are values the constrained code produces
-    // (positive, implicitly open) and its return is a value it consumes
-    // (negative, closed as written). The obligation on an implementation
-    // therefore bounds the implementation's return by the listed tags, and
-    // the constrained body can match it exhaustively. (Per-use instantiation
-    // of the signature, which would also let the body widen the return, is a
-    // follow-up that needs per-use dispatch obligations.)
+    // The receiver is a rigid var anno; polarity is irrelevant for it.
+    try self.generateAnnoTypeInPlace(method.var_, env, method_ctx, .neg);
+
     const args_anno_slice = self.cir.store.sliceTypeAnnos(method.args);
     for (args_anno_slice) |arg_anno_idx| {
-        try self.generateAnnoTypeInPlace(arg_anno_idx, env, ctx, .pos);
+        try self.generateAnnoTypeInPlace(arg_anno_idx, env, method_ctx, .neg);
     }
     const anno_arg_vars: []Var = @ptrCast(args_anno_slice);
 
-    try self.generateAnnoTypeInPlace(method.ret, env, ctx, .neg);
+    try self.generateAnnoTypeInPlace(method.ret, env, method_ctx, .pos);
     const ret_var = ModuleEnv.varFrom(method.ret);
 
     const func_content = if (method.effectful)
@@ -15113,7 +15183,10 @@ fn instantiateWhereAliasConstraint(
 ) std.mem.Allocator.Error!StaticDispatchConstraint {
     return StaticDispatchConstraint{
         .fn_name = constraint.fn_name,
-        .fn_var = try self.instantiateVarWithSubs(constraint.fn_var, subs, env, .{ .explicit = region }),
+        // A faithful copy: the declaration's where-method signatures keep
+        // their polarity markers, which the referencing annotation's own body
+        // uses and obligations resolve.
+        .fn_var = try self.instantiateVarWithSubsPolarized(constraint.fn_var, subs, env, .{ .explicit = region }, .preserve, .pos),
         .origin = .{ .where_clause = .{} },
     };
 }
@@ -15716,17 +15789,25 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             // opening would silently destroy. It always means the closed
             // empty union.
             const anno_has_tags = tag_anno_slices.len > 0;
-            const implicitly_open = anno_has_tags and
-                polarity == .pos and
-                ctx == .annotation and
-                ctx.annotation.opening == .implicit_open;
+            const output_opening: ?GenTypeAnnoCtx.AnnotationGenCtx.OpeningBehavior = if (anno_has_tags and polarity == .pos and ctx == .annotation)
+                ctx.annotation.opening
+            else
+                null;
+            const implicitly_open = output_opening == .implicit_open;
+            // A where-method signature's output row: deferred with the
+            // polarity marker, resolved per body use and per obligation.
+            const deferred_open = output_opening == .per_use;
             const ext_var = inner_blk: {
                 if (tag_union.ext) |ext_anno_idx| {
-                    if (implicitly_open and self.annoIsAnonymousOpenExt(ext_anno_idx)) {
+                    if ((implicitly_open or deferred_open) and self.annoIsAnonymousOpenExt(ext_anno_idx)) {
                         const open_ext_var = ModuleEnv.varFrom(ext_anno_idx);
                         try self.setVarRank(open_ext_var, env);
                         self.markTypeAnnoSeen(ext_anno_idx);
-                        try self.unifyWith(open_ext_var, .{ .flex = Flex.init() }, env);
+                        if (deferred_open) {
+                            try self.unifyWith(open_ext_var, .{ .rigid = Rigid.init(self.cir.idents.polarity_var) }, env);
+                        } else {
+                            try self.unifyWith(open_ext_var, .{ .flex = Flex.init() }, env);
+                        }
                         try self.implicit_open_exts.append(self.gpa, .{
                             .var_ = open_ext_var,
                             .region = anno_region,
@@ -15746,6 +15827,10 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                     const open_ext_var = try self.fresh(env, anno_region);
                     try self.implicit_open_exts.append(self.gpa, .{ .var_ = open_ext_var, .region = anno_region });
                     break :inner_blk open_ext_var;
+                }
+
+                if (deferred_open) {
+                    break :inner_blk try self.freshFromContent(.{ .rigid = Rigid.init(self.cir.idents.polarity_var) }, env, anno_region);
                 }
 
                 break :inner_blk switch (ctx) {
@@ -29861,12 +29946,26 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
                     // Then, lookup the inferred constraint in the actual list of rigid constraints
                     if (self.ident_to_var_map.get(constraint.fn_name)) |rigid_var| {
+                        // Each USE instantiates the where-method signature
+                        // (design.md "Polarity"): its output rows are fresh
+                        // for this use, everything else is shared. A scheme's
+                        // own where-clause requirement meeting itself here
+                        // (the deferred relation IS the signature, re-checked
+                        // at a boundary) is not a use: it stays the identity
+                        // relation it always was, or every pass would mint a
+                        // fresh copy and the drain would never settle.
+                        const same_root = self.types.resolveVar(rigid_var).var_ == self.types.resolveVar(constraint.fn_var).var_;
+                        const use_fn_var = if (same_root)
+                            rigid_var
+                        else
+                            try self.instantiateWhereMethodForUse(rigid_var, env, self.getRegionAt(constraint.fn_var));
+
                         // Unify the actual function var against the inferred var
                         //
                         // TODO: For better error messages, we should check if these
                         // types are functions, unify each arg, etc. This should look
                         // similar to e_call
-                        const result = try self.unify(rigid_var, constraint.fn_var, env);
+                        const result = try self.unify(use_fn_var, constraint.fn_var, env);
                         if (result.isEstablished()) {
                             try self.recordSuccessfulStaticDispatch(constraint);
 

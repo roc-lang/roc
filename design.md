@@ -4445,21 +4445,28 @@ positions, `[]` in negative ones — negating through functions embedded in the
 alias body (`Instantiator.PolarityVarBehavior`). Nominal declaration bodies
 close as written.
 
-WHERE-METHOD signatures are functions the constrained code RECEIVES (a
-callback passed implicitly with the type), so they are generated at negative
-polarity: the method's arguments open (the constrained body may only pass
-listed tags; an implementation may accept more) and its return stays closed
-(the constrained body may match it exhaustively; an implementation may return
-a subset, never more). One consequence, pinned by the "where-method Try
-result through ?" tests: `?` on a where-method's `Try` result re-raises the
-method's CLOSED error row into the enclosing annotated row by ordinary
-unification, so it composes only when the enclosing row lists exactly the
-method's errors — a wider enclosing row is rejected, exactly as issue #9798
-rejects any closed callee row (the hosted use-site widening rule is the sole
-exception, and its lowering adapter is hosted-specific). Per-use
-instantiation of the signature inside the body — which would let the body
-widen the return, and `?` compose — is a follow-up requiring per-use dispatch
-obligations and per-use dispatch plans.
+A WHERE-METHOD signature is a scheme the constrained body instantiates at
+each use, exactly like a call of an annotated function. It is walked like any
+function annotation (arguments closed as written, return an output), but its
+implicitly opened output rows are generated as polarity MARKERS
+(`AnnotationGenCtx.opening = .per_use`) rather than flex vars. A body use —
+the point where a body dispatch on the constrained rigid is matched by name
+to the where-clause constraint — instantiates the signature
+(`Check.instantiateWhereMethodForUse`): every marker becomes a fresh flex, so
+that use may match the result exhaustively (closing its own copy) or widen it
+(`?` composes into a wider enclosing row), independently of every other use;
+every other leaf, the receiver rigid included, stays the same variable
+whatever its rank (`Instantiator.share_leaves`): the signature belongs to
+the enclosing scheme, whether it is still being checked or already
+generalized and re-checked against a requirement at a later boundary. An
+OBLIGATION — an instantiation of the enclosing scheme at a call site or an
+import — closes the same markers (`PolarityVarBehavior.close`), so an
+implementation is bounded by the listed tags: it may return a subset, never
+more, and its arguments must match as written. A where-alias declaration's
+signatures are copied into a referencing annotation with their markers
+intact (`.preserve`). Lowering note: a body use that WIDENS its copy asks
+Monotype to specialize the implementation at the wider row per use, which
+the dispatch plan does not yet do (one plan per obligation).
 
 Two positions opt out of implicit opening, both genuine non-producers:
 host-boundary annotations (hosted lambdas and `provides` defs) and platform

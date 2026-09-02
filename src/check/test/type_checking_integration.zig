@@ -8699,16 +8699,16 @@ test "check type - polarity - where-method return stays closed inside the body" 
     try checkTypesModule(source, .{ .pass = .last_def }, "a -> Str where [a.status : a -> [Err(Str), Ok(Str)]]");
 }
 
-test "check type - polarity - where-method argument is open for implementations" {
-    // The method's arguments sit in an output position (the constrained code
-    // produces them), so an implementation may accept more tags than the
-    // constraint lists, while the constrained body may only pass listed ones.
+test "check type - polarity - where-method argument is closed as written" {
+    // A where-method's arguments are inputs: closed as written, for the
+    // constrained body (it may only pass listed tags) and for an
+    // implementation (it must accept exactly the listed tags).
     const source =
         \\show : a -> Str where [a.render : a, [Compact, Pretty] -> Str]
         \\show = |x| x.render(Compact)
         \\
         \\Doc := [Doc].{
-        \\    render : Doc, [Compact, Pretty, Verbose] -> Str
+        \\    render : Doc, [Compact, Pretty] -> Str
         \\    render = |_, _| "doc"
         \\}
         \\
@@ -8731,20 +8731,78 @@ test "check type - polarity - where-method Try result flows through ? into an eq
     try checkTypesModule(source, .{ .pass = .last_def }, "a -> Try(Str, [NotFound]) where [a.fetch : a -> Try(Str, [NotFound])]");
 }
 
-test "check type - polarity - where-method Try result through ? into a wider annotated row is rejected today" {
-    // KNOWN LIMITATION, pinned: the method's return row is closed, and `?`
-    // re-raises `e` at its own row, so a closed `[NotFound]` meets the wider
-    // `[NotFound, Other]` by ordinary unification and fails — the same
-    // pairing issue #9798 rejects for closed callees. Only the hosted use-site
-    // widening rule composes a closed callee row into a wider enclosing row.
-    // Per-use instantiation of where-method signatures (or extending that
-    // widening rule to where-method calls) is the follow-up that lifts this.
+test "check type - polarity - where-method Try result flows through ? into a wider annotated row" {
+    // Each body use instantiates the where-method signature, so the `?`
+    // re-raise carries a fresh open row into `load`'s wider annotated row.
     const source =
         \\load : a -> Try(Str, [NotFound, Other]) where [a.fetch : a -> Try(Str, [NotFound])]
         \\load = |x| {
         \\    s = x.fetch()?
         \\    Ok(s)
         \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "a -> Try(Str, [NotFound, Other]) where [a.fetch : a -> Try(Str, [NotFound])]");
+}
+
+test "check type - polarity - where-method result may be widened by the body" {
+    const source =
+        \\describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\describe = |x| x.status()
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "a -> [Err(Str), Extra, Ok(Str)] where [a.status : a -> [Err(Str), Ok(Str)]]");
+}
+
+test "check type - polarity - two uses of a where-method in one body are independent" {
+    // One use closes its copy with an exhaustive match; the other widens its
+    // copy into the return row. Neither affects the signature.
+    const source =
+        \\both : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\both = |x| {
+        \\    first = match x.status() {
+        \\        Ok(s) => s
+        \\        Err(e) => e
+        \\    }
+        \\    if Str.is_empty(first) Extra else x.status()
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "a -> [Err(Str), Extra, Ok(Str)] where [a.status : a -> [Err(Str), Ok(Str)]]");
+}
+
+test "check type - polarity - where-method implementation may return a subset" {
+    const source =
+        \\describe : a -> Str where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\describe = |x| match x.status() {
+        \\    Ok(s) => s
+        \\    Err(e) => e
+        \\}
+        \\
+        \\Job := [Pending].{
+        \\    status : Job -> [Ok(Str)]
+        \\    status = |_| Ok("pending")
+        \\}
+        \\
+        \\out = describe(Job.Pending)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "out" } }, "Str");
+}
+
+test "check type - polarity - where-method implementation may not return an unlisted tag" {
+    // The obligation closes the signature's row, so an implementation
+    // returning `Timeout` is rejected even though the body would have
+    // re-raised it: the body's uses closed their own copies.
+    const source =
+        \\describe : a -> Str where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\describe = |x| match x.status() {
+        \\    Ok(s) => s
+        \\    Err(e) => e
+        \\}
+        \\
+        \\Job := [Pending].{
+        \\    status : Job -> [Ok(Str), Err(Str), Timeout]
+        \\    status = |_| Timeout
+        \\}
+        \\
+        \\bad = describe(Job.Pending)
     ;
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
@@ -8793,7 +8851,7 @@ test "check type - polarity - constrained body may not pass an unlisted method a
         \\show : a -> Str where [a.render : a, [Compact, Pretty] -> Str]
         \\show = |x| x.render(Verbose)
     ;
-    try checkTypesModule(source, .fail_first, "Tag Not In Annotation");
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
 test "check type - polarity - input is inferred as closed" {

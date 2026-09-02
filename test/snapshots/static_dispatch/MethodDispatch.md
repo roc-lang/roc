@@ -291,7 +291,7 @@ NO CHANGE
 			(args
 				(p-assign (ident "x"))
 				(p-assign (ident "fn")))
-			(e-dispatch-call (method "transform") (constraint-fn-var 458)
+			(e-dispatch-call (method "transform") (constraint-fn-var 460)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -335,7 +335,7 @@ NO CHANGE
 			(ty-lookup (name "Container") (local))))
 	(d-let
 		(p-assign (ident "directCall"))
-		(e-dispatch-call (method "get_value") (constraint-fn-var 513)
+		(e-dispatch-call (method "get_value") (constraint-fn-var 519)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "myContainer"))))
@@ -344,7 +344,7 @@ NO CHANGE
 			(ty-lookup (name "Str") (builtin))))
 	(d-let
 		(p-assign (ident "result1"))
-		(e-call (constraint-fn-var 522)
+		(e-call (constraint-fn-var 529)
 			(e-lookup-local
 				(p-assign (ident "extract")))
 			(e-lookup-local
@@ -353,7 +353,7 @@ NO CHANGE
 			(ty-lookup (name "Str") (builtin))))
 	(d-let
 		(p-assign (ident "result2"))
-		(e-call (constraint-fn-var 550)
+		(e-call (constraint-fn-var 560)
 			(e-lookup-local
 				(p-assign (ident "modify")))
 			(e-lookup-local
@@ -366,7 +366,7 @@ NO CHANGE
 						(p-assign (ident "#interp_0"))
 						(e-lookup-local
 							(p-assign (ident "s"))))
-					(e-interpolation (constraint-fn-var 548) (dispatcher-var 116)
+					(e-interpolation (constraint-fn-var 558) (dispatcher-var 116)
 						(first
 							(e-literal (string "")))
 						(parts
@@ -383,7 +383,7 @@ NO CHANGE
 					(p-assign (ident "directCall")))
 				(e-lookup-local
 					(p-assign (ident "result1")))
-				(e-call (constraint-fn-var 572)
+				(e-call (constraint-fn-var 583)
 					(e-lookup-local
 						(p-assign (ident "extract")))
 					(e-lookup-local
