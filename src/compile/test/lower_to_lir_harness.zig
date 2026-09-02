@@ -11,6 +11,7 @@ const collections = @import("collections");
 const eval = @import("eval");
 const layout = @import("layout");
 const lir = @import("lir");
+const postcheck = @import("postcheck");
 const roc_target = @import("roc_target");
 
 const Coordinator = @import("../coordinator.zig").Coordinator;
@@ -96,6 +97,7 @@ pub const LirLoweringOptions = struct {
     parallel_procedure_root_fixture: bool = false,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     inline_mode: lir.CheckedPipeline.InlineMode = .none,
+    spec_constr_clone_inlining: lir.CheckedPipeline.SpecConstrCloneInlining = .all_calls,
     consume_dead_boxes: bool = false,
     list_in_place_map: bool = false,
     proc_debug_names: bool = false,
@@ -104,6 +106,9 @@ pub const LirLoweringOptions = struct {
     /// Receives the expression count of the lifted program handed to lambda-set
     /// solving, for tests that assert on post-check program growth.
     lifted_expr_count_out: ?*usize = null,
+    /// Stop after Monotype lowering. Focused postcheck regressions use this
+    /// boundary when later LIR passes are outside the behavior under test.
+    monotype_only: bool = false,
 };
 
 /// Lower an app whose body is `app_body` (everything after the platform header
@@ -124,6 +129,12 @@ pub fn expectLowersToLirWithOptions(app_body: []const u8, opts: LirLoweringOptio
 /// the app checked cleanly and passed ARC certification.
 pub fn expectAppPathLowersToLir(app_path: []const u8) LowerToLirHarnessError!void {
     try lowerAppPathToLir(std.testing.allocator, app_path, null, .{}, null, null);
+}
+
+/// Lower an app at `app_path` through Monotype specialization, without running
+/// later LIR transforms or ARC insertion.
+pub fn expectAppPathLowersToMonotype(app_path: []const u8) LowerToLirHarnessError!void {
+    try lowerAppPathToLir(std.testing.allocator, app_path, null, .{ .monotype_only = true }, null, null);
 }
 
 /// Lower an app at `app_path` to LIR, then run a focused invariant check
@@ -390,6 +401,20 @@ fn lowerAppPathToLir(
         try std.testing.expectEqual(@as(usize, 2), procedure_use_roots);
     }
 
+    if (opts.monotype_only) {
+        var mono = try postcheck.Monotype.Lower.run(
+            gpa,
+            .{
+                .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+                .imports = imports,
+            },
+            .{ .requests = lir_roots },
+            .{},
+        );
+        mono.deinit();
+        return;
+    }
+
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
         .{
@@ -401,6 +426,7 @@ fn lowerAppPathToLir(
             .specialization_strategy = opts.specialization_strategy,
             .target_usize = opts.target_usize,
             .inline_mode = opts.inline_mode,
+            .spec_constr_clone_inlining = opts.spec_constr_clone_inlining,
             .consume_dead_boxes = opts.consume_dead_boxes,
             .list_in_place_map = opts.list_in_place_map,
             .proc_debug_names = opts.proc_debug_names,

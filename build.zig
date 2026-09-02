@@ -746,10 +746,10 @@ const CheckTypeCheckerPatternsStep = struct {
         .{ .file = "inspected.zig", .start = 226, .end = 232 },
         // inspected.zig trims the trailing newline off a rendered report. This is
         // presentation text on its way out, not a type-checker comparison.
-        .{ .file = "inspected.zig", .start = 2207, .end = 2207 },
+        .{ .file = "inspected.zig", .start = 2473, .end = 2473 },
         // inspected.zig converts a NUL-terminated dylib path from the linker into a
         // slice. Path bytes, not identifiers.
-        .{ .file = "inspected.zig", .start = 3000, .end = 3008 },
+        .{ .file = "inspected.zig", .start = 3263, .end = 3274 },
         // inspected_run.zig dispatches on a hosted function's ABI symbol, which is
         // matched by name at the host boundary and has no Ident.Idx.
         .{ .file = "inspected_run.zig", .start = 107, .end = 107 },
@@ -758,11 +758,11 @@ const CheckTypeCheckerPatternsStep = struct {
         // the declaring module's lowering) against the finalizing module's
         // qualified name—cross-module, so there is no shared ident store to
         // compare indices in. Error-reporting path, not a type-checker judgment.
-        .{ .file = "compile_time_finalization.zig", .start = 2145, .end = 2155 },
+        .{ .file = "compile_time_finalization.zig", .start = 2197, .end = 2207 },
         // report.zig compares already-formatted diagnostic text only to avoid
         // printing two visually identical types. This is presentation logic,
         // not a type-checking or identifier comparison.
-        .{ .file = "report.zig", .start = 563, .end = 563 },
+        .{ .file = "report.zig", .start = 564, .end = 564 },
     };
 
     fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {
@@ -2942,6 +2942,7 @@ pub fn build(b: *std.Build) void {
     const run_test_wasm_static_lib_step = b.step("run-test-wasm-static-lib", "Run WASM static library test runner");
     const run_test_dylib_step = b.step("run-test-dylib", "Build a Roc shared library and run it through the loader test");
     const run_test_archive_step = b.step("run-test-archive", "Build a Roc static archive, link a consumer against it, and run it");
+    const run_check_machine_code_shim_archive_step = b.step("run-check-machine-code-shim-archive", "Check that the machine-code shim keeps compiler-private support local");
     const build_coverage_tools_step = b.step("build-coverage-tools", "Build parser coverage tools");
     const run_coverage_parser_step = b.step("run-coverage-parser", "Run parser tests with kcov code coverage");
     const run_minici_step = b.step("minici", "Run a subset of CI build and test steps");
@@ -5452,6 +5453,10 @@ pub fn build(b: *std.Build) void {
         });
     }
 
+    if (main_exe_result.machine_code_shim_archive_check) |machine_code_shim_archive_check| {
+        run_check_machine_code_shim_archive_step.dependOn(machine_code_shim_archive_check);
+    }
+
     const guarded_list_violation_exe = b.addExecutable(.{
         .name = "guarded_list_violation_test",
         .root_module = b.createModule(.{
@@ -5546,6 +5551,7 @@ pub fn build(b: *std.Build) void {
         // Zig (the vendored IR builder), so no LLVM library linkage is needed.
         if (std.mem.eql(u8, module_test.test_step.name, "compile")) {
             module_test.test_step.root_module.addImport("llvm_codegen", llvm_codegen_module);
+            module_test.test_step.root_module.addImport("postcheck", roc_modules.postcheck);
         }
 
         if (std.mem.eql(u8, module_test.test_step.name, "glue")) {
@@ -7149,6 +7155,7 @@ fn wasmObjectArtifact(b: *std.Build, obj: *Step.Compile) std.Build.LazyPath {
 const MainExeResult = struct {
     exe: *Step.Compile,
     machine_code_shim_test: ?*Step.Compile,
+    machine_code_shim_archive_check: ?*Step,
 };
 fn addMainExe(
     b: *std.Build,
@@ -7381,13 +7388,10 @@ fn addMainExe(
     machine_code_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
     machine_code_shim_lib.step.dependOn(&write_compiled_builtins.step);
     machine_code_shim_lib.root_module.addObjectFile(builtins_obj.getEmittedBin());
-    // The shim is linked alongside a platform host that is its own compiler-rt
-    // carrier, and COFF rejects the resulting duplicate definitions of `memcpy`
-    // and the integer/float libcalls outright (the same hazard noted on the
-    // boxy object above). The shim does not need a copy of its own: its objects
-    // reference only memcpy, memmove and memset, which the rest of the link
-    // already provides -- both for a platform host and for the freestanding
-    // default platform.
+    // The shim defines its compiler-private stack probe internally. Do not
+    // bundle the complete compiler-rt object: its broad set of weak definitions
+    // can participate in platform symbol resolution, and COFF rejects duplicate
+    // definitions of memcpy and the integer/float libcalls outright.
     machine_code_shim_lib.bundle_compiler_rt = false;
     // On Linux the shim reaches the kernel directly, so the executables it is
     // linked into need no libc. Declaring that here makes the Zig compiler
@@ -7396,6 +7400,7 @@ fn addMainExe(
     if (target.result.os.tag == .linux) machine_code_shim_lib.root_module.link_libc = false;
 
     var machine_code_shim_test_for_registry: ?*Step.Compile = null;
+    var machine_code_shim_archive_check_for_registry: ?*Step = null;
     if (add_machine_code_shim_test) {
         const machine_code_shim_test = b.addTest(.{
             .name = "machine_code_shim",
@@ -7432,6 +7437,25 @@ fn addMainExe(
         machine_code_shim_test.bundle_compiler_rt = true;
         add_tracy(b, roc_modules.build_options, machine_code_shim_test, b.graph.host, false, flag_enable_tracy);
         machine_code_shim_test_for_registry = machine_code_shim_test;
+
+        // Run mode hands the linker the platform's own inputs plus this shim
+        // and nothing else. Check that compiler-private support does not escape
+        // the shim object as an undefined or global symbol. The checker reads
+        // ELF archive members directly.
+        if (target.result.ofmt == .elf) {
+            const machine_code_shim_archive_check = b.addExecutable(.{
+                .name = "machine_code_shim_archive_check",
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("src/machine_code_shim/archive_check.zig"),
+                    .target = b.graph.host,
+                    .optimize = .Debug,
+                }),
+            });
+            configureBackend(machine_code_shim_archive_check, b.graph.host);
+            const run_machine_code_shim_archive_check = b.addRunArtifact(machine_code_shim_archive_check);
+            run_machine_code_shim_archive_check.addFileArg(machine_code_shim_lib.getEmittedBin());
+            machine_code_shim_archive_check_for_registry = &run_machine_code_shim_archive_check.step;
+        }
     }
 
     const install_machine_code_shim = b.addInstallArtifact(machine_code_shim_lib, .{});
@@ -7756,6 +7780,7 @@ fn addMainExe(
     return .{
         .exe = exe,
         .machine_code_shim_test = machine_code_shim_test_for_registry,
+        .machine_code_shim_archive_check = machine_code_shim_archive_check_for_registry,
     };
 }
 

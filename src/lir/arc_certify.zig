@@ -1284,6 +1284,9 @@ const State = struct {
     /// producer-authored conditional join clears it, and another guarded read
     /// before either transition is a possible double release.
     maybe_uninitialized_released: std.bit_set.DynamicBitSetUnmanaged,
+    /// Some value on this path has a negative balance: an aggregate move
+    /// consumed a field read whose take has not settled yet.
+    any_negative: bool = false,
 
     fn init(allocator: Allocator, local_dense: []const u32, proc_local_count: usize) Allocator.Error!State {
         const local_value = try allocator.alloc(ValueId, proc_local_count);
@@ -1305,6 +1308,7 @@ const State = struct {
             .result_discriminant = no_dense,
             .maybe_uninitialized_unresolved = maybe_uninitialized_unresolved,
             .maybe_uninitialized_released = maybe_uninitialized_released,
+            .any_negative = false,
         };
     }
 
@@ -1381,11 +1385,12 @@ const State = struct {
             .result_discriminant = self.result_discriminant,
             .maybe_uninitialized_unresolved = maybe_uninitialized_unresolved,
             .maybe_uninitialized_released = maybe_uninitialized_released,
+            .any_negative = self.any_negative,
         };
     }
 
     /// Overwrites a recycled state with `source`, keeping the buffers it
-    /// already owns. Every field a fresh clone would set is set here too.
+    /// already owns. `refilled_fields` holds this to every field of `State`.
     fn refillFrom(self: *State, source: *const State) Allocator.Error!void {
         if (self.local_value.len != source.local_value.len) {
             self.local_value = try self.allocator.realloc(self.local_value, source.local_value.len);
@@ -1411,9 +1416,69 @@ const State = struct {
             self.outcome_discriminants.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
         }
 
+        try self.maybe_uninitialized_unresolved.resize(
+            self.allocator,
+            source.maybe_uninitialized_unresolved.capacity(),
+            false,
+        );
+        self.maybe_uninitialized_unresolved.unsetAll();
+        self.maybe_uninitialized_unresolved.setUnion(source.maybe_uninitialized_unresolved);
+
+        try self.maybe_uninitialized_released.resize(
+            self.allocator,
+            source.maybe_uninitialized_released.capacity(),
+            false,
+        );
+        self.maybe_uninitialized_released.unsetAll();
+        self.maybe_uninitialized_released.setUnion(source.maybe_uninitialized_released);
+
         self.local_dense = source.local_dense;
         self.pool = source.pool;
         self.result_discriminant = source.result_discriminant;
+        self.any_negative = source.any_negative;
+    }
+
+    /// Every field `refillFrom` copies out of the source state.
+    const refilled_fields = [_][]const u8{
+        "local_value",
+        "balance",
+        "holder",
+        "conditional_condition",
+        "conditional_condition_mask",
+        "maybe_uninitialized_unresolved",
+        "maybe_uninitialized_released",
+        "claims",
+        "outcome_discriminants",
+        "local_dense",
+        "pool",
+        "result_discriminant",
+    };
+
+    /// Fields a refill leaves as the recycled state already has them. Every
+    /// state in a pool is built with the certifier's allocator, so the one a
+    /// recycled state holds is already the source's.
+    const refill_exempt_fields = [_][]const u8{
+        "allocator",
+    };
+
+    // A recycled state keeps whatever the previous walk left in a field the
+    // refill skips, and a leftover fact reads as one this path established:
+    // the certifier then reports a finding against a path it never walked, or
+    // misses one it did. Neither shows up as a crash, so a field added to
+    // `State` fails to compile until it is accounted for above.
+    comptime {
+        for (@typeInfo(State).@"struct".fields) |field| {
+            var accounted = false;
+            for (refilled_fields) |name| {
+                if (std.mem.eql(u8, name, field.name)) accounted = true;
+            }
+            for (refill_exempt_fields) |name| {
+                if (std.mem.eql(u8, name, field.name)) accounted = true;
+            }
+            if (!accounted) @compileError(
+                "State." ++ field.name ++ " is neither copied by refillFrom nor listed as exempt",
+            );
+        }
     }
 
     fn copyList(
@@ -1507,6 +1572,7 @@ const State = struct {
     fn addBalance(self: *State, value: ValueId, delta: i32) Allocator.Error!void {
         try self.growToValue(value);
         self.balance.items[value] += delta;
+        if (self.balance.items[value] < 0) self.any_negative = true;
     }
 
     fn setHolder(self: *State, value: ValueId, holder_value: ValueId) Allocator.Error!void {
@@ -2286,12 +2352,15 @@ const Certifier = struct {
     /// emissions never reach a settlement point negative, so this only
     /// rescues balances that were already failures before field takes.
     fn settleNegativeClaims(self: *Certifier, state: *State) Allocator.Error!void {
+        var remaining = false;
         for (0..state.balance.items.len) |value_index| {
             while (state.balance.items[value_index] < 0) {
                 if (!try self.tryClaim(state, @intCast(value_index))) break;
                 state.balance.items[value_index] += 1;
             }
+            if (state.balance.items[value_index] < 0) remaining = true;
         }
+        state.any_negative = remaining;
     }
 
     fn checkLeaks(self: *Certifier, state: *State) CertifyError!void {
@@ -2506,10 +2575,14 @@ const Certifier = struct {
                 }
                 summary.abi_live = self.values.items[value].always_live;
                 if (summary.class != .unbound and summary.class != .representation) {
-                    summary.provenance = if (repr == dense)
-                        try self.makeSummaryProvenance(state, value)
-                    else
-                        self.summary_scratch.items[repr].provenance;
+                    if (repr == dense) {
+                        const made = try self.makeSummaryProvenance(state, value);
+                        summary.provenance = made.provenance;
+                        if (made.uncarried_live_lender) summary.abi_live = true;
+                    } else {
+                        summary.provenance = self.summary_scratch.items[repr].provenance;
+                        if (self.summary_scratch.items[repr].abi_live) summary.abi_live = true;
+                    }
                 }
             }
             summary.maybe_uninitialized_unresolved = state.maybeUninitializedIsUnresolved(dense);
@@ -2592,32 +2665,52 @@ const Certifier = struct {
     /// directly carried dependency stays as that representative so its own
     /// sparse provenance remains available. An unbound intermediate is
     /// reduced to the live carriers the existing certifier proof uses.
+    /// Appends the summarized carrier of every liveness anchor of
+    /// `dependency`, and reports whether each live anchor had one. A live
+    /// anchor with no summarized carrier cannot be referenced by the summary
+    /// at all; per the carried-into-join invariant it is either ABI-live or
+    /// fully claimed, so the caller records the liveness it proves on the
+    /// entry itself instead of through a dangling local reference.
     fn appendSummaryDependencyReprs(
         self: *Certifier,
         state: *const State,
         dependency: ValueId,
         reprs: *std.ArrayList(u32),
-    ) Allocator.Error!void {
+    ) Allocator.Error!bool {
         if (self.repr_scratch.get(dependency)) |repr| {
             try appendUniqueU32(reprs, self.allocator, repr);
-            return;
+            return true;
         }
 
-        if (!try self.collectBorrowSummaryAnchorValues(state, dependency, &self.provenance_value_scratch)) return;
+        if (!try self.collectBorrowSummaryAnchorValues(state, dependency, &self.provenance_value_scratch)) return true;
+        var all_carried = true;
         for (self.provenance_value_scratch.items) |anchor| {
-            const repr = self.repr_scratch.get(anchor) orelse self.denseOf(self.values.items[anchor].origin);
-            try appendUniqueU32(reprs, self.allocator, repr);
+            if (self.repr_scratch.get(anchor)) |repr| {
+                try appendUniqueU32(reprs, self.allocator, repr);
+            } else {
+                all_carried = false;
+            }
         }
+        return all_carried;
     }
 
     /// Builds the sparse provenance attached to one alias-class
     /// representative. Positive ownership balance does not suppress these
     /// edges: they become active if later statements spend the explicit unit.
+    const SummaryProvenanceResult = struct {
+        provenance: ?*const SummaryProvenance,
+        /// A live lender anchor had no summarized carrier local. Per the
+        /// carried-into-join invariant such an anchor is either ABI-live or
+        /// fully claimed, and both outlive every read of the borrow, so the
+        /// entry itself carries the liveness the dropped reference proved.
+        uncarried_live_lender: bool,
+    };
+
     fn makeSummaryProvenance(
         self: *Certifier,
         state: *const State,
         value: ValueId,
-    ) Allocator.Error!?*const SummaryProvenance {
+    ) Allocator.Error!SummaryProvenanceResult {
         const info = self.values.items[value];
         self.provenance_lender_scratch.clearRetainingCapacity();
         self.provenance_holder_scratch.clearRetainingCapacity();
@@ -2632,14 +2725,17 @@ const Certifier = struct {
                 break;
             }
         }
+        var uncarried_live_lender = false;
         if (lenders_live) {
             for (info.lenders) |lender| {
-                try self.appendSummaryDependencyReprs(state, lender, &self.provenance_lender_scratch);
+                if (!try self.appendSummaryDependencyReprs(state, lender, &self.provenance_lender_scratch)) {
+                    uncarried_live_lender = true;
+                }
             }
         }
         const holder = state.holderOf(value);
         if (holder != no_value and try self.valueIsLive(state, holder)) {
-            try self.appendSummaryDependencyReprs(state, holder, &self.provenance_holder_scratch);
+            _ = try self.appendSummaryDependencyReprs(state, holder, &self.provenance_holder_scratch);
         }
 
         const payload_source = if (info.payload_source == no_value or !try self.valueIsLive(state, info.payload_source))
@@ -2650,7 +2746,7 @@ const Certifier = struct {
             self.provenance_holder_scratch.items.len == 0 and
             payload_source == no_dense)
         {
-            return null;
+            return .{ .provenance = null, .uncarried_live_lender = uncarried_live_lender };
         }
 
         std.mem.sort(u32, self.provenance_lender_scratch.items, {}, comptime std.sort.asc(u32));
@@ -2669,7 +2765,9 @@ const Certifier = struct {
             candidate,
             .{},
         );
-        if (interned.found_existing) return interned.value_ptr.*;
+        if (interned.found_existing) {
+            return .{ .provenance = interned.value_ptr.*, .uncarried_live_lender = uncarried_live_lender };
+        }
         errdefer _ = self.provenance_interner.removeContext(candidate, .{});
 
         const arena = self.lender_arena.allocator();
@@ -2688,7 +2786,7 @@ const Certifier = struct {
         };
         interned.key_ptr.* = provenance.*;
         interned.value_ptr.* = provenance;
-        return provenance;
+        return .{ .provenance = provenance, .uncarried_live_lender = uncarried_live_lender };
     }
 
     /// The provenance both states prove, for widening a group at the cap.
@@ -4409,10 +4507,14 @@ const Certifier = struct {
                         }
                         summary.abi_live = self.values.items[value].always_live;
                         if (summary.class != .unbound and summary.class != .representation) {
-                            summary.provenance = if (repr == dense)
-                                try self.makeSummaryProvenance(state, value)
-                            else
-                                self.summary_scratch.items[repr].provenance;
+                            if (repr == dense) {
+                                const made = try self.makeSummaryProvenance(state, value);
+                                summary.provenance = made.provenance;
+                                if (made.uncarried_live_lender) summary.abi_live = true;
+                            } else {
+                                summary.provenance = self.summary_scratch.items[repr].provenance;
+                                if (self.summary_scratch.items[repr].abi_live) summary.abi_live = true;
+                            }
                         }
                     }
                 }
@@ -5248,6 +5350,7 @@ const Certifier = struct {
         }
         const source_value = try self.requireLive(state, source);
         if (!self.isRc(target)) return;
+        if (source_value != no_value) try self.requireFieldUntaken(state, source_value, source, target, projection);
         const value = if (source_value == no_value)
             try self.bindBorrowedFromImplicitLive(state, target)
         else
@@ -5255,6 +5358,53 @@ const Certifier = struct {
         const info = &self.values.items[value];
         info.payload_source = source_value;
         info.payload_projection = projection;
+    }
+
+    /// An RC-bearing projection read observes the stored unit behind the
+    /// projected field. Once a take has spent that unit on this path (settled,
+    /// or pending settlement from an aggregate move), the field's bytes no
+    /// longer denote a unit this value holds, so reading them again is
+    /// invalid unless an intact surplus unit still keeps them live.
+    fn requireFieldUntaken(
+        self: *Certifier,
+        state: *State,
+        container: ValueId,
+        source: LIR.LocalId,
+        target: LIR.LocalId,
+        projection: u64,
+    ) CertifyError!void {
+        if (state.any_negative) try self.settleNegativeClaims(state);
+        const claims = state.claimsOf(container);
+        if (claims == 0) return;
+        const container_origin = self.values.items[container].origin;
+        const container_layout = self.layouts.getLayout(self.store.getLocal(container_origin).layout_idx);
+        const taken = switch (container_layout.tag) {
+            .struct_ => blk: {
+                const field_idx: u16 = @intCast(projection & 0xffff);
+                if (field_idx >= 64) break :blk false;
+                break :blk (claims & (@as(u64, 1) << @intCast(field_idx))) != 0;
+            },
+            .tag_union => true,
+            .scalar,
+            .box,
+            .box_of_zst,
+            .erased_box,
+            .list,
+            .list_of_zst,
+            .closure,
+            .erased_callable,
+            .zst,
+            .ptr,
+            => false,
+        };
+        if (!taken or self.hasIntactSurplusUnit(state, container)) return;
+        self.diag.context_local = source;
+        self.diag.context_proc = self.current_proc;
+        self.diag.context_stmt = self.current_stmt;
+        return self.fail(
+            "refcounted read into local {d} through local {d} after the field's stored unit was taken",
+            .{ @intFromEnum(target), @intFromEnum(source) },
+        );
     }
 
     fn validateResidualShellFields(
@@ -7691,6 +7841,135 @@ test "certify rejects an RC field read through a released struct representation"
     try testing.expect(std.mem.find(u8, f.diag.message(), "dead refcounted local") != null);
 }
 
+test "certify rejects an RC field read after a take through its payload projection spent the unit" {
+    // The shape issue 10968 produced: a `Try` payload record is projected
+    // borrowed, aliased, and its sole refcounted field is taken without a
+    // retain into a holder that is then released. A second read of that
+    // field through another alias of the projection denotes a spent unit.
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = .str },
+    });
+    const tag_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        record_layout,
+    });
+    const payload = try f.local(.str);
+    const record = try f.local(record_layout);
+    const tag_value = try f.local(tag_layout);
+    const projection = try f.local(record_layout);
+    const first_alias = try f.local(record_layout);
+    const first = try f.local(.str);
+    const holder = try f.local(record_layout);
+    const second_alias = try f.local(record_layout);
+    const second = try f.local(.str);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const assign_result = try f.assignI64(result, ret);
+    const release_second = try f.decrefStmt(second, .str, assign_result);
+    const retain_second = try f.increfStmt(second, .str, release_second);
+    const read_second = try fieldReadStmt(&f, second, second_alias, 0, retain_second);
+    const alias_second = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = second_alias,
+        .op = .{ .local = projection },
+        .next = read_second,
+    } });
+    const release_holder = try f.decrefStmt(holder, record_layout, alias_second);
+    const make_holder = try f.store.addCFStmt(.{ .assign_struct = .{
+        .target = holder,
+        .fields = try f.store.addLocalSpan(&.{first}),
+        .next = release_holder,
+    } });
+    const read_first = try fieldReadStmt(&f, first, first_alias, 0, make_holder);
+    const alias_first = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = first_alias,
+        .op = .{ .local = projection },
+        .next = read_first,
+    } });
+    const project = try tagPayloadStructReadStmt(&f, projection, tag_value, 1, alias_first);
+    const make_tag = try f.store.addCFStmt(.{ .assign_tag = .{
+        .target = tag_value,
+        .variant_index = 1,
+        .discriminant = 1,
+        .payload = record,
+        .next = project,
+    } });
+    const make_record = try f.store.addCFStmt(.{ .assign_struct = .{
+        .target = record,
+        .fields = try f.store.addLocalSpan(&.{payload}),
+        .next = make_tag,
+    } });
+    const body = try f.assignStr(payload, make_record);
+    _ = try f.addProc(&.{}, body, .i64);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "stored unit was taken") != null);
+}
+
+test "certify accepts a retained payload field read twice through aliases of its projection" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = .str },
+    });
+    const tag_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        record_layout,
+    });
+    const payload = try f.local(.str);
+    const record = try f.local(record_layout);
+    const tag_value = try f.local(tag_layout);
+    const projection = try f.local(record_layout);
+    const first_alias = try f.local(record_layout);
+    const first = try f.local(.str);
+    const holder = try f.local(record_layout);
+    const second_alias = try f.local(record_layout);
+    const second = try f.local(.str);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const assign_result = try f.assignI64(result, ret);
+    const release_tag = try f.decrefStmt(tag_value, tag_layout, assign_result);
+    const release_second = try f.decrefStmt(second, .str, release_tag);
+    const retain_second = try f.increfStmt(second, .str, release_second);
+    const read_second = try fieldReadStmt(&f, second, second_alias, 0, retain_second);
+    const alias_second = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = second_alias,
+        .op = .{ .local = projection },
+        .next = read_second,
+    } });
+    const release_holder = try f.decrefStmt(holder, record_layout, alias_second);
+    const make_holder = try f.store.addCFStmt(.{ .assign_struct = .{
+        .target = holder,
+        .fields = try f.store.addLocalSpan(&.{first}),
+        .next = release_holder,
+    } });
+    const retain_first = try f.increfStmt(first, .str, make_holder);
+    const read_first = try fieldReadStmt(&f, first, first_alias, 0, retain_first);
+    const alias_first = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = first_alias,
+        .op = .{ .local = projection },
+        .next = read_first,
+    } });
+    const project = try tagPayloadStructReadStmt(&f, projection, tag_value, 1, alias_first);
+    const make_tag = try f.store.addCFStmt(.{ .assign_tag = .{
+        .target = tag_value,
+        .variant_index = 1,
+        .discriminant = 1,
+        .payload = record,
+        .next = project,
+    } });
+    const make_record = try f.store.addCFStmt(.{ .assign_struct = .{
+        .target = record,
+        .fields = try f.store.addLocalSpan(&.{payload}),
+        .next = make_tag,
+    } });
+    const body = try f.assignStr(payload, make_record);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.certify();
+}
+
 test "certify accepts a retained record moved whole beside a take of its field" {
     // ARC lowers `{ level, world: World.new(level) }` as an incref of the
     // whole record, a take of the field the sibling needs, and residual
@@ -7996,4 +8275,23 @@ test "certify rejects consuming Box.unbox after the ARC boundary" {
 
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "post-ARC LIR retained a consuming Box.unbox") != null);
+}
+
+test "reused certifier state copies maybe-uninitialized bits exactly" {
+    const local_dense = [_]u32{ 0, 1, 2, 3 };
+
+    var source = try State.init(testing.allocator, &local_dense, local_dense.len);
+    defer source.deinit();
+    source.maybe_uninitialized_unresolved.set(1);
+    source.maybe_uninitialized_released.set(2);
+
+    var reused = try State.init(testing.allocator, &local_dense, local_dense.len);
+    defer reused.deinit();
+    reused.maybe_uninitialized_unresolved.set(0);
+    reused.maybe_uninitialized_released.set(3);
+
+    try reused.refillFrom(&source);
+
+    try testing.expect(reused.maybe_uninitialized_unresolved.eql(source.maybe_uninitialized_unresolved));
+    try testing.expect(reused.maybe_uninitialized_released.eql(source.maybe_uninitialized_released));
 }
