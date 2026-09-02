@@ -480,7 +480,7 @@ fn applyCandidate(
 }
 
 /// Identify locals defined inside a cloned match arm. Those locals must be
-/// alpha-renamed when the original arm remains as a partial-fusion fallback;
+/// alpha-renamed when the original arm remains as the partial-fusion path;
 /// frame locals that are only read are external inputs and retain identity.
 fn collectBranchDefinitions(store: *LirStore, body: LIR.CFStmtId) ResourceError![]bool {
     const defined = try store.allocator.alloc(bool, store.localCount());

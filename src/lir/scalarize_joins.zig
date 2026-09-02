@@ -839,7 +839,8 @@ const Pass = struct {
                 const old_param = GuardedList.at(old_params, index);
                 try new_params.append(self.allocator, if (old_param == param) payload_param else old_param);
             }
-            self.store.getCFStmtPtr(listing_id).join.params = try self.store.addLocalSpan(new_params.items);
+            const new_param_span = try self.store.addLocalSpan(new_params.items);
+            self.store.getCFStmtPtr(listing_id).join.params = new_param_span;
         }
 
         self.rewriteSingleVariantReads(direct_reads, closure.tag_reads.items, payload_param, payload_layout);
@@ -960,7 +961,7 @@ const Pass = struct {
             .mode = .initialize_join_param,
             .next = old_remainder,
         } });
-        self.store.getCFStmtPtr(join_stmt_id).join.remainder = try self.store.addCFStmt(.{ .assign_ref = .{
+        const seeded_remainder = try self.store.addCFStmt(.{ .assign_ref = .{
             .target = tmp,
             .op = .{ .tag_payload_struct = .{
                 .source = arg_tag,
@@ -969,6 +970,7 @@ const Pass = struct {
             } },
             .next = set_stmt,
         } });
+        self.store.getCFStmtPtr(join_stmt_id).join.remainder = seeded_remainder;
     }
 
     fn tryScalarize(

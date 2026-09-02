@@ -4078,11 +4078,11 @@ counts prove exclusivity, the outer join is nonrecursive, and the forwarded
 layout contains no reference-counted storage; moving owning continuations needs
 explicit path-ownership data and is not admitted. Third, literal tag edges may
 bypass a join whose body immediately matches that tag. Complete fusion moves
-all arms; partial fusion retains the original fallback and clones only arms
+all arms; partial fusion retains the original path and clones only arms
 whose locally defined values are ownership-neutral. Join scalarization then
-removes aggregate fixed points when every initializer and projection is
-explicit. Every mutation plan requires disjoint statement roles before it
-changes the graph. These passes visit only stamped procedures, so ordinary dev
+removes aggregate fixed points when every initializer, field read, and tag
+payload read is explicit. Every mutation plan requires disjoint statement
+roles before it changes the graph. These passes visit only stamped procedures, so ordinary dev
 code pays neither their analysis cost nor their structural changes.
 
 The clone propagates constructor values through ordinary bindings and solves
