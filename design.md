@@ -7764,15 +7764,16 @@ literals default to `Str`, and every requirement on such a var resolves against
 the default owner during checking. Structural-capable requirements on other
 unpinnable vars resolve structurally; the rest are statically unreachable.
 
-The checker pinning-frontier judgment records default materialization as an
-explicit solver fact. Its compatibility fixpoint consumes that fact before the
-checked-module boundary, instantiates the selected owner's method scheme, and
+The checker pinning-frontier judgment appends each selected receiver and
+`DefaultTarget` to `default_materializations`. Its compatibility fixpoint
+consumes those `DefaultMaterialization` entries before the checked-module
+boundary, instantiates the selected owner's method scheme, and
 unifies every independent callable relation exactly. The default owner is
 selected once per receiver; creation-site constraints retain their source and
 copied scheme constraints retain their exact per-edge callable and use-site
-identity, including detached requirements. Publication consumes the resulting
-selected-target evidence or checked rejection and never repeats the
-compatibility decision.
+identity, including detached requirements. `CheckedModule` construction
+consumes each `dispatch_target` evidence slot or `rejected_static_dispatches`
+entry and never repeats the compatibility decision.
 
 Requirements instantiated from a candidate method target are conditional on
 that exact parent edge being selected. If checking rejects the parent, its

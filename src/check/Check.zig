@@ -25684,7 +25684,7 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
         // exact worklists until neither produces another codec obligation.
         while (self.final_codec_dispatch_constraints.items.len > 0) {
             try self.checkFinalGeneratedCodecConstraints(env);
-            try self.checkInstantiatedStaticDispatchConstraints(env, true);
+            try self.checkInstantiatedStaticDispatchConstraints(env, true, .ordinary);
             try self.checkGroundedStoredTypeSchemeRequirementsAtFinalization(env, true);
         }
     } else {
