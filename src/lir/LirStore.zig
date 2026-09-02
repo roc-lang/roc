@@ -1330,7 +1330,6 @@ test "body shard relocates nonzero local and body suffixes" {
         .args = pattern_args,
     } });
     const pattern_ids = try worker.addPatternSpan(&.{ parent_pattern, child_pattern });
-    _ = masks;
 
     const shard = try worker.captureBodyShard(prefix);
     // Give every destination body space a nonzero base.
@@ -1384,7 +1383,10 @@ test "body shard relocates nonzero local and body suffixes" {
     const relocated_offsets = coordinator.getErasedCallArgOffsets(relocated_plan);
     try std.testing.expectEqual(@as(u32, 0), relocated_offsets.at(0));
     try std.testing.expectEqual(@as(u32, 8), relocated_offsets.at(1));
-    try std.testing.expectEqual(@as(u64, 9), coordinator.getU64Span(.{ .start = appended.relocation.u64s, .len = 1 }).at(0));
+    try std.testing.expectEqual(
+        @as(u64, 9),
+        coordinator.getU64Span(.{ .start = appended.relocation.u64s, .len = masks.len }).at(0),
+    );
     const relocated_pattern_ids = coordinator.getPatternSpan(.{ .start = appended.relocation.pattern_ids + 1, .len = pattern_ids.len });
     try std.testing.expectEqual(@as(u32, 3), @intFromEnum(relocated_pattern_ids.at(0)));
     try std.testing.expectEqual(@as(u32, 2), @intFromEnum(relocated_pattern_ids.at(1)));
