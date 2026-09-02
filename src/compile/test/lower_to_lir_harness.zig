@@ -11,6 +11,7 @@ const collections = @import("collections");
 const eval = @import("eval");
 const layout = @import("layout");
 const lir = @import("lir");
+const postcheck = @import("postcheck");
 const roc_target = @import("roc_target");
 
 const Coordinator = @import("../coordinator.zig").Coordinator;
@@ -107,6 +108,9 @@ pub const LirLoweringOptions = struct {
     lifted_expr_count_out: ?*usize = null,
     /// Receives the complete checked-to-LIR timing snapshot after lowering.
     timing_out: ?*lir.CheckedPipeline.TimingSnapshot = null,
+    /// Stop after Monotype lowering. Focused postcheck regressions use this
+    /// boundary when later LIR passes are outside the behavior under test.
+    monotype_only: bool = false,
 };
 
 /// Lower an app whose body is `app_body` (everything after the platform header
@@ -127,6 +131,12 @@ pub fn expectLowersToLirWithOptions(app_body: []const u8, opts: LirLoweringOptio
 /// the app checked cleanly and passed ARC certification.
 pub fn expectAppPathLowersToLir(app_path: []const u8) LowerToLirHarnessError!void {
     try lowerAppPathToLir(std.testing.allocator, app_path, null, .{}, null, null);
+}
+
+/// Lower an app at `app_path` through Monotype specialization, without running
+/// later LIR transforms or ARC insertion.
+pub fn expectAppPathLowersToMonotype(app_path: []const u8) LowerToLirHarnessError!void {
+    try lowerAppPathToLir(std.testing.allocator, app_path, null, .{ .monotype_only = true }, null, null);
 }
 
 /// Lower an app at `app_path` to LIR, then run a focused invariant check
@@ -405,6 +415,20 @@ fn lowerAppPathToLir(
             if (request.procedure_use != null) procedure_use_roots += 1;
         }
         try std.testing.expectEqual(@as(usize, 2), procedure_use_roots);
+    }
+
+    if (opts.monotype_only) {
+        var mono = try postcheck.Monotype.Lower.run(
+            gpa,
+            .{
+                .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+                .imports = imports,
+            },
+            .{ .requests = lir_roots },
+            .{},
+        );
+        mono.deinit();
+        return;
     }
 
     var timing = lir.CheckedPipeline.Timing.init(std.testing.io);
