@@ -5635,10 +5635,10 @@ The name outer_val is being redeclared here:
 outer_val = 500
 ^^^^^^^^^
 
-In this scope, outer_val was already defined in associated_items_complete_all_patterns.md:15:21:
+In this scope, outer_val was already defined in associated_items_complete_all_patterns.md:18:5:
 
-inner_val = outer_val
-            ^^^^^^^^^
+outer_val = 300
+^^^^^^^^^
 
 ── ✗ unrecognized syntax ──────── associated_items_complete_all_patterns.md:30:8
 
@@ -5768,10 +5768,10 @@ The name val1 is being redeclared here:
 val1 = 30
 ^^^^
 
-In this scope, val1 was already defined in associated_items_complete_all_patterns.md:63:20:
+In this scope, val1 was already defined in associated_items_complete_all_patterns.md:69:5:
 
-val3 = val1 + val2
-       ^^^^
+val1 = 10
+^^^^
 
 ── ✗ type redeclared ──────────── associated_items_complete_all_patterns.md:78:5
 

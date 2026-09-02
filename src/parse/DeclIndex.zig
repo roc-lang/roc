@@ -404,6 +404,23 @@ pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
     return idx;
 }
 
+/// Record `ident` as a value that `decl_idx` declares in `scope_idx`. A
+/// declaration whose pattern destructures its value binds several names and
+/// has no single `name_ident`; each bound name is registered through here so
+/// a reference ahead of the declaration resolves to it.
+pub fn addValueName(self: *DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx, decl_idx: DeclIdx) std.mem.Allocator.Error!void {
+    const gop = try self.scopes.items[@intFromEnum(scope_idx)].value_decls.getOrPut(self.gpa, ident);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = .{};
+    }
+    // A pattern binding the same name twice registers the declaration once.
+    var existing = gop.value_ptr.iter();
+    while (existing.next()) |registered| {
+        if (registered == decl_idx) return;
+    }
+    try gop.value_ptr.append(self.gpa, decl_idx);
+}
+
 fn addDeclToBucket(
     comptime K: type,
     gpa: std.mem.Allocator,

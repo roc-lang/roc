@@ -8328,7 +8328,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     for (self.selected_hoisted_roots.items, 0..) |*root, i| {
         keep_oracle.current_root_index = i;
         const intrinsic = !self.hoistExprInvalidated(root.expr) and try self.hoistedRootIsIntrinsicallyKept(root);
-        const deps = intrinsic and try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle);
+        const deps = intrinsic and try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle, self.selectedHoistedRootIsTopLevel(root.*));
         if (!intrinsic) continue;
         if (!deps) continue;
 
@@ -8459,7 +8459,7 @@ fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
 
     for (self.selected_hoisted_roots.items, 0..) |root, i| {
         keep_oracle.current_root_index = i;
-        if (!try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle)) {
+        if (!try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle, self.selectedHoistedRootIsTopLevel(root))) {
             hoistSelectionInvariant("kept selected hoisted root has unavailable dependency");
         }
     }
@@ -8661,6 +8661,11 @@ const HoistedCallableState = enum {
 const HoistedDependencyContext = struct {
     bindings: std.ArrayListUnmanaged(HoistedDependencyBinding) = .empty,
     callable_stability: std.AutoHashMapUnmanaged(HoistedCallableKey, HoistedCallableState) = .{},
+    /// Whether the root materializes a top-level binding. A lambda inside a
+    /// top-level value is part of that value, like the lambda in
+    /// `r = { g: |x| x }`, whereas a lambda inside an expression hoisted out
+    /// of a function body would need that body's environment.
+    top_level_value: bool = false,
 
     fn deinit(self: *@This(), allocator: Allocator) void {
         self.bindings.deinit(allocator);
@@ -8757,10 +8762,25 @@ fn hoistedRootDependenciesAreKept(
     self: *Self,
     expr: CIR.Expr.Idx,
     keep_oracle: *const HoistedRootKeepOracle,
+    top_level_value: bool,
 ) Allocator.Error!bool {
-    var context = HoistedDependencyContext{};
+    var context = HoistedDependencyContext{ .top_level_value = top_level_value };
     defer context.deinit(self.gpa);
     return try self.hoistedRootDependenciesAreKeptInternal(expr, &context, keep_oracle);
+}
+
+/// Whether a binding a hoisted root reads stays available once the root is
+/// evaluated on its own: a top-level binding, a binding the root itself
+/// introduces, or a binding whose own selected root is kept.
+fn hoistedRootBindingIsKept(
+    self: *Self,
+    pattern: CIR.Pattern.Idx,
+    context: *const HoistedDependencyContext,
+    keep_oracle: *const HoistedRootKeepOracle,
+) bool {
+    return self.patternIsTopLevel(pattern) or
+        context.contains(pattern) or
+        (keep_oracle.selectedPatternIsKept(pattern) orelse false);
 }
 
 fn hoistedRootDependenciesAreKeptInternal(
@@ -8773,9 +8793,21 @@ fn hoistedRootDependenciesAreKeptInternal(
     if (self.exprHasDedicatedLiteralConversionRoot(expr)) return false;
 
     return switch (self.cir.store.getExpr(expr)) {
-        .e_lookup_local => |lookup| self.patternIsTopLevel(lookup.pattern_idx) or
-            context.contains(lookup.pattern_idx) or
-            (keep_oracle.selectedPatternIsKept(lookup.pattern_idx) orelse false),
+        .e_lookup_local => |lookup| self.hoistedRootBindingIsKept(lookup.pattern_idx, context, keep_oracle),
+        // A lambda's body is not walked: a top-level binder is globally
+        // resolvable, so a lambda inside a top-level value captures only the
+        // block-local bindings of that value's own expression, and those are
+        // in `context` (staging treats lambdas as leaves, so a capture never
+        // has a staged dependency root to consult).
+        .e_lambda => context.top_level_value,
+        .e_closure => |closure| blk: {
+            if (!context.top_level_value) break :blk false;
+            for (self.cir.store.sliceCaptures(closure.captures)) |capture_idx| {
+                const capture = self.cir.store.getCapture(capture_idx);
+                if (!self.patternIsTopLevel(capture.pattern_idx) and !context.contains(capture.pattern_idx)) break :blk false;
+            }
+            break :blk true;
+        },
         .e_lookup_external,
         .e_lookup_associated_local,
         .e_lookup_associated,
@@ -8801,8 +8833,6 @@ fn hoistedRootDependenciesAreKeptInternal(
         .e_anno_only,
         .e_derived_method,
         .e_crash,
-        .e_closure,
-        .e_lambda,
         .e_hosted_lambda,
         .e_dbg,
         .e_expect_err,
@@ -32378,6 +32408,84 @@ test "a lambda referring to a name bound by the same top-level destructure is no
     defer test_env.deinit();
 
     try test_env.assertCanErrors(&.{});
+}
+
+test "a name bound by a top-level destructure can be referenced ahead of its declaration" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\later = x + 1
+        \\{x} = { x: 1 }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertDefType("later", "Dec");
+    try test_env.assertDefType("x", "Dec");
+}
+
+test "names bound by a top-level tuple destructure can be referenced ahead of their declaration" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\total = a + b
+        \\(a, b) = (1, 2)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertDefType("total", "Dec");
+    try test_env.assertDefType("b", "Dec");
+}
+
+test "a name bound inside a nested top-level destructure or by its as-binder can be referenced ahead of the declaration" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\total = inner + whole.a
+        \\{ outer: { inner }, p: { a } as whole } = { outer: { inner: 1 }, p: { a: 2 } }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertDefType("total", "Dec");
+    try test_env.assertDefType("whole", "{ a: Dec }");
+}
+
+test "a top-level destructure can reference a name bound by a later top-level destructure" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\{a} = { a: b + 1 }
+        \\{b} = { b: 1 }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertDefType("a", "Dec");
+}
+
+test "a function bound by a top-level destructure may capture a block-local binding of the destructured value" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\{ f } = {
+        \\    k = 5
+        \\    { f: |x| x + k }
+        \\}
+        \\later = f(1)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertDefType("later", "Dec");
+}
+
+test "a function bound by a top-level destructure is callable from another def" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\{f, n} = { f: |x| x + 1, n: 2 }
+        \\later = f(n)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertDefType("later", "Dec");
 }
 
 test "literal strict demands flow through polymorphic called function summaries" {
