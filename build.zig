@@ -746,10 +746,10 @@ const CheckTypeCheckerPatternsStep = struct {
         .{ .file = "inspected.zig", .start = 226, .end = 232 },
         // inspected.zig trims the trailing newline off a rendered report. This is
         // presentation text on its way out, not a type-checker comparison.
-        .{ .file = "inspected.zig", .start = 2207, .end = 2207 },
+        .{ .file = "inspected.zig", .start = 2473, .end = 2473 },
         // inspected.zig converts a NUL-terminated dylib path from the linker into a
         // slice. Path bytes, not identifiers.
-        .{ .file = "inspected.zig", .start = 3000, .end = 3008 },
+        .{ .file = "inspected.zig", .start = 3263, .end = 3274 },
         // inspected_run.zig dispatches on a hosted function's ABI symbol, which is
         // matched by name at the host boundary and has no Ident.Idx.
         .{ .file = "inspected_run.zig", .start = 107, .end = 107 },
@@ -758,11 +758,11 @@ const CheckTypeCheckerPatternsStep = struct {
         // the declaring module's lowering) against the finalizing module's
         // qualified name—cross-module, so there is no shared ident store to
         // compare indices in. Error-reporting path, not a type-checker judgment.
-        .{ .file = "compile_time_finalization.zig", .start = 2145, .end = 2155 },
+        .{ .file = "compile_time_finalization.zig", .start = 2197, .end = 2207 },
         // report.zig compares already-formatted diagnostic text only to avoid
         // printing two visually identical types. This is presentation logic,
         // not a type-checking or identifier comparison.
-        .{ .file = "report.zig", .start = 563, .end = 563 },
+        .{ .file = "report.zig", .start = 564, .end = 564 },
     };
 
     fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {
@@ -5546,6 +5546,7 @@ pub fn build(b: *std.Build) void {
         // Zig (the vendored IR builder), so no LLVM library linkage is needed.
         if (std.mem.eql(u8, module_test.test_step.name, "compile")) {
             module_test.test_step.root_module.addImport("llvm_codegen", llvm_codegen_module);
+            module_test.test_step.root_module.addImport("postcheck", roc_modules.postcheck);
         }
 
         if (std.mem.eql(u8, module_test.test_step.name, "glue")) {

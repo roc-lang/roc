@@ -4649,10 +4649,14 @@ rejection or enter a later scheme.
 Instantiation copies the root type and every pending requirement under one
 substitution. The receiver follows ordinary rank behavior: an enclosing weak
 value stays shared, while a receiver quantified by an enclosing scheme is
-copied. The callable root is copied even though its outer receiver keeps that
-root below generalized rank; everything below the callable root follows
-ordinary rank behavior, so its generalized argument and result variables are
-fresh per use. Derived-shape validation is the one exception: it instantiates
+copied. A generated-codec requirement force-copies its receiver's monomorphic
+structural spine as well: the spine can contain a generalized descendant shared
+with the scheme root, and reusing the spine would leave the requirement attached
+to the definition's old descendant instead of the use's substitution. The
+callable root is copied even though its outer receiver keeps that root below
+generalized rank; everything below the callable root follows ordinary rank
+behavior, so its generalized argument and result variables are fresh per use.
+Derived-shape validation is the one exception: it instantiates
 a method's scheme only to narrow the root copy against an expected callable
 shape, it is not a value use, and no definition boundary owns the validation
 site. A validation instantiation therefore keeps a requirement whose receiver
@@ -4752,9 +4756,20 @@ counter, so a boundary that resolves pending dispatch targets by checking a
 sibling module-level group in a nested frame sees that group's schemes one rank
 deeper, and only the explicit capture-group identity keeps those live
 module-level schemes out of the closing boundary's nested-frame retirement.
-The checked-module boundary rejects
-any remaining checker-local requirement and empties the scheme index, so no
-import can observe a root type after its requirement was silently discarded.
+The checked-module boundary rejects any remaining ordinary checker-local
+requirement and empties the checker-local scheme index, so no import can observe
+a root type after such a requirement was silently discarded. A successfully
+validated generated-codec requirement is different: its current concrete shape
+can still change when a downstream use substitutes a nested generalized
+variable. Checking serializes that exact receiver and callable relation in a
+node-sorted binding-scheme side table, referencing the constraint already stored
+in the module's TypeStore and carrying the scheme root that groups all source
+aliases. Import copying copies the binding root, codec receiver, and callable
+through one shared source-to-destination substitution map and recreates the
+explicit TypeScheme requirement. Rechecking a deserialized checked environment
+uses that scheme root to rehydrate the same alias-indexed TypeScheme before
+source checking starts. No import stage infers a codec relation from the solved
+receiver shape or from method-name heuristics.
 
 Boundary literal defaulting protects variables in the callable relation but
 does not protect the receiver solely because it is the callable's first
@@ -11336,6 +11351,23 @@ checked CIR
   -> native dev backend on native compiler hosts
   -> store eval result in ConstStore
 ```
+
+An interactive REPL expression is an explicit `.repl_expr` compile-time root
+whose checked body returns `Str.inspect(expression)`. The evaluation helper
+that generated the zero-argument wrapper resolves its asserted body once and
+puts that exact expression identity in the root request; `CheckedModuleBuilder`
+and `CompileTimeFinalization` consume the identity directly. Checking retains the zero-argument
+REPL-root context so inspecting an
+uncalled constrained polymorphic function does not force its body, but checking
+finalization evaluates the selected body itself and stores its `Str` result in
+the root payload. This payload is not a source-visible top-level constant and is
+not installed in the module's const-template tables. An effectful REPL body is a
+checking error; it is never silently demoted to a runtime root. Runtime backend
+selection and specialization settings therefore do not affect ordinary REPL
+expression evaluation. The finalizer replays `dbg` observations in root request
+order and forwards observations from the `.repl_expr` root to the REPL's
+structured event stream; observations from other compile-time roots are not
+misattributed to the current interactive expression.
 
 On native compiler hosts, every `compile_time_*` root uses the dev backend for
 compile-time evaluation: ordinary constants, selected hoisted constants,
