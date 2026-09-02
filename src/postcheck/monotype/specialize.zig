@@ -482,13 +482,13 @@ pub const SpecBuilder = struct {
         if (left.codec_contract == null) return true;
         const left_contract = left.codec_contract.?;
         const right_contract = right.codec_contract.?;
-        if (!digestEql(left_contract.grounding_callable_ty_digest, right_contract.grounding_callable_ty_digest)) return false;
-        if (left_contract.grounding_callable_ty == right_contract.grounding_callable_ty) return true;
+        if (!digestEql(left_contract.constructor_ty_digest, right_contract.constructor_ty_digest)) return false;
+        if (left_contract.constructor_ty == right_contract.constructor_ty) return true;
         self.countExactTypeCheck();
         return try self.types.typeEql(
             self.names,
-            left_contract.grounding_callable_ty,
-            right_contract.grounding_callable_ty,
+            left_contract.constructor_ty,
+            right_contract.constructor_ty,
         );
     }
 
@@ -501,15 +501,15 @@ pub const SpecBuilder = struct {
         if (current.codec_contract == null) return true;
         const loaded_contract = loaded.record.identity.codec_contract.?;
         const current_contract = current.codec_contract.?;
-        if (!digestEql(loaded_contract.grounding_callable_ty_digest, current_contract.grounding_callable_ty_digest)) return false;
+        if (!digestEql(loaded_contract.constructor_ty_digest, current_contract.constructor_ty_digest)) return false;
         self.countExactTypeCheck();
         return try Type.typeEqlAcrossStores(
             self.allocator,
             self.names,
             self.types.view(),
-            current_contract.grounding_callable_ty,
+            current_contract.constructor_ty,
             loaded.types,
-            loaded_contract.grounding_callable_ty,
+            loaded_contract.constructor_ty,
         );
     }
 
@@ -797,7 +797,6 @@ fn codecContractHeaderEql(
     if (left == null) return true;
     return std.meta.eql(left.?.module, right.?.module) and
         left.?.derivation == right.?.derivation and
-        left.?.call_index == right.?.call_index and
         left.?.kind == right.?.kind;
 }
 
@@ -1078,13 +1077,12 @@ test "monotype spec builder uses exact codec contract equality after digest matc
     first_identity.codec_contract = .{
         .module = moduleDigestWithFirstByte(3),
         .derivation = @enumFromInt(4),
-        .call_index = 5,
         .kind = .encoder,
-        .grounding_callable_ty_digest = forced_grounding_digest,
-        .grounding_callable_ty = first_grounding_ty,
+        .constructor_ty_digest = forced_grounding_digest,
+        .constructor_ty = first_grounding_ty,
     };
     var second_identity = first_identity;
-    second_identity.codec_contract.?.grounding_callable_ty = second_grounding_ty;
+    second_identity.codec_contract.?.constructor_ty = second_grounding_ty;
 
     var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
     defer records.deinit(std.testing.allocator);

@@ -4322,12 +4322,14 @@ pub const CheckedTypeStore = struct {
                 derivation.source_constraint_fn_var,
                 derivation.source_runtime_fn_var,
                 derivation.source_shape_var,
+                derivation.source_body_shape_var,
                 derivation.source_encoding_var,
                 derivation.source_state_var,
                 derivation.source_error_var,
                 derivation.constraint_fn_var,
                 derivation.runtime_fn_var,
                 derivation.shape_var,
+                derivation.body_shape_var,
                 derivation.encoding_var,
                 derivation.state_var,
                 derivation.error_var,
@@ -17430,7 +17432,13 @@ const EvidencePass = struct {
                 const evidence_var: Var = @enumFromInt(source_call.evidence_var);
                 switch (target.kind) {
                     .procedure, .local_proc => {
-                        const node_id = try self.evidenceNodeForTarget(target, call.dispatcher_ty, evidence_var, .derivation);
+                        const node_id = try self.evidenceNodeForTarget(
+                            target,
+                            call.dispatcher_ty,
+                            evidence_var,
+                            call.callable_ty,
+                            .derivation,
+                        );
                         switch (self.evidence_nodes.items[@intFromEnum(node_id)].nested) {
                             .resolved => {},
                             .from_callable => checkedArtifactInvariant(
@@ -18201,7 +18209,13 @@ const EvidencePass = struct {
                 }
                 break :blk .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) };
             },
-            .procedure, .local_proc => .{ .direct_pending = try self.evidenceNodeForTarget(target, dispatcher_ty, constraint_fn_var, .dispatch_edge) },
+            .procedure, .local_proc => .{ .direct_pending = try self.evidenceNodeForTarget(
+                target,
+                dispatcher_ty,
+                constraint_fn_var,
+                null,
+                .dispatch_edge,
+            ) },
         };
     }
 
@@ -18277,7 +18291,9 @@ const EvidencePass = struct {
     /// Build the evidence node for `target`. A checker-recorded dispatch-target
     /// record is the exact evidence selected at the discharge edge; compiler-
     /// generated edges that have no record derive evidence from the target
-    /// schema and concrete callable relation.
+    /// schema and concrete callable relation. Generated codec publication
+    /// supplies the frozen contract callable identity explicitly; its source
+    /// variable remains only the durable key for any recorded nested evidence.
     /// How a method target was selected, which decides whether a checked
     /// instantiation record must exist for it. A `dispatch_edge` target was
     /// chosen by resolving a static-dispatch constraint, and that resolution
@@ -18291,12 +18307,13 @@ const EvidencePass = struct {
         target: static_dispatch.MethodTarget,
         dispatcher_ty: ?CheckedTypeId,
         constraint_fn_var: ?Var,
+        contract_callable_ty: ?CheckedTypeId,
         selection: MethodTargetSelection,
     ) Allocator.Error!static_dispatch.EvidenceNodeId {
         if (target.kind == .structural) {
             checkedArtifactInvariant("structural method registry result reached the callable evidence-node graph", .{});
         }
-        const callable_ty = if (constraint_fn_var) |fn_var|
+        const callable_ty = contract_callable_ty orelse if (constraint_fn_var) |fn_var|
             self.checked_types.rootForSourceVar(self.module, fn_var) orelse
                 checkedArtifactInvariant("checked direct evidence callable type was not published", .{})
         else
@@ -18331,8 +18348,6 @@ const EvidencePass = struct {
             }
             defer _ = self.record_in_progress.remove(idx);
 
-            const instantiated_callable_ty = self.checked_types.rootForSourceVar(self.module, constraint_fn_var.?) orelse
-                checkedArtifactInvariant("dispatch target instantiated callable was missing from checked type output", .{});
             const nested = (try self.evidenceRefsForRecord(idx, true)).?;
             if (procedure_schema == .requires_record) {
                 const target_view = self.procedureEvidenceView(target);
@@ -18344,7 +18359,7 @@ const EvidencePass = struct {
                 .target = target,
                 .dispatcher_ty = dispatcher_ty,
                 .generated_codec_derivation = generated_codec_derivation,
-                .instantiation = .{ .callable = instantiated_callable_ty },
+                .instantiation = .{ .callable = callable_ty.? },
                 .nested = .{ .resolved = nested },
             });
             try self.node_by_record.put(idx, node_id);
@@ -18352,15 +18367,14 @@ const EvidencePass = struct {
         }
 
         if (procedure_schema == .from_callable) {
-            const fn_var = constraint_fn_var orelse
+            if (constraint_fn_var == null) {
                 checkedArtifactInvariant("callable-derived procedure evidence had no checked callable relation", .{});
-            const callable = self.checked_types.rootForSourceVar(self.module, fn_var) orelse
-                checkedArtifactInvariant("callable-derived dispatch target was missing from checked type output", .{});
+            }
             return try self.internEvidenceNode(.{
                 .target = target,
                 .dispatcher_ty = dispatcher_ty,
                 .generated_codec_derivation = generated_codec_derivation,
-                .instantiation = .{ .callable = callable },
+                .instantiation = .{ .callable = callable_ty.? },
                 .nested = .from_callable,
             });
         }
@@ -18372,10 +18386,10 @@ const EvidencePass = struct {
             checkedArtifactInvariant("constrained local-procedure target evidence had no checked instantiation record", .{});
         }
 
-        const instantiation: static_dispatch.EvidenceTargetInstantiation = if (constraint_fn_var) |fn_var| .{
-            .callable = self.checked_types.rootForSourceVar(self.module, fn_var) orelse
-                checkedArtifactInvariant("dispatch target callable was missing from checked type output", .{}),
-        } else .monomorphic;
+        const instantiation: static_dispatch.EvidenceTargetInstantiation = if (callable_ty) |callable|
+            .{ .callable = callable }
+        else
+            .monomorphic;
         return try self.internEvidenceNode(.{
             .target = target,
             .dispatcher_ty = dispatcher_ty,
@@ -29743,7 +29757,11 @@ pub const CheckedModuleArtifact = struct {
     // Version 77 additionally publishes the exact resolution of every
     // generated-codec call, the selected contract on structural dispatch
     // plans, and that contract on stored structural function evidence.
-    const serialized_layout_version: u32 = 77;
+    // Version 78 marks checker-validated generated-codec capabilities whose
+    // generated-body edge is selected only by a concrete specialization.
+    // Version 79 publishes the generated body's structural shape separately
+    // from the codec's public value shape.
+    const serialized_layout_version: u32 = 79;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -30273,6 +30291,7 @@ pub const CheckedModuleArtifact = struct {
                 const derivation = table.generated_codec_derivations[raw_derivation];
                 if (@intFromEnum(derivation.source_constructor_ty) >= self.checked_types.payloadCount() or
                     @intFromEnum(derivation.source_shape_ty) >= self.checked_types.payloadCount() or
+                    @intFromEnum(derivation.source_body_shape_ty) >= self.checked_types.payloadCount() or
                     !std.meta.eql(type_view.rootKey(derivation.source_constructor_ty), type_view.rootKey(plan.callable_ty)) or
                     !std.meta.eql(type_view.rootKey(derivation.source_shape_ty), type_view.rootKey(plan.dispatcher_ty)))
                 {
@@ -30301,12 +30320,14 @@ pub const CheckedModuleArtifact = struct {
                 derivation.source_constructor_ty,
                 derivation.source_runtime_ty,
                 derivation.source_shape_ty,
+                derivation.source_body_shape_ty,
                 derivation.source_encoding_ty,
                 derivation.source_state_ty,
                 derivation.source_error_ty,
                 derivation.constructor_ty,
                 derivation.runtime_ty,
                 derivation.shape_ty,
+                derivation.body_shape_ty,
                 derivation.encoding_ty,
                 derivation.state_ty,
                 derivation.error_ty,
@@ -36116,8 +36137,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xC4, 0x00, 0x5B, 0x31, 0x12, 0x96, 0x34, 0x83, 0x85, 0x48, 0x82, 0xF1, 0x68, 0x8D, 0x68, 0x8F,
-        0x71, 0xD8, 0x60, 0x6E, 0x2F, 0x7B, 0x19, 0x57, 0x3A, 0x9D, 0x6A, 0xC4, 0x1F, 0xD0, 0x48, 0x78,
+        0x2A, 0xA5, 0xE4, 0xE7, 0xB5, 0xAA, 0x6E, 0xB8, 0x27, 0xC5, 0x7A, 0x93, 0x36, 0xB5, 0x76, 0xB0,
+        0xD8, 0xB1, 0x22, 0x13, 0xC3, 0xF4, 0xBB, 0x6D, 0x24, 0x33, 0xF5, 0x77, 0x56, 0xD8, 0x33, 0x15,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

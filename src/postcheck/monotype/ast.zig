@@ -149,14 +149,13 @@ pub const CodecContractKind = enum(u8) {
 };
 
 /// Collision-authoritative specialization context for a procedure whose body
-/// is lowered beneath one exact checker-generated codec call.
+/// is lowered beneath one exact checker-generated codec contract boundary.
 pub const CodecContractIdentity = struct {
     module: names.CheckedModuleDigest,
     derivation: static_dispatch.GeneratedCodecDerivationId,
-    call_index: u32,
     kind: CodecContractKind,
-    grounding_callable_ty_digest: names.TypeDigest,
-    grounding_callable_ty: Type.TypeId,
+    constructor_ty_digest: names.TypeDigest,
+    constructor_ty: Type.TypeId,
 };
 
 /// Function template plus source and monomorphic type identities.
@@ -1330,7 +1329,7 @@ pub const ProgramView = struct {
         for (self.specs) |spec| {
             if (!self.typeRefInBounds(spec.identity.request_fn_ty)) return .spec_type_out_of_bounds;
             if (spec.identity.codec_contract) |contract| {
-                if (!self.typeRefInBounds(contract.grounding_callable_ty)) return .spec_type_out_of_bounds;
+                if (!self.typeRefInBounds(contract.constructor_ty)) return .spec_type_out_of_bounds;
             }
             if (!self.typeRefInBounds(spec.request_fn_ty)) return .spec_type_out_of_bounds;
             if (!self.typeRefInBounds(spec.solved_fn_ty)) return .spec_type_out_of_bounds;

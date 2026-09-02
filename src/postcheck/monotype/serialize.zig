@@ -28,6 +28,9 @@ const TestEvidenceMappingError = std.mem.Allocator.Error || CacheError || error{
 /// Magic bytes at the start of a specialization cache file.
 pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Serialization format version for specialization cache files.
+/// Version 16: generated-codec specialization identities name their complete
+/// derivation boundary and instantiated constructor rather than one grounding
+/// call edge.
 /// Version 15: specialization identities include the exact generated-codec
 /// contract whose prepared calls a procedure body consumes.
 /// Version 14: nested function references and callable identities carry the
@@ -43,7 +46,7 @@ pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// roots or one exact producer-authored graph.
 /// Version 8: specialization and function-template identity includes the
 /// SHA-256 digest of exact compile-time evidence topology.
-pub const FORMAT_VERSION: u32 = 15;
+pub const FORMAT_VERSION: u32 = 16;
 
 const SECTION_COUNT = 43;
 
@@ -632,7 +635,7 @@ pub const MappedProgramView = struct {
         for (self.specs) |spec| {
             if (!self.typeRefInBounds(spec.identity.request_fn_ty)) return false;
             if (spec.identity.codec_contract) |contract| {
-                if (!self.typeRefInBounds(contract.grounding_callable_ty)) return false;
+                if (!self.typeRefInBounds(contract.constructor_ty)) return false;
             }
             if (!self.typeRefInBounds(spec.request_fn_ty)) return false;
             if (!self.typeRefInBounds(spec.solved_fn_ty)) return false;
@@ -1627,9 +1630,8 @@ fn writeSpecRecord(hasher: *std.crypto.hash.sha2.Sha256, spec: Ast.SpecRecord) v
         writeHashBool(hasher, true);
         writeHashBytes32(hasher, contract.module.bytes);
         writeHashU32(hasher, @intFromEnum(contract.derivation));
-        writeHashU32(hasher, contract.call_index);
         writeHashU32(hasher, @intFromEnum(contract.kind));
-        writeHashBytes32(hasher, contract.grounding_callable_ty_digest.bytes);
+        writeHashBytes32(hasher, contract.constructor_ty_digest.bytes);
     } else {
         writeHashBool(hasher, false);
     }
@@ -2900,13 +2902,12 @@ test "monotype specialization cache validity includes stored specialization iden
     fourth_spec.identity.codec_contract = .{
         .module = testModuleDigest(10),
         .derivation = @enumFromInt(11),
-        .call_index = 12,
         .kind = .encoder,
-        .grounding_callable_ty_digest = mono_digest,
-        .grounding_callable_ty = spec_ty,
+        .constructor_ty_digest = mono_digest,
+        .constructor_ty = spec_ty,
     };
     var fifth_spec = fourth_spec;
-    fifth_spec.identity.codec_contract.?.call_index = 13;
+    fifth_spec.identity.codec_contract.?.derivation = @enumFromInt(13);
 
     const no_specs = computeValidityId(.{ .root_module = testModuleId(1) });
     const first = computeValidityId(.{

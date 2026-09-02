@@ -1565,6 +1565,9 @@ pub const GeneratedCodecCallResolution = union(enum(u8)) {
 /// One exact method edge inside a compiler-generated parser or encoder.
 pub const GeneratedCodecCall = struct {
     method: canonical.MethodNameId,
+    /// This checked edge is consumed only by a specialization whose boundary
+    /// selects the corresponding generated-code path.
+    conditional: bool = false,
     /// Dense producer role among distinct subject obligations for `method`.
     /// This is the post-check selection key; subject types remain validation
     /// metadata and are never rediscovered from a Monotype graph.
@@ -1581,12 +1584,17 @@ pub const GeneratedCodecDerivation = struct {
     source_constructor_ty: CheckedTypeId,
     source_runtime_ty: CheckedTypeId,
     source_shape_ty: CheckedTypeId,
+    /// Exact structural shape walked by the generated body. This differs from
+    /// `source_shape_ty` for a declaration-backed nominal codec.
+    source_body_shape_ty: CheckedTypeId,
     source_encoding_ty: CheckedTypeId,
     source_state_ty: CheckedTypeId,
     source_error_ty: CheckedTypeId,
     constructor_ty: CheckedTypeId,
     runtime_ty: CheckedTypeId,
     shape_ty: CheckedTypeId,
+    /// Frozen counterpart of `source_body_shape_ty`.
+    body_shape_ty: CheckedTypeId,
     encoding_ty: CheckedTypeId,
     state_ty: CheckedTypeId,
     error_ty: CheckedTypeId,
@@ -2000,6 +2008,7 @@ pub const StaticDispatchPlanTable = struct {
                 }
                 try generated_codec_calls.append(allocator, .{
                     .method = method,
+                    .conditional = call.conditional != 0,
                     .method_role = method_role.?,
                     .dispatcher_ty = dispatcher_ty,
                     .callable_ty = callable_ty,
@@ -2014,12 +2023,14 @@ pub const StaticDispatchPlanTable = struct {
                 .source_constructor_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.source_constraint_fn_var)),
                 .source_runtime_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.source_runtime_fn_var)),
                 .source_shape_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.source_shape_var)),
+                .source_body_shape_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.source_body_shape_var)),
                 .source_encoding_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.source_encoding_var)),
                 .source_state_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.source_state_var)),
                 .source_error_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.source_error_var)),
                 .constructor_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.constraint_fn_var)),
                 .runtime_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.runtime_fn_var)),
                 .shape_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.shape_var)),
+                .body_shape_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.body_shape_var)),
                 .encoding_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.encoding_var)),
                 .state_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.state_var)),
                 .error_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.error_var)),

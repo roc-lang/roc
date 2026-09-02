@@ -3162,7 +3162,8 @@ encoding and state types for exactly the methods needed by that shape:
 `StaticDispatchPlanTable.generated_codec_derivations` stores each parser/encoder
 derivation as an explicit generated-codec contract. It records every generated
 call's method, concrete dispatcher and callable types, optional subject role,
-and exact resolution to either checked callable evidence or another
+whether the edge is unconditional or a checker-validated conditional
+capability, and exact resolution to either checked callable evidence or another
 generated-codec contract. A
 structural dispatch plan and any stored generated runtime name that contract by
 identity. Boxy and Monotype consume the identity directly; they must not find a
@@ -3171,8 +3172,12 @@ the method name in a registry.
 
 Monotype instantiates a generated-codec contract once at the codec boundary.
 While the specialization graph is mutable, codec preparation relates the
-contract's checked call interfaces, reserves their exact callees, and records
-the method identity and checker-authored role with each prepared call. Repeated
+contract's source and frozen constructor roles to that boundary, instantiates
+both its public value shape and its explicitly checker-published generated-body
+shape so every nested subject ID remains related to its specialized shape cell,
+reserves the exact callees, and records the method identity and checker-authored
+role with each prepared call. A declaration-backed nominal has a distinct body
+shape; anonymous shapes use the public shape for both roles. Repeated
 exact subjects share one such role slot; Phase A deduplicates by that contract
 identity instead of comparing graph shapes. Freezing installs the selected role
 in a content-addressed prepared-call index. A subject-bearing entry uses the
@@ -3188,9 +3193,15 @@ frozen prepared-call plan. They do not repeat method lookup, synthesize another
 specialization request, or interpret the shape to recover a call absent from
 `StaticDispatchPlanTable.generated_codec_derivations`. Debug compiler builds
 audit that every producer-required call was consumed and that repeated roles
-have exactly equal checked type graphs;
-these audits and their consumption bits are absent from release compiler
-builds.
+have exactly equal checked type graphs. Conditional capabilities are omitted
+from the consumption requirement unless the specialization selects their
+generated-code path. A format procedure's specialization identity names the
+complete derivation boundary and instantiated constructor, not the individual
+call edge that first reached it. Equivalent checked call edges therefore share
+one specialization, while the ordinary request type and checked evidence still
+distinguish genuinely different targets. The grounding call index remains only
+activation and debug metadata. These audits and their consumption bits are
+absent from release compiler builds.
 
 If a format does not support a shape, checking reports the missing method as a
 static-dispatch error. Unsupported shapes are not represented as runtime parse
@@ -4546,30 +4557,44 @@ test/cli/JsonNestedNominalContract.roc (both reads at one row, at a row wider
 than the shape demands, and at two different rows).
 
 Input formats contribute only errors that arise from reading their syntax and
-values. They do not implement a missing-required-field callback. Monotype
-specialization repeats the declared shape rule when a parser constraint was
-generalized before its concrete dispatcher was known: it constrains the
-instantiated callable's open error extension to include
-`MissingRequiredField(Str)` before materializing the callable monotype. This is
-required even when an enclosing generic function consumes and maps every parse
-error, because the generated parser runtime still constructs the missing-field
-branch. Lowering then consumes that solved error row and directly constructs
-`MissingRequiredField(field_name)` when generated record-finalization observes
-an absent required field; absence of that tag from the checked monotype is an
-invariant violation, not a condition lowering may recover from.
+values. They do not implement a missing-required-field callback. After source
+types settle, checking finalizes the generated parser contract for every body
+that owns a required-field path. If the format has an `invalid_value` method
+compatible with the exact encoding, state, and parser error types, one
+commit-probe records that fully checked call as a CONDITIONAL contract
+capability. Failure of that optional probe is rolled back completely: a parser
+whose error row retains `MissingRequiredField(Str)` never calls the method, so
+an absent or incompatible declaration is irrelevant. If the precise tag is not
+available at the source boundary, the same method is mandatory and ordinary
+static-dispatch checking reports its absence or incompatible type.
+
+Monotype specialization repeats only the checker-declared error relation when
+a parser constraint was generalized before its concrete dispatcher was known:
+it constrains an open instantiated callable error extension to include
+`MissingRequiredField(Str)`. A specialization boundary that is already closed
+without the tag selects the contract's conditional `invalid_value` slot and
+maps the generated missing-field path through that exact checked callable.
+There is no method lookup, recovery, or unchecked call after the checked
+boundary. An open-row parser directly constructs
+`MissingRequiredField(field_name)`; a closed-row parser emits one direct call
+to the selected `invalid_value` specialization. This remains correct when an
+enclosing generic function consumes and maps every parse error.
 
 Both sides are pinned by tests: accepted—
 test/cli/ParserRequiredFieldError.roc (a non-JSON derived parser reports the
-generic error with the missing field name), and
+generic error with the missing field name and the precise-tag path ignores an
+incompatible, unused `invalid_value` declaration),
 test/cli/JsonParseErrorComposition.roc (JSON scalar parsing has only
 `InvalidJson(Str)`, while a required-record parser composes in
 `MissingRequiredField(Str)`),
 test/cli/JsonParseGenericWrapperErrors.roc (a generalized wrapper may consume
-the parser errors without losing the concrete record's required-field error),
+the parser errors and a closed specialization consumes the checked conditional
+mapping capability),
 and test/cli/ParserCustomNominalField.roc (a custom nominal parser's narrower
 error row injects into its containing record row); rejected—
 test/cli/ParserMissingRequiredFieldError.roc (a required-record parser cannot
-use a closed format error row that omits `MissingRequiredField(Str)`).
+use a closed format error row that omits `MissingRequiredField(Str)` when the
+format supplies no checked `invalid_value` capability).
 
 ### Builtin Str Interpolation Part Compatibility
 
@@ -5890,6 +5915,14 @@ Other solved-graph mutations:
   Required-Field Error Composition (above). A structural probe of derived
   record fields gates ordinary unification of the parser's shared error row
   with `[MissingRequiredField(Str), ..]`.
+- `tryValidateOptionalInvalidValueMethod`—policy: Derived Parser
+  Required-Field Error Composition (above). Once source types settle, one
+  commit-probe instantiates and relates the format's optional `invalid_value`
+  capability at the exact parser boundary. Full success publishes the checked
+  conditional call; absence or mismatch rolls back every type, evidence, and
+  worklist mutation. `JsonParseGenericWrapperErrors.roc` pins the committed
+  side, while `ParserRequiredFieldError.roc` pins rollback by declaring an
+  incompatible unused method and still reporting the precise generated tag.
 - `constrainDerivedParserErrorRowIncludes`—policy: Derived Parser
   Required-Field Error Composition (above). A custom parser method's
   instantiated error extension is closed, then its concrete tags gate ordinary

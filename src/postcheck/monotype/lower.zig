@@ -1798,7 +1798,6 @@ fn optionalCodecContractAnchorEql(
     if (left == null) return true;
     return moduleBytesEqual(left.?.view.key.bytes, right.?.view.key.bytes) and
         left.?.derivation == right.?.derivation and
-        left.?.call_index == right.?.call_index and
         left.?.kind == right.?.kind;
 }
 
@@ -1811,8 +1810,8 @@ fn optionalDraftCodecContractContextEql(
     if (left == null) return true;
     return optionalCodecContractAnchorEql(left.?.anchor, right.?.anchor) and
         graph.sameFunctionInterface(
-            left.?.grounding_callable_node,
-            right.?.grounding_callable_node,
+            left.?.constructor_node,
+            right.?.constructor_node,
         );
 }
 
@@ -2780,15 +2779,13 @@ fn nestedSpecIdentity(
 fn codecContractIdentityDigest(contract: ?Ast.CodecContractIdentity) names.TypeDigest {
     const actual = contract orelse return .{};
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update("roc.monotype.codec_contract.v1");
+    hasher.update("roc.monotype.codec_contract.v3");
     hasher.update(&actual.module.bytes);
     var integer: [4]u8 = undefined;
     std.mem.writeInt(u32, &integer, @intFromEnum(actual.derivation), .little);
     hasher.update(&integer);
-    std.mem.writeInt(u32, &integer, actual.call_index, .little);
-    hasher.update(&integer);
     hasher.update(&.{@intFromEnum(actual.kind)});
-    hasher.update(&actual.grounding_callable_ty_digest.bytes);
+    hasher.update(&actual.constructor_ty_digest.bytes);
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -3229,13 +3226,12 @@ const Builder = struct {
         return .{
             .module = .{ .bytes = actual.anchor.view.key.bytes },
             .derivation = actual.anchor.derivation,
-            .call_index = actual.anchor.call_index,
             .kind = switch (actual.anchor.kind) {
                 .parser => .parser,
                 .encoder => .encoder,
             },
-            .grounding_callable_ty_digest = self.specializationTypeDigest(actual.grounding_callable_ty),
-            .grounding_callable_ty = actual.grounding_callable_ty,
+            .constructor_ty_digest = self.specializationTypeDigest(actual.constructor_ty),
+            .constructor_ty = actual.constructor_ty,
         };
     }
 
@@ -5447,14 +5443,14 @@ const Builder = struct {
         const root_node = try body_ctx.relateCheckedFunctionToMono(template.checked_fn_root, graph_fn_ty);
         const draft_codec_contract: ?DraftCodecContractContext = if (codec_contract) |contract| .{
             .anchor = contract.anchor,
-            .grounding_callable_node = try body_ctx.activeNodeFromType(
-                try body_ctx.importProgramType(contract.grounding_callable_ty),
+            .constructor_node = try body_ctx.activeNodeFromType(
+                try body_ctx.importProgramType(contract.constructor_ty),
             ),
         } else null;
         if (draft_codec_contract) |contract| {
             try body_ctx.instantiateCodecContractAtCall(
                 contract.anchor,
-                contract.grounding_callable_node,
+                contract.constructor_node,
             );
         }
         self.active_template_root = .{
@@ -5553,7 +5549,7 @@ const Builder = struct {
         self.count("template_requests");
         const request_fn_node = try source_ctx.graph.functionRequestRoot(raw_request_fn_node);
         const codec_contract: ?DraftCodecContractContext = if (codec_contract_anchor) |anchor|
-            .{ .anchor = anchor, .grounding_callable_node = request_fn_node }
+            source_ctx.activeCodecContractContextForAnchor(anchor)
         else
             source_ctx.activeCodecContractContext();
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
@@ -5940,7 +5936,7 @@ const Builder = struct {
         if (codec_contract) |contract| {
             try body_ctx.instantiateCodecContractAtCall(
                 contract.anchor,
-                contract.grounding_callable_node,
+                contract.constructor_node,
             );
         }
         try body_ctx.instantiateTemplateDispatchRelations(template, null);
@@ -7607,7 +7603,7 @@ const Builder = struct {
         self.count("nested_requests");
         const request_fn_node = try source_ctx.graph.functionRequestRoot(raw_request_fn_node);
         const codec_contract: ?DraftCodecContractContext = if (codec_contract_anchor) |anchor|
-            .{ .anchor = anchor, .grounding_callable_node = request_fn_node }
+            source_ctx.activeCodecContractContextForAnchor(anchor)
         else
             source_ctx.activeCodecContractContext();
         const family = DraftNestedFamilyAddress.init(nested, source_ctx.method_scope.key, source_fn_key);
@@ -7910,7 +7906,7 @@ const Builder = struct {
         if (codec_contract) |contract| {
             try nested_ctx.instantiateCodecContractAtCall(
                 contract.anchor,
-                contract.grounding_callable_node,
+                contract.constructor_node,
             );
         }
         const root_node = try nested_ctx.instNode(source_fn_ty);
@@ -8112,13 +8108,12 @@ const Builder = struct {
             const right_contract = right.codec_contract.?;
             if (!std.meta.eql(left_contract.module, right_contract.module) or
                 left_contract.derivation != right_contract.derivation or
-                left_contract.call_index != right_contract.call_index or
                 left_contract.kind != right_contract.kind or
-                !std.meta.eql(left_contract.grounding_callable_ty_digest, right_contract.grounding_callable_ty_digest) or
+                !std.meta.eql(left_contract.constructor_ty_digest, right_contract.constructor_ty_digest) or
                 !try self.program.types.typeEql(
                     &self.program.names,
-                    left_contract.grounding_callable_ty,
-                    right_contract.grounding_callable_ty,
+                    left_contract.constructor_ty,
+                    right_contract.constructor_ty,
                 )) return false;
         }
         if (!std.mem.eql(u8, left.request_fn_ty_digest.bytes[0..], right.request_fn_ty_digest.bytes[0..])) return false;
@@ -9001,8 +8996,8 @@ const Builder = struct {
             const coordinator_fn_ty = try committed_types.commitType(draft_fn_ty);
             const codec_contract: ?SealedCodecContractContext = if (spec.codec_contract) |contract| .{
                 .anchor = contract.anchor,
-                .grounding_callable_ty = try committed_types.commitType(
-                    contract.grounding_callable_ty,
+                .constructor_ty = try committed_types.commitType(
+                    contract.constructor_ty,
                 ),
             } else null;
             // Seal-time requests are symbolic: they reserve the callee's id
@@ -9065,8 +9060,8 @@ const Builder = struct {
             spec.sealed_codec_contract = if (spec.codec_contract) |contract|
                 self.codecContractIdentity(.{
                     .anchor = contract.anchor,
-                    .grounding_callable_ty = try committed_types.commitType(
-                        contract.grounding_callable_ty,
+                    .constructor_ty = try committed_types.commitType(
+                        contract.constructor_ty,
                     ),
                 })
             else
@@ -9104,8 +9099,8 @@ const Builder = struct {
                     const codec_contract = if (spec.codec_contract) |contract|
                         self.codecContractIdentity(.{
                             .anchor = contract.anchor,
-                            .grounding_callable_ty = try committed_types.commitType(
-                                contract.grounding_callable_ty,
+                            .constructor_ty = try committed_types.commitType(
+                                contract.constructor_ty,
                             ),
                         })
                     else
@@ -9365,7 +9360,7 @@ const Builder = struct {
                 .evidence = spec.evidence,
                 .codec_contract = if (spec.codec_contract) |contract| .{
                     .anchor = contract.anchor,
-                    .grounding_callable_ty = try sealer.sealNode(contract.grounding_callable_node),
+                    .constructor_ty = try sealer.sealNode(contract.constructor_node),
                 } else null,
                 .requires_local = spec.requires_local,
                 .local_context_dependent = spec.local_context_dependent,
@@ -9392,7 +9387,7 @@ const Builder = struct {
                 ),
                 .codec_contract = if (spec.codec_contract) |contract| .{
                     .anchor = contract.anchor,
-                    .grounding_callable_ty = try sealer.sealNode(contract.grounding_callable_node),
+                    .constructor_ty = try sealer.sealNode(contract.constructor_node),
                 } else null,
                 .lexical_owner = spec.lexical_owner,
                 .requires_local = spec.requires_local,
@@ -12525,29 +12520,24 @@ const CheckedCodecContractAnchor = struct {
 };
 
 /// Graph-local specialization context for a procedure body reached from a
-/// generated codec call. `grounding_callable_node` is always the original
-/// checker-listed format call, even when the body is a transitive helper.
+/// generated codec call. The instantiated constructor carries the complete
+/// producer-authored contract component bindings, including components that
+/// the grounding format call's own type does not mention.
 const DraftCodecContractContext = struct {
     anchor: CheckedCodecContractAnchor,
-    grounding_callable_node: NodeId,
+    constructor_node: NodeId,
 };
 
 /// Durable form of `DraftCodecContractContext` used after the requesting
 /// graph's single sealing boundary and by queued specialization jobs.
 const SealedCodecContractContext = struct {
     anchor: CheckedCodecContractAnchor,
-    grounding_callable_ty: Type.TypeId,
+    constructor_ty: Type.TypeId,
 };
 
-const CodecContractGrounding = union(enum) {
-    boundary: struct {
-        callable_node: NodeId,
-        shape_node: NodeId,
-    },
-    call: struct {
-        call_index: u32,
-        callable_node: NodeId,
-    },
+const CodecContractBoundary = struct {
+    callable_node: NodeId,
+    shape_node: NodeId,
 };
 
 const InstantiatedGeneratedCodecCall = struct {
@@ -12582,6 +12572,7 @@ const ActiveCodecContract = struct {
     calls_len: usize,
     method_call_slots: []CodecMethodCallSlot,
     grounding_call_index: ?u32,
+    constructor_node: NodeId,
 };
 
 /// Graph-native snapshot of an already-instantiated checker contract. Deferred
@@ -12595,6 +12586,7 @@ const RetainedCodecContract = struct {
     calls: []const InstantiatedGeneratedCodecCall,
     method_call_slots: []const CodecMethodCallSlot,
     grounding_call_index: ?u32,
+    constructor_node: NodeId,
 };
 
 const CodecContractExpansion = struct {
@@ -18193,6 +18185,7 @@ const BodyContext = struct {
             .calls_len = calls.len,
             .method_call_slots = try self.graph.arena().dupe(CodecMethodCallSlot, active.method_call_slots),
             .grounding_call_index = active.grounding_call_index,
+            .constructor_node = active.constructor_node,
         };
     }
 
@@ -26411,6 +26404,7 @@ const BodyContext = struct {
         loop_body = skip_join;
 
         const entry_end_body = try self.lowerParseRecordEntryEnd(
+            shape_ty,
             encoding_expr,
             encoding_ty,
             state_ty,
@@ -26465,7 +26459,7 @@ const BodyContext = struct {
             "parse_record_start",
             &.{ encoding_expr, state_expr },
             &.{ encoding_ty, state_ty },
-            null,
+            shape_ty,
             start_try_ty,
         );
         const start_event_local = try self.addLocal(self.builder.symbols.fresh(), start_event_ty);
@@ -26818,6 +26812,7 @@ const BodyContext = struct {
     /// otherwise ask `parse_record_after_field` whether more entries follow.
     fn lowerParseRecordEntryEnd(
         self: *BodyContext,
+        shape_ty: Type.TypeId,
         encoding_expr: DraftExprId,
         encoding_ty: Type.TypeId,
         state_ty: Type.TypeId,
@@ -26848,7 +26843,7 @@ const BodyContext = struct {
             "parse_record_after_field",
             &.{ encoding_expr, try self.localExpr(entry_state_local, state_ty) },
             &.{ encoding_ty, state_ty },
-            null,
+            shape_ty,
             after_try_ty,
         );
         const after_event_local = try self.addLocal(self.builder.symbols.fresh(), after_event_ty);
@@ -27455,7 +27450,7 @@ const BodyContext = struct {
             "parse_tuple_start",
             &.{ encoding_expr, state_expr, len_expr },
             &.{ encoding_ty, state_ty, u64_ty },
-            null,
+            tuple_ty,
             state_try_ty,
         );
         const cursor_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
@@ -27497,7 +27492,7 @@ const BodyContext = struct {
                 "parse_tuple_end",
                 &.{ encoding_expr, try self.localExpr(cursor_local, state_ty), len_expr },
                 &.{ encoding_ty, state_ty, u64_ty },
-                null,
+                tuple_ty,
                 state_try_ty,
             );
             const end_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
@@ -27561,7 +27556,7 @@ const BodyContext = struct {
             "parse_tuple_next",
             &.{ encoding_expr, try self.localExpr(cursor_local, state_ty), index_expr, len_expr },
             &.{ encoding_ty, state_ty, u64_ty, u64_ty },
-            null,
+            tuple_ty,
             state_try_ty,
         );
         const separated_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
@@ -27681,7 +27676,7 @@ const BodyContext = struct {
             "parse_list_start",
             &.{ encoding_expr, state_expr },
             &.{ encoding_ty, state_ty },
-            null,
+            list_ty,
             start_try_ty,
         );
         const start_event_local = try self.addLocal(self.builder.symbols.fresh(), start_event_ty);
@@ -27844,7 +27839,7 @@ const BodyContext = struct {
             "parse_dict_start",
             &.{ encoding_expr, state_expr },
             &.{ encoding_ty, state_ty },
-            null,
+            dict_ty,
             start_try_ty,
         );
         const start_event_local = try self.addLocal(self.builder.symbols.fresh(), start_event_ty);
@@ -27968,7 +27963,7 @@ const BodyContext = struct {
             "parse_dict_next",
             &.{ encoding_expr, try self.localExpr(cursor_local, state_ty) },
             &.{ encoding_ty, state_ty },
-            null,
+            dict_ty,
             event_try_ty,
         );
         const event_local = try self.addLocal(self.builder.symbols.fresh(), event_ty);
@@ -28133,7 +28128,7 @@ const BodyContext = struct {
             "parse_dict_after_key",
             &.{ encoding_expr, try self.localExpr(after_key_local, state_ty) },
             &.{ encoding_ty, state_ty },
-            null,
+            dict_ty,
             separator_try_ty,
         );
         const value_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
@@ -28169,7 +28164,7 @@ const BodyContext = struct {
                     "parse_dict_after_entry",
                     &.{ encoding_expr, try self.localExpr(rest_local, state_ty) },
                     &.{ encoding_ty, state_ty },
-                    null,
+                    dict_ty,
                     after_try_ty,
                 );
                 const after_event_local = try self.addLocal(self.builder.symbols.fresh(), after_event_ty);
@@ -28262,7 +28257,7 @@ const BodyContext = struct {
             "parse_key_start",
             &.{ encoding_expr, state_expr },
             &.{ encoding_ty, state_ty },
-            null,
+            key_ty,
             start_try_ty,
         );
         const opened_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
@@ -28299,7 +28294,7 @@ const BodyContext = struct {
             "parse_key_str",
             &.{ encoding_expr, state_expr },
             &.{ encoding_ty, state_ty },
-            key_ty,
+            str_ty,
             key_parse_ret_ty,
         );
         const key_local = try self.addLocal(self.builder.symbols.fresh(), str_ty);
@@ -28351,7 +28346,7 @@ const BodyContext = struct {
             "parse_list_next",
             &.{ encoding_expr, try self.localExpr(cursor_local, state_ty) },
             &.{ encoding_ty, state_ty },
-            null,
+            list_ty,
             next_try_ty,
         );
         const event_local = try self.addLocal(self.builder.symbols.fresh(), next_event_ty);
@@ -28550,7 +28545,7 @@ const BodyContext = struct {
             "parse_list_after_item",
             &.{ encoding_expr, try self.localExpr(rest_local, state_ty) },
             &.{ encoding_ty, state_ty },
-            null,
+            list_ty,
             after_try_ty,
         );
         const after_event_local = try self.addLocal(self.builder.symbols.fresh(), after_event_ty);
@@ -32538,8 +32533,8 @@ const BodyContext = struct {
         const coordinator_request_fn_ty = try self.commitGraphType(request_fn_ty);
         const codec_contract: ?SealedCodecContractContext = if (spec.codec_contract) |contract| .{
             .anchor = contract.anchor,
-            .grounding_callable_ty = try self.commitGraphType(
-                try self.activeTypeFromNode(contract.grounding_callable_node),
+            .constructor_ty = try self.commitGraphType(
+                try self.activeTypeFromNode(contract.constructor_node),
             ),
         } else null;
         // Iterator-inline completion consumes the callee's solved private
@@ -41836,11 +41831,11 @@ const BodyContext = struct {
         self: *BodyContext,
         method_name: []const u8,
         kind: EncodeContainerKind,
-        _: Type.TypeId,
+        shape_ty: Type.TypeId,
         state_ty: Type.TypeId,
         result_ty: Type.TypeId,
     ) Allocator.Error!EncodeContainerMethod {
-        const prepared = try self.frozenFormatCodecCall(.encoder, method_name);
+        const prepared = try self.frozenFormatCodecCallForShape(.encoder, method_name, shape_ty);
         const callable_ty = prepared.callable_ty;
         const method_fn = self.functionShape(callable_ty, "container encoder method was not a function");
         const method_args = self.typeStore().span(method_fn.args);
@@ -42112,14 +42107,14 @@ const BodyContext = struct {
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
         const u64_ty = try self.primitiveType(.u64);
-        const method = try self.resolveEncodeContainerMethod("encode_tuple", .tuple, encoding_ty, state_ty, ret_ty);
+        const tuple_ty = try self.exprType(value_expr);
+        const method = try self.resolveEncodeContainerMethod("encode_tuple", .tuple, tuple_ty, state_ty, ret_ty);
         const body_state_local = try self.addLocal(self.builder.symbols.fresh(), method.container_state_ty);
         const element_writer_local = try self.addLocal(self.builder.symbols.fresh(), method.writer_ty);
         const body = blk: {
-            const value_ty = try self.exprType(value_expr);
             const demand_scope = try self.enterCallableBodyDemandScope(
                 &.{ method.container_state_ty, method.writer_ty },
-                &.{ value_ty, encoding_ty },
+                &.{ tuple_ty, encoding_ty },
             );
             defer demand_scope.leave();
             break :blk try self.lowerEncodeTupleItemsFromState(
@@ -42212,7 +42207,8 @@ const BodyContext = struct {
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
         const u64_ty = try self.primitiveType(.u64);
-        const method = try self.resolveEncodeContainerMethod("encode_list", .list, encoding_ty, state_ty, ret_ty);
+        const list_ty = try self.exprType(value_expr);
+        const method = try self.resolveEncodeContainerMethod("encode_list", .list, list_ty, state_ty, ret_ty);
         const body_state_local = try self.addLocal(self.builder.symbols.fresh(), method.container_state_ty);
         const element_writer_local = try self.addLocal(self.builder.symbols.fresh(), method.writer_ty);
         const len_local = try self.addLocal(self.builder.symbols.fresh(), u64_ty);
@@ -42220,10 +42216,9 @@ const BodyContext = struct {
         const loop_state_local = try self.addLocal(self.builder.symbols.fresh(), method.container_state_ty);
         const len_value = try self.lowLevelExpr(.list_len, &.{value_expr}, u64_ty);
         const loop_expr = blk: {
-            const value_ty = try self.exprType(value_expr);
             const demand_scope = try self.enterCallableBodyDemandScope(
                 &.{ method.container_state_ty, method.writer_ty },
-                &.{ value_ty, encoding_ty, u64_ty },
+                &.{ list_ty, encoding_ty, u64_ty },
             );
             defer demand_scope.leave();
             const loop_body = try self.lowerEncodeListLoopBody(
@@ -42302,7 +42297,7 @@ const BodyContext = struct {
         const entries_expr = try self.lowerDictToList(dict_ty, entries_ty, value_expr);
         const entries_local = try self.addLocal(self.builder.symbols.fresh(), entries_ty);
         const u64_ty = try self.primitiveType(.u64);
-        const method = try self.resolveEncodeContainerMethod("encode_dict", .dict, encoding_ty, state_ty, ret_ty);
+        const method = try self.resolveEncodeContainerMethod("encode_dict", .dict, dict_ty, state_ty, ret_ty);
         const body_state_local = try self.addLocal(self.builder.symbols.fresh(), method.container_state_ty);
         const field_writer_local = try self.addLocal(self.builder.symbols.fresh(), method.writer_ty);
         const len_local = try self.addLocal(self.builder.symbols.fresh(), u64_ty);
@@ -42526,7 +42521,7 @@ const BodyContext = struct {
                 "encode_key_str",
                 &.{ encoding_expr, key_string, state_expr },
                 &.{ encoding_ty, str_ty, state_ty },
-                key_ty,
+                str_ty,
                 ret_ty,
             );
         }
@@ -42768,7 +42763,7 @@ const BodyContext = struct {
         };
 
         const u64_ty = try self.primitiveType(.u64);
-        const method = try self.resolveEncodeContainerMethod("encode_record", .record, encoding_ty, state_ty, ret_ty);
+        const method = try self.resolveEncodeContainerMethod("encode_record", .record, shape_ty, state_ty, ret_ty);
         const body_state_local = try self.addLocal(self.builder.symbols.fresh(), method.container_state_ty);
         const field_writer_local = try self.addLocal(self.builder.symbols.fresh(), method.writer_ty);
         const fields_body = blk: {
@@ -43175,6 +43170,7 @@ const BodyContext = struct {
             branches[tag_index] = .{
                 .pat = pat,
                 .body = try self.lowerEncodeTagUnionBranchToState(
+                    value_ty,
                     tag,
                     payload_exprs,
                     payload_tys,
@@ -43196,6 +43192,7 @@ const BodyContext = struct {
 
     fn lowerEncodeTagUnionBranchToState(
         self: *BodyContext,
+        tag_union_ty: Type.TypeId,
         tag: Type.Tag,
         payload_exprs: []const DraftExprId,
         payload_tys: []const Type.TypeId,
@@ -43210,7 +43207,7 @@ const BodyContext = struct {
 
         const tag_name_expr = try self.stringExpr(self.nameStore().tagLabelText(tag.name), try self.primitiveType(.str));
         const u64_ty = try self.primitiveType(.u64);
-        const method = try self.resolveEncodeContainerMethod("encode_tag", .tag, encoding_ty, state_ty, ret_ty);
+        const method = try self.resolveEncodeContainerMethod("encode_tag", .tag, tag_union_ty, state_ty, ret_ty);
         const body_state_local = try self.addLocal(self.builder.symbols.fresh(), method.container_state_ty);
         const element_writer_local = try self.addLocal(self.builder.symbols.fresh(), method.writer_ty);
         const body = blk: {
@@ -44151,14 +44148,26 @@ const BodyContext = struct {
         if (kind == .parser) {
             var required_error_seen = collections.DenseMap(NodeId, void).init(self.allocator);
             defer required_error_seen.deinit();
-            if (try self.graphParserShapeNeedsRequiredFieldError(shape_node, &required_error_seen)) {
-                added_relation = try self.ensureGraphParserMissingRequiredFieldError(boundary_callable_node);
-            }
+            const needs_missing_required_field = try self.graphParserShapeNeedsRequiredFieldError(shape_node, &required_error_seen);
+            const missing_required_field_ready = if (needs_missing_required_field) blk: {
+                const added_missing = try self.ensureGraphParserMissingRequiredFieldError(boundary_callable_node);
+                added_relation = added_missing;
+                const has_missing = try self.graphRowHasTag(
+                    (try self.graphParserResultNodes((try self.graph.functionNodes((try self.graph.functionNodes(boundary_callable_node)).ret)).ret)).err,
+                    "MissingRequiredField",
+                );
+                break :blk added_missing or has_missing;
+            } else true;
             const runtime = try self.graph.functionNodes((try self.graph.functionNodes(boundary_callable_node)).ret);
             const outer_result = try self.graphParserResultNodes(runtime.ret);
             var invalid_value_seen = collections.DenseMap(NodeId, void).init(self.allocator);
             defer invalid_value_seen.deinit();
-            if (try self.graphParserShapeNeedsInvalidValue(shape_node, outer_result.err, &invalid_value_seen)) {
+            if (try self.graphParserShapeNeedsInvalidValue(
+                shape_node,
+                outer_result.err,
+                missing_required_field_ready,
+                &invalid_value_seen,
+            )) {
                 added_relation = try self.prepareParserInvalidValueCodecCall(
                     boundary_expr,
                     shape_node,
@@ -44206,16 +44215,16 @@ const BodyContext = struct {
                     if (!missing_required_field_ready) {
                         const added_missing = try self.ensureGraphParserMissingRequiredFieldError(boundary_callable_node);
                         added_relation = added_missing or added_relation;
-                        missing_required_field_ready = added_missing or try self.graphRowHasTag(err_node, "MissingRequiredField");
-                        if (!missing_required_field_ready) {
-                            // Checker-closed row without the report: emission
-                            // crash-maps this decode, so no format-method
-                            // relations may widen it.
-                            return false;
-                        }
+                        const has_missing = try self.graphRowHasTag(err_node, "MissingRequiredField");
+                        missing_required_field_ready = added_missing or has_missing;
                     }
                 }
-                if (try self.graphParserShapeNeedsInvalidValue(payload, err_node, &invalid_value_seen)) {
+                if (try self.graphParserShapeNeedsInvalidValue(
+                    payload,
+                    err_node,
+                    missing_required_field_ready,
+                    &invalid_value_seen,
+                )) {
                     added_relation = try self.prepareParserInvalidValueCodecCall(
                         boundary_expr,
                         payload,
@@ -44344,27 +44353,192 @@ const BodyContext = struct {
             checked_structural.view,
             derivation_id,
             kind,
-            .{ .boundary = .{
-                .callable_node = callable_node,
-                .shape_node = shape_node,
-            } },
+            .{ .callable_node = callable_node, .shape_node = shape_node },
         );
     }
 
     fn instantiateCodecContractAtCall(
         self: *BodyContext,
         anchor: CheckedCodecContractAnchor,
-        callable_node: NodeId,
+        constructor_node: NodeId,
     ) Allocator.Error!void {
-        self.active_codec_contract = try self.instantiateCheckedCodecContract(
+        if (@intFromEnum(anchor.derivation) >= anchor.view.static_dispatch_plans.generated_codec_derivations.len) {
+            Common.invariant("checked codec call anchor referenced a missing derivation");
+        }
+        const derivation = anchor.view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(anchor.derivation)];
+        if (anchor.call_index >= derivation.calls.len) {
+            Common.invariant("checked codec call anchor referenced a missing generated call");
+        }
+        const shape_node = try self.codecShapeNodeFromConstructor(anchor.kind, constructor_node);
+        var active = try self.instantiateCheckedCodecContract(
             anchor.view,
             anchor.derivation,
             anchor.kind,
-            .{ .call = .{
-                .call_index = anchor.call_index,
-                .callable_node = callable_node,
-            } },
+            .{ .callable_node = constructor_node, .shape_node = shape_node },
         );
+        active.grounding_call_index = anchor.call_index;
+        self.active_codec_contract = active;
+    }
+
+    fn codecShapeNodeFromConstructor(
+        self: *BodyContext,
+        kind: CodecKind,
+        constructor_node: NodeId,
+    ) Allocator.Error!NodeId {
+        const constructor = try self.graph.functionNodes(constructor_node);
+        if (constructor.args.len != 1) {
+            Common.invariant("generated codec boundary constructor did not have one encoding argument");
+        }
+        const runtime = try self.graph.functionNodes(constructor.ret);
+        return switch (kind) {
+            .parser => blk: {
+                if (runtime.args.len != 1) {
+                    Common.invariant("generated parser boundary runtime did not have one state argument");
+                }
+                break :blk (try self.graphParserResultNodes(runtime.ret)).value;
+            },
+            .encoder => blk: {
+                if (runtime.args.len != 2) {
+                    Common.invariant("generated encoder boundary runtime did not have value and state arguments");
+                }
+                break :blk runtime.args[0];
+            },
+        };
+    }
+
+    /// Select the checker-authored subject role for a container reached while
+    /// walking one active generated body. Only the active declaration-backed
+    /// boundary is validated against its structural body shape; nested named
+    /// containers are validated against their own public shape.
+    fn codecContractSubjectNode(
+        self: *BodyContext,
+        shape_node: NodeId,
+        structural_node: NodeId,
+    ) Allocator.Error!NodeId {
+        const active = self.active_codec_contract orelse
+            Common.invariant("generated codec subject selection had no active contract");
+        const derivation = active.view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(active.derivation)];
+        if (derivation.body_shape_ty == derivation.shape_ty) return shape_node;
+        const boundary_shape_node = try self.codecShapeNodeFromConstructor(active.kind, active.constructor_node);
+        return if (self.graph.sameClass(boundary_shape_node, shape_node)) structural_node else shape_node;
+    }
+
+    fn bindCheckedCodecContractType(
+        self: *BodyContext,
+        contract_ctx: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        node: NodeId,
+    ) Allocator.Error!void {
+        const scoped_ty = contract_ctx.scopedCheckedType(checked_ty);
+        if (contract_ctx.scopedNode(scoped_ty)) |existing| {
+            try relateRequestComponent(self.graph, existing, node);
+        } else {
+            try contract_ctx.putScopedNode(scoped_ty, node);
+        }
+    }
+
+    /// Instantiate a checked contract component before relating it to the
+    /// specialization boundary. Unlike a root substitution, this preserves
+    /// the checked IDs of nested row fragments and container children, which
+    /// are the exact subject identities carried by generated-call slots.
+    fn relateCheckedCodecContractType(
+        self: *BodyContext,
+        contract_ctx: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        node: NodeId,
+    ) Allocator.Error!void {
+        const scoped_ty = contract_ctx.scopedCheckedType(checked_ty);
+        const checked_node = try contract_ctx.instNode(checked_ty);
+        try relateCheckedNodeToMono(self.graph, checked_node, node);
+        // The recursive relation above preserves every nested checked ID.
+        // Rebind this component root to the specialization's authoritative
+        // node so a generated call that names the same checked role receives
+        // that exact node instead of the checked representation wrapper.
+        try contract_ctx.putScopedNode(scoped_ty, node);
+    }
+
+    fn bindCodecContractBoundary(
+        self: *BodyContext,
+        contract_ctx: *BodyContext,
+        derivation: static_dispatch.GeneratedCodecDerivation,
+        kind: CodecKind,
+        callable_node: NodeId,
+        shape_node: NodeId,
+    ) Allocator.Error!void {
+        const constructor = try self.graph.functionNodes(callable_node);
+        if (constructor.args.len != 1) {
+            Common.invariant("generated codec boundary constructor did not have one encoding argument");
+        }
+        const runtime = try self.graph.functionNodes(constructor.ret);
+        const source_has_distinct_body_shape = derivation.source_body_shape_ty != derivation.source_shape_ty;
+        const frozen_has_distinct_body_shape = derivation.body_shape_ty != derivation.shape_ty;
+        if (source_has_distinct_body_shape != frozen_has_distinct_body_shape) {
+            Common.invariant("generated codec source and frozen body-shape roles disagreed");
+        }
+        const body_shape_node = if (source_has_distinct_body_shape) blk: {
+            const named = switch (self.graph.content(shape_node)) {
+                .named => |named| named,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated codec declared a distinct body shape for a non-nominal boundary"),
+            };
+            break :blk (named.backing orelse
+                Common.invariant("generated codec nominal boundary had no body-shape backing")).node;
+        } else shape_node;
+        const state_node, const error_node = switch (kind) {
+            .parser => blk: {
+                if (runtime.args.len != 1) {
+                    Common.invariant("generated parser boundary runtime did not have one state argument");
+                }
+                const result = try self.graphParserResultNodes(runtime.ret);
+                try relateRequestComponent(self.graph, result.value, shape_node);
+                try relateRequestComponent(self.graph, result.rest, runtime.args[0]);
+                break :blk .{ runtime.args[0], result.err };
+            },
+            .encoder => blk: {
+                if (runtime.args.len != 2) {
+                    Common.invariant("generated encoder boundary runtime did not have value and state arguments");
+                }
+                try relateRequestComponent(self.graph, runtime.args[0], shape_node);
+                const result = try self.graphTryPayloads(runtime.ret);
+                try relateRequestComponent(self.graph, result.ok, runtime.args[1]);
+                break :blk .{ runtime.args[1], result.err };
+            },
+        };
+
+        // The source and frozen producer roles together are the codec
+        // contract's complete substitution interface. Most calls were
+        // validated against the frozen snapshot; a conditional parser
+        // `invalid_value` edge is validated later against the settled source
+        // boundary. Binding both sets here gives every checker-authored edge
+        // the same authoritative boundary nodes without rediscovering or
+        // widening a type in Monotype.
+        try self.bindCheckedCodecContractType(contract_ctx, derivation.source_constructor_ty, callable_node);
+        try self.bindCheckedCodecContractType(contract_ctx, derivation.source_runtime_ty, constructor.ret);
+        try self.relateCheckedCodecContractType(contract_ctx, derivation.source_shape_ty, shape_node);
+        try self.relateCheckedCodecContractType(contract_ctx, derivation.source_body_shape_ty, body_shape_node);
+        try self.bindCheckedCodecContractType(contract_ctx, derivation.source_encoding_ty, constructor.args[0]);
+        try self.bindCheckedCodecContractType(contract_ctx, derivation.source_state_ty, state_node);
+        try self.bindCheckedCodecContractType(contract_ctx, derivation.source_error_ty, error_node);
+        if (derivation.constructor_ty != derivation.source_constructor_ty) {
+            try self.bindCheckedCodecContractType(contract_ctx, derivation.constructor_ty, callable_node);
+        }
+        if (derivation.runtime_ty != derivation.source_runtime_ty) {
+            try self.bindCheckedCodecContractType(contract_ctx, derivation.runtime_ty, constructor.ret);
+        }
+        if (derivation.shape_ty != derivation.source_shape_ty) {
+            try self.relateCheckedCodecContractType(contract_ctx, derivation.shape_ty, shape_node);
+        }
+        if (derivation.body_shape_ty != derivation.source_body_shape_ty) {
+            try self.relateCheckedCodecContractType(contract_ctx, derivation.body_shape_ty, body_shape_node);
+        }
+        if (derivation.encoding_ty != derivation.source_encoding_ty) {
+            try self.bindCheckedCodecContractType(contract_ctx, derivation.encoding_ty, constructor.args[0]);
+        }
+        if (derivation.state_ty != derivation.source_state_ty) {
+            try self.bindCheckedCodecContractType(contract_ctx, derivation.state_ty, state_node);
+        }
+        if (derivation.error_ty != derivation.source_error_ty) {
+            try self.bindCheckedCodecContractType(contract_ctx, derivation.error_ty, error_node);
+        }
     }
 
     fn instantiateCheckedCodecContract(
@@ -44372,7 +44546,7 @@ const BodyContext = struct {
         checked_view: ModuleView,
         derivation_id: static_dispatch.GeneratedCodecDerivationId,
         kind: CodecKind,
-        grounding: CodecContractGrounding,
+        boundary: CodecContractBoundary,
     ) Allocator.Error!ActiveCodecContract {
         if (@intFromEnum(derivation_id) >= checked_view.static_dispatch_plans.generated_codec_derivations.len) {
             Common.invariant("checked codec anchor referenced a missing generated derivation");
@@ -44397,38 +44571,18 @@ const BodyContext = struct {
         );
         defer contract_ctx.deinit();
         contract_ctx.evidence = self.evidence;
-        switch (grounding) {
-            .boundary => |boundary| {
-                try relateFunctionRequestInterface(
-                    self.graph,
-                    try contract_ctx.instNode(derivation.constructor_ty),
-                    boundary.callable_node,
-                );
-                try relateRequestComponent(
-                    self.graph,
-                    try contract_ctx.instNode(derivation.shape_ty),
-                    boundary.shape_node,
-                );
-            },
-            .call => {},
-        }
+        try self.bindCodecContractBoundary(
+            &contract_ctx,
+            derivation,
+            kind,
+            boundary.callable_node,
+            boundary.shape_node,
+        );
 
         const calls_start = self.instantiated_codec_calls.items.len;
         errdefer self.instantiated_codec_calls.shrinkRetainingCapacity(calls_start);
-        var grounded_call = grounding == .boundary;
         for (derivation.callsSlice(checked_view.static_dispatch_plans), 0..) |call, call_index| {
             const instantiated_callable = try contract_ctx.instNode(call.callable_ty);
-            switch (grounding) {
-                .boundary => {},
-                .call => |call_grounding| if (call_grounding.call_index == call_index) {
-                    try relateFunctionRequestInterface(
-                        self.graph,
-                        instantiated_callable,
-                        call_grounding.callable_node,
-                    );
-                    grounded_call = true;
-                },
-            }
             try self.instantiated_codec_calls.append(self.allocator, .{
                 .view = checked_view,
                 .call_index = @intCast(call_index),
@@ -44444,9 +44598,6 @@ const BodyContext = struct {
                 },
             });
         }
-        if (!grounded_call) {
-            Common.invariant("checked codec anchor referenced a missing generated call");
-        }
         const instantiated_calls = self.instantiated_codec_calls.items[calls_start..];
         return .{
             .view = checked_view,
@@ -44456,10 +44607,8 @@ const BodyContext = struct {
             .calls_start = calls_start,
             .calls_len = self.instantiated_codec_calls.items.len - calls_start,
             .method_call_slots = try self.codecMethodCallSlots(instantiated_calls),
-            .grounding_call_index = switch (grounding) {
-                .boundary => null,
-                .call => |call| call.call_index,
-            },
+            .grounding_call_index = null,
+            .constructor_node = boundary.callable_node,
         };
     }
 
@@ -44531,10 +44680,26 @@ const BodyContext = struct {
                     .call_index = grounding_index,
                     .kind = active.kind,
                 },
-                .grounding_callable_node = call.callable_node,
+                .constructor_node = active.constructor_node,
             };
         }
         Common.invariant("active generated codec contract lost its grounding call");
+    }
+
+    fn activeCodecContractContextForAnchor(
+        self: *BodyContext,
+        anchor: CheckedCodecContractAnchor,
+    ) DraftCodecContractContext {
+        const active = self.active_codec_contract orelse
+            Common.invariant("generated codec call specialization had no active contract");
+        if (!moduleBytesEqual(active.view.key.bytes, anchor.view.key.bytes) or
+            active.derivation != anchor.derivation or
+            active.kind != anchor.kind or
+            anchor.call_index >= active.calls_len)
+        {
+            Common.invariant("generated codec call anchor disagreed with its active contract");
+        }
+        return .{ .anchor = anchor, .constructor_node = active.constructor_node };
     }
 
     fn retainActiveCodecContract(self: *BodyContext) Allocator.Error!RetainedCodecContract {
@@ -44551,6 +44716,7 @@ const BodyContext = struct {
             .calls = calls,
             .method_call_slots = method_call_slots,
             .grounding_call_index = active.grounding_call_index,
+            .constructor_node = active.constructor_node,
         };
     }
 
@@ -44571,6 +44737,7 @@ const BodyContext = struct {
             .calls_len = retained.calls.len,
             .method_call_slots = try self.graph.arena().dupe(CodecMethodCallSlot, retained.method_call_slots),
             .grounding_call_index = retained.grounding_call_index,
+            .constructor_node = retained.constructor_node,
         };
     }
 
@@ -44616,11 +44783,25 @@ const BodyContext = struct {
 
     fn sameCodecSubject(self: *BodyContext, checked_subject: NodeId, requested_subject: NodeId) bool {
         if (self.graph.sameClass(checked_subject, requested_subject)) return true;
-        const checked_named = switch (self.graph.content(checked_subject)) {
+        // A declaration-backed nominal opens its backing in a declaration
+        // scope, independently from the checked codec contract's snapshot.
+        // Closed primitives and named applications still have exact constant-
+        // time identities even when those two producer paths allocate distinct
+        // graph nodes; no wider structural comparison is permitted here.
+        const checked_content = self.graph.content(checked_subject);
+        const requested_content = self.graph.content(requested_subject);
+        switch (checked_content) {
+            .primitive => |checked_primitive| return switch (requested_content) {
+                .primitive => |requested_primitive| checked_primitive == requested_primitive,
+                .redirect, .unresolved, .named, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
+            },
+            .redirect, .unresolved, .named, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+        }
+        const checked_named = switch (checked_content) {
             .named => |named| named,
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
         };
-        const requested_named = switch (self.graph.content(requested_subject)) {
+        const requested_named = switch (requested_content) {
             .named => |named| named,
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
         };
@@ -44642,7 +44823,7 @@ const BodyContext = struct {
             Common.invariant("generated codec consumption audit received an invalid call span");
         }
         for (self.instantiated_codec_calls.items[active.calls_start..][0..active.calls_len]) |call| {
-            if (!call.debug_consumed) {
+            if (!call.debug_consumed and !call.checked.conditional) {
                 std.debug.panic(
                     "postcheck invariant violated: Monotype did not consume checker-required generated codec call {s} role {} (subject: {s})",
                     .{
@@ -44966,6 +45147,7 @@ const BodyContext = struct {
         self: *BodyContext,
         boundary_expr: DraftExprId,
         shape_node: NodeId,
+        contract_subject_node: NodeId,
         boundary_callable_node: NodeId,
         method_name: []const u8,
     ) Allocator.Error!bool {
@@ -44974,7 +45156,7 @@ const BodyContext = struct {
         const runtime = try self.graph.functionNodes(boundary.ret);
         if (runtime.args.len != 2) Common.invariant("structural encoder runtime did not have value and state arguments");
         const state_node = runtime.args[1];
-        const exact = try self.requiredGeneratedCodecTarget(method_name, null);
+        const exact = try self.requiredGeneratedCodecTarget(method_name, contract_subject_node);
         const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, .encoder, exact)) return false;
 
@@ -45283,7 +45465,11 @@ const BodyContext = struct {
     fn prepareParseRecordFieldCodecCall(
         self: *BodyContext,
         boundary_expr: DraftExprId,
+        // Emission indexes the prepared call by the public value shape, while
+        // the checker-authored method edge names the exact structural backing
+        // whose generated record body calls `parse_record_field`.
         shape_node: NodeId,
+        contract_subject_node: NodeId,
         boundary_callable_node: NodeId,
     ) Allocator.Error!bool {
         const boundary = try self.graph.functionNodes(boundary_callable_node);
@@ -45293,7 +45479,7 @@ const BodyContext = struct {
         const encoding_node = boundary.args[0];
         const state_node = runtime.args[0];
         const outer_result = try self.graphParserResultNodes(runtime.ret);
-        const exact = try self.requiredGeneratedCodecTarget("parse_record_field", shape_node);
+        const exact = try self.requiredGeneratedCodecTarget("parse_record_field", contract_subject_node);
         const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
@@ -45419,7 +45605,10 @@ const BodyContext = struct {
     fn prepareParseTagUnionCodecCall(
         self: *BodyContext,
         boundary_expr: DraftExprId,
+        // Emission uses the public value shape; the contract subject is the
+        // checker-authored role selected for this generated body.
         shape_node: NodeId,
+        contract_subject_node: NodeId,
         boundary_callable_node: NodeId,
     ) Allocator.Error!bool {
         const boundary = try self.graph.functionNodes(boundary_callable_node);
@@ -45430,7 +45619,7 @@ const BodyContext = struct {
         const state_node = runtime.args[0];
         const outer_result = try self.graphParserResultNodes(runtime.ret);
 
-        const exact = try self.requiredGeneratedCodecTarget("parse_tag_union", shape_node);
+        const exact = try self.requiredGeneratedCodecTarget("parse_tag_union", contract_subject_node);
         const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
@@ -45647,6 +45836,7 @@ const BodyContext = struct {
         self: *BodyContext,
         boundary_expr: DraftExprId,
         shape_node: NodeId,
+        contract_subject_node: ?NodeId,
         boundary_callable_node: NodeId,
         method_name: []const u8,
         result_is_state: bool,
@@ -45658,7 +45848,7 @@ const BodyContext = struct {
         const encoding_node = boundary.args[0];
         const state_node = runtime.args[0];
         const outer_result = try self.graphParserResultNodes(runtime.ret);
-        const exact = try self.requiredGeneratedCodecTarget(method_name, null);
+        const exact = try self.requiredGeneratedCodecTarget(method_name, contract_subject_node);
         const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
@@ -45783,16 +45973,17 @@ const BodyContext = struct {
         switch (kind) {
             .parser => {
                 if (self.graphJsonParseObjectKeyMethodName(key_node)) |method_name| {
-                    return try self.prepareParseObjectKeyCodecCall(boundary_expr, key_node, key_node, boundary_callable_node, method_name);
+                    return try self.prepareParseObjectKeyCodecCall(boundary_expr, key_node, boundary_callable_node, method_name);
                 }
                 if (self.graphNodeIsStringRenderedDictKey(key_node)) {
                     const str_node = try self.graph.newNode(.{ .primitive = .str });
-                    var added = try self.prepareParseObjectKeyCodecCall(boundary_expr, key_node, str_node, boundary_callable_node, "parse_key_str");
+                    var added = try self.prepareParseObjectKeyCodecCall(boundary_expr, str_node, boundary_callable_node, "parse_key_str");
                     added = try self.prepareParserInvalidValueCodecCall(boundary_expr, key_node, boundary_callable_node) or added;
                     return added;
                 }
                 var added = try self.prepareParseFormatControlCodecCall(
                     boundary_expr,
+                    key_node,
                     key_node,
                     boundary_callable_node,
                     "parse_key_start",
@@ -45803,11 +45994,11 @@ const BodyContext = struct {
             },
             .encoder => {
                 if (self.graphJsonEncodeObjectKeyMethodName(key_node)) |method_name| {
-                    return try self.prepareEncodeObjectKeyCodecCall(boundary_expr, key_node, key_node, boundary_callable_node, method_name);
+                    return try self.prepareEncodeObjectKeyCodecCall(boundary_expr, key_node, boundary_callable_node, method_name);
                 }
                 if (self.graphNodeIsStringRenderedDictKey(key_node)) {
                     const str_node = try self.graph.newNode(.{ .primitive = .str });
-                    return try self.prepareEncodeObjectKeyCodecCall(boundary_expr, key_node, str_node, boundary_callable_node, "encode_key_str");
+                    return try self.prepareEncodeObjectKeyCodecCall(boundary_expr, str_node, boundary_callable_node, "encode_key_str");
                 }
                 var added = try self.prepareEncodeKeyStartCodecCall(boundary_expr, key_node, boundary_callable_node);
                 added = try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, key_node, boundary_callable_node, seen) or added;
@@ -45828,7 +46019,7 @@ const BodyContext = struct {
         if (runtime.args.len != 2) Common.invariant("structural encoder runtime did not have value and state arguments");
         const encoding_node = boundary.args[0];
         const state_node = runtime.args[1];
-        const exact = try self.requiredGeneratedCodecTarget("encode_key_start", null);
+        const exact = try self.requiredGeneratedCodecTarget("encode_key_start", key_node);
         const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, .encoder, exact)) return false;
 
@@ -45860,11 +46051,13 @@ const BodyContext = struct {
         self: *BodyContext,
         boundary_expr: DraftExprId,
         shape_node: NodeId,
+        contract_subject_node: NodeId,
         boundary_callable_node: NodeId,
     ) Allocator.Error!bool {
         var added = try self.prepareParseFormatControlCodecCall(
             boundary_expr,
             shape_node,
+            contract_subject_node,
             boundary_callable_node,
             "parse_dict_start",
             false,
@@ -45872,6 +46065,7 @@ const BodyContext = struct {
         added = try self.prepareParseFormatControlCodecCall(
             boundary_expr,
             shape_node,
+            contract_subject_node,
             boundary_callable_node,
             "parse_dict_next",
             false,
@@ -45879,6 +46073,7 @@ const BodyContext = struct {
         added = try self.prepareParseFormatControlCodecCall(
             boundary_expr,
             shape_node,
+            contract_subject_node,
             boundary_callable_node,
             "parse_dict_after_key",
             true,
@@ -45886,6 +46081,7 @@ const BodyContext = struct {
         added = try self.prepareParseFormatControlCodecCall(
             boundary_expr,
             shape_node,
+            contract_subject_node,
             boundary_callable_node,
             "parse_dict_after_entry",
             false,
@@ -45897,11 +46093,13 @@ const BodyContext = struct {
         self: *BodyContext,
         boundary_expr: DraftExprId,
         shape_node: NodeId,
+        contract_subject_node: NodeId,
         boundary_callable_node: NodeId,
     ) Allocator.Error!bool {
         var added = try self.prepareParseFormatControlCodecCall(
             boundary_expr,
             shape_node,
+            contract_subject_node,
             boundary_callable_node,
             "parse_list_start",
             false,
@@ -45909,6 +46107,7 @@ const BodyContext = struct {
         added = try self.prepareParseFormatControlCodecCall(
             boundary_expr,
             shape_node,
+            contract_subject_node,
             boundary_callable_node,
             "parse_list_next",
             false,
@@ -45916,6 +46115,7 @@ const BodyContext = struct {
         added = try self.prepareParseFormatControlCodecCall(
             boundary_expr,
             shape_node,
+            contract_subject_node,
             boundary_callable_node,
             "parse_list_after_item",
             false,
@@ -45929,11 +46129,13 @@ const BodyContext = struct {
         self: *BodyContext,
         boundary_expr: DraftExprId,
         shape_node: NodeId,
+        contract_subject_node: NodeId,
         boundary_callable_node: NodeId,
     ) Allocator.Error!bool {
         var added = try self.prepareParseTupleFormatCodecCall(
             boundary_expr,
             shape_node,
+            contract_subject_node,
             boundary_callable_node,
             "parse_tuple_start",
             1,
@@ -45941,6 +46143,7 @@ const BodyContext = struct {
         added = try self.prepareParseTupleFormatCodecCall(
             boundary_expr,
             shape_node,
+            contract_subject_node,
             boundary_callable_node,
             "parse_tuple_next",
             2,
@@ -45948,6 +46151,7 @@ const BodyContext = struct {
         added = try self.prepareParseTupleFormatCodecCall(
             boundary_expr,
             shape_node,
+            contract_subject_node,
             boundary_callable_node,
             "parse_tuple_end",
             1,
@@ -45959,6 +46163,7 @@ const BodyContext = struct {
         self: *BodyContext,
         boundary_expr: DraftExprId,
         shape_node: NodeId,
+        contract_subject_node: NodeId,
         boundary_callable_node: NodeId,
         method_name: []const u8,
         arity_arg_count: usize,
@@ -45970,7 +46175,7 @@ const BodyContext = struct {
         const encoding_node = boundary.args[0];
         const state_node = runtime.args[0];
         const outer_result = try self.graphParserResultNodes(runtime.ret);
-        const exact = try self.requiredGeneratedCodecTarget(method_name, null);
+        const exact = try self.requiredGeneratedCodecTarget(method_name, contract_subject_node);
         const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
@@ -46007,7 +46212,6 @@ const BodyContext = struct {
     fn prepareParseObjectKeyCodecCall(
         self: *BodyContext,
         boundary_expr: DraftExprId,
-        key_node: NodeId,
         value_node: NodeId,
         boundary_callable_node: NodeId,
         method_name: []const u8,
@@ -46019,7 +46223,7 @@ const BodyContext = struct {
         const encoding_node = boundary.args[0];
         const state_node = runtime.args[0];
         const outer_result = try self.graphParserResultNodes(runtime.ret);
-        const exact = try self.requiredGeneratedCodecTarget(method_name, key_node);
+        const exact = try self.requiredGeneratedCodecTarget(method_name, value_node);
         const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
 
@@ -46042,7 +46246,7 @@ const BodyContext = struct {
             .subject_bearing = exact.subject_bearing,
             .contract_view = exact.anchor.view.key.bytes,
             .contract_derivation = exact.anchor.derivation,
-            .shape_node = key_node,
+            .shape_node = value_node,
             .lookup = lookup,
             .callable_node = target_node,
             .callee = callee,
@@ -46053,7 +46257,6 @@ const BodyContext = struct {
     fn prepareEncodeObjectKeyCodecCall(
         self: *BodyContext,
         boundary_expr: DraftExprId,
-        key_node: NodeId,
         value_node: NodeId,
         boundary_callable_node: NodeId,
         method_name: []const u8,
@@ -46065,7 +46268,7 @@ const BodyContext = struct {
         const encoding_node = boundary.args[0];
         const state_node = runtime.args[1];
         const outer_try = try self.graphTryPayloads(runtime.ret);
-        const exact = try self.requiredGeneratedCodecTarget(method_name, key_node);
+        const exact = try self.requiredGeneratedCodecTarget(method_name, value_node);
         const lookup = exact.lookup;
         if (self.preparedRequiredCodecCallExists(boundary_expr, .encoder, exact)) return false;
 
@@ -46088,7 +46291,7 @@ const BodyContext = struct {
             .subject_bearing = exact.subject_bearing,
             .contract_view = exact.anchor.view.key.bytes,
             .contract_derivation = exact.anchor.derivation,
-            .shape_node = key_node,
+            .shape_node = value_node,
             .lookup = lookup,
             .callable_node = target_node,
             .callee = callee,
@@ -46334,6 +46537,7 @@ const BodyContext = struct {
         self: *BodyContext,
         raw_node: NodeId,
         err_node: NodeId,
+        missing_required_field_ready: bool,
         seen: *collections.DenseMap(NodeId, void),
     ) Allocator.Error!bool {
         const node = raw_node;
@@ -46347,29 +46551,29 @@ const BodyContext = struct {
             if (try self.graphErrorIsExactUnitTag(payloads.err, "Missing") or
                 try self.graphErrorIsExactUnitTag(payloads.err, "Null"))
             {
-                return try self.graphParserShapeNeedsInvalidValue(payloads.ok, err_node, seen);
+                return try self.graphParserShapeNeedsInvalidValue(payloads.ok, err_node, missing_required_field_ready, seen);
             }
             return false;
         }
 
         return switch (self.graph.content(node)) {
-            .list, .box => |payload| try self.graphParserShapeNeedsInvalidValue(payload, err_node, seen),
+            .list, .box => |payload| try self.graphParserShapeNeedsInvalidValue(payload, err_node, missing_required_field_ready, seen),
             .tuple => true,
             .record => blk: {
                 const has_missing_required_field = try self.graphRowHasTag(err_node, "MissingRequiredField");
                 for ((try self.graph.recordNodes(node)).fields) |field| {
                     const value_node = self.graph.codecFieldValueNode(field);
                     if (try self.graphMissingTryOkNode(value_node)) |payload| {
-                        if (try self.graphParserShapeNeedsInvalidValue(payload, err_node, seen)) break :blk true;
+                        if (try self.graphParserShapeNeedsInvalidValue(payload, err_node, missing_required_field_ready, seen)) break :blk true;
                         continue;
                     }
                     switch (self.graph.codecFieldKind(field)) {
                         .optional, .defaulted => {
-                            if (try self.graphParserShapeNeedsInvalidValue(value_node, err_node, seen)) break :blk true;
+                            if (try self.graphParserShapeNeedsInvalidValue(value_node, err_node, missing_required_field_ready, seen)) break :blk true;
                         },
                         .required => {
-                            if (!has_missing_required_field) break :blk true;
-                            if (try self.graphParserShapeNeedsInvalidValue(value_node, err_node, seen)) break :blk true;
+                            if (!missing_required_field_ready and !has_missing_required_field) break :blk true;
+                            if (try self.graphParserShapeNeedsInvalidValue(value_node, err_node, missing_required_field_ready, seen)) break :blk true;
                         },
                     }
                 }
@@ -46378,21 +46582,21 @@ const BodyContext = struct {
             .tag_union => blk: {
                 for ((try self.graph.tagRowNodes(node)).tags) |tag| {
                     for (tag.payloads) |payload| {
-                        if (try self.graphParserShapeNeedsInvalidValue(payload, err_node, seen)) break :blk true;
+                        if (try self.graphParserShapeNeedsInvalidValue(payload, err_node, missing_required_field_ready, seen)) break :blk true;
                     }
                 }
                 break :blk false;
             },
             .named => |named| blk: {
                 if (named.builtin_owner == .set and named.args.len == 1) {
-                    break :blk try self.graphParserShapeNeedsInvalidValue(named.args[0], err_node, seen);
+                    break :blk try self.graphParserShapeNeedsInvalidValue(named.args[0], err_node, missing_required_field_ready, seen);
                 }
                 if (named.builtin_owner == .dict and named.args.len == 2) {
                     if (try self.graphNodeIsUnitTagUnion(named.args[0])) break :blk true;
-                    break :blk try self.graphParserShapeNeedsInvalidValue(named.args[1], err_node, seen);
+                    break :blk try self.graphParserShapeNeedsInvalidValue(named.args[1], err_node, missing_required_field_ready, seen);
                 }
                 if (named.backing) |backing| {
-                    break :blk try self.graphParserShapeNeedsInvalidValue(backing.node, err_node, seen);
+                    break :blk try self.graphParserShapeNeedsInvalidValue(backing.node, err_node, missing_required_field_ready, seen);
                 }
                 break :blk false;
             },
@@ -46460,8 +46664,9 @@ const BodyContext = struct {
             .redirect, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .erased, .zst => Common.invariant("structural parser error evidence was not a tag-union row"),
         }
         // A row whose extension chain already terminated in a concrete empty
-        // union is checker-closed; the generated body crash-maps the missing
-        // required-field path instead of widening checked output.
+        // union is checker-closed; the generated body maps the missing-field
+        // path through its checker-validated `invalid_value` slot instead of
+        // widening checked output.
         var row_probe = outer_result.err;
         probe: while (true) {
             switch (self.graph.content(row_probe)) {
@@ -46578,6 +46783,7 @@ const BodyContext = struct {
                     .parser => try self.prepareParseFormatControlCodecCall(
                         boundary_expr,
                         shape_node,
+                        null,
                         boundary_callable_node,
                         "parse_null",
                         true,
@@ -46602,10 +46808,11 @@ const BodyContext = struct {
             .named => |named| if (named.builtin_owner) |owner| switch (owner) {
                 .set => {
                     if (named.args.len != 1) Common.invariant("builtin Set graph node had an unexpected arity");
+                    const list_node = try self.graph.newNode(.{ .list = named.args[0] });
                     var added = if (kind == .parser)
-                        try self.prepareParseListFormatCodecCalls(boundary_expr, shape_node, boundary_callable_node)
+                        try self.prepareParseListFormatCodecCalls(boundary_expr, list_node, shape_node, boundary_callable_node)
                     else
-                        try self.prepareEncodeContainerCodecCall(boundary_expr, shape_node, boundary_callable_node, "encode_list");
+                        try self.prepareEncodeContainerCodecCall(boundary_expr, list_node, shape_node, boundary_callable_node, "encode_list");
                     added = try self.prepareSetCollectionCodecCall(
                         boundary_expr,
                         kind,
@@ -46618,9 +46825,9 @@ const BodyContext = struct {
                 .dict => {
                     if (named.args.len != 2) Common.invariant("builtin Dict graph node had an unexpected arity");
                     var added = if (kind == .parser)
-                        try self.prepareParseDictFormatCodecCalls(boundary_expr, shape_node, boundary_callable_node)
+                        try self.prepareParseDictFormatCodecCalls(boundary_expr, shape_node, shape_node, boundary_callable_node)
                     else
-                        try self.prepareEncodeContainerCodecCall(boundary_expr, shape_node, boundary_callable_node, "encode_dict");
+                        try self.prepareEncodeContainerCodecCall(boundary_expr, shape_node, shape_node, boundary_callable_node, "encode_dict");
                     added = try self.prepareDictKeyCodecCalls(
                         boundary_expr,
                         kind,
@@ -46665,18 +46872,21 @@ const BodyContext = struct {
 
         var added = false;
         const structural_node = self.graphShapeNode(shape_node);
+        const contract_subject_node = try self.codecContractSubjectNode(shape_node, structural_node);
         switch (self.graph.content(structural_node)) {
             .list => |elem| {
                 if (kind == .parser) {
                     added = try self.prepareParseListFormatCodecCalls(
                         boundary_expr,
                         shape_node,
+                        contract_subject_node,
                         boundary_callable_node,
                     ) or added;
                 } else {
                     added = try self.prepareEncodeContainerCodecCall(
                         boundary_expr,
                         shape_node,
+                        contract_subject_node,
                         boundary_callable_node,
                         "encode_list",
                     ) or added;
@@ -46689,12 +46899,14 @@ const BodyContext = struct {
                     added = try self.prepareParseTupleFormatCodecCalls(
                         boundary_expr,
                         shape_node,
+                        contract_subject_node,
                         boundary_callable_node,
                     ) or added;
                 } else {
                     added = try self.prepareEncodeContainerCodecCall(
                         boundary_expr,
                         shape_node,
+                        contract_subject_node,
                         boundary_callable_node,
                         "encode_tuple",
                     ) or added;
@@ -46713,6 +46925,7 @@ const BodyContext = struct {
                     added = try self.prepareEncodeContainerCodecCall(
                         boundary_expr,
                         shape_node,
+                        contract_subject_node,
                         boundary_callable_node,
                         "encode_record",
                     ) or added;
@@ -46734,11 +46947,13 @@ const BodyContext = struct {
                     added = try self.prepareParseRecordFieldCodecCall(
                         boundary_expr,
                         shape_node,
+                        contract_subject_node,
                         boundary_callable_node,
                     ) or added;
                     added = try self.prepareParseFormatControlCodecCall(
                         boundary_expr,
                         shape_node,
+                        contract_subject_node,
                         boundary_callable_node,
                         "parse_record_start",
                         false,
@@ -46746,6 +46961,7 @@ const BodyContext = struct {
                     added = try self.prepareParseFormatControlCodecCall(
                         boundary_expr,
                         shape_node,
+                        contract_subject_node,
                         boundary_callable_node,
                         "parse_record_after_field",
                         false,
@@ -46778,12 +46994,18 @@ const BodyContext = struct {
                     added = try self.prepareEncodeContainerCodecCall(
                         boundary_expr,
                         shape_node,
+                        contract_subject_node,
                         boundary_callable_node,
                         "encode_tag",
                     ) or added;
                 }
                 if (kind == .parser) {
-                    added = try self.prepareParseTagUnionCodecCall(boundary_expr, shape_node, boundary_callable_node) or added;
+                    added = try self.prepareParseTagUnionCodecCall(
+                        boundary_expr,
+                        shape_node,
+                        contract_subject_node,
+                        boundary_callable_node,
+                    ) or added;
                 }
                 for ((try self.graph.tagRowNodes(structural_node)).tags) |tag| {
                     for (tag.payloads) |payload|
