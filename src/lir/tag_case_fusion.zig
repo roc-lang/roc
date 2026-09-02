@@ -513,7 +513,7 @@ test "tag case fusion requires ownership-neutral branch definitions" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = text } });
     const branch = try store.addCFStmt(.{ .assign_literal = .{
         .target = text,
-        .value = .{ .str_literal = try store.insertString("owned") },
+        .value = .{ .str_literal = try store.insertStringView("owned", 0, 5) },
         .next = ret,
     } });
     const switch_id = try store.addCFStmt(.{ .switch_stmt = .{
