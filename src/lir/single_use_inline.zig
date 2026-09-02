@@ -3,10 +3,11 @@
 //! The admission rule is deliberately complete rather than budget-based: a
 //! candidate is called from a producer-stamped iterator-fusion scope, has
 //! exactly one reachable direct call, no root or first-class procedure
-//! reference, and an ordinary compiler-owned Roc ABI. Removing its old
-//! unreachable body offsets the body cloned at the call site, so the reachable
-//! program never grows. Outermost candidates are processed together; a chain
-//! therefore needs one inventory scan per call depth, not per call.
+//! reference, an ordinary compiler-owned Roc ABI, and an ownership-neutral
+//! frame. Removing its old unreachable body offsets the body cloned at the
+//! call site, so the reachable program never grows. Outermost candidates are
+//! processed together; a chain therefore needs one inventory scan per call
+//! depth, not per call.
 
 const std = @import("std");
 const core = @import("lir_core");
@@ -113,7 +114,7 @@ const Inventory = struct {
         try self.proc_queue.append(self.allocator, proc);
     }
 
-    fn collectFrontier(self: *Inventory, sites: *std.ArrayList(CallSite)) ResourceError!void {
+    fn collectFrontier(self: *Inventory, layouts: *const layout_mod.Store, sites: *std.ArrayList(CallSite)) ResourceError!void {
         const candidate = try self.allocator.alloc(bool, self.store.procSpecCount());
         defer self.allocator.free(candidate);
         @memset(candidate, false);
@@ -124,7 +125,7 @@ const Inventory = struct {
             if (!self.store.getProcSpec(site.caller).iterator_fusion_scope) continue;
             const stmt = self.store.getCFStmt(site.stmt);
             if (stmt != .assign_call or @intFromEnum(stmt.assign_call.proc) != callee_index) continue;
-            if (!eligibleCall(self.store, stmt.assign_call)) continue;
+            if (!eligibleCall(self.store, layouts, stmt.assign_call)) continue;
             candidate[callee_index] = true;
         }
 
@@ -140,7 +141,11 @@ const Inventory = struct {
     }
 };
 
-fn eligibleCall(store: *const LirStore, call: @FieldType(LIR.CFStmt, "assign_call")) bool {
+fn eligibleCall(
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    call: @FieldType(LIR.CFStmt, "assign_call"),
+) bool {
     if (call.is_cold or call.result_desc != null or call.out_desc != null) return false;
     const callee = store.getProcSpec(call.proc);
     return callee.body != null and
@@ -151,7 +156,18 @@ fn eligibleCall(store: *const LirStore, call: @FieldType(LIR.CFStmt, "assign_cal
         callee.ret_desc == null and
         callee.runtime_ret_desc == null and
         !callee.boxy_runtime_entry and
-        !callee.is_static_initializer;
+        !callee.is_static_initializer and
+        ownershipNeutralFrame(store, layouts, callee.frame_locals);
+}
+
+fn ownershipNeutralFrame(store: *const LirStore, layouts: *const layout_mod.Store, frame_span: LIR.LocalSpan) bool {
+    const frame = store.getLocalSpan(frame_span);
+    for (0..frame.len) |index| {
+        const local = GuardedList.at(frame, index);
+        const layout = layouts.getLayout(store.getLocal(local).layout_idx);
+        if (layouts.layoutContainsRefcounted(layout)) return false;
+    }
+    return true;
 }
 
 /// Inline every eligible, reachable, single-use procedure without code growth.
@@ -162,7 +178,7 @@ pub fn run(result: *LirProgram.Result) ResourceError!void {
         try inventory.collect();
         var sites = std.ArrayList(CallSite).empty;
         defer sites.deinit(result.store.allocator);
-        try inventory.collectFrontier(&sites);
+        try inventory.collectFrontier(&result.layouts, &sites);
         if (sites.items.len == 0) return;
         for (sites.items) |site| try inlineAt(&result.store, &result.layouts, site);
     }
@@ -326,4 +342,46 @@ test "single-use inline keeps writable callee arguments distinct from caller ope
     }
     try testing.expect(saw_argument_copy);
     try testing.expect(saw_distinct_write);
+}
+
+test "single-use inline preserves calls with refcounted callee frames" {
+    const testing = std.testing;
+    var result = try LirProgram.Result.init(testing.allocator, .u64);
+    defer result.deinit();
+    const store = &result.store;
+
+    const callee_arg = try store.addLocal(.{ .layout_idx = .str });
+    const callee_body = try store.addCFStmt(.{ .ret = .{ .value = callee_arg } });
+    const callee = try store.addProcSpec(.{
+        .name = LIR.Symbol.fromRaw(1),
+        .args = try store.addLocalSpan(&.{callee_arg}),
+        .body = callee_body,
+        .frame_locals = try store.addLocalSpan(&.{callee_arg}),
+        .ret_layout = .str,
+    });
+
+    const caller_arg = try store.addLocal(.{ .layout_idx = .str });
+    const result_local = try store.addLocal(.{ .layout_idx = .str });
+    const caller_ret = try store.addCFStmt(.{ .ret = .{ .value = result_local } });
+    const caller_body = try store.addCFStmt(.{ .assign_call = .{
+        .target = result_local,
+        .proc = callee,
+        .args = try store.addLocalSpan(&.{caller_arg}),
+        .next = caller_ret,
+    } });
+    const caller = try store.addProcSpec(.{
+        .name = LIR.Symbol.fromRaw(2),
+        .args = try store.addLocalSpan(&.{caller_arg}),
+        .iterator_fusion_scope = true,
+        .body = caller_body,
+        .frame_locals = try store.addLocalSpan(&.{ caller_arg, result_local }),
+        .ret_layout = .str,
+    });
+    try result.root_procs.append(testing.allocator, caller);
+
+    try run(&result);
+
+    const preserved = store.getCFStmt(store.getProcSpec(caller).body.?);
+    try testing.expect(preserved == .assign_call);
+    try testing.expectEqual(callee, preserved.assign_call.proc);
 }

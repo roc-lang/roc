@@ -434,7 +434,13 @@ pub fn collectReachableDefinitions(store: *LirStore, body: CFStmtId) Allocator.E
 
     var walk = try ReachableStmts.init(store, body);
     defer walk.deinit();
-    while (try walk.next()) |stmt_id| switch (store.getCFStmt(stmt_id)) {
+    while (try walk.next()) |stmt_id| markStmtDefinitions(store, defined, stmt_id);
+    return defined;
+}
+
+/// Add every local defined by `stmt_id` to an existing definition set.
+pub fn markStmtDefinitions(store: *const LirStore, defined: []bool, stmt_id: CFStmtId) void {
+    switch (store.getCFStmt(stmt_id)) {
         inline .init_uninitialized,
         .assign_ref,
         .assign_literal,
@@ -501,8 +507,7 @@ pub fn collectReachableDefinitions(store: *LirStore, body: CFStmtId) Allocator.E
         .ret,
         .crash,
         => {},
-    };
-    return defined;
+    }
 }
 
 fn markStrMatchDefinitions(store: *const LirStore, defined: []bool, span: LIR.StrMatchStepSpan) void {

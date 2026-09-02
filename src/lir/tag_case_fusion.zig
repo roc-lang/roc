@@ -198,7 +198,7 @@ fn findCandidate(
             builds.deinit(store.allocator);
             continue;
         };
-        if (!complete and !try partialBranchesAreOwnershipNeutral(store, layouts, switch_node.switch_stmt, builds.items)) {
+        if (!try branchesAreOwnershipNeutral(store, layouts, switch_node.switch_stmt, builds.items)) {
             builds.deinit(store.allocator);
             continue;
         }
@@ -216,10 +216,10 @@ fn findCandidate(
 }
 
 /// Before ARC, cloning scalar locals is ownership-neutral. Refcounted branch
-/// definitions require a full ownership-aware clone (including path-specific
-/// move facts), so partial fusion leaves those cases intact. Complete fusion
-/// replaces the original arms, so it does not duplicate their ownership paths.
-fn partialBranchesAreOwnershipNeutral(
+/// definitions require a full ownership-aware clone, including path-specific
+/// move facts across the newly introduced joins, even when complete fusion
+/// removes the original arms.
+fn branchesAreOwnershipNeutral(
     store: *LirStore,
     layouts: *const layout_mod.Store,
     switch_stmt: @FieldType(LIR.CFStmt, "switch_stmt"),
@@ -499,6 +499,41 @@ fn nextJoinPointRaw(store: *LirStore) u32 {
 
 test "tag case fusion declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "tag case fusion requires ownership-neutral branch definitions" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+
+    const cond = try store.addLocal(.{ .layout_idx = .bool });
+    const text = try store.addLocal(.{ .layout_idx = .str });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = text } });
+    const branch = try store.addCFStmt(.{ .assign_literal = .{
+        .target = text,
+        .value = .{ .str_literal = try store.insertString("owned") },
+        .next = ret,
+    } });
+    const switch_id = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = cond,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = branch }}),
+        .default_branch = branch,
+    } });
+    const builds = [_]BuildSite{.{
+        .stmt = branch,
+        .variant_index = 0,
+        .discriminant = 0,
+        .payload = null,
+    }};
+
+    try testing.expect(!try branchesAreOwnershipNeutral(
+        &store,
+        &layouts,
+        store.getCFStmt(switch_id).switch_stmt,
+        &builds,
+    ));
 }
 
 test "tag case fusion routes exact constructor edges without materializing tags" {
