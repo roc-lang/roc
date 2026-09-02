@@ -166,12 +166,8 @@ NO CHANGE
 							(args
 								(p-underscore))
 							(e-block
-								(s-reassign
-									(p-assign (ident "count_"))
-									(e-runtime-error (tag "var_across_function_boundary")))
-								(s-reassign
-									(p-assign (ident "total_"))
-									(e-runtime-error (tag "var_across_function_boundary")))
+								(s-runtime-error (tag "var_across_function_boundary"))
+								(s-runtime-error (tag "var_across_function_boundary"))
 								(e-lookup-local
 									(p-assign (ident "count_")))))))
 				(s-let
