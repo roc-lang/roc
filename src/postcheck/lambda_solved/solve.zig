@@ -2645,18 +2645,30 @@ const Solver = struct {
         defer merged.deinit(self.allocator);
         var shared_count: usize = 0;
 
+        // Both rows indexed by name so each side pairs with the other in one
+        // pass; the first row position wins for a repeated name.
+        var right_by_name = std.AutoHashMapUnmanaged(Type.names.TagNameId, usize).empty;
+        defer right_by_name.deinit(self.allocator);
+        try right_by_name.ensureTotalCapacity(self.allocator, @intCast(rhs.count()));
+        for (0..rhs.count()) |right_index| {
+            const gop = right_by_name.getOrPutAssumeCapacity(self.program.types.tagItem(rhs, right_index).name);
+            if (!gop.found_existing) gop.value_ptr.* = right_index;
+        }
+        var left_names = std.AutoHashMapUnmanaged(Type.names.TagNameId, void).empty;
+        defer left_names.deinit(self.allocator);
+        try left_names.ensureTotalCapacity(self.allocator, @intCast(lhs.count()));
+
         for (0..lhs.count()) |left_index| {
             const left_tag = self.program.types.tagItem(lhs, left_index);
             try merged.append(self.allocator, left_tag);
-            for (0..rhs.count()) |right_index| {
+            left_names.putAssumeCapacity(left_tag.name, {});
+            if (right_by_name.get(left_tag.name)) |right_index| {
                 const right_tag = self.program.types.tagItem(rhs, right_index);
-                if (left_tag.name != right_tag.name) continue;
                 try payload_pairs.append(self.allocator, .{
                     .lhs = left_tag.payloads,
                     .rhs = right_tag.payloads,
                 });
                 shared_count += 1;
-                break;
             }
         }
 
@@ -2664,11 +2676,8 @@ const Solver = struct {
 
         for (0..rhs.count()) |right_index| {
             const right_tag = self.program.types.tagItem(rhs, right_index);
-            for (0..lhs.count()) |left_index| {
-                if (self.program.types.tagItem(lhs, left_index).name == right_tag.name) break;
-            } else {
-                try merged.append(self.allocator, right_tag);
-            }
+            if (left_names.contains(right_tag.name)) continue;
+            try merged.append(self.allocator, right_tag);
         }
 
         return try self.program.types.addTags(merged.items);

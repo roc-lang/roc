@@ -347,7 +347,7 @@ pub const LayoutStoreImage = extern struct {
             .tag_union_data = try safeListFromRef(layout_mod.TagUnionData, base_ptr, image_size, self.tag_union_data),
             .interned_layouts = std.StringHashMap(layout_mod.Idx).init(allocator),
             .scratch_intern_key = .empty,
-            .interned_recursive_graphs = std.StringHashMap(layout_mod.Idx).init(allocator),
+            .interned_recursive_graphs = layout_mod.Store.RecursiveGraphMap.init(allocator),
             .target_usize = target_usize,
         };
     }
@@ -760,7 +760,7 @@ fn serializeSidecarInto(
         .tag_union_data = try cloneSafeList(layout_mod.TagUnionData, gpa, lowered.layouts.tag_union_data),
         .interned_layouts = std.StringHashMap(layout_mod.Idx).init(gpa),
         .scratch_intern_key = .empty,
-        .interned_recursive_graphs = std.StringHashMap(layout_mod.Idx).init(gpa),
+        .interned_recursive_graphs = layout_mod.Store.RecursiveGraphMap.init(gpa),
         .target_usize = lowered.layouts.target_usize,
     };
     const strings = try lowered.store.strings.clone(gpa);

@@ -431,6 +431,10 @@ const ContainmentDependency = struct {
 const ContainmentQueryCache = struct {
     valid: bool = false,
     result: bool = false,
+    /// `InstGraph.structure_epoch` when the dependencies were last verified;
+    /// while the epoch is unchanged no class has changed, so the answer is
+    /// still valid without rechecking them.
+    verified_epoch: u32 = 0,
     dependencies: std.ArrayList(ContainmentDependency) = .empty,
 };
 
@@ -522,6 +526,9 @@ pub const InstGraph = struct {
     active_snapshot_nodes: collections.DenseMap(Type.TypeId, NodeId),
     /// Finished Monotypes already imported into the current ownership scope.
     imported_type_nodes: collections.DenseMap(Type.TypeId, NodeId),
+    /// Memo of `provisionalViewShareable`: whether everything reachable from
+    /// a Monotype type is settled per-request evidence-free structure.
+    provisional_view_shareable: collections.DenseMap(Type.TypeId, bool),
     /// Exact immutable Monotype snapshot imported at each permanent node.
     /// Unlike `node_snapshots`, these are producer-owned representation
     /// witnesses. Keeping the direct node association lets consumers of an
@@ -572,6 +579,21 @@ pub const InstGraph = struct {
     /// maps re-allocate and re-zero sparse chunks across the node/type ID
     /// domains on every walk; pooled maps keep their chunks.
     node_set_pool: collections.DenseMapPool(NodeId, void),
+    /// Roots whose every reachable node was found resolved, stamped with the
+    /// `resolved_epoch` current at that walk. Resolvedness survives every
+    /// union (a concrete class always wins over a variable) and every content
+    /// replacement of a variable, so a stamp goes stale only when a concrete
+    /// root's content is replaced or a variable wins a union, each of which
+    /// advances the epoch.
+    resolved_roots: collections.DenseMap(NodeId, u32),
+    resolved_epoch: u32,
+    /// Advances on every union and every content change, so an equal epoch
+    /// proves no class in the graph has changed since.
+    structure_epoch: u32,
+    /// Types known to reach no active snapshot. Store types are immutable and
+    /// every active snapshot is a type sealed after the types that could
+    /// reference it, so a negative answer never changes.
+    snapshot_free_types: collections.DenseMap(Type.TypeId, void),
     type_set_pool: collections.DenseMapPool(Type.TypeId, void),
     pub fn create(
         allocator: Allocator,
@@ -598,6 +620,7 @@ pub const InstGraph = struct {
             .current_snapshots_dirty = false,
             .active_snapshot_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
             .imported_type_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
+            .provisional_view_shareable = collections.DenseMap(Type.TypeId, bool).init(allocator),
             .imported_monos = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
             .nominal_backing_index = std.HashMap(NominalBackingKey, NominalBackingInstanceId, NominalBackingKeyContext, 80).init(allocator),
             .nominal_backing_instances = .empty,
@@ -615,6 +638,10 @@ pub const InstGraph = struct {
             .containment_visit_epoch = 0,
             .containment_cache = collections.DenseMap(NodeId, ContainmentCacheEntry).init(allocator),
             .node_set_pool = collections.DenseMapPool(NodeId, void).init(allocator),
+            .resolved_roots = collections.DenseMap(NodeId, u32).init(allocator),
+            .resolved_epoch = 0,
+            .structure_epoch = 0,
+            .snapshot_free_types = collections.DenseMap(Type.TypeId, void).init(allocator),
             .type_set_pool = collections.DenseMapPool(Type.TypeId, void).init(allocator),
         };
         return graph;
@@ -659,6 +686,8 @@ pub const InstGraph = struct {
         self.recursive_argument_slots.deinit(allocator);
         self.containment_pending.deinit(allocator);
         self.containment_visit_epochs.deinit(allocator);
+        self.snapshot_free_types.deinit();
+        self.resolved_roots.deinit();
         self.node_set_pool.deinit();
         self.type_set_pool.deinit();
         var containment_entries = self.containment_cache.valueIterator();
@@ -669,6 +698,7 @@ pub const InstGraph = struct {
         self.imported_monos.deinit();
         self.active_snapshot_nodes.deinit();
         self.imported_type_nodes.deinit();
+        self.provisional_view_shareable.deinit();
         self.processed_relations.deinit();
         self.class_member_tail.deinit(allocator);
         self.class_member_head.deinit(allocator);
@@ -2006,6 +2036,7 @@ pub const InstGraph = struct {
         root: NodeId,
         allow_field_kind_defaults: bool,
     ) Allocator.Error!bool {
+        if (self.rootStampedResolved(root)) return true;
         var pending = std.ArrayList(NodeId).empty;
         defer pending.deinit(self.allocator);
         var seen = self.node_set_pool.acquire();
@@ -2015,6 +2046,9 @@ pub const InstGraph = struct {
             const node = self.find(raw_node);
             const entry = try seen.getOrPut(node);
             if (entry.found_existing) continue;
+            // A stamped class is resolved throughout, so nothing below it can
+            // change the answer.
+            if (self.rootStampedResolved(node)) continue;
             switch (self.nodes.items[@intFromEnum(node)]) {
                 .redirect => unreachable,
                 .unresolved => return false,
@@ -2057,7 +2091,20 @@ pub const InstGraph = struct {
                 },
             }
         }
+        if (!allow_field_kind_defaults) {
+            // Every class the strict walk visited is resolved throughout.
+            var visited = seen.keyIterator();
+            while (visited.next()) |node| {
+                try self.resolved_roots.put(node.*, self.resolved_epoch);
+            }
+        }
         return true;
+    }
+
+    /// Whether the node's class was stamped resolved at the current epoch.
+    fn rootStampedResolved(self: *InstGraph, node: NodeId) bool {
+        const stamp = self.resolved_roots.get(self.find(node)) orelse return false;
+        return stamp == self.resolved_epoch;
     }
 
     /// Materialize the checked literal default recorded on an otherwise-open
@@ -2208,10 +2255,14 @@ pub const InstGraph = struct {
         const cache = try self.containment_cache.getOrPut(query_root);
         if (!cache.found_existing) cache.value_ptr.* = .{};
         const entry = cache.value_ptr.forQuery(query);
-        if (entry.valid and !self.containmentQueryCacheValid(entry)) {
-            entry.valid = false;
-            entry.result = false;
-            entry.dependencies.clearRetainingCapacity();
+        if (entry.valid and entry.verified_epoch != self.structure_epoch) {
+            if (self.containmentQueryCacheValid(entry)) {
+                entry.verified_epoch = self.structure_epoch;
+            } else {
+                entry.valid = false;
+                entry.result = false;
+                entry.dependencies.clearRetainingCapacity();
+            }
         }
         if (entry.valid) {
             self.countDiagnostic(cache_hits_field);
@@ -2276,6 +2327,7 @@ pub const InstGraph = struct {
                     if (found) {
                         entry.result = true;
                         entry.valid = true;
+                        entry.verified_epoch = self.structure_epoch;
                         return true;
                     }
                     if (named.backing) |backing| {
@@ -2290,6 +2342,7 @@ pub const InstGraph = struct {
             }
         }
         entry.valid = true;
+        entry.verified_epoch = self.structure_epoch;
         return false;
     }
 
@@ -3522,6 +3575,15 @@ pub const InstGraph = struct {
         self.current_snapshots_dirty = false;
     }
 
+    /// Whether the node's class has a current active snapshot. Snapshots are
+    /// taken only from resolved roots and the cache is cleared by every union
+    /// and content change, so a current snapshot proves the class is still
+    /// resolved without walking it.
+    fn hasCurrentSnapshot(self: *InstGraph, node: NodeId) bool {
+        self.refreshActiveSnapshots();
+        return self.current_snapshots.contains(self.find(node));
+    }
+
     /// Redirect `loser` into `winner` and invalidate the current snapshot
     /// cache. Immutable snapshot provenance remains attached to permanent node
     /// ids and resolves through `find`.
@@ -3529,6 +3591,11 @@ pub const InstGraph = struct {
         const winner = self.find(raw_winner);
         const loser = self.find(raw_loser);
         if (winner == loser) return;
+        if (self.nodes.items[@intFromEnum(winner)] == .unresolved and self.nodes.items[@intFromEnum(loser)] != .unresolved) {
+            // A variable absorbing concrete content can make classes that
+            // reached the loser unresolved.
+            self.resolved_epoch +%= 1;
+        }
         // Rekey before changing union state. Its allocation preflight can still
         // fail without staling a resident key.
         try self.migrateNominalBackingRoot(loser, winner);
@@ -3538,6 +3605,7 @@ pub const InstGraph = struct {
         self.class_member_tail.items[@intFromEnum(winner)] = self.class_member_tail.items[@intFromEnum(loser)];
         self.nodes.items[@intFromEnum(loser)] = .{ .redirect = winner };
         self.versions.items[@intFromEnum(winner)] +%= 1;
+        self.structure_epoch +%= 1;
         self.countDiagnostic("class_unions");
         self.invalidateActiveSnapshots(winner);
         try self.drainNominalBackingCollisions();
@@ -3549,8 +3617,14 @@ pub const InstGraph = struct {
     fn replaceContentWithoutSnapshotInvalidation(self: *InstGraph, raw_root: NodeId, new_content: InstNode) bool {
         const root = self.find(raw_root);
         if (instNodeEql(self.nodes.items[@intFromEnum(root)], new_content)) return false;
+        if (self.nodes.items[@intFromEnum(root)] != .unresolved) {
+            // Replacing concrete content can introduce unresolved reachable
+            // nodes into classes already stamped resolved.
+            self.resolved_epoch +%= 1;
+        }
         self.nodes.items[@intFromEnum(root)] = new_content;
         self.versions.items[@intFromEnum(root)] +%= 1;
+        self.structure_epoch +%= 1;
         return true;
     }
 
@@ -4502,11 +4576,26 @@ pub const InstGraph = struct {
         var only_right = std.ArrayList(InstTag).empty;
         defer only_right.deinit(self.allocator);
 
+        // Both rows indexed by label text so each side pairs with the other
+        // in one pass; the first row position wins for a repeated label.
+        var right_by_text: std.StringHashMapUnmanaged(usize) = .empty;
+        defer right_by_text.deinit(self.allocator);
+        try right_by_text.ensureTotalCapacity(self.allocator, @intCast(flat_right.tags.len));
+        for (flat_right.tags, 0..) |right_tag, index| {
+            const gop = right_by_text.getOrPutAssumeCapacity(self.tagLabelText(right_tag.name));
+            if (!gop.found_existing) gop.value_ptr.* = index;
+        }
+        var left_texts: std.StringHashMapUnmanaged(void) = .empty;
+        defer left_texts.deinit(self.allocator);
+        try left_texts.ensureTotalCapacity(self.allocator, @intCast(flat_left.tags.len));
         for (flat_left.tags) |left_tag| {
-            const wanted = self.tagLabelText(left_tag.name);
+            left_texts.putAssumeCapacity(self.tagLabelText(left_tag.name), {});
+        }
+
+        for (flat_left.tags) |left_tag| {
             var shared = false;
-            for (flat_right.tags) |right_tag| {
-                if (!Ident.textEql(wanted, self.tagLabelText(right_tag.name))) continue;
+            if (right_by_text.get(self.tagLabelText(left_tag.name))) |right_index| {
+                const right_tag = flat_right.tags[right_index];
                 if (left_tag.payloads.len != right_tag.payloads.len) {
                     Common.invariant("instantiation unified one tag at two different payload arities");
                 }
@@ -4514,24 +4603,14 @@ pub const InstGraph = struct {
                     try pending.append(self.allocator, .{ .left = left_payload, .right = right_payload, .row_width = row_width });
                 }
                 shared = true;
-                break;
             }
             try merged.append(self.allocator, left_tag);
             if (!shared) try only_left.append(self.allocator, left_tag);
         }
         for (flat_right.tags) |right_tag| {
-            const wanted = self.tagLabelText(right_tag.name);
-            var shared = false;
-            for (flat_left.tags) |left_tag| {
-                if (Ident.textEql(wanted, self.tagLabelText(left_tag.name))) {
-                    shared = true;
-                    break;
-                }
-            }
-            if (!shared) {
-                try merged.append(self.allocator, right_tag);
-                try only_right.append(self.allocator, right_tag);
-            }
+            if (left_texts.contains(self.tagLabelText(right_tag.name))) continue;
+            try merged.append(self.allocator, right_tag);
+            try only_right.append(self.allocator, right_tag);
         }
 
         if (self.rowAdditionConflicts(flat_left.ext, only_right.items.len, .tag_union) or
@@ -4622,11 +4701,26 @@ pub const InstGraph = struct {
         var only_right = std.ArrayList(InstField).empty;
         defer only_right.deinit(self.allocator);
 
+        // Both rows indexed by label text so each side pairs with the other
+        // in one pass; the first row position wins for a repeated label.
+        var right_by_text: std.StringHashMapUnmanaged(usize) = .empty;
+        defer right_by_text.deinit(self.allocator);
+        try right_by_text.ensureTotalCapacity(self.allocator, @intCast(flat_right.fields.len));
+        for (flat_right.fields, 0..) |right_field, index| {
+            const gop = right_by_text.getOrPutAssumeCapacity(self.fieldLabelText(right_field.name));
+            if (!gop.found_existing) gop.value_ptr.* = index;
+        }
+        var left_texts: std.StringHashMapUnmanaged(void) = .empty;
+        defer left_texts.deinit(self.allocator);
+        try left_texts.ensureTotalCapacity(self.allocator, @intCast(flat_left.fields.len));
         for (flat_left.fields) |left_field| {
-            const wanted = self.fieldLabelText(left_field.name);
+            left_texts.putAssumeCapacity(self.fieldLabelText(left_field.name), {});
+        }
+
+        for (flat_left.fields) |left_field| {
             var shared = false;
-            for (flat_right.fields) |right_field| {
-                if (!Ident.textEql(wanted, self.fieldLabelText(right_field.name))) continue;
+            if (right_by_text.get(self.fieldLabelText(left_field.name))) |right_index| {
+                const right_field = flat_right.fields[right_index];
                 const merged_kind = self.unifyFieldKinds(
                     left_field.kind,
                     left_field.default,
@@ -4651,7 +4745,6 @@ pub const InstGraph = struct {
                     .default = resolved_default,
                 });
                 shared = true;
-                break;
             }
             if (!shared) {
                 try merged.append(self.allocator, left_field);
@@ -4659,18 +4752,9 @@ pub const InstGraph = struct {
             }
         }
         for (flat_right.fields) |right_field| {
-            const wanted = self.fieldLabelText(right_field.name);
-            var shared = false;
-            for (flat_left.fields) |left_field| {
-                if (Ident.textEql(wanted, self.fieldLabelText(left_field.name))) {
-                    shared = true;
-                    break;
-                }
-            }
-            if (!shared) {
-                try merged.append(self.allocator, right_field);
-                try only_right.append(self.allocator, right_field);
-            }
+            if (left_texts.contains(self.fieldLabelText(right_field.name))) continue;
+            try merged.append(self.allocator, right_field);
+            try only_right.append(self.allocator, right_field);
         }
 
         const left_absorbs_right = self.closedRecordAbsorbsFields(flat_left.ext, only_right.items, row_width);
@@ -4888,14 +4972,112 @@ pub const InstGraph = struct {
 
     /// Instantiate one immutable provisional interface-replay view as fresh
     /// graph cells. Unlike `importMono`, this deliberately creates an
-    /// independent copy on every call: an undetermined field-kind cell remains
-    /// open evidence for the duplicate request and must not become an immutable
-    /// cross-request witness or share later constraints with another duplicate.
+    /// independent copy of every open part on every call: an undetermined
+    /// field-kind cell remains open evidence for the duplicate request and
+    /// must not become an immutable cross-request witness or share later
+    /// constraints with another duplicate. A component with no open part
+    /// anywhere inside it (see `provisionalViewShareable`) is finished
+    /// structure every duplicate reads identically, so it enters through the
+    /// finished-Monotype import memo and is shared rather than copied.
     pub fn instantiateProvisionalTypeView(self: *InstGraph, ty: Type.TypeId) Allocator.Error!NodeId {
         self.requireRelationProduction();
         var imported = collections.DenseMap(Type.TypeId, NodeId).init(self.allocator);
         defer imported.deinit();
         return try self.instantiateProvisionalTypeViewInner(ty, &imported);
+    }
+
+    /// Whether every type reachable from `ty` is settled structure a
+    /// provisional view may share between requests: no undetermined
+    /// record-field kind, no generated-private backing, and no
+    /// compiler-generated or representation-carrying iterator nominal, since
+    /// those are per-request evidence that representation selection may
+    /// still rewrite.
+    fn provisionalViewShareable(self: *InstGraph, root: Type.TypeId) Allocator.Error!bool {
+        if (self.provisional_view_shareable.get(root)) |known| return known;
+
+        var reachable = collections.DenseMap(Type.TypeId, void).init(self.allocator);
+        defer reachable.deinit();
+        var pending = std.ArrayList(Type.TypeId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        const types = self.types;
+        var shareable = true;
+        scan: while (pending.pop()) |ty| {
+            const entry = try reachable.getOrPut(ty);
+            if (entry.found_existing) continue;
+            if (self.provisional_view_shareable.get(ty)) |known| {
+                // A settled subtree needs no walk; an unsettled one settles
+                // the whole query.
+                if (!known) {
+                    shareable = false;
+                    break :scan;
+                }
+                continue;
+            }
+            switch (types.get(ty)) {
+                .primitive, .erased, .zst => {},
+                .list, .box => |elem| try pending.append(self.allocator, elem),
+                .tuple => |items| try self.appendProvisionalSpan(&pending, types.span(items)),
+                .func => |func| {
+                    try self.appendProvisionalSpan(&pending, types.span(func.args));
+                    try pending.append(self.allocator, func.ret);
+                },
+                .tag_union => |tags| {
+                    const span = types.tagSpan(tags);
+                    for (0..span.len) |index| {
+                        try self.appendProvisionalSpan(&pending, types.span(GuardedList.at(span, index).payloads));
+                    }
+                },
+                .record => |fields| {
+                    const span = types.fieldSpan(fields);
+                    for (0..span.len) |index| {
+                        const field = GuardedList.at(span, index);
+                        if (field.kind_state == .undetermined) {
+                            shareable = false;
+                            break :scan;
+                        }
+                        try pending.append(self.allocator, field.ty);
+                        if (field.value_ty) |value_ty| try pending.append(self.allocator, value_ty);
+                    }
+                },
+                .named => |named| {
+                    if (named.def.generated != null or named.def.iterator_representation != .none or named.def.iterator_kind != .none) {
+                        shareable = false;
+                        break :scan;
+                    }
+                    try self.appendProvisionalSpan(&pending, types.span(named.args));
+                    if (named.backing) |backing| {
+                        if (backing.authority == .generated_private) {
+                            shareable = false;
+                            break :scan;
+                        }
+                        try pending.append(self.allocator, backing.ty);
+                    }
+                    const declared = types.declaredFieldSpan(named.declared_order);
+                    for (0..declared.len) |index| {
+                        switch (GuardedList.at(declared, index)) {
+                            .named => {},
+                            .padding => |padding_ty| try pending.append(self.allocator, padding_ty),
+                        }
+                    }
+                },
+            }
+        }
+
+        if (shareable) {
+            // Everything reachable from a settled root is settled too.
+            var it = reachable.keyIterator();
+            while (it.next()) |ty| try self.provisional_view_shareable.put(ty.*, true);
+        } else {
+            try self.provisional_view_shareable.put(root, false);
+        }
+        return shareable;
+    }
+
+    fn appendProvisionalSpan(self: *InstGraph, pending: *std.ArrayList(Type.TypeId), tys: anytype) Allocator.Error!void {
+        for (0..tys.len) |index| {
+            try pending.append(self.allocator, GuardedList.at(tys, index));
+        }
     }
 
     fn instantiateProvisionalTypeViewInner(
@@ -4904,6 +5086,11 @@ pub const InstGraph = struct {
         imported: *collections.DenseMap(Type.TypeId, NodeId),
     ) Allocator.Error!NodeId {
         if (imported.get(ty)) |existing| return existing;
+        if (try self.provisionalViewShareable(ty)) {
+            const shared = try self.importMono(ty);
+            try imported.put(ty, shared);
+            return shared;
+        }
 
         const node = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
         try imported.put(ty, node);
@@ -5078,7 +5265,7 @@ pub const InstGraph = struct {
             Common.compilerBug("provisional Monotype snapshot requested inside a type transaction");
         }
         if (self.imported_monos.get(node)) |imported| return imported;
-        if (try self.typeIsResolved(node)) return try self.monoFor(node);
+        if (self.hasCurrentSnapshot(node) or try self.typeIsResolved(node)) return try self.monoFor(node);
         var snapshot = GraphTypeFinals.initProvisionalSnapshot(self);
         defer snapshot.deinit();
         return try snapshot.sealNode(self.find(node));
@@ -5093,7 +5280,7 @@ pub const InstGraph = struct {
         if (self.types.hasSpeculativeConstruction()) {
             Common.compilerBug("specialization Monotype snapshot requested inside a type transaction");
         }
-        if (try self.typeIsResolved(node)) return try self.monoFor(node);
+        if (self.hasCurrentSnapshot(node) or try self.typeIsResolved(node)) return try self.monoFor(node);
         if (!try self.typeIsSpecializationDefaultable(node)) {
             Common.invariant("specialization type view requested for a graph type with non-field-kind unresolved evidence");
         }
@@ -5117,7 +5304,7 @@ pub const InstGraph = struct {
             self.countDiagnostic("active_type_imported_hits");
             return imported;
         }
-        if (!try self.typeIsResolved(node)) {
+        if (!self.hasCurrentSnapshot(node) and !try self.typeIsResolved(node)) {
             Common.invariant("active Monotype TypeId requested for an unresolved instantiation graph node");
         }
         return try self.monoFor(node);
@@ -5125,15 +5312,18 @@ pub const InstGraph = struct {
 
     fn monoFor(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
         const root = self.find(node);
-        if (!try self.typeIsResolved(root)) {
-            Common.invariant("immutable Monotype snapshot requested for an unresolved instantiation graph node");
-        }
+        // A current snapshot was taken from a resolved root, and the cache is
+        // cleared by every union and content change, so a hit is still
+        // resolved without walking the type again.
         self.refreshActiveSnapshots();
         if (self.current_snapshots.get(root)) |current| {
             self.countDiagnostic("active_snapshot_cache_hits");
             return current;
         }
         self.countDiagnostic("active_snapshot_cache_misses");
+        if (!try self.typeIsResolved(root)) {
+            Common.invariant("immutable Monotype snapshot requested for an unresolved instantiation graph node");
+        }
 
         var snapshot = GraphTypeFinals.initActiveSnapshot(self);
         defer snapshot.deinit();
@@ -5176,9 +5366,16 @@ pub const InstGraph = struct {
     }
 
     pub fn typeHasActiveSnapshots(self: *InstGraph, ty: Type.TypeId) Allocator.Error!bool {
+        if (self.snapshot_free_types.contains(ty)) return false;
         var seen = self.type_set_pool.acquire();
         defer self.type_set_pool.release(&seen);
-        return try self.typeContainsActiveSnapshot(ty, &seen);
+        if (try self.typeContainsActiveSnapshot(ty, &seen)) return true;
+        // Every type the walk reached is snapshot-free as well.
+        var visited = seen.keyIterator();
+        while (visited.next()) |visited_ty| {
+            try self.snapshot_free_types.put(visited_ty.*, {});
+        }
+        return false;
     }
 
     fn typeContainsActiveSnapshot(
@@ -5187,6 +5384,7 @@ pub const InstGraph = struct {
         seen: *collections.DenseMap(Type.TypeId, void),
     ) Allocator.Error!bool {
         if (self.isActiveSnapshotType(ty)) return true;
+        if (self.snapshot_free_types.contains(ty)) return false;
         const seen_entry = try seen.getOrPut(ty);
         if (seen_entry.found_existing) return false;
         return switch (self.types.get(ty)) {
