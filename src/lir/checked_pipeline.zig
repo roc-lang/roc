@@ -11,6 +11,7 @@ const check = @import("check");
 const core = @import("lir_core");
 
 const Arc = @import("arc.zig");
+const ImmortalLocals = @import("immortal_locals.zig");
 const Trmc = @import("trmc.zig");
 const BoxReuse = @import("box_reuse.zig");
 const ReturnSlot = @import("return_slot.zig");
@@ -71,6 +72,12 @@ pub const TargetConfig = struct {
     post_check_executor: ?base.post_check_task_executor.Executor = null,
     checked_module_state: CheckedModuleState = .complete,
     inline_mode: InlineMode = .none,
+    /// Direct-call inlining scope for SpecConstr's value-aware clones.
+    /// Optimized builds use `.all_calls`; dev builds use `.iterator_fusion`
+    /// so post-check time and emitted program size stay bounded. Consulted
+    /// only when `inline_mode` is not `.none`, since that is what gates
+    /// SpecConstr itself.
+    spec_constr_clone_inlining: SpecConstrCloneInlining = .all_calls,
     inline_expects: InlineExpectMode = .run,
     /// Whether ARC may consume a dead Box lender while unboxing.
     consume_dead_boxes: bool = false,
@@ -492,6 +499,7 @@ pub const RuntimeRecordSchema = postcheck.SolvedLirLower.RuntimeRecordSchema;
 pub const RuntimeTagSchema = postcheck.SolvedLirLower.RuntimeTagSchema;
 pub const RuntimeTagUnionSchema = postcheck.SolvedLirLower.RuntimeTagUnionSchema;
 pub const InlineMode = postcheck.SolvedInline.Mode;
+pub const SpecConstrCloneInlining = postcheck.MonotypeLifted.SpecConstr.CloneInlining;
 pub const InlineExpectMode = postcheck.SolvedLirLower.InlineExpectMode;
 pub const MonotypeCacheControl = postcheck.Monotype.Lower.SpecializationCacheControl;
 
@@ -704,7 +712,8 @@ pub fn lowerCheckedModulesToLir(
     var procedure_usage = if (target.inline_mode != .none) blk: {
         var spec_constr_timing_scope = PipelineTimingScope.begin(target.timing, .spec_constr);
         defer spec_constr_timing_scope.end();
-        const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted);
+        const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted, target.spec_constr_clone_inlining);
+        spec_constr_timing_scope.end();
         break :blk usage;
     } else postcheck.MonotypeLifted.SpecConstr.OwnedProcedureUsage.empty(allocator);
     defer procedure_usage.deinit();
@@ -793,6 +802,10 @@ fn finishLoweredOutput(
         .consume_dead_boxes = target.consume_dead_boxes,
     });
     arc_timing_scope.end();
+
+    // After the certifier has checked ARC's ledger, so that what it verified
+    // is the placement ARC produced.
+    _ = try ImmortalLocals.elide(allocator, &lowered.lir_result.store);
 
     try LirDump.run(&lowered.lir_result);
 
