@@ -123,6 +123,7 @@ comptime {
         std.testing.refAllDecls(@import("test/platform_config.zig"));
         std.testing.refAllDecls(@import("ReplLine.zig"));
         std.testing.refAllDecls(@import("ReplSession.zig"));
+        std.testing.refAllDecls(@import("macho/DyldExportStrip.zig"));
     }
 }
 const linker = @import("linker.zig");
@@ -11658,10 +11659,32 @@ test "runtime specialization strategy helpers" {
     try std.testing.expectEqualStrings("Lowering", loweringProgressLabel(.boxy));
 }
 
+test "post-check optimization scope per opt level" {
+    try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers, postCheckInlineModeForOpt(.speed));
+    try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers, postCheckInlineModeForOpt(.size));
+    try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers, postCheckInlineModeForOpt(.dev));
+    try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.none, postCheckInlineModeForOpt(.interpreter));
+    try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.all_calls, specConstrCloneInliningForOpt(.speed));
+    try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.all_calls, specConstrCloneInliningForOpt(.size));
+    try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.iterator_fusion, specConstrCloneInliningForOpt(.dev));
+}
+
 fn postCheckInlineModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineMode {
     return switch (opt) {
-        .size, .speed => .wrappers,
-        .dev, .interpreter => .none,
+        .size, .speed, .dev => .wrappers,
+        .interpreter => .none,
+    };
+}
+
+/// Optimized builds let SpecConstr's value-aware clones chase known values
+/// through any direct call; dev builds confine that chase to iterator
+/// pipelines, which keeps post-check time and emitted program size bounded
+/// while still collapsing `Iter` loops. The interpreter never reaches
+/// SpecConstr (its inline mode is `.none`), so its value here is inert.
+fn specConstrCloneInliningForOpt(opt: cli_args.OptLevel) postcheck.MonotypeLifted.SpecConstr.CloneInlining {
+    return switch (opt) {
+        .size, .speed => .all_calls,
+        .dev, .interpreter => .iterator_fusion,
     };
 }
 
@@ -11785,6 +11808,7 @@ fn lowerCheckedSourceToLir(
             .target_usize = target_usize,
             .specialization_strategy = specialization_strategy,
             .inline_mode = postCheckInlineModeForOpt(opt),
+            .spec_constr_clone_inlining = specConstrCloneInliningForOpt(opt),
             .consume_dead_boxes = switch (roots) {
                 .linked_output => true,
                 .platform_entrypoints => |artifact| artifact == .dev_run_image,

@@ -746,10 +746,10 @@ const CheckTypeCheckerPatternsStep = struct {
         .{ .file = "inspected.zig", .start = 226, .end = 232 },
         // inspected.zig trims the trailing newline off a rendered report. This is
         // presentation text on its way out, not a type-checker comparison.
-        .{ .file = "inspected.zig", .start = 2207, .end = 2207 },
+        .{ .file = "inspected.zig", .start = 2473, .end = 2473 },
         // inspected.zig converts a NUL-terminated dylib path from the linker into a
         // slice. Path bytes, not identifiers.
-        .{ .file = "inspected.zig", .start = 3000, .end = 3008 },
+        .{ .file = "inspected.zig", .start = 3263, .end = 3274 },
         // inspected_run.zig dispatches on a hosted function's ABI symbol, which is
         // matched by name at the host boundary and has no Ident.Idx.
         .{ .file = "inspected_run.zig", .start = 107, .end = 107 },
@@ -758,11 +758,11 @@ const CheckTypeCheckerPatternsStep = struct {
         // the declaring module's lowering) against the finalizing module's
         // qualified name—cross-module, so there is no shared ident store to
         // compare indices in. Error-reporting path, not a type-checker judgment.
-        .{ .file = "compile_time_finalization.zig", .start = 2145, .end = 2155 },
+        .{ .file = "compile_time_finalization.zig", .start = 2197, .end = 2207 },
         // report.zig compares already-formatted diagnostic text only to avoid
         // printing two visually identical types. This is presentation logic,
         // not a type-checking or identifier comparison.
-        .{ .file = "report.zig", .start = 563, .end = 563 },
+        .{ .file = "report.zig", .start = 564, .end = 564 },
     };
 
     fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {
@@ -3482,10 +3482,35 @@ pub fn build(b: *std.Build) void {
     llvm_codegen_module.addImport("roc_target", roc_modules.roc_target);
     llvm_codegen_module.addImport("vendor_llvm_ir", roc_modules.vendor_llvm_ir);
 
+    // On macOS the linked roc executable exports every global symbol of its
+    // statically linked LLVM, LLD, Binaryen, zlib and zstd, and dyld walks
+    // all of that on every launch—~540M instructions before main() runs
+    // (#10992). Every install of the roc CLI for a macOS target goes through
+    // this tool, which removes the export trie and weak-bind info and
+    // rewrites the ad-hoc code signature.
+    const dyld_export_strip_module = b.createModule(.{
+        .root_source_file = b.path("src/cli/macho/DyldExportStrip.zig"),
+        .imports = &.{
+            .{ .name = "vendor_macho", .module = roc_modules.vendor_macho },
+        },
+    });
+    const strip_macho_exports_tool = b.addExecutable(.{
+        .name = "strip_macho_exports",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build/strip_macho_exports.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseSafe,
+            .imports = &.{
+                .{ .name = "dyld_export_strip", .module = dyld_export_strip_module },
+                .{ .name = "build_options", .module = roc_modules.build_options },
+            },
+        }),
+    });
+
     const main_exe_result = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, llvm_codegen_module, flag_enable_tracy, test_filters, true, valgrind_support) orelse return;
     const roc_exe = main_exe_result.exe;
     roc_modules.addAll(roc_exe);
-    _ = install_and_run(b, no_bin, roc_exe, build_roc_step, run_roc_step, run_args);
+    const roc_install_step = install_and_run(b, no_bin, roc_exe, strip_macho_exports_tool, build_roc_step, run_roc_step, run_args);
 
     // Clear the Roc cache when building the compiler to ensure stale cached artifacts aren't used
     const clear_cache_step = createClearCacheStep(b);
@@ -3670,8 +3695,7 @@ pub fn build(b: *std.Build) void {
             exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
             exe.step.dependOn(&write_compiled_builtins.step);
             release_exe_for_llvm_embedded = exe;
-            const install = b.addInstallArtifact(exe, .{});
-            build_release_step.dependOn(&install.step);
+            build_release_step.dependOn(addInstallMaybeStrippedExe(b, exe, strip_macho_exports_tool));
         }
     }
 
@@ -3682,7 +3706,9 @@ pub fn build(b: *std.Build) void {
     // subcommands, echo, and glue. Focus locally with:
     //   zig build run-test-cli -- --suite echo --filter "case name"
     if (!no_bin) {
-        const install = b.addInstallArtifact(roc_exe, .{});
+        // install_and_run only returns null under no_bin, which this branch
+        // excludes.
+        const install_step = roc_install_step.?;
 
         const parallel_cli_runner_exe = b.addExecutable(.{
             .name = "parallel_cli_runner",
@@ -3715,7 +3741,7 @@ pub fn build(b: *std.Build) void {
         if (run_args.len != 0) {
             run_cli.addArgs(run_args);
         }
-        run_cli.step.dependOn(&install.step);
+        run_cli.step.dependOn(install_step);
         run_cli.step.dependOn(build_test_hosts_step);
         run_cli_test_step = &run_cli.step;
         run_test_cli_step.dependOn(&run_cli.step);
@@ -4091,6 +4117,7 @@ pub fn build(b: *std.Build) void {
         b,
         no_bin,
         snapshot_exe,
+        null,
         build_snapshot_tool_step,
         run_snapshot_tool_step,
         run_args,
@@ -4161,6 +4188,7 @@ pub fn build(b: *std.Build) void {
         b,
         no_bin,
         eval_test_exe,
+        null,
         build_test_eval_runner_step,
         run_test_eval_step,
         eval_run_args,
@@ -4223,6 +4251,7 @@ pub fn build(b: *std.Build) void {
         b,
         no_bin,
         eval_host_effects_exe,
+        null,
         build_test_eval_host_effects_runner_step,
         run_test_eval_host_effects_step,
         eval_host_effects_run_args,
@@ -4288,6 +4317,7 @@ pub fn build(b: *std.Build) void {
         b,
         no_bin,
         lambda_mono_differential_exe,
+        null,
         build_test_lambda_mono_differential_step,
         run_test_lambda_mono_differential_step,
         lambda_mono_differential_run_args,
@@ -4325,7 +4355,7 @@ pub fn build(b: *std.Build) void {
             "corpus-only",
         });
         run_simd_lambda_mono.addArgs(run_args);
-        run_simd_lambda_mono.step.dependOn(&install.step);
+        run_simd_lambda_mono.step.dependOn(install);
         run_simd_lambda_mono.step.dependOn(&run_simd_eval.step);
         run_test_simd_differential_step.dependOn(&run_simd_lambda_mono.step);
     } else {
@@ -5800,7 +5830,7 @@ pub fn build(b: *std.Build) void {
         // an explicit type: peer-type resolution on an inline
         // `if (c) &.{x} else &.{}` inside a struct literal field is fragile.
         const snapshot_deps: []const *Step = if (snapshot_exe_install) |install|
-            &.{&install.step}
+            &.{install}
         else
             &.{};
 
@@ -6938,7 +6968,7 @@ fn add_fuzz_target(
     repro_exe.root_module.addImport("fuzz_test", fuzz_obj.root_module);
     repro_exe.root_module.addImport("build_options", roc_modules.build_options);
 
-    _ = install_and_run(b, no_bin, repro_exe, build_repro_step, run_repro_step, run_args);
+    _ = install_and_run(b, no_bin, repro_exe, null, build_repro_step, run_repro_step, run_args);
 
     if (fuzz and build_afl and !no_bin) {
         const fuzz_step = b.step(b.fmt("build-fuzz-{s}", .{name}), b.fmt("Build fuzz executable for {s}", .{name}));
@@ -7729,14 +7759,32 @@ fn addMainExe(
     };
 }
 
+/// Install `exe` into the bin directory. When `macho_strip_tool` is given and
+/// the target is macOS, the installed copy is produced by that tool (which
+/// removes the dyld export trie and weak-bind info; see
+/// src/cli/macho/DyldExportStrip.zig) instead of installing the linked
+/// artifact directly. Returns the step that puts the binary in place.
+fn addInstallMaybeStrippedExe(b: *std.Build, exe: *Step.Compile, macho_strip_tool: ?*Step.Compile) *Step {
+    if (macho_strip_tool) |tool| {
+        if (exe.root_module.resolved_target.?.result.os.tag == .macos) {
+            const strip_run = b.addRunArtifact(tool);
+            strip_run.addFileArg(exe.getEmittedBin());
+            const stripped = strip_run.addOutputFileArg(exe.out_filename);
+            return &b.addInstallBinFile(stripped, exe.out_filename).step;
+        }
+    }
+    return &b.addInstallArtifact(exe, .{}).step;
+}
+
 fn install_and_run(
     b: *std.Build,
     no_bin: bool,
     exe: *Step.Compile,
+    macho_strip_tool: ?*Step.Compile,
     build_step: *Step,
     run_step: *Step,
     run_args: []const []const u8,
-) ?*Step.InstallArtifact {
+) ?*Step {
     if (run_step != build_step) {
         run_step.dependOn(build_step);
     }
@@ -7746,22 +7794,22 @@ fn install_and_run(
         b.getInstallStep().dependOn(&exe.step);
         return null;
     } else {
-        const install = b.addInstallArtifact(exe, .{});
+        const install_step = addInstallMaybeStrippedExe(b, exe, macho_strip_tool);
 
         // Add a step to print success message after build completes
         const success_step = PrintBuildSuccessStep.create(b);
-        success_step.step.dependOn(&install.step);
+        success_step.step.dependOn(install_step);
         build_step.dependOn(&success_step.step);
 
-        b.getInstallStep().dependOn(&install.step);
+        b.getInstallStep().dependOn(install_step);
 
         const run = b.addRunArtifact(exe);
-        run.step.dependOn(&install.step);
+        run.step.dependOn(install_step);
         if (run_args.len != 0) {
             run.addArgs(run_args);
         }
         run_step.dependOn(&run.step);
-        return install;
+        return install_step;
     }
 }
 

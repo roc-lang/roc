@@ -2487,6 +2487,7 @@ pub const Coordinator = struct {
                 .expect,
                 .numeral_conversion,
                 .quote_conversion,
+                .repl_expr,
                 => {},
             }
         }
@@ -2513,6 +2514,7 @@ pub const Coordinator = struct {
                 .expect,
                 .numeral_conversion,
                 .quote_conversion,
+                .repl_expr,
                 => continue,
             }
             const source_expr = switch (root.source) {
@@ -2537,6 +2539,7 @@ pub const Coordinator = struct {
                     .expect,
                     .numeral_conversion,
                     .quote_conversion,
+                    .repl_expr,
                     => unreachable,
                 },
             };
@@ -6542,6 +6545,7 @@ fn hashPatternExtractionRegionsForView(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .repl_expr,
             => false,
         };
         if (!is_selected_root) continue;
@@ -6600,6 +6604,7 @@ fn hashPatternExtractionRegionsForView(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .repl_expr,
             => unreachable,
         }
 
