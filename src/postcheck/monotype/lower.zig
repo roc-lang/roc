@@ -11600,6 +11600,7 @@ const DraftTrySequence = struct {
     try_expr: DraftExprId,
     ok_local: DraftLocalId,
     err_is_cold: bool = false,
+    err_target: ?DraftExprId = null,
     ok_body: DraftExprId,
 };
 
@@ -11610,7 +11611,25 @@ const DraftTryRecordSequence = struct {
     rest_local: DraftLocalId,
     rest_field: names.RecordFieldNameId,
     err_is_cold: bool = false,
+    err_target: ?DraftExprId = null,
     ok_body: DraftExprId,
+};
+
+const DraftJoinPointExpr = struct {
+    /// A generated Monotype join is identified by its reserved owning
+    /// expression. Sealing maps both through the same expression relocation.
+    id: DraftExprId,
+    params: DraftSpan(DraftTypedLocal),
+    retained: DraftSpan(DraftTypedLocal) = DraftSpan(DraftTypedLocal).empty(),
+    body: DraftExprId,
+    remainder: DraftExprId,
+};
+
+const DraftJumpExpr = struct {
+    target: DraftExprId,
+    args: DraftSpan(DraftExprId),
+    loop_params: DraftSpan(DraftTypedLocal) = DraftSpan(DraftTypedLocal).empty(),
+    loop_values: DraftSpan(DraftExprId) = DraftSpan(DraftExprId).empty(),
 };
 
 const DraftBlockExpr = struct {
@@ -11742,6 +11761,8 @@ const DraftExprData = union(enum(u8)) {
     loop_: DraftLoopExpr,
     break_: ?DraftExprId,
     continue_: DraftContinueExpr,
+    join_point: DraftJoinPointExpr,
+    jump: DraftJumpExpr,
     return_: DraftReturn,
     crash: DraftStringLiteralId,
     comptime_branch_taken: DraftComptimeBranchTaken,
@@ -14997,6 +15018,8 @@ const BodyDraftStore = struct {
                 .loop_,
                 .break_,
                 .continue_,
+                .join_point,
+                .jump,
                 .return_,
                 .crash,
                 .comptime_branch_taken,
@@ -15138,6 +15161,7 @@ const BodyDraftStore = struct {
                 .try_expr = ids.expr(try_.try_expr),
                 .ok_local = ids.local(try_.ok_local),
                 .err_is_cold = try_.err_is_cold,
+                .err_target = if (try_.err_target) |target| @enumFromInt(@intFromEnum(ids.expr(target))) else null,
                 .ok_body = ids.expr(try_.ok_body),
             } },
             .try_record_sequence => |try_| .{ .try_record_sequence = .{
@@ -15147,6 +15171,7 @@ const BodyDraftStore = struct {
                 .rest_local = ids.local(try_.rest_local),
                 .rest_field = try committed_types.commitRecordFieldName(try_.rest_field),
                 .err_is_cold = try_.err_is_cold,
+                .err_target = if (try_.err_target) |target| @enumFromInt(@intFromEnum(ids.expr(target))) else null,
                 .ok_body = ids.expr(try_.ok_body),
             } },
             .block => |block| .{ .block = .{
@@ -15161,6 +15186,19 @@ const BodyDraftStore = struct {
             .break_ => |break_| .{ .break_ = if (break_) |expr| ids.expr(expr) else null },
             .continue_ => |continue_| .{ .continue_ = .{
                 .values = ids.exprSpan(continue_.values),
+            } },
+            .join_point => |join_point| .{ .join_point = .{
+                .id = @enumFromInt(@intFromEnum(ids.expr(join_point.id))),
+                .params = ids.typedLocalSpan(join_point.params),
+                .retained = ids.typedLocalSpan(join_point.retained),
+                .body = ids.expr(join_point.body),
+                .remainder = ids.expr(join_point.remainder),
+            } },
+            .jump => |jump| .{ .jump = .{
+                .target = @enumFromInt(@intFromEnum(ids.expr(jump.target))),
+                .args = ids.exprSpan(jump.args),
+                .loop_params = ids.typedLocalSpan(jump.loop_params),
+                .loop_values = ids.exprSpan(jump.loop_values),
             } },
             .return_ => |ret| .{ .return_ = try BodyDraftStore.sealCoreReturn(ids, committed_types, ret) },
             .crash => |literal| .{ .crash = ids.stringLiteral(literal) },
@@ -16606,6 +16644,16 @@ const BodyContext = struct {
         }
     };
 
+    /// Producer-authored control-flow for one derived record parser. All three
+    /// format field-event modes route to these same field continuations, so
+    /// field parsing and loop-state transition code each exist once.
+    const ParseRecordContinuations = struct {
+        error_join: DraftExprId,
+        entry_end_join: DraftExprId,
+        skip_join: DraftExprId,
+        field_joins: []const DraftExprId,
+    };
+
     /// Loop-carried control locals for a derived record parser. `done` is set
     /// when the format reports the end of the record so the next iteration
     /// finishes at the loop head, which keeps the record-construction code at
@@ -16618,12 +16666,6 @@ const BodyContext = struct {
         remaining_local: DraftLocalId,
         bool_ty: Type.TypeId,
         u64_ty: Type.TypeId,
-    };
-
-    const UpdatedFieldSlot = struct {
-        local: DraftLocalId,
-        ty: Type.TypeId,
-        index: usize,
     };
 
     /// Loop-carried control locals for a derived list parser. In Counted mode
@@ -17032,6 +17074,7 @@ const BodyContext = struct {
             .@"unreachable",
             .break_,
             .continue_,
+            .jump,
             .return_,
             .crash,
             .comptime_exhaustiveness_failed,
@@ -17146,6 +17189,10 @@ const BodyContext = struct {
                 break :blk try self.anyImpossibilityProof(proofs.items);
             },
             .loop_ => |loop_| try self.anyExprSpanImpossibilityProof(loop_.initial_values),
+            // A join may be entered through its remainder or any lexically
+            // nested jump. The generated control-flow producer owns that
+            // reachability; this local proof builder does not approximate it.
+            .join_point => null,
             .comptime_branch_taken => |branch| self.exprImpossibilityProof(branch.body),
             .dbg => |child| self.exprImpossibilityProof(child),
             .expect_err => |expect_err| self.exprImpossibilityProof(expect_err.msg),
@@ -18669,6 +18716,17 @@ const BodyContext = struct {
             .nominal => |backing| self.exprCarriesFunctionDefinitionEvidence(backing),
             .let_ => |let_| self.exprCarriesFunctionDefinitionEvidence(let_.value) or
                 self.exprCarriesFunctionDefinitionEvidence(let_.rest),
+            .join_point => |join_point| self.exprCarriesFunctionDefinitionEvidence(join_point.body) or
+                self.exprCarriesFunctionDefinitionEvidence(join_point.remainder),
+            .jump => |jump| blk: {
+                for (self.exprSpan(jump.loop_values)) |value| {
+                    if (self.exprCarriesFunctionDefinitionEvidence(value)) break :blk true;
+                }
+                for (self.exprSpan(jump.args)) |arg| {
+                    if (self.exprCarriesFunctionDefinitionEvidence(arg)) break :blk true;
+                }
+                break :blk false;
+            },
             .local,
             .unit,
             .pending_deferred,
@@ -18941,6 +18999,27 @@ const BodyContext = struct {
             .continue_ => |continue_| {
                 for (self.exprSpan(continue_.values)) |value| {
                     if (try self.exprDependsOnFreeLocalInner(value, target, bound)) return true;
+                }
+                return false;
+            },
+            .join_point => |join_point| {
+                for (self.typedLocalSpan(join_point.retained)) |retained| {
+                    if (try self.localDependsOnTarget(retained.local, target, bound)) return true;
+                }
+                var added = std.ArrayList(DraftLocalId).empty;
+                defer added.deinit(self.allocator);
+                try self.bindTypedLocalLocals(join_point.params, bound, &added);
+                const body_depends = try self.exprDependsOnFreeLocalInner(join_point.body, target, bound);
+                removeBoundLocals(bound, added.items);
+                if (body_depends) return true;
+                return try self.exprDependsOnFreeLocalInner(join_point.remainder, target, bound);
+            },
+            .jump => |jump| {
+                for (self.exprSpan(jump.loop_values)) |value| {
+                    if (try self.exprDependsOnFreeLocalInner(value, target, bound)) return true;
+                }
+                for (self.exprSpan(jump.args)) |arg| {
+                    if (try self.exprDependsOnFreeLocalInner(arg, target, bound)) return true;
                 }
                 return false;
             },
@@ -19374,32 +19453,43 @@ const BodyContext = struct {
         return try self.instNode(checked_ty);
     }
 
+    /// Resolve a checked type's memoized instantiation node. A closed checked
+    /// type (no identity variables anywhere, field kinds included) means the
+    /// same thing under every declaration scope, so it memoizes at the
+    /// instantiation-context level; an open type's meaning depends on the
+    /// innermost declaration scope's formal bindings, so it memoizes there
+    /// and only there. An outer declaration scope must never answer an open
+    /// lookup: the same open checked type mentioned at two nesting levels of
+    /// a recursive declaration expansion binds the formals differently, and
+    /// an outer answer would collapse those distinct types into one node.
     fn scopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) ?NodeId {
-        var index = self.instantiation.decl_scopes.items.len;
-        while (index > 0) {
-            index -= 1;
-            if (self.instantiation.decl_scopes.items[index].get(checked_ty)) |existing| return existing;
+        const scopes = self.instantiation.decl_scopes.items;
+        if (scopes.len == 0 or self.checkedTypeIsClosed(checked_ty)) {
+            return self.instantiation.node_map.get(checked_ty);
         }
-        if (self.instantiation.decl_scopes.items.len != 0) return null;
-        return self.instantiation.node_map.get(checked_ty);
+        return scopes[scopes.len - 1].get(checked_ty);
     }
 
     fn putScopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId, node: NodeId) Allocator.Error!void {
-        if (self.instantiation.decl_scopes.items.len != 0) {
-            try self.instantiation.decl_scopes.items[self.instantiation.decl_scopes.items.len - 1].put(checked_ty, node);
+        const scopes = self.instantiation.decl_scopes.items;
+        if (scopes.len == 0 or self.checkedTypeIsClosed(checked_ty)) {
+            try self.instantiation.node_map.put(checked_ty, node);
             return;
         }
-        try self.instantiation.node_map.put(checked_ty, node);
+        try scopes[scopes.len - 1].put(checked_ty, node);
     }
 
+    /// Field-kind memoization scopes exactly like `scopedNode`. A kind cell
+    /// is looked up by its undetermined variable's checked type, and a
+    /// variable is always open, so inside a declaration expansion this
+    /// resolves in the innermost scope; the closed branch exists only to
+    /// keep the routing rule identical to `scopedNode`'s.
     fn scopedFieldKind(self: *BodyContext, checked_ty: checked.CheckedTypeId) ?InstantiatedFieldKind {
-        var index = self.instantiation.field_kind_decl_scopes.items.len;
-        while (index > 0) {
-            index -= 1;
-            if (self.instantiation.field_kind_decl_scopes.items[index].get(checked_ty)) |existing| return existing;
+        const scopes = self.instantiation.field_kind_decl_scopes.items;
+        if (scopes.len == 0 or self.checkedTypeIsClosed(checked_ty)) {
+            return self.instantiation.field_kind_map.get(checked_ty);
         }
-        if (self.instantiation.field_kind_decl_scopes.items.len != 0) return null;
-        return self.instantiation.field_kind_map.get(checked_ty);
+        return scopes[scopes.len - 1].get(checked_ty);
     }
 
     fn putScopedFieldKind(
@@ -19407,11 +19497,12 @@ const BodyContext = struct {
         checked_ty: checked.CheckedTypeId,
         field_kind: InstantiatedFieldKind,
     ) Allocator.Error!void {
-        if (self.instantiation.field_kind_decl_scopes.items.len != 0) {
-            try self.instantiation.field_kind_decl_scopes.items[self.instantiation.field_kind_decl_scopes.items.len - 1].put(checked_ty, field_kind);
+        const scopes = self.instantiation.field_kind_decl_scopes.items;
+        if (scopes.len == 0 or self.checkedTypeIsClosed(checked_ty)) {
+            try self.instantiation.field_kind_map.put(checked_ty, field_kind);
             return;
         }
-        try self.instantiation.field_kind_map.put(checked_ty, field_kind);
+        try scopes[scopes.len - 1].put(checked_ty, field_kind);
     }
 
     fn instNodeSlice(self: *BodyContext, checked_tys: []const checked.CheckedTypeId) Allocator.Error![]NodeId {
@@ -19648,8 +19739,19 @@ const BodyContext = struct {
     /// formals and backing share one set of checked roots across every instance
     /// of the nominal, so the backing instantiates inside a fresh scope seeded
     /// with this instance's argument nodes: two instances of the same nominal at
-    /// different arguments stay independent, and the recursive uses inside the
-    /// backing resolve through the scope chain.
+    /// different arguments stay independent.
+    ///
+    /// Termination: the checker's `validateNominalDeclArgumentGrowth` rejects
+    /// any declaration group whose formal-flow graph carries a growing edge
+    /// inside a cycle, and any recursive mention argument holding a variable
+    /// that is no formal of the mentioning declaration. What remains keeps
+    /// the reachable argument tuples finite here: a formal argument resolves
+    /// in the innermost scope to this instance's own argument cell, so the
+    /// recursive lookup hits the placeholder registered below before the
+    /// backing expands; a closed argument memoizes once per instantiation
+    /// context, so nested expansions present the same cell; and a
+    /// formal-wrapping argument only occurs on acyclic flow edges, so the
+    /// fresh cells it mints never feed back into their own declaration.
     fn instNominalBackingNode(
         self: *BodyContext,
         nominal: checked.CheckedNominalType,
@@ -26166,8 +26268,47 @@ const BodyContext = struct {
             .bool_ty = bool_ty,
             .u64_ty = u64_ty,
         };
+
+        const error_join = try self.reserveGeneratedJoinPoint(ret_ty);
+        const entry_end_join = try self.reserveGeneratedJoinPoint(ret_ty);
+        const entry_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const skip_join = try self.reserveGeneratedJoinPoint(ret_ty);
+        const skip_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const field_joins = try self.allocator.alloc(DraftExprId, record_fields.len);
+        defer self.allocator.free(field_joins);
+        const field_state_locals = try self.allocator.alloc(DraftLocalId, record_fields.len);
+        defer self.allocator.free(field_state_locals);
+        for (field_joins, field_state_locals) |*join, *local| {
+            join.* = try self.reserveGeneratedJoinPoint(ret_ty);
+            local.* = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        }
+        const continuations = ParseRecordContinuations{
+            .error_join = error_join,
+            .entry_end_join = entry_end_join,
+            .skip_join = skip_join,
+            .field_joins = field_joins,
+        };
+
         const fields_expr = try self.lowerFieldNamesValue(fields_ty, fields_backing_ty, field_handle_ty, renamed_field_locals, renamed_field_lengths);
         const fields_local = try self.addLocal(self.builder.symbols.fresh(), fields_ty);
+        const parser_retained = try self.allocator.alloc(
+            BodyTypedLocal,
+            1 + renamed_field_locals.len + record_slots.payload_locals.len,
+        );
+        defer self.allocator.free(parser_retained);
+        var retained_index: usize = 0;
+        parser_retained[retained_index] = .{ .local = fields_local, .ty = fields_ty };
+        retained_index += 1;
+        for (renamed_field_locals) |local| {
+            parser_retained[retained_index] = .{ .local = local, .ty = str_ty };
+            retained_index += 1;
+        }
+        for (record_slots.payload_locals, record_slots.payload_tys) |local, ty| {
+            parser_retained[retained_index] = .{ .local = local, .ty = ty };
+            retained_index += 1;
+        }
+        if (retained_index != parser_retained.len) Common.invariant("record parser retained local count differed");
+
         const step_expr = try self.addExpr(.{
             .ty = step_try_ty,
             .data = .{ .call_proc = .{
@@ -26183,21 +26324,18 @@ const BodyContext = struct {
 
         const event_local = try self.addLocal(self.builder.symbols.fresh(), event_ty);
         const event_body = try self.lowerParseRecordEvent(
-            shape_ty,
-            encoding_expr,
-            encoding_ty,
             state_ty,
             ret_ty,
             record_slots,
             ctl,
-            precomputed_plan,
+            continuations,
             renamed_field_locals,
             renamed_field_lengths,
             renamed_field_texts,
             event_local,
             event_ty,
         );
-        const step_body = try self.sequenceTry(step_expr, step_try_ty, event_local, event_body, ret_ty);
+        const step_body = try self.sequenceTryTo(step_expr, step_try_ty, event_local, event_body, ret_ty, error_join);
 
         const remaining_is_zero = try self.lowLevelExpr(.num_is_eq, &.{
             try self.localExpr(ctl.remaining_local, u64_ty),
@@ -26224,8 +26362,83 @@ const BodyContext = struct {
             record_slots,
             renamed_field_locals,
             try self.localExpr(cursor_local, state_ty),
+            error_join,
         );
-        const loop_body = try self.ifExpr(finish_cond, finish_body, step_body, ret_ty);
+        var loop_body = try self.ifExpr(finish_cond, finish_body, step_body, ret_ty);
+
+        var field_index = record_fields.len;
+        while (field_index > 0) {
+            field_index -= 1;
+            const field_body = try self.lowerParseMatchedRecordFieldNext(
+                record_fields[field_index],
+                field_index,
+                encoding_expr,
+                encoding_ty,
+                state_ty,
+                record_slots,
+                precomputed_plan,
+                field_state_locals[field_index],
+                ret_ty,
+                entry_end_join,
+                error_join,
+            );
+            try self.completeGeneratedJoinPoint(
+                field_joins[field_index],
+                &.{.{ .local = field_state_locals[field_index], .ty = state_ty }},
+                &.{},
+                field_body,
+                loop_body,
+            );
+            loop_body = field_joins[field_index];
+        }
+
+        const skip_body = try self.lowerSkipRecordFieldNext(
+            encoding_expr,
+            encoding_ty,
+            state_ty,
+            ret_ty,
+            skip_state_local,
+            entry_end_join,
+            error_join,
+        );
+        try self.completeGeneratedJoinPoint(
+            skip_join,
+            &.{.{ .local = skip_state_local, .ty = state_ty }},
+            &.{},
+            skip_body,
+            loop_body,
+        );
+        loop_body = skip_join;
+
+        const entry_end_body = try self.lowerParseRecordEntryEnd(
+            encoding_expr,
+            encoding_ty,
+            state_ty,
+            ret_ty,
+            entry_state_local,
+            record_slots,
+            ctl,
+            error_join,
+        );
+        try self.completeGeneratedJoinPoint(
+            entry_end_join,
+            &.{.{ .local = entry_state_local, .ty = state_ty }},
+            parser_retained,
+            entry_end_body,
+            loop_body,
+        );
+        loop_body = entry_end_join;
+
+        const error_local = try self.addLocal(self.builder.symbols.fresh(), ret_info.err_ty);
+        const error_body = try self.tryErr(ret_ty, try self.localExpr(error_local, ret_info.err_ty));
+        try self.completeGeneratedJoinPoint(
+            error_join,
+            &.{.{ .local = error_local, .ty = ret_info.err_ty }},
+            parser_retained,
+            error_body,
+            loop_body,
+        );
+        loop_body = error_join;
 
         const params = try self.allocator.alloc(BodyTypedLocal, record_loop_slot_offset + record_slots.payload_locals.len + record_slots.presence_locals.len);
         defer self.allocator.free(params);
@@ -26340,14 +26553,11 @@ const BodyContext = struct {
 
     fn lowerParseRecordEvent(
         self: *BodyContext,
-        shape_ty: Type.TypeId,
-        encoding_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
         record_slots: ParseRecordSlots,
         ctl: RecordLoopCtl,
-        precomputed_plan: ?*const ParserPrecomputedPlan,
+        continuations: ParseRecordContinuations,
         renamed_field_locals: []const DraftLocalId,
         renamed_field_lengths: ?[]const u32,
         renamed_field_texts: ?[]const []const u8,
@@ -26398,14 +26608,9 @@ const BodyContext = struct {
             .payloads = try self.addPatSpan(&[_]DraftPatId{field_payload_pat}),
         } } });
         const field_body = try self.lowerParseRecordDirectFieldEvent(
-            shape_ty,
-            encoding_expr,
-            encoding_ty,
             state_ty,
             ret_ty,
-            record_slots,
-            ctl,
-            precomputed_plan,
+            continuations,
             field_payload_local,
             field_payload_ty,
         );
@@ -26417,14 +26622,9 @@ const BodyContext = struct {
             .payloads = try self.addPatSpan(&[_]DraftPatId{try_field_payload_pat}),
         } } });
         const try_field_body = try self.lowerParseRecordNamedFieldEvent(
-            shape_ty,
-            encoding_expr,
-            encoding_ty,
             state_ty,
             ret_ty,
-            record_slots,
-            ctl,
-            precomputed_plan,
+            continuations,
             renamed_field_locals,
             renamed_field_lengths,
             renamed_field_texts,
@@ -26440,14 +26640,9 @@ const BodyContext = struct {
             .payloads = try self.addPatSpan(&[_]DraftPatId{try_field_caseless_payload_pat}),
         } } });
         const try_field_caseless_body = try self.lowerParseRecordNamedFieldEvent(
-            shape_ty,
-            encoding_expr,
-            encoding_ty,
             state_ty,
             ret_ty,
-            record_slots,
-            ctl,
-            precomputed_plan,
+            continuations,
             renamed_field_locals,
             renamed_field_lengths,
             renamed_field_texts,
@@ -26597,7 +26792,6 @@ const BodyContext = struct {
         remaining_expr: DraftExprId,
         record_slots: ParseRecordSlots,
         ctl: RecordLoopCtl,
-        updated: ?UpdatedFieldSlot,
     ) Allocator.Error!DraftExprId {
         const values = try self.allocator.alloc(DraftExprId, record_loop_slot_offset + record_slots.payload_locals.len + record_slots.presence_locals.len);
         defer self.allocator.free(values);
@@ -26610,17 +26804,11 @@ const BodyContext = struct {
         // marked present.
         const payload_offset = record_loop_slot_offset;
         for (record_slots.payload_locals, record_slots.payload_tys, 0..) |local, ty, index| {
-            values[payload_offset + index] = if (updated != null and index == updated.?.index) blk: {
-                if (!self.sameType(ty, updated.?.ty)) Common.invariant("record parser field payload type differed from slot payload type");
-                break :blk try self.localExpr(updated.?.local, updated.?.ty);
-            } else try self.localExpr(local, ty);
+            values[payload_offset + index] = try self.localExpr(local, ty);
         }
         const presence_offset = payload_offset + record_slots.payload_locals.len;
         for (record_slots.presence_locals, record_slots.presence_tys, 0..) |local, ty, index| {
-            values[presence_offset + index] = if (updated != null and index == recordPresenceWordIndex(updated.?.index))
-                try self.recordPresenceWithBit(local, ty, recordPresenceMask(updated.?.index))
-            else
-                try self.localExpr(local, ty);
+            values[presence_offset + index] = try self.localExpr(local, ty);
         }
         return try self.continueWith(.{ .sealed = ret_ty }, values);
     }
@@ -26637,7 +26825,7 @@ const BodyContext = struct {
         entry_state_local: DraftLocalId,
         record_slots: ParseRecordSlots,
         ctl: RecordLoopCtl,
-        updated: ?UpdatedFieldSlot,
+        error_join: DraftExprId,
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
         const false_expr = try self.boolLiteral(false, ctl.bool_ty);
@@ -26652,7 +26840,6 @@ const BodyContext = struct {
             remaining_minus_one,
             record_slots,
             ctl,
-            updated,
         );
 
         const after_event_ty = try self.parseArrayEventType(state_ty, "Continue", "Done");
@@ -26681,7 +26868,6 @@ const BodyContext = struct {
             remaining_expr,
             record_slots,
             ctl,
-            updated,
         );
 
         const done_tag = self.monoTagByText(after_event_ty, "Done");
@@ -26698,7 +26884,6 @@ const BodyContext = struct {
             try self.localExpr(ctl.remaining_local, ctl.u64_ty),
             record_slots,
             ctl,
-            updated,
         );
 
         const branches = [_]DraftBranch{
@@ -26709,7 +26894,7 @@ const BodyContext = struct {
             .scrutinee = try self.localExpr(after_event_local, after_event_ty),
             .branches = try self.addBranchSpan(&branches),
         } } });
-        const uncounted_body = try self.sequenceTry(after_try, after_try_ty, after_event_local, after_match, ret_ty);
+        const uncounted_body = try self.sequenceTryTo(after_try, after_try_ty, after_event_local, after_match, ret_ty, error_join);
 
         return try self.ifExpr(
             try self.localExpr(ctl.counted_local, ctl.bool_ty),
@@ -26721,14 +26906,9 @@ const BodyContext = struct {
 
     fn lowerParseRecordNamedFieldEvent(
         self: *BodyContext,
-        shape_ty: Type.TypeId,
-        encoding_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
-        record_slots: ParseRecordSlots,
-        ctl: RecordLoopCtl,
-        precomputed_plan: ?*const ParserPrecomputedPlan,
+        continuations: ParseRecordContinuations,
         renamed_field_locals: []const DraftLocalId,
         renamed_field_lengths: ?[]const u32,
         renamed_field_texts: ?[]const []const u8,
@@ -26745,17 +26925,12 @@ const BodyContext = struct {
         const key_local = try self.addLocal(self.builder.symbols.fresh(), str_ty);
         const rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
         const body = try self.lowerRecordNamedFieldDispatchBody(
-            shape_ty,
-            encoding_expr,
-            encoding_ty,
             key_local,
             str_ty,
             rest_local,
             state_ty,
             ret_ty,
-            record_slots,
-            ctl,
-            precomputed_plan,
+            continuations,
             renamed_field_locals,
             renamed_field_lengths,
             renamed_field_texts,
@@ -26781,7 +26956,7 @@ const BodyContext = struct {
             try self.localExpr(ctl.remaining_local, ctl.u64_ty),
             try self.intLiteralExpr(1, ctl.u64_ty),
         }, ctl.u64_ty);
-        const counted_body = try self.continueRecordLoop(ret_ty, cursor_expr, false_expr, remaining_minus_one, record_slots, ctl, null);
+        const counted_body = try self.continueRecordLoop(ret_ty, cursor_expr, false_expr, remaining_minus_one, record_slots, ctl);
         const uncounted_body = try self.continueRecordLoop(
             ret_ty,
             cursor_expr,
@@ -26789,7 +26964,6 @@ const BodyContext = struct {
             try self.localExpr(ctl.remaining_local, ctl.u64_ty),
             record_slots,
             ctl,
-            null,
         );
         return try self.ifExpr(
             try self.localExpr(ctl.counted_local, ctl.bool_ty),
@@ -26814,7 +26988,6 @@ const BodyContext = struct {
             try self.localExpr(ctl.remaining_local, ctl.u64_ty),
             record_slots,
             ctl,
-            null,
         );
     }
 
@@ -26830,6 +27003,7 @@ const BodyContext = struct {
         record_slots: ParseRecordSlots,
         renamed_field_locals: []const DraftLocalId,
         rest_expr: DraftExprId,
+        error_join: DraftExprId,
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
         const record_try_ty = try self.tryTypeLike(ret_ty, shape_ty, ret_info.err_ty);
@@ -26842,6 +27016,7 @@ const BodyContext = struct {
             rest_expr,
             state_ty,
             renamed_field_locals,
+            error_join,
         );
         const record_local = try self.addLocal(self.builder.symbols.fresh(), shape_ty);
         const ok_body = try self.parseResultOk(
@@ -26850,19 +27025,14 @@ const BodyContext = struct {
             rest_expr,
             state_ty,
         );
-        return try self.sequenceTry(record_expr, record_try_ty, record_local, ok_body, ret_ty);
+        return try self.sequenceTryTo(record_expr, record_try_ty, record_local, ok_body, ret_ty, error_join);
     }
 
     fn lowerParseRecordDirectFieldEvent(
         self: *BodyContext,
-        shape_ty: Type.TypeId,
-        encoding_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
-        record_slots: ParseRecordSlots,
-        ctl: RecordLoopCtl,
-        precomputed_plan: ?*const ParserPrecomputedPlan,
+        continuations: ParseRecordContinuations,
         field_payload_local: DraftLocalId,
         field_payload_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
@@ -26872,82 +27042,50 @@ const BodyContext = struct {
         const field_local = try self.addLocal(self.builder.symbols.fresh(), field_ty);
         const rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
         const body = try self.lowerRecordDirectFieldDispatchBody(
-            shape_ty,
-            encoding_expr,
-            encoding_ty,
             field_local,
             field_ty,
             rest_local,
             state_ty,
             ret_ty,
-            record_slots,
-            ctl,
-            precomputed_plan,
+            continuations,
         );
         return try self.wrapLet(field_local, field_ty, field_expr, try self.wrapLet(rest_local, state_ty, rest_expr, body, ret_ty), ret_ty);
     }
 
     fn lowerRecordDirectFieldDispatchBody(
         self: *BodyContext,
-        shape_ty: Type.TypeId,
-        encoding_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
         field_local: DraftLocalId,
         field_ty: Type.TypeId,
         rest_local: DraftLocalId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
-        record_slots: ParseRecordSlots,
-        ctl: RecordLoopCtl,
-        precomputed_plan: ?*const ParserPrecomputedPlan,
+        continuations: ParseRecordContinuations,
     ) Allocator.Error!DraftExprId {
-        const fields = try GuardedList.dupe(self.allocator, Type.Field, switch (self.shapeContent(shape_ty)) {
-            .record => |span| self.typeStore().fieldSpan(span),
-            .zst => self.typeStore().fieldSpan(.empty()),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => Common.invariant("record direct field dispatch requested for a non-record shape"),
-        });
-        defer self.allocator.free(fields);
-        if (fields.len != record_slots.fieldCount()) Common.invariant("record direct field dispatch state arity differed from field count");
-
-        if (fields.len == 0) {
-            return try self.lowerSkipRecordFieldNext(
-                encoding_expr,
-                encoding_ty,
-                state_ty,
-                ret_ty,
-                rest_local,
-                record_slots,
-                ctl,
-            );
-        }
+        if (continuations.field_joins.len == 0) return try self.jumpToGeneratedJoin(
+            continuations.skip_join,
+            &.{try self.localExpr(rest_local, state_ty)},
+            &.{},
+            &.{},
+            ret_ty,
+        );
 
         const u64_ty = try self.primitiveType(.u64);
         const index_local = try self.addLocal(self.builder.symbols.fresh(), u64_ty);
-        var body = try self.lowerParseMatchedRecordFieldNext(
-            fields[fields.len - 1],
-            fields.len - 1,
-            encoding_expr,
-            encoding_ty,
-            state_ty,
-            record_slots,
-            ctl,
-            precomputed_plan,
-            rest_local,
+        var body = try self.jumpToGeneratedJoin(
+            continuations.field_joins[continuations.field_joins.len - 1],
+            &.{try self.localExpr(rest_local, state_ty)},
+            &.{},
+            &.{},
             ret_ty,
         );
-        var index = fields.len - 1;
+        var index = continuations.field_joins.len - 1;
         while (index > 0) {
             index -= 1;
-            const matched = try self.lowerParseMatchedRecordFieldNext(
-                fields[index],
-                index,
-                encoding_expr,
-                encoding_ty,
-                state_ty,
-                record_slots,
-                ctl,
-                precomputed_plan,
-                rest_local,
+            const matched = try self.jumpToGeneratedJoin(
+                continuations.field_joins[index],
+                &.{try self.localExpr(rest_local, state_ty)},
+                &.{},
+                &.{},
                 ret_ty,
             );
             const index_expr = try self.localExpr(index_local, u64_ty);
@@ -26962,62 +27100,43 @@ const BodyContext = struct {
 
     fn lowerRecordNamedFieldDispatchBody(
         self: *BodyContext,
-        shape_ty: Type.TypeId,
-        encoding_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
         key_local: DraftLocalId,
         key_ty: Type.TypeId,
         rest_local: DraftLocalId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
-        record_slots: ParseRecordSlots,
-        ctl: RecordLoopCtl,
-        precomputed_plan: ?*const ParserPrecomputedPlan,
+        continuations: ParseRecordContinuations,
         renamed_field_locals: []const DraftLocalId,
         renamed_field_lengths: ?[]const u32,
         renamed_field_texts: ?[]const []const u8,
         mode: RecordFieldMatchMode,
     ) Allocator.Error!DraftExprId {
-        const fields = try GuardedList.dupe(self.allocator, Type.Field, switch (self.shapeContent(shape_ty)) {
-            .record => |span| self.typeStore().fieldSpan(span),
-            .zst => self.typeStore().fieldSpan(.empty()),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => Common.invariant("record named field dispatch requested for a non-record shape"),
-        });
-        defer self.allocator.free(fields);
-        if (fields.len != record_slots.fieldCount()) Common.invariant("record named field dispatch state arity differed from field count");
-        if (fields.len != renamed_field_locals.len) Common.invariant("record named field dispatch renamed field arity differed from field count");
+        if (continuations.field_joins.len != renamed_field_locals.len) Common.invariant("record named field dispatch renamed field arity differed from field count");
         if (renamed_field_lengths) |lengths| {
-            if (fields.len != lengths.len) Common.invariant("record named field dispatch renamed length arity differed from field count");
+            if (continuations.field_joins.len != lengths.len) Common.invariant("record named field dispatch renamed length arity differed from field count");
         }
         if (renamed_field_texts) |texts| {
-            if (fields.len != texts.len) Common.invariant("record named field dispatch renamed text arity differed from field count");
+            if (continuations.field_joins.len != texts.len) Common.invariant("record named field dispatch renamed text arity differed from field count");
         }
 
-        const matched_bodies = try self.allocator.alloc(DraftExprId, fields.len);
+        const matched_bodies = try self.allocator.alloc(DraftExprId, continuations.field_joins.len);
         defer self.allocator.free(matched_bodies);
-        for (fields, 0..) |field, index| {
-            matched_bodies[index] = try self.lowerParseMatchedRecordFieldNext(
-                field,
-                index,
-                encoding_expr,
-                encoding_ty,
-                state_ty,
-                record_slots,
-                ctl,
-                precomputed_plan,
-                rest_local,
+        for (continuations.field_joins, 0..) |target, index| {
+            matched_bodies[index] = try self.jumpToGeneratedJoin(
+                target,
+                &.{try self.localExpr(rest_local, state_ty)},
+                &.{},
+                &.{},
                 ret_ty,
             );
         }
 
-        const unknown_body = try self.lowerSkipRecordFieldNext(
-            encoding_expr,
-            encoding_ty,
-            state_ty,
+        const unknown_body = try self.jumpToGeneratedJoin(
+            continuations.skip_join,
+            &.{try self.localExpr(rest_local, state_ty)},
+            &.{},
+            &.{},
             ret_ty,
-            rest_local,
-            record_slots,
-            ctl,
         );
 
         return try self.lowerParseRecordNamedDispatchBody(
@@ -27040,8 +27159,8 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
         rest_local: DraftLocalId,
-        record_slots: ParseRecordSlots,
-        ctl: RecordLoopCtl,
+        entry_end_join: DraftExprId,
+        error_join: DraftExprId,
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
         const skip_try_ty = try self.tryTypeLike(ret_ty, state_ty, ret_info.err_ty);
@@ -27063,17 +27182,14 @@ const BodyContext = struct {
             } },
         });
         const skipped_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        const ok_body = try self.lowerParseRecordEntryEnd(
-            encoding_expr,
-            encoding_ty,
-            state_ty,
+        const ok_body = try self.jumpToGeneratedJoin(
+            entry_end_join,
+            &.{try self.localExpr(skipped_local, state_ty)},
+            &.{},
+            &.{},
             ret_ty,
-            skipped_local,
-            record_slots,
-            ctl,
-            null,
         );
-        return try self.sequenceTry(skip_expr, skip_try_ty, skipped_local, ok_body, ret_ty);
+        return try self.sequenceTryTo(skip_expr, skip_try_ty, skipped_local, ok_body, ret_ty, error_join);
     }
 
     fn lowerParseMatchedRecordFieldNext(
@@ -27084,10 +27200,11 @@ const BodyContext = struct {
         encoding_ty: Type.TypeId,
         state_ty: Type.TypeId,
         record_slots: ParseRecordSlots,
-        ctl: RecordLoopCtl,
         precomputed_plan: ?*const ParserPrecomputedPlan,
         rest_local: DraftLocalId,
         ret_ty: Type.TypeId,
+        entry_end_join: DraftExprId,
+        error_join: DraftExprId,
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
         const maybe_missing_try = try self.missingTryInfo(field.ty);
@@ -27122,18 +27239,41 @@ const BodyContext = struct {
             try self.localExpr(parsed_value_local, field_parse_ty);
         const field_value_local = try self.addLocal(self.builder.symbols.fresh(), field.ty);
         const parsed_rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        const ok_body = try self.lowerParseRecordEntryEnd(
-            encoding_expr,
-            encoding_ty,
-            state_ty,
+        const presence_word = recordPresenceWordIndex(field_index);
+        const loop_params = [_]BodyTypedLocal{
+            .{ .local = record_slots.payload_locals[field_index], .ty = record_slots.payload_tys[field_index] },
+            .{ .local = record_slots.presence_locals[presence_word], .ty = record_slots.presence_tys[presence_word] },
+        };
+        // Payload replacement must precede marking the slot initialized. ARC
+        // cleanup of a duplicate field therefore tests the previous presence
+        // bit and never decrefs an uninitialized payload.
+        const loop_values = [_]DraftExprId{
+            try self.localExpr(field_value_local, field.ty),
+            try self.recordPresenceWithBit(
+                record_slots.presence_locals[presence_word],
+                record_slots.presence_tys[presence_word],
+                recordPresenceMask(field_index),
+            ),
+        };
+        const ok_body = try self.jumpToGeneratedJoin(
+            entry_end_join,
+            &.{try self.localExpr(parsed_rest_local, state_ty)},
+            &loop_params,
+            &loop_values,
             ret_ty,
-            parsed_rest_local,
-            record_slots,
-            ctl,
-            .{ .local = field_value_local, .ty = field.ty, .index = field_index },
         );
         const with_field_value = try self.wrapLet(field_value_local, field.ty, field_value, ok_body, ret_ty);
-        return try self.sequenceTryRecord(parse_expr, parse_ret_ty, parsed_value_local, value_name, parsed_rest_local, rest_name, with_field_value, ret_ty);
+        return try self.sequenceTryRecordTo(
+            parse_expr,
+            parse_ret_ty,
+            parsed_value_local,
+            value_name,
+            parsed_rest_local,
+            rest_name,
+            with_field_value,
+            ret_ty,
+            error_join,
+        );
     }
 
     fn lowerParseShapeHelperCall(
@@ -28939,6 +29079,7 @@ const BodyContext = struct {
         rest_value: DraftExprId,
         state_ty: Type.TypeId,
         renamed_field_locals: []const DraftLocalId,
+        error_join: DraftExprId,
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
         if (!self.sameType(ret_info.ok_ty, record_ty)) Common.invariant("record finish Try Ok type differed from record type");
@@ -28957,38 +29098,10 @@ const BodyContext = struct {
 
         const out_fields = try self.allocator.alloc(DraftFieldExpr, record_fields.len);
         defer self.allocator.free(out_fields);
-        const field_tries = try self.allocator.alloc(?DraftExprId, record_fields.len);
-        defer self.allocator.free(field_tries);
-        @memset(field_tries, null);
-        const field_try_tys = try self.allocator.alloc(?Type.TypeId, record_fields.len);
-        defer self.allocator.free(field_try_tys);
-        @memset(field_try_tys, null);
         const field_locals = try self.allocator.alloc(DraftLocalId, record_fields.len);
         defer self.allocator.free(field_locals);
         for (record_fields, 0..) |field, index| {
             field_locals[index] = try self.addLocal(self.builder.symbols.fresh(), field.ty);
-            const field_can_be_missing = (try self.missingTryInfo(field.ty)) != null or
-                self.optionalFieldSlot(field.ty) != null or
-                self.parserFieldDefaultFor(record_ty, field.name) != null;
-            if (!field_can_be_missing) {
-                const field_try_ty = try self.tryTypeLike(ret_ty, field.ty, ret_info.err_ty);
-                field_try_tys[index] = field_try_ty;
-                const presence_word = recordPresenceWordIndex(index);
-                const is_present = try self.localExpr(record_slots.presence_locals[presence_word], record_slots.presence_tys[presence_word]);
-                field_tries[index] = try self.parseRecordFieldFromPresencePayload(
-                    is_present,
-                    recordPresenceMask(index),
-                    record_slots.payload_locals[index],
-                    record_slots.payload_tys[index],
-                    field,
-                    field_try_ty,
-                    renamed_field_locals[index],
-                    encoding_expr,
-                    encoding_ty,
-                    rest_expr,
-                    state_ty,
-                );
-            }
             out_fields[index] = .{
                 .name = field.name,
                 .value = try self.localExpr(field_locals[index], field.ty),
@@ -29027,13 +29140,52 @@ const BodyContext = struct {
                     field_locals[field_index],
                 )
             else
-                try self.sequenceTry(
-                    field_tries[field_index] orelse Common.invariant("required record field was missing finish Try"),
-                    field_try_tys[field_index] orelse Common.invariant("required record field was missing finish Try type"),
+                try self.wrapLet(
                     field_locals[field_index],
+                    record_fields[field_index].ty,
+                    try self.localExpr(record_slots.payload_locals[field_index], record_slots.payload_tys[field_index]),
                     body,
                     ret_ty,
                 );
+        }
+
+        // Validate every required presence bit before consuming any payload.
+        // Consequently every failure edge reaches the shared error body with
+        // the same ownership environment, and ARC emits its O(N) cleanup once.
+        field_index = record_fields.len;
+        while (field_index > 0) {
+            field_index -= 1;
+            const field = record_fields[field_index];
+            const field_can_be_missing = (try self.missingTryInfo(field.ty)) != null or
+                self.optionalFieldSlot(field.ty) != null or
+                self.parserFieldDefaultFor(record_ty, field.name) != null;
+            if (field_can_be_missing) continue;
+
+            const renamed_field_ty = try self.localType(renamed_field_locals[field_index]);
+            const missing_error = try self.missingRequiredFieldError(
+                try self.localExpr(renamed_field_locals[field_index], renamed_field_ty),
+                encoding_expr,
+                rest_expr,
+                encoding_ty,
+                state_ty,
+                ret_info.err_ty,
+            );
+            const missing_body = try self.jumpToGeneratedJoin(
+                error_join,
+                &.{missing_error},
+                &.{},
+                &.{},
+                ret_ty,
+            );
+            const presence_word = recordPresenceWordIndex(field_index);
+            body = try self.addExpr(.{ .ty = ret_ty, .data = .{ .if_initialized_payload = .{
+                .cond = try self.localExpr(record_slots.presence_locals[presence_word], record_slots.presence_tys[presence_word]),
+                .cond_mask = recordPresenceMask(field_index),
+                .payload = record_slots.payload_locals[field_index],
+                .uninitialized_is_cold = true,
+                .initialized = body,
+                .uninitialized = missing_body,
+            } } });
         }
         return try self.wrapLet(rest_local, state_ty, rest_value, body, ret_ty);
     }
@@ -29612,6 +29764,57 @@ const BodyContext = struct {
             .bind = try self.bindPat(local, ty),
             .value = value,
             .rest = rest,
+        } } });
+    }
+
+    /// Reserve the expression that owns a compiler-generated join id. The
+    /// producer fills it only after every body that can jump to the join has
+    /// been built, so forward edges never require guessed or reconstructed
+    /// control-flow metadata.
+    fn reserveGeneratedJoinPoint(self: *BodyContext, ret_ty: Type.TypeId) Allocator.Error!DraftExprId {
+        return try self.addExprWithTypeCell(.{ .sealed = ret_ty }, .pending_deferred);
+    }
+
+    fn completeGeneratedJoinPoint(
+        self: *BodyContext,
+        reservation: DraftExprId,
+        params: []const BodyTypedLocal,
+        retained: []const BodyTypedLocal,
+        body: DraftExprId,
+        remainder: DraftExprId,
+    ) Allocator.Error!void {
+        const reserved = &self.draft.exprs.items[@intFromEnum(reservation)];
+        if (reserved.data != .pending_deferred) {
+            Common.invariant("compiler-generated join reservation was filled more than once");
+        }
+        const data: BodyExprData = .{ .join_point = .{
+            .id = reservation,
+            .params = try self.addTypedLocalSpan(params),
+            .retained = try self.addTypedLocalSpan(retained),
+            .body = body,
+            .remainder = remainder,
+        } };
+        reserved.data = data;
+        self.draft.expr_impossibility_proofs.items[@intFromEnum(reservation)] =
+            try self.exprDataImpossibilityProof(reserved.ty, data);
+    }
+
+    fn jumpToGeneratedJoin(
+        self: *BodyContext,
+        target: DraftExprId,
+        args: []const DraftExprId,
+        loop_params: []const BodyTypedLocal,
+        loop_values: []const DraftExprId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        if (loop_params.len != loop_values.len) {
+            Common.invariant("compiler-generated jump loop-update arity differed");
+        }
+        return try self.addExpr(.{ .ty = ret_ty, .data = .{ .jump = .{
+            .target = target,
+            .args = try self.addExprSpan(args),
+            .loop_params = try self.addTypedLocalSpan(loop_params),
+            .loop_values = try self.addExprSpan(loop_values),
         } } });
     }
 
@@ -43551,6 +43754,18 @@ const BodyContext = struct {
         ok_body: DraftExprId,
         out_try_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
+        return try self.sequenceTryTo(try_expr, try_ty, ok_local, ok_body, out_try_ty, null);
+    }
+
+    fn sequenceTryTo(
+        self: *BodyContext,
+        try_expr: DraftExprId,
+        try_ty: Type.TypeId,
+        ok_local: DraftLocalId,
+        ok_body: DraftExprId,
+        out_try_ty: Type.TypeId,
+        err_target: ?DraftExprId,
+    ) Allocator.Error!DraftExprId {
         const info = self.tryInfo(try_ty);
         const out_info = self.tryInfo(out_try_ty);
         if (!self.sameType(info.err_ty, out_info.err_ty)) Common.invariant("sequenced Try error type differed from output Try error type");
@@ -43559,6 +43774,7 @@ const BodyContext = struct {
             .try_expr = try_expr,
             .ok_local = ok_local,
             .err_is_cold = true,
+            .err_target = err_target,
             .ok_body = ok_body,
         } } });
     }
@@ -43616,6 +43832,31 @@ const BodyContext = struct {
         ok_body: DraftExprId,
         out_try_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
+        return try self.sequenceTryRecordTo(
+            try_expr,
+            try_ty,
+            value_local,
+            value_field,
+            rest_local,
+            rest_field,
+            ok_body,
+            out_try_ty,
+            null,
+        );
+    }
+
+    fn sequenceTryRecordTo(
+        self: *BodyContext,
+        try_expr: DraftExprId,
+        try_ty: Type.TypeId,
+        value_local: DraftLocalId,
+        value_field: names.RecordFieldNameId,
+        rest_local: DraftLocalId,
+        rest_field: names.RecordFieldNameId,
+        ok_body: DraftExprId,
+        out_try_ty: Type.TypeId,
+        err_target: ?DraftExprId,
+    ) Allocator.Error!DraftExprId {
         const info = self.tryInfo(try_ty);
         const out_info = self.tryInfo(out_try_ty);
         if (!self.sameType(info.err_ty, out_info.err_ty)) Common.invariant("sequenced Try record error type differed from output Try error type");
@@ -43633,6 +43874,7 @@ const BodyContext = struct {
             .rest_local = rest_local,
             .rest_field = rest_field,
             .err_is_cold = true,
+            .err_target = err_target,
             .ok_body = ok_body,
         } } });
     }
@@ -46686,50 +46928,6 @@ const BodyContext = struct {
             .uninitialized = default_field,
         } } });
         return try self.wrapLet(field_local, field_ty, field_value, next_body, ret_ty);
-    }
-
-    fn parseRecordFieldFromPresencePayload(
-        self: *BodyContext,
-        is_present_expr: DraftExprId,
-        is_present_mask: u64,
-        payload_local: DraftLocalId,
-        payload_ty: Type.TypeId,
-        field: Type.Field,
-        field_try_ty: Type.TypeId,
-        renamed_field_local: DraftLocalId,
-        encoding_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
-        state_expr: DraftExprId,
-        state_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        const field_ty = field.ty;
-        const field_try_info = self.tryInfo(field_try_ty);
-        if (!self.sameType(field_try_info.ok_ty, field_ty)) Common.invariant("structural parser field Try Ok type differed from field type");
-        const renamed_field_ty = try self.localType(renamed_field_local);
-        if (!self.typeHasBuiltinOwner(renamed_field_ty, .str)) Common.invariant("record parser renamed field local was not Str");
-        const renamed_field_expr = try self.localExpr(renamed_field_local, renamed_field_ty);
-
-        if (!self.sameType(payload_ty, field_ty)) {
-            Common.invariant("generated record parse payload type differed from parsed field type");
-        }
-        const present_body = try self.tryOk(field_try_ty, try self.localExpr(payload_local, payload_ty));
-        const absent_body = try self.tryErr(field_try_ty, try self.missingRequiredFieldError(
-            renamed_field_expr,
-            encoding_expr,
-            state_expr,
-            encoding_ty,
-            state_ty,
-            field_try_info.err_ty,
-        ));
-
-        return try self.addExpr(.{ .ty = field_try_ty, .data = .{ .if_initialized_payload = .{
-            .cond = is_present_expr,
-            .cond_mask = is_present_mask,
-            .payload = payload_local,
-            .uninitialized_is_cold = true,
-            .initialized = present_body,
-            .uninitialized = absent_body,
-        } } });
     }
 
     /// Whether parsing `ty` from source text can report a missing required

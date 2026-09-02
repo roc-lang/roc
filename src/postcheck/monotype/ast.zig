@@ -800,6 +800,10 @@ pub const TrySequence = struct {
     /// The Err propagation edge is compiler-proven cold. LIR lowering may
     /// preserve this as explicit branch metadata; backends must not infer it.
     err_is_cold: bool = false,
+    /// Explicit enclosing continuation for compiler-generated shared error
+    /// propagation. Its single parameter has the input Try's Err payload type.
+    /// Null preserves ordinary inline Err construction.
+    err_target: ?JoinPointId = null,
     ok_body: ExprId,
 };
 
@@ -816,6 +820,10 @@ pub const TryRecordSequence = struct {
     /// The Err propagation edge is compiler-proven cold. LIR lowering may
     /// preserve this as explicit branch metadata; backends must not infer it.
     err_is_cold: bool = false,
+    /// Explicit enclosing continuation for compiler-generated shared error
+    /// propagation. Its single parameter has the input Try's Err payload type.
+    /// Null preserves ordinary inline Err construction.
+    err_target: ?JoinPointId = null,
     ok_body: ExprId,
 };
 
@@ -837,7 +845,8 @@ pub const ContinueExpr = struct {
     values: Span(ExprId),
 };
 
-/// A typed shared continuation introduced after Monotype lifting.
+/// A typed shared continuation introduced by generated Monotype or a later
+/// specialization pass.
 ///
 /// `body` is evaluated when a matching `jump` supplies `params`; `remainder`
 /// is the expression that may transfer control to the join point. Both have
@@ -845,6 +854,10 @@ pub const ContinueExpr = struct {
 pub const JoinPointExpr = struct {
     id: JoinPointId,
     params: Span(TypedLocal),
+    /// Lexically enclosing locals whose ownership is transferred into the
+    /// shared body even when the body's value computation does not read them.
+    /// ARC performs their eventual release once in the body.
+    retained: Span(TypedLocal) = Span(TypedLocal).empty(),
     body: ExprId,
     remainder: ExprId,
 };
@@ -853,6 +866,11 @@ pub const JoinPointExpr = struct {
 pub const JumpExpr = struct {
     target: JoinPointId,
     args: Span(ExprId),
+    /// Explicit sparse rebinding of lexically enclosing loop parameters before
+    /// the jump. `loop_params` and `loop_values` are parallel; all values are
+    /// evaluated before any parameter is replaced.
+    loop_params: Span(TypedLocal) = Span(TypedLocal).empty(),
+    loop_values: Span(ExprId) = Span(ExprId).empty(),
 };
 
 /// Source control-flow construct observed during compile-time finalization.

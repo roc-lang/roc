@@ -822,14 +822,24 @@ const Solver = struct {
                 if (std.meta.activeTag(content) != .tag_union) Common.invariant("try_sequence input was not a Try tag union");
                 const tags = content.tag_union;
                 var ok_ty: ?Type.TypeVarId = null;
+                var err_ty: ?Type.TypeVarId = null;
                 for (0..tags.count()) |tag_index| {
                     const tag = self.program.types.tagItem(tags, tag_index);
-                    if (!std.mem.eql(u8, self.lifted.names.tagLabelText(tag.name), "Ok")) continue;
-                    if (tag.payloads.count() != 1) Common.invariant("try_sequence Ok tag had unexpected payload arity");
-                    ok_ty = self.program.types.spanItem(tag.payloads, 0);
-                    break;
+                    const text = self.lifted.names.tagLabelText(tag.name);
+                    if (std.mem.eql(u8, text, "Ok")) {
+                        if (tag.payloads.count() != 1) Common.invariant("try_sequence Ok tag had unexpected payload arity");
+                        ok_ty = self.program.types.spanItem(tag.payloads, 0);
+                    } else if (std.mem.eql(u8, text, "Err")) {
+                        if (tag.payloads.count() != 1) Common.invariant("try_sequence Err tag had unexpected payload arity");
+                        err_ty = self.program.types.spanItem(tag.payloads, 0);
+                    }
                 }
                 try self.unify(self.localTy(sequence.ok_local), ok_ty orelse Common.invariant("try_sequence input had no Ok tag"));
+                if (sequence.err_target) |target| {
+                    const params = self.activeJoinPoint(target).params;
+                    if (params.count() != 1) Common.invariant("try_sequence error target did not have one parameter");
+                    try self.unify(self.program.types.spanItem(params, 0), err_ty orelse Common.invariant("try_sequence input had no Err tag"));
+                }
                 _ = try self.expectExpr(sequence.ok_body, expected);
             },
             .try_record_sequence => |sequence| {
@@ -838,16 +848,26 @@ const Solver = struct {
                 if (std.meta.activeTag(content) != .tag_union) Common.invariant("try_record_sequence input was not a Try tag union");
                 const tags = content.tag_union;
                 var ok_ty: ?Type.TypeVarId = null;
+                var err_ty: ?Type.TypeVarId = null;
                 for (0..tags.count()) |tag_index| {
                     const tag = self.program.types.tagItem(tags, tag_index);
-                    if (!std.mem.eql(u8, self.lifted.names.tagLabelText(tag.name), "Ok")) continue;
-                    if (tag.payloads.count() != 1) Common.invariant("try_record_sequence Ok tag had unexpected payload arity");
-                    ok_ty = self.program.types.spanItem(tag.payloads, 0);
-                    break;
+                    const text = self.lifted.names.tagLabelText(tag.name);
+                    if (std.mem.eql(u8, text, "Ok")) {
+                        if (tag.payloads.count() != 1) Common.invariant("try_record_sequence Ok tag had unexpected payload arity");
+                        ok_ty = self.program.types.spanItem(tag.payloads, 0);
+                    } else if (std.mem.eql(u8, text, "Err")) {
+                        if (tag.payloads.count() != 1) Common.invariant("try_record_sequence Err tag had unexpected payload arity");
+                        err_ty = self.program.types.spanItem(tag.payloads, 0);
+                    }
                 }
                 const ok_record_ty = ok_ty orelse Common.invariant("try_record_sequence input had no Ok tag");
                 try self.unify(self.localTy(sequence.value_local), try self.recordField(ok_record_ty, sequence.value_field));
                 try self.unify(self.localTy(sequence.rest_local), try self.recordField(ok_record_ty, sequence.rest_field));
+                if (sequence.err_target) |target| {
+                    const params = self.activeJoinPoint(target).params;
+                    if (params.count() != 1) Common.invariant("try_record_sequence error target did not have one parameter");
+                    try self.unify(self.program.types.spanItem(params, 0), err_ty orelse Common.invariant("try_record_sequence input had no Err tag"));
+                }
                 _ = try self.expectExpr(sequence.ok_body, expected);
             },
             .@"unreachable" => {},
@@ -906,6 +926,12 @@ const Solver = struct {
                 if (params.count() != args.len) Common.invariant("jump argument count differs from join-point parameter count");
                 for (args, 0..) |arg, arg_index| {
                     _ = try self.expectExpr(arg, self.program.types.spanItem(params, arg_index));
+                }
+                const loop_params = self.lifted.typedLocalSpan(jump.loop_params);
+                const loop_values = self.lifted.exprSpan(jump.loop_values);
+                if (loop_params.len != loop_values.len) Common.invariant("jump loop-update parameter count differs from value count");
+                for (loop_params, loop_values) |param, value| {
+                    _ = try self.expectExpr(value, self.localTy(param.local));
                 }
             },
             .return_ => |ret| _ = try self.expectExpr(ret.value, try self.returnTargetTy(ret.target)),

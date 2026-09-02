@@ -9,7 +9,7 @@ const collections = @import("collections");
 const build_options = @import("build_options");
 const embedded_lld = @import("embedded_lld");
 const stack_probe = embedded_lld.stack_probe;
-const CodeSignature = @import("vendor_macho").CodeSignature;
+const AdHocResign = @import("macho/AdHocResign.zig");
 const DwarfSplice = @import("macho/DwarfSplice.zig");
 const backend = @import("backend");
 const roc_target = @import("roc_target");
@@ -288,16 +288,6 @@ pub const LinkError = error{
 } || std.zig.system.DetectError;
 
 const PatchMachoStackSizeError = std.Io.File.OpenError || std.Io.File.ReadPositionalError || std.Io.File.WritePositionalError || error{
-    NotMacho64,
-    UnexpectedEof,
-};
-
-const ResignMachoError = Allocator.Error || CodeSignature.WriteError || std.Io.File.OpenError || std.Io.File.ReadPositionalError || std.Io.File.WritePositionalError || error{
-    CodeSignatureNotAtEnd,
-    InvalidCodeSignatureSize,
-    MissingLinkeditSegment,
-    MissingTextSegment,
-    NonResizable,
     NotMacho64,
     UnexpectedEof,
 };
@@ -950,7 +940,7 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
         // Patching invalidated the ad-hoc code signature ld64.lld wrote; on
         // macOS 14+ the kernel SIGKILLs (137) binaries with bad signatures,
         // so rewrite the signature in place.
-        resignMachoAdHoc(ctx, config.output_path) catch |err| {
+        AdHocResign.resign(ctx.io.std_io, ctx.gpa, ctx.arena, config.output_path) catch |err| {
             std.log.warn("Failed to re-sign {s} after stacksize patch: {}", .{ config.output_path, err });
         };
     }
@@ -1086,8 +1076,6 @@ fn optimizeWasmOutput(ctx: *CliCtx, config: LinkConfig) LinkError!void {
 
 const macho = std.macho;
 
-const deterministic_macho_code_signature_identifier = "roc";
-
 /// Patch a freshly-linked macOS executable's LC_MAIN stacksize field. See the
 /// callsite in `link` for why this is needed.
 fn patchMachoStackSize(path: []const u8, stacksize: u64, io: std.Io) PatchMachoStackSizeError!void {
@@ -1114,106 +1102,6 @@ fn patchMachoStackSize(path: []const u8, stacksize: u64, io: std.Io) PatchMachoS
         offset += lc.cmdsize;
     }
     // No LC_MAIN—leave as-is (e.g. dylibs or unusual layouts).
-}
-
-/// Rewrite a Mach-O binary's ad-hoc code signature in place. The signature
-/// blob is the last content in the file, recorded by LC_CODE_SIGNATURE; we
-/// recompute the page hashes over everything before it and write a fresh
-/// linker-style ad-hoc signature into that extent.
-fn resignMachoAdHoc(ctx: *CliCtx, path: []const u8) ResignMachoError!void {
-    const io = ctx.io.std_io;
-    const gpa = ctx.gpa;
-
-    var file = try std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write });
-    defer file.close(io);
-
-    var header: macho.mach_header_64 = undefined;
-    const header_n = try file.readPositionalAll(io, std.mem.asBytes(&header), 0);
-    if (header_n != @sizeOf(macho.mach_header_64)) return error.UnexpectedEof;
-    if (header.magic != macho.MH_MAGIC_64) return error.NotMacho64;
-
-    const cmds_buf = try ctx.arena.alignedAlloc(u8, .of(macho.segment_command_64), header.sizeofcmds);
-    const cmds_n = try file.readPositionalAll(io, cmds_buf, @sizeOf(macho.mach_header_64));
-    if (cmds_n != header.sizeofcmds) return error.UnexpectedEof;
-
-    var cs_cmd: ?*align(8) macho.linkedit_data_command = null;
-    var text_seg: ?*align(8) macho.segment_command_64 = null;
-    var linkedit_seg: ?*align(8) macho.segment_command_64 = null;
-
-    var offset: usize = 0;
-    var i: u32 = 0;
-    while (i < header.ncmds) : (i += 1) {
-        if (offset + @sizeOf(macho.load_command) > cmds_buf.len) return error.UnexpectedEof;
-        const lc: *align(8) macho.load_command = @ptrCast(@alignCast(cmds_buf.ptr + offset));
-        if (lc.cmd == .CODE_SIGNATURE) {
-            cs_cmd = @ptrCast(lc);
-        } else if (lc.cmd == .SEGMENT_64) {
-            const seg: *align(8) macho.segment_command_64 = @ptrCast(lc);
-            if (std.mem.eql(u8, seg.segName(), "__TEXT")) {
-                text_seg = seg;
-            } else if (std.mem.eql(u8, seg.segName(), "__LINKEDIT")) {
-                linkedit_seg = seg;
-            }
-        }
-        offset += lc.cmdsize;
-    }
-
-    // No LC_CODE_SIGNATURE means the linker did not sign this binary (ld64.lld
-    // only ad-hoc signs arm64 by default), so patching invalidated nothing and
-    // the kernel does not require a signature.
-    const cs = cs_cmd orelse return;
-    const text = text_seg orelse return error.MissingTextSegment;
-    const linkedit = linkedit_seg orelse return error.MissingLinkeditSegment;
-
-    const page_size: u16 = if (header.cputype == macho.CPU_TYPE_ARM64) 0x4000 else 0x1000;
-    const ident = deterministic_macho_code_signature_identifier;
-
-    // The signature hashes every page before LC_CODE_SIGNATURE's dataoff,
-    // including page 0 with the load commands. Its exact size is known up
-    // front (one CodeDirectory blob, no special slots), so any load command
-    // size changes must be written back before hashing.
-    const hash_size = std.crypto.hash.sha2.Sha256.digest_length;
-    const total_pages = std.mem.alignForward(usize, cs.dataoff, page_size) / page_size;
-    const exact_size = @sizeOf(macho.SuperBlob) + @sizeOf(macho.BlobIndex) +
-        @sizeOf(macho.CodeDirectory) + ident.len + 1 + total_pages * hash_size;
-
-    const old_datasize = cs.datasize;
-    const old_sig_end: u64 = @as(u64, cs.dataoff) + @as(u64, old_datasize);
-    if (try file.length(io) != old_sig_end) return error.CodeSignatureNotAtEnd;
-
-    if (exact_size != old_datasize) {
-        cs.datasize = @intCast(exact_size);
-        if (exact_size > old_datasize) {
-            const grow: u64 = @intCast(exact_size - old_datasize);
-            linkedit.filesize += grow;
-        } else {
-            const shrink: u64 = @intCast(old_datasize - exact_size);
-            if (linkedit.filesize < shrink) return error.InvalidCodeSignatureSize;
-            linkedit.filesize -= shrink;
-        }
-        linkedit.vmsize = std.mem.alignForward(u64, linkedit.filesize, page_size);
-        try file.writePositionalAll(io, cmds_buf, @sizeOf(macho.mach_header_64));
-    }
-
-    var code_sig = CodeSignature.init(page_size);
-    defer code_sig.deinit(gpa);
-    code_sig.code_directory.ident = ident;
-
-    var sig_bytes: std.Io.Writer.Allocating = .init(gpa);
-    defer sig_bytes.deinit();
-    try code_sig.writeAdhocSignature(gpa, io, .{
-        .file = file,
-        .exec_seg_base = text.fileoff,
-        .exec_seg_limit = text.filesize,
-        .file_size = cs.dataoff,
-        .dylib = header.filetype == macho.MH_DYLIB,
-    }, &sig_bytes.writer);
-
-    const sig = sig_bytes.written();
-    std.debug.assert(sig.len == exact_size);
-    try file.writePositionalAll(io, sig, cs.dataoff);
-    const new_sig_end: u64 = @as(u64, cs.dataoff) + @as(u64, @intCast(sig.len));
-    try file.setLength(io, new_sig_end);
 }
 
 fn findArg(args: []const []const u8, needle: []const u8) ?usize {
