@@ -123,7 +123,7 @@ main = "${y}"
 				(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))
 	(d-let
 		(p-assign (ident "y"))
-		(e-call (constraint-fn-var 268)
+		(e-call (constraint-fn-var 270)
 			(e-lookup-local
 				(p-assign (ident "call")))
 			(e-num (value "5"))
@@ -131,7 +131,7 @@ main = "${y}"
 				(args
 					(p-assign (ident "i")))
 				(e-block
-					(e-dispatch-call (method "plus") (constraint-fn-var 266)
+					(e-dispatch-call (method "plus") (constraint-fn-var 268)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "i"))))

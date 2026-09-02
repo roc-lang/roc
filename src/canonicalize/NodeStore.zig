@@ -263,6 +263,7 @@ const DiagnosticNodeTag = enum {
     diag_underscore_in_type_declaration,
     diag_break_outside_loop,
     diag_infinite_loop_never_exits,
+    diag_trailing_try_suffix,
     diag_return_outside_fn,
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
@@ -749,7 +750,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 95;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 96;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
@@ -5538,6 +5539,10 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_infinite_loop_never_exits;
             region = r.region;
         },
+        .trailing_try_suffix => |r| {
+            node.tag = .diag_trailing_try_suffix;
+            region = r.region;
+        },
         .return_outside_fn => |r| {
             node.tag = .diag_return_outside_fn;
             region = r.region;
@@ -6068,6 +6073,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_infinite_loop_never_exits => return CIR.Diagnostic{ .infinite_loop_never_exits = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_trailing_try_suffix => return CIR.Diagnostic{ .trailing_try_suffix = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_return_outside_fn => {

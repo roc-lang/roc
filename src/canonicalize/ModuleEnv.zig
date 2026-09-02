@@ -3593,6 +3593,51 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .trailing_try_suffix => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Trailing `?`", "", .warning);
+            try report.headline.addReflowingText("This ");
+            try report.headline.addAnnotated("?", .inline_code);
+            try report.headline.addReflowingText(" is applied to the value this function returns:");
+
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("A ");
+            try report.document.addAnnotated("?", .inline_code);
+            try report.document.addReflowingText(" here is almost always a mistake. On ");
+            try report.document.addAnnotated("Err", .inline_code);
+            try report.document.addReflowingText(", it returns the error from the function early. On ");
+            try report.document.addAnnotated("Ok", .inline_code);
+            try report.document.addReflowingText(", it unwraps the payload and returns that instead of the ");
+            try report.document.addAnnotated("Try", .inline_code);
+            try report.document.addReflowingText(", which only type-checks when the payload is itself a ");
+            try report.document.addAnnotated("Try", .inline_code);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("If you meant to return the ");
+            try report.document.addAnnotated("Try", .inline_code);
+            try report.document.addReflowingText(" as-is, remove the ");
+            try report.document.addAnnotated("?", .inline_code);
+            try report.document.addReflowingText(". If you really do want to unwrap a nested ");
+            try report.document.addAnnotated("Try", .inline_code);
+            try report.document.addReflowingText(" here, write that as a ");
+            try report.document.addAnnotated("match", .inline_code);
+            try report.document.addReflowingText(" instead, because a trailing ");
+            try report.document.addAnnotated("?", .inline_code);
+            try report.document.addReflowingText(" is confusing to read.");
+
+            break :blk report;
+        },
         .return_outside_fn => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
