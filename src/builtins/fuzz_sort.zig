@@ -8,6 +8,7 @@ const std = @import("std");
 const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 const sort = @import("sort.zig");
+const utils = @import("utils.zig");
 
 fn cMain() callconv(.c) i32 {
     fuzz_main() catch unreachable;
@@ -20,15 +21,15 @@ comptime {
 
 const DEBUG = false;
 
-var allocator: std.mem.Allocator = undefined;
-
 /// TODO: Document fuzz_main.
 pub fn fuzz_main() Allocator.Error!void {
     // Setup an allocator that will detect leaks/use-after-free/etc
     var gpa = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
     // this will check for leaks and crash the program if it finds any
     defer std.debug.assert(build_options.debugGpaOk(gpa.deinit()));
-    allocator = gpa.allocator();
+    const allocator = gpa.allocator();
+    var test_env = utils.TestEnv.init(allocator);
+    defer test_env.deinit();
 
     // Read the data from stdin.
     // Access Io types via @import("std") to avoid the banned std-dot-Io string
@@ -45,7 +46,19 @@ pub fn fuzz_main() Allocator.Error!void {
     }
 
     var test_count: i64 = 0;
-    sort.fluxsort(@ptrCast(arr_ptr), len, &test_i64_compare_refcounted, @ptrCast(&test_count), true, &test_inc_n_data, @sizeOf(i64), @alignOf(i64), &test_i64_copy);
+    sort.fluxsort(
+        @ptrCast(arr_ptr),
+        len,
+        &test_i64_compare_refcounted,
+        @ptrCast(&test_count),
+        true,
+        null,
+        &test_inc_n_data,
+        @sizeOf(i64),
+        @alignOf(i64),
+        &test_i64_copy,
+        test_env.getOps(),
+    );
 
     const sorted = std.sort.isSorted(i64, arr_ptr[0..len], {}, std.sort.asc(i64));
     if (DEBUG) {
@@ -60,47 +73,17 @@ fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) 
     const a = @as(*i64, @ptrCast(@alignCast(a_ptr))).*;
     const b = @as(*i64, @ptrCast(@alignCast(b_ptr))).*;
 
-    const gt = @as(u8, @intFromBool(a > b));
-    const lt = @as(u8, @intFromBool(a < b));
-
     std.debug.assert(@as(*isize, @ptrCast(@alignCast(count_ptr))).* > 0);
     @as(*isize, @ptrCast(@alignCast(count_ptr))).* -= 1;
-    // Eq = 0
-    // GT = 1
-    // LT = 2
-    return lt + lt + gt;
+    if (a < b) return @intFromEnum(utils.Ordering.Before);
+    if (a > b) return @intFromEnum(utils.Ordering.After);
+    return @intFromEnum(utils.Ordering.Same);
 }
 
 fn test_i64_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.c) void {
     @as(*i64, @ptrCast(@alignCast(dst_ptr))).* = @as(*i64, @ptrCast(@alignCast(src_ptr))).*;
 }
 
-fn test_inc_n_data(count_ptr: Opaque, n: usize) callconv(.c) void {
+fn test_inc_n_data(_: ?*anyopaque, count_ptr: Opaque, n: usize) callconv(.c) void {
     @as(*isize, @ptrCast(@alignCast(count_ptr))).* += @intCast(n);
-}
-
-comptime {
-    @export(&testing_roc_alloc, .{ .name = "roc_alloc", .linkage = .Strong });
-    @export(&testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .Strong });
-    @export(&testing_roc_panic, .{ .name = "roc_panic", .linkage = .Strong });
-}
-
-fn testing_roc_alloc(size: usize, _: u32) callconv(.c) ?*anyopaque {
-    // We store an extra usize which is the size of the full allocation.
-    const full_size = size + @sizeOf(usize);
-    var raw_ptr = (allocator.alloc(u8, full_size) catch unreachable).ptr;
-    @as([*]usize, @ptrCast(@alignCast(raw_ptr)))[0] = full_size;
-    raw_ptr += @sizeOf(usize);
-    return @as(?*anyopaque, @ptrCast(raw_ptr));
-}
-
-fn testing_roc_dealloc(c_ptr: *anyopaque, _: u32) callconv(.c) void {
-    const raw_ptr = @as([*]u8, @ptrCast(c_ptr)) - @sizeOf(usize);
-    const full_size = @as([*]usize, @ptrCast(@alignCast(raw_ptr)))[0];
-    const slice = raw_ptr[0..full_size];
-    allocator.free(slice);
-}
-
-fn testing_roc_panic(_: *anyopaque, _: u32) callconv(.c) void {
-    @panic("Roc panicked");
 }

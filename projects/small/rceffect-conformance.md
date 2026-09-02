@@ -138,6 +138,6 @@ interpreter with small values.
 
 ## Related projects
 
-- [../small/silent-drift-guards.md](../small/silent-drift-guards.md)—
+- `silent-drift-guards` (landed; doc removed)—
   the same enforcement philosophy for other mirrored facts; this doc is
   the ownership-table instance.

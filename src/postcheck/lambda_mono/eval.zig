@@ -380,7 +380,13 @@ pub const Evaluator = struct {
             .join_point => |join_point| return try self.evalJoinPoint(frame, join_point),
             .jump => |jump| {
                 self.jump_target = jump.target;
+                const update_values = try self.evalExprSpan(frame, jump.loop_values);
                 self.jump_values = try self.evalExprSpan(frame, jump.args);
+                const update_params = self.program.typedLocalSpan(jump.loop_params);
+                if (update_params.len != update_values.len) return self.unsupported_("jump loop-update arity mismatch");
+                for (0..update_params.len) |index| {
+                    frame.put(GuardedList.at(update_params, index).local, update_values[index]) catch return error.OutOfMemory;
+                }
                 return error.Jumped;
             },
             .return_ => |value_expr| {
@@ -831,6 +837,12 @@ pub const Evaluator = struct {
             return self.evalExpr(frame, seq.ok_body);
         }
         if (tag.discriminant == err_index) {
+            if (seq.err_target) |target| {
+                if (tag.payloads.len != 1) return self.unsupported_("try sequence Err payload arity");
+                self.jump_target = target;
+                self.jump_values = tag.payloads;
+                return error.Jumped;
+            }
             // Build the Err in the enclosing expression's result type.
             return self.rebuildErr(result_ty, tag.payloads);
         }
@@ -865,6 +877,12 @@ pub const Evaluator = struct {
             return self.evalExpr(frame, seq.ok_body);
         }
         if (tag.discriminant == err_index) {
+            if (seq.err_target) |target| {
+                if (tag.payloads.len != 1) return self.unsupported_("try record Err payload arity");
+                self.jump_target = target;
+                self.jump_values = tag.payloads;
+                return error.Jumped;
+            }
             return self.rebuildErr(result_ty, tag.payloads);
         }
         return self.unsupported_("try record scrutinee tag neither Ok nor Err");
@@ -1189,12 +1207,18 @@ pub const Evaluator = struct {
             .num_is_gt => self.numCompare(args, arg_types, .gt),
             .num_is_gte => self.numCompare(args, arg_types, .gte),
 
-            .num_plus, .num_plus_checked => self.numArith(args, arg_types, result_ty, .add),
-            .num_minus, .num_minus_checked => self.numArith(args, arg_types, result_ty, .sub),
-            .num_times, .num_times_checked => self.numArith(args, arg_types, result_ty, .mul),
-            .num_plus_wrap => self.numWrappingArith(args, arg_types, result_ty, .plus),
-            .num_minus_wrap => self.numWrappingArith(args, arg_types, result_ty, .minus),
-            .num_times_wrap => self.numWrappingArith(args, arg_types, result_ty, .times),
+            .num_plus, .num_int_add_crash_on_overflow => self.numArith(args, arg_types, result_ty, .add),
+            .num_minus, .num_int_sub_crash_on_overflow => self.numArith(args, arg_types, result_ty, .sub),
+            .num_times, .num_int_mul_crash_on_overflow, .dec_mul => self.numArith(args, arg_types, result_ty, .mul),
+            .num_int_add_wrap => self.numWrappingArith(args, arg_types, result_ty, .plus),
+            .num_int_sub_wrap => self.numWrappingArith(args, arg_types, result_ty, .minus),
+            .num_int_mul_wrap => self.numWrappingArith(args, arg_types, result_ty, .times),
+            .num_int_add_overflows => self.numOverflows(args, arg_types, .add),
+            .num_int_sub_overflows => self.numOverflows(args, arg_types, .sub),
+            .num_int_mul_overflows => self.numOverflows(args, arg_types, .mul),
+            .num_float_add => self.numArith(args, arg_types, result_ty, .add),
+            .num_float_sub => self.numArith(args, arg_types, result_ty, .sub),
+            .num_float_mul => self.numArith(args, arg_types, result_ty, .mul),
             .num_div_by, .num_div_by_checked => self.numArith(args, arg_types, result_ty, .div),
             .num_div_trunc_by, .num_div_trunc_by_checked => self.numArith(args, arg_types, result_ty, .div_trunc),
             .num_rem_by, .num_rem_by_checked => self.numArith(args, arg_types, result_ty, .rem),
@@ -1397,6 +1421,7 @@ pub const Evaluator = struct {
             .list_map_cast_unsafe,
             .list_map_extract_unsafe,
             .list_map_write_unsafe,
+            .list_sort_with,
             .hasher_finish,
             .hasher_write_bool,
             .hasher_write_u8,
@@ -1674,6 +1699,9 @@ pub const Evaluator = struct {
             .ptr_store,
             .ptr_load,
             .ptr_cast,
+            .num_int_add_proven_cannot_overflow,
+            .num_int_sub_proven_cannot_overflow,
+            .num_int_mul_proven_cannot_overflow,
             .list_append_range_within,
             .list_copy_range_within,
             .list_append_range_within_unsafe,
@@ -1731,15 +1759,15 @@ pub const Evaluator = struct {
             .str => return self.unsupported_("compare on string"),
             .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return self.unsupported_("compare on SIMD vector"),
         };
-        // Result ordering tag union sorts as EQ, GT, LT (alphabetical), matching
-        // the interpreter's runtime discriminants EQ=0, GT=1, LT=2.
+        // Result ordering tag union sorts as After, Before, Same (alphabetical), matching
+        // the interpreter's runtime discriminants After=0, Before=1, Same=2.
         return .{ .tag = .{ .discriminant = order, .payloads = &.{} } };
     }
 
     fn cmpOrder(comptime T: type, a: T, b: T) u8 {
-        if (a == b) return 0; // EQ
-        if (a > b) return 1; // GT
-        return 2; // LT
+        if (a == b) return 2; // Same
+        if (a < b) return 1; // Before
+        return 0; // After
     }
 
     // numeric arithmetic
@@ -1764,6 +1792,25 @@ pub const Evaluator = struct {
                 break :blk self.canonicalInt(result_prim, bitsOf(T, result));
             },
             .bool, .str, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => self.unsupported_("wrapping arithmetic on non-integer type"),
+        };
+    }
+
+    fn numOverflows(self: *Evaluator, args: []const Value, arg_types: []const Type.TypeId, op: ArithOp) EvalError!Value {
+        const prim = self.primitiveOf(arg_types[0]) orelse return self.unsupported_("overflow predicate operand without primitive type");
+        return switch (prim) {
+            inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => |p| blk: {
+                const T = intType(p);
+                const a = readAs(T, args[0]);
+                const b = readAs(T, args[1]);
+                const overflowed = switch (op) {
+                    .add => @addWithOverflow(a, b)[1] != 0,
+                    .sub => @subWithOverflow(a, b)[1] != 0,
+                    .mul => @mulWithOverflow(a, b)[1] != 0,
+                    .div, .div_trunc, .rem, .mod, .negate, .abs, .abs_diff => unreachable,
+                };
+                break :blk .{ .bool_ = overflowed };
+            },
+            .bool, .str, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => self.unsupported_("overflow predicate on non-integer type"),
         };
     }
 
@@ -1858,8 +1905,16 @@ pub const Evaluator = struct {
         const a = va.dec;
         const b = vb.dec;
         switch (op) {
-            .add => return .{ .dec = a +% b },
-            .sub => return .{ .dec = a -% b },
+            .add => {
+                const result = @addWithOverflow(a, b);
+                if (result[1] != 0) return self.crashAbort("Integer addition overflowed");
+                return .{ .dec = result[0] };
+            },
+            .sub => {
+                const result = @subWithOverflow(a, b);
+                if (result[1] != 0) return self.crashAbort("Integer subtraction overflowed");
+                return .{ .dec = result[0] };
+            },
             .mul => {
                 const result = RocDec.mulWithOverflow(.{ .num = a }, .{ .num = b });
                 if (result.has_overflowed) return self.crashAbort("Decimal multiplication overflowed!");
@@ -2197,7 +2252,7 @@ pub const Evaluator = struct {
     /// delegated to the same builtins the LIR interpreter uses so the accepted
     /// syntax (radix prefixes, leading sign, overflow, empty string) matches.
     fn evalFromStr(self: *Evaluator, op: base.LowLevel, args: []const Value, result_ty: Type.TypeId) EvalError!Value {
-        const spec = op.numericParseSpec() orelse return self.unsupported_("numeric parse spec missing");
+        const spec = base.numeric_conversion.getNumericParseSpec(op) orelse return self.unsupported_("numeric parse spec missing");
         const source = args[0].str;
         const outcome: ParseOutcome = switch (spec) {
             .int => |int| switch (int.width_bytes) {

@@ -261,11 +261,80 @@ fn walkSpanCloned(
     for (source) |item| try visit(context, item);
 }
 
+/// Exact post-SpecConstr use information for one lifted procedure.
+pub const ProcedureUse = struct {
+    external_calls: usize = 0,
+    external_call_expr: ?Ast.ExprId = null,
+    external_call_owner: ?Ast.FnId = null,
+    value_refs: usize = 0,
+    contains_return: bool = false,
+};
+
+/// Read-only exact procedure-use inventory produced after all SpecConstr graph
+/// rewrites. Function ids index `items` directly.
+pub const ProcedureUsage = struct {
+    items: []const ProcedureUse = &.{},
+
+    pub fn get(self: ProcedureUsage, fn_id: Ast.FnId) ProcedureUse {
+        const index = @intFromEnum(fn_id);
+        if (index >= self.items.len) {
+            Common.invariant("procedure-use inventory did not contain a lifted function");
+        }
+        return self.items[index];
+    }
+};
+
+/// Allocator-owned storage for an exact post-SpecConstr procedure-use inventory.
+pub const OwnedProcedureUsage = struct {
+    allocator: Allocator,
+    items: []ProcedureUse,
+
+    pub fn empty(allocator: Allocator) OwnedProcedureUsage {
+        return .{ .allocator = allocator, .items = &.{} };
+    }
+
+    pub fn deinit(self: *OwnedProcedureUsage) void {
+        if (self.items.len != 0) self.allocator.free(self.items);
+        self.* = empty(self.allocator);
+    }
+
+    pub fn view(self: *const OwnedProcedureUsage) ProcedureUsage {
+        return .{ .items = self.items };
+    }
+};
+
+/// How this pass's value-aware clones inline direct calls, both when
+/// rewriting original bodies in place and when writing specialization
+/// workers.
+///
+/// `.all_calls` lets a clone inline any admissible direct call while it
+/// chases known values, so general call-pattern specialization simplifies
+/// across arbitrary procedure boundaries. That chase is the expensive part of
+/// this pass: its cost grows with how much known-value structure flows through
+/// a module's call graph, independent of the emitted-code budgets, and a
+/// worker written this way can flatten a callee's whole call tree into its
+/// body.
+///
+/// `.iterator_fusion` restricts a clone's inlining to checker-stamped
+/// iterator producers and calls already inside an iterator context: the
+/// subset that collapses `Iter` pipelines into scalar loops. Argument-level
+/// specialization still runs in full; only the value chase narrows. Dev
+/// builds select this so their post-check time and emitted program size stay
+/// proportional to the iterator code the pass improves.
+pub const CloneInlining = enum { all_calls, iterator_fusion };
+
 /// Specialize recursive direct calls whose arguments are known constructor shapes.
-pub fn run(allocator: Allocator, program: *Ast.Program) Common.LowerError!void {
+pub fn run(allocator: Allocator, program: *Ast.Program, clone_inlining: CloneInlining) Common.LowerError!void {
+    var procedure_usage = try runAndCollectProcedureUsage(allocator, program, clone_inlining);
+    defer procedure_usage.deinit();
+}
+
+/// Run SpecConstr and retain the exact use inventory from its final graph.
+pub fn runAndCollectProcedureUsage(allocator: Allocator, program: *Ast.Program, clone_inlining: CloneInlining) Common.LowerError!OwnedProcedureUsage {
     var pass = try Pass.init(allocator, program);
     defer pass.deinit();
-    try pass.run();
+    pass.clone_inlining = clone_inlining;
+    return try pass.run();
 }
 
 const Shape = union(enum) {
@@ -322,8 +391,9 @@ fn shapeProofIsProven(proof: ShapeProof) bool {
     };
 }
 
-/// Maximum number of `nominal.backing` / `static_data_candidate.runtime` /
-/// callable-capture pointer edges any single value-tree strip may follow. A
+/// Maximum number of `runtime_anchor.structure` / `nominal.backing` /
+/// `static_data_candidate.runtime` / callable-capture pointer edges any single
+/// value-tree strip may follow. A
 /// value can reference itself through those edges when a `.local` resolves
 /// through the substitution maps to an ancestor of a recursive construction,
 /// so a strip that ignored the bound would hang on a cycle. A finite value's
@@ -338,12 +408,23 @@ const value_wrapper_strip_cap: usize = 4096;
 
 const Value = union(enum) {
     expr: Ast.ExprId,
+    runtime_anchor: RuntimeAnchorValue,
     static_data_candidate: StaticDataCandidateValue,
     tag: TagValue,
     record: RecordValue,
     tuple: TupleValue,
     nominal: NominalValue,
     callable: CallableValue,
+};
+
+/// One exact runtime value paired with finite symbolic structure known for it.
+/// Materialization always reuses `runtime`; structural consumers inspect
+/// `structure`. Recursive bindings use this dual representation to expose
+/// constructor and callable structure without reconstructing the recursive value
+/// or letting initializer-private locals escape their scope.
+const RuntimeAnchorValue = struct {
+    runtime: Ast.ExprId,
+    structure: *const Value,
 };
 
 const StaticDataCandidateValue = struct {
@@ -452,9 +533,18 @@ const BodySize = union(enum) {
     }
 };
 
+const FnSource = struct {
+    /// The authoritative input body for every clone of this function. The
+    /// program's function table becomes an output table once rewriting starts,
+    /// so reading a body back from it would make later clones consume output
+    /// emitted by earlier clones.
+    body: Ast.FnBody,
+    size: BodySize,
+};
+
 const FnPlan = struct {
     used_args: []bool,
-    body_size: BodySize,
+    source: FnSource,
     specs: std.ArrayList(Spec),
 
     fn deinit(self: *FnPlan, allocator: Allocator) void {
@@ -466,8 +556,10 @@ const FnPlan = struct {
 /// A pattern binder paired with the monomorphic type it was bound at. A single
 /// source binder is reused across every monomorphization of its binding, so the
 /// binder alone does not identify a value; the type digest completes the
-/// identity, matching the `(binder, type)` identity Monotype lowering uses for
-/// locals. See `Builder.sameLocalIdentity` in monotype/lower.zig.
+/// identity. This must use the digest of `typeEql`, not stored type identity:
+/// one monomorphization may carry distinct checked-node provenance or a
+/// transparent alias at equivalent local sites. See `Builder.sameLocalIdentity`
+/// in monotype/lower.zig.
 const BinderIdentity = struct {
     binder: check.CheckedModule.PatternBinderId,
     digest: names.TypeDigest,
@@ -490,10 +582,32 @@ const StrictBinding = struct {
     value: Ast.ExprId,
 };
 
+const PositionedBinding = union(enum) {
+    strict: StrictBinding,
+    /// The exact cloned recursive statement that owns a symbolic value's
+    /// runtime back-edge. Keeping this anchor in the same source-ordered chain
+    /// as the initializer's strict leaves lets transparent value flow retain
+    /// the known outer structure without turning the finite symbolic graph
+    /// into an unbound local reference.
+    recursive_anchor: Ast.StmtId,
+};
+
 const BindingNode = struct {
-    binding: StrictBinding,
+    binding: PositionedBinding,
     previous: ?*BindingNode = null,
     next: ?*BindingNode = null,
+};
+
+const PatternLocalUseProbe = struct {
+    program: *const Ast.Program,
+    expr: Ast.ExprId,
+    found: *bool,
+
+    pub fn bindLocal(self: PatternLocalUseProbe, local: Ast.LocalId) Allocator.Error!void {
+        if (!self.found.* and exprReferencesLocal(self.program, self.expr, local)) {
+            self.found.* = true;
+        }
+    }
 };
 
 /// A linearly owned, source-ordered chain of strict bindings. Concatenation
@@ -524,7 +638,18 @@ const BindingChain = struct {
 
     fn appendBinding(self: *BindingChain, arena: Allocator, binding: StrictBinding) Allocator.Error!void {
         const node = try arena.create(BindingNode);
-        node.* = .{ .binding = binding, .previous = self.last };
+        node.* = .{ .binding = .{ .strict = binding }, .previous = self.last };
+        if (self.last) |last| {
+            last.next = node;
+        } else {
+            self.first = node;
+        }
+        self.last = node;
+    }
+
+    fn appendRecursiveAnchor(self: *BindingChain, arena: Allocator, stmt: Ast.StmtId) Allocator.Error!void {
+        const node = try arena.create(BindingNode);
+        node.* = .{ .binding = .{ .recursive_anchor = stmt }, .previous = self.last };
         if (self.last) |last| {
             last.next = node;
         } else {
@@ -550,12 +675,59 @@ const BindingChain = struct {
         var current = self.first;
         while (current) |node| : (current = node.next) {
             std.debug.assert(node.previous == previous);
-            std.debug.assert(program.getLocal(node.binding.local).ty == node.binding.ty);
-            std.debug.assert(program.getExpr(node.binding.value).ty == node.binding.ty);
+            switch (node.binding) {
+                .strict => |binding| {
+                    std.debug.assert(program.getLocal(binding.local).ty == binding.ty);
+                    std.debug.assert(program.getExpr(binding.value).ty == binding.ty);
+                },
+                .recursive_anchor => |stmt_id| {
+                    const stmt = program.getStmt(stmt_id);
+                    std.debug.assert(stmt == .let_ and stmt.let_.recursive);
+                },
+            }
             previous = node;
         }
         std.debug.assert(previous == self.last);
         std.debug.assert((self.first == null) == (self.last == null));
+    }
+
+    fn hasRecursiveAnchor(self: BindingChain) bool {
+        var current = self.first;
+        while (current) |node| : (current = node.next) {
+            if (node.binding == .recursive_anchor) return true;
+        }
+        return false;
+    }
+
+    /// Whether materializing a symbolic value outside this chain would expose
+    /// one of the chain's private locals. Recursive initializer chains use
+    /// this exact scope proof before letting their symbolic structure flow
+    /// past the recursive statement.
+    fn referencedByExpr(
+        self: BindingChain,
+        program: *const Ast.Program,
+        expr: Ast.ExprId,
+    ) Allocator.Error!bool {
+        var current = self.first;
+        while (current) |node| : (current = node.next) {
+            switch (node.binding) {
+                .strict => |binding| if (exprReferencesLocal(program, expr, binding.local)) return true,
+                .recursive_anchor => |stmt_id| {
+                    const stmt = program.getStmt(stmt_id);
+                    if (stmt != .let_ or !stmt.let_.recursive) {
+                        Common.invariant("recursive binding-chain anchor was not a recursive statement");
+                    }
+                    var found = false;
+                    try Ast.forEachBoundLocal(program, stmt.let_.pat, PatternLocalUseProbe{
+                        .program = program,
+                        .expr = expr,
+                        .found = &found,
+                    });
+                    if (found) return true;
+                },
+            }
+        }
+        return false;
     }
 };
 
@@ -784,6 +956,9 @@ const Pass = struct {
     program: *Ast.Program,
     plans: []FnPlan,
     symbols: Common.SymbolGen,
+    /// Direct-call inlining scope for this pass's value-aware clones. See
+    /// `CloneInlining`.
+    clone_inlining: CloneInlining = .all_calls,
     /// Per source function: whether the whole-body value clone has already
     /// satisfied value-aware call rewriting, shape demand, and known-loop
     /// scalarization. Those analyses can all request the same clone, but the
@@ -820,7 +995,10 @@ const Pass = struct {
             @memset(used_args, false);
             plan.* = .{
                 .used_args = used_args,
-                .body_size = fnBodySizeWithin(program, fn_.body, spec_constr_body_expr_threshold),
+                .source = .{
+                    .body = fn_.body,
+                    .size = fnBodySizeWithin(program, fn_.body, spec_constr_body_expr_threshold),
+                },
                 .specs = .empty,
             };
         }
@@ -838,7 +1016,11 @@ const Pass = struct {
             .whole_body_cloned = whole_body_cloned,
             .callable_workers = std.AutoHashMap(CallableWorkerIdentity, Ast.FnId).init(allocator),
             .callable_sources = collections.DenseMap(Ast.FnId, Ast.FnId).init(allocator),
-            .next_join_point = 0,
+            // Monotype-generated joins use the raw id of their owning
+            // expression. New SpecConstr joins begin beyond the complete
+            // existing expression arena, so the two producer namespaces
+            // cannot collide.
+            .next_join_point = @intCast(program.exprCount()),
         };
     }
 
@@ -888,7 +1070,7 @@ const Pass = struct {
         self.arena.deinit();
     }
 
-    fn run(self: *Pass) Common.LowerError!void {
+    fn run(self: *Pass) Common.LowerError!OwnedProcedureUsage {
         const original_fn_count = self.plans.len;
 
         const capture_snapshot = try self.snapshotOriginalCaptures(original_fn_count);
@@ -907,12 +1089,14 @@ const Pass = struct {
         try self.rewriteAllOriginalBodies(original_fn_count);
         try self.createSpecializations(original_fn_count);
         try self.projectUnusedLoopResults();
-        try self.localizeSingleUseTailRecursiveWorkers(original_fn_count);
+        var procedure_usage = try self.localizeSingleUseTailRecursiveWorkers(original_fn_count);
+        errdefer procedure_usage.deinit();
         try Lift.recomputeCaptures(self.allocator, self.program);
         self.verifyRewrittenCaptureGain(capture_snapshot);
         try self.verifyRewrittenBodyLocals(original_fn_count);
 
         self.program.next_symbol = self.symbols.next;
+        return procedure_usage;
     }
 
     /// Turn a specialized tail-recursive worker with exactly one external use
@@ -920,7 +1104,7 @@ const Pass = struct {
     /// exposed the worker's constructor leaves as scalar arguments here, so
     /// moving that exact ABI into the caller preserves the specialized loop
     /// without paying an out-of-line call or duplicating any code.
-    fn localizeSingleUseTailRecursiveWorkers(self: *Pass, original_fn_count: usize) Common.LowerError!void {
+    fn localizeSingleUseTailRecursiveWorkers(self: *Pass, original_fn_count: usize) Common.LowerError!OwnedProcedureUsage {
         const fn_count = self.program.fnCount();
         var program_usage = try ProgramProcedureUsage.collect(self.allocator, self.program);
         defer program_usage.deinit(self.allocator);
@@ -933,7 +1117,7 @@ const Pass = struct {
             // A source-level return is relative to the worker procedure. It
             // cannot be moved across a procedure boundary until the IR gives
             // it an explicit continuation target.
-            if (program_usage.contains_return[worker_index]) continue;
+            if (program_usage.fn_uses[worker_index].contains_return) continue;
 
             const tail = program_usage.tail_self_calls[worker_index];
             if (!tail.valid or tail.count == 0) continue;
@@ -953,6 +1137,11 @@ const Pass = struct {
             program_usage = refreshed_usage;
             refreshed_usage = undefined;
         }
+
+        return .{
+            .allocator = self.allocator,
+            .items = program_usage.takeFnUses(),
+        };
     }
 
     fn localizeTailRecursiveWorker(
@@ -1281,17 +1470,20 @@ const Pass = struct {
                 .body = .{ .roc = specialized },
                 .ret = fn_.ret,
             });
-            self.refreshPreCloneBodySize(index);
+            self.refreshPreCloneSource(index);
         }
     }
 
-    fn refreshPreCloneBodySize(self: *Pass, index: usize) void {
-        if (index >= self.plans.len) Common.invariant("SpecConstr body-size refresh received a generated function");
-        self.plans[index].body_size = fnBodySizeWithin(
-            self.program,
-            self.program.getFnAt(index).body,
-            spec_constr_body_expr_threshold,
-        );
+    /// Replace the paired source body and size during the one authoritative
+    /// pre-clone rewrite. After this phase both fields remain immutable, so a
+    /// clone can never charge one body while reading another.
+    fn refreshPreCloneSource(self: *Pass, index: usize) void {
+        if (index >= self.plans.len) Common.invariant("SpecConstr source refresh received a generated function");
+        const body = self.program.getFnAt(index).body;
+        self.plans[index].source = .{
+            .body = body,
+            .size = fnBodySizeWithin(self.program, body, spec_constr_body_expr_threshold),
+        };
     }
 
     fn copyProcDebugName(self: *Pass, source_symbol: Common.Symbol, target_symbol: Common.Symbol) Allocator.Error!void {
@@ -1305,8 +1497,7 @@ const Pass = struct {
         while (changed) {
             changed = false;
             for (0..original_fn_count) |index| {
-                const fn_ = self.program.getFnAt(index);
-                const body = switch (fn_.body) {
+                const body = switch (self.plans[index].source.body) {
                     .roc => |body| body,
                     .hosted => continue,
                 };
@@ -1319,8 +1510,7 @@ const Pass = struct {
     fn collectCallPatterns(self: *Pass, original_fn_count: usize) Allocator.Error!void {
         var index: usize = 0;
         while (index < original_fn_count) : (index += 1) {
-            const fn_ = self.program.getFnAt(index);
-            const body = switch (fn_.body) {
+            const body = switch (self.plans[index].source.body) {
                 .roc => |body| body,
                 .hosted => continue,
             };
@@ -1338,8 +1528,7 @@ const Pass = struct {
 
         var index: usize = 0;
         while (index < original_fn_count) : (index += 1) {
-            const fn_ = self.program.getFnAt(index);
-            const body = switch (fn_.body) {
+            const body = switch (self.plans[index].source.body) {
                 .roc => |body| body,
                 .hosted => continue,
             };
@@ -1544,10 +1733,15 @@ const Pass = struct {
                 for (0..values.len) |index| try self.markArgUsesInExpr(fn_id, GuardedList.at(values, index), changed);
             },
             .join_point => |join_point| {
+                // Retained locals describe ownership liveness, not value-shape
+                // demand. They follow any substitution selected by operational
+                // consumers, but must never cause argument specialization.
                 try self.markArgUsesInExpr(fn_id, join_point.body, changed);
                 try self.markArgUsesInExpr(fn_id, join_point.remainder, changed);
             },
             .jump => |jump| {
+                const loop_values = self.program.exprSpan(jump.loop_values);
+                for (0..loop_values.len) |index| try self.markArgUsesInExpr(fn_id, GuardedList.at(loop_values, index), changed);
                 const args = self.program.exprSpan(jump.args);
                 for (0..args.len) |index| try self.markArgUsesInExpr(fn_id, GuardedList.at(args, index), changed);
             },
@@ -1683,7 +1877,10 @@ const Pass = struct {
                 try self.collectCallPatternsInExpr(owner, join_point.body);
                 try self.collectCallPatternsInExpr(owner, join_point.remainder);
             },
-            .jump => |jump| try self.collectCallPatternsInExprSpan(owner, jump.args),
+            .jump => |jump| {
+                try self.collectCallPatternsInExprSpan(owner, jump.loop_values);
+                try self.collectCallPatternsInExprSpan(owner, jump.args);
+            },
             .if_initialized_payload => |payload_switch| {
                 try self.collectCallPatternsInExpr(owner, payload_switch.cond);
                 try self.collectCallPatternsInExpr(owner, payload_switch.initialized);
@@ -1764,21 +1961,35 @@ const Pass = struct {
     }
 
     fn newSpecAdmission(self: *const Pass, raw: usize) SpecAdmission {
-        if (!self.plans[raw].body_size.admits()) return .denied_body_size;
+        if (!self.plans[raw].source.size.admits()) return .denied_body_size;
         if (self.plans[raw].specs.items.len >= spec_constr_specialization_count) return .denied_spec_count;
         return .admitted;
     }
 
-    fn inlineBodySize(self: *const Pass, fn_id: Ast.FnId, body: Ast.ExprId) BodySize {
+    const InlineSourceBody = struct {
+        expr: Ast.ExprId,
+        size: BodySize,
+    };
+
+    fn sourceBody(self: *const Pass, fn_id: Ast.FnId) Ast.FnBody {
         const raw = @intFromEnum(fn_id);
-        return if (raw < self.plans.len)
-            self.plans[raw].body_size
-        else
-            exprBodySizeWithin(self.program, body, spec_constr_body_expr_threshold);
+        return if (raw < self.plans.len) self.plans[raw].source.body else self.program.getFn(fn_id).body;
     }
 
-    fn inlineBodyAdmission(self: *const Pass, fn_id: Ast.FnId, body: Ast.ExprId) SpecAdmission {
-        return if (self.inlineBodySize(fn_id, body).admits()) .admitted else .denied_body_size;
+    /// Return the body and the work charged for cloning it as one value. Keeping
+    /// these inseparable prevents a mutable output body from being admitted
+    /// against an original source body's smaller size.
+    fn inlineSourceBody(self: *const Pass, fn_id: Ast.FnId) ?InlineSourceBody {
+        const raw = @intFromEnum(fn_id);
+        const body = switch (self.sourceBody(fn_id)) {
+            .roc => |body| body,
+            .hosted => return null,
+        };
+        const size = if (raw < self.plans.len)
+            self.plans[raw].source.size
+        else
+            exprBodySizeWithin(self.program, body, spec_constr_body_expr_threshold);
+        return .{ .expr = body, .size = size };
     }
 
     fn recordCallPattern(self: *Pass, fn_id: Ast.FnId, args_span: Ast.Span(Ast.ExprId)) Allocator.Error!void {
@@ -1833,7 +2044,7 @@ const Pass = struct {
     fn ensureCallPatternForValues(self: *Pass, fn_id: Ast.FnId, values: []const Value) Common.LowerError!void {
         const raw = @intFromEnum(fn_id);
         if (raw >= self.plans.len) return;
-        if (!self.plans[raw].body_size.admits()) return;
+        if (!self.plans[raw].source.size.admits()) return;
 
         const pattern = (try self.callPatternForValues(fn_id, values)) orelse return;
         for (self.plans[raw].specs.items) |spec| {
@@ -1894,6 +2105,10 @@ const Pass = struct {
 
         var cloner = Cloner.init(self, source_fn_id, spec.pattern);
         defer cloner.deinit();
+        cloner.inline_calls = switch (self.clone_inlining) {
+            .all_calls => .all,
+            .iterator_fusion => .iterator_fusion,
+        };
 
         try cloner.inline_stack.append(self.allocator, .{ .fn_id = source_fn_id, .known_size = 0 });
         defer {
@@ -1902,7 +2117,7 @@ const Pass = struct {
         }
 
         const args = try cloner.buildArgs();
-        const body: Ast.FnBody = switch (source_fn.body) {
+        const body: Ast.FnBody = switch (self.sourceBody(source_fn_id)) {
             .roc => |body_expr| .{ .roc = try cloner.cloneExpr(body_expr) },
             .hosted => Common.invariant("hosted function had a call-pattern specialization"),
         };
@@ -1924,8 +2139,11 @@ const Pass = struct {
         defer self.allocator.free(done);
         @memset(done, false);
 
+        // Original bodies are immutable clone sources. Their output calls are
+        // rewritten when rewriteAllOriginalBodies clones them below; only the
+        // already-emitted specialization bodies need this in-place update.
         const fn_count = self.program.fnCount();
-        for (0..fn_count) |index| {
+        for (self.plans.len..fn_count) |index| {
             const fn_ = self.program.getFnAt(index);
             const body = switch (fn_.body) {
                 .roc => |body| body,
@@ -1941,11 +2159,7 @@ const Pass = struct {
     fn rewriteAllOriginalBodies(self: *Pass, original_fn_count: usize) Common.LowerError!void {
         for (0..original_fn_count) |index| {
             const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
-            const body = switch (self.program.getFnAt(index).body) {
-                .roc => |body| body,
-                .hosted => continue,
-            };
-            try self.cloneFnBodyInPlace(fn_id, body);
+            try self.cloneFnBodyInPlace(fn_id);
         }
     }
 
@@ -3631,13 +3845,21 @@ const Pass = struct {
     /// Structural consumers expose exact producer calls locally, call-pattern
     /// rewrites consume the resulting values, and loop fixed points scalarize
     /// known carried structure without a body-category routing decision.
-    fn cloneFnBodyInPlace(self: *Pass, fn_id: Ast.FnId, body: Ast.ExprId) Common.LowerError!void {
+    fn cloneFnBodyInPlace(self: *Pass, fn_id: Ast.FnId) Common.LowerError!void {
         const fn_index = @intFromEnum(fn_id);
         if (fn_index < self.whole_body_cloned.len and self.whole_body_cloned[fn_index]) return;
 
         const fn_ = self.program.getFn(fn_id);
+        const body = switch (self.sourceBody(fn_id)) {
+            .roc => |body| body,
+            .hosted => return,
+        };
         var cloner = Cloner.initForRewrite(self);
         defer cloner.deinit();
+        cloner.inline_calls = switch (self.clone_inlining) {
+            .all_calls => .all,
+            .iterator_fusion => .iterator_fusion,
+        };
         cloner.inline_direct_requires_known_arg = true;
         const args = self.program.typedLocalSpan(fn_.args);
         for (0..args.len) |index| {
@@ -3786,7 +4008,10 @@ const Pass = struct {
                 try self.rewriteCallsInExpr(join_point.body, done);
                 try self.rewriteCallsInExpr(join_point.remainder, done);
             },
-            .jump => |jump| try self.rewriteCallsInExprSpan(jump.args, done),
+            .jump => |jump| {
+                try self.rewriteCallsInExprSpan(jump.loop_values, done);
+                try self.rewriteCallsInExprSpan(jump.args, done);
+            },
             .if_initialized_payload => |payload_switch| {
                 try self.rewriteCallsInExpr(payload_switch.cond, done);
                 try self.rewriteCallsInExpr(payload_switch.initialized, done);
@@ -4161,6 +4386,7 @@ const Pass = struct {
         budget.* -= 1;
         return switch (value) {
             .expr => |expr| if (try self.constructorShape(expr)) |shape| .{ .proven = shape } else .disproven,
+            .runtime_anchor => |anchor| try self.shapeFromValueBudgeted(anchor.structure.*, budget),
             .static_data_candidate => |candidate| try self.shapeFromValueBudgeted(candidate.runtime.*, budget),
             .tag => |tag| blk: {
                 const payloads = try self.arena.allocator().alloc(Shape, tag.payloads.len);
@@ -4296,7 +4522,7 @@ const Subst = struct {
         const binder = local_data.binder orelse return null;
         return .{
             .binder = binder,
-            .digest = program.types.typeDigestCached(&program.names, local_data.ty, null),
+            .digest = program.types.equalityDigest(&program.names, local_data.ty),
         };
     }
 
@@ -4343,6 +4569,7 @@ const Subst = struct {
             .record,
             .tuple,
             .nominal,
+            .runtime_anchor,
             => true,
             .expr,
             .static_data_candidate,
@@ -4567,10 +4794,11 @@ const Cloner = struct {
     inline_scope_origins: collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId),
     /// Depth of the wrapper-strip recursion in the static value matchers
     /// (`bindPatToValue`/`bindPatToMatchValue`/`bindPatToFlowValue`), counting
-    /// each `nominal.backing`/`static_data_candidate.runtime` pointer edge
-    /// followed. A loop-carried value can reference itself through those edges,
-    /// so an unbounded strip would hang; reaching `value_wrapper_strip_cap`
-    /// declines the static decision toward a residual runtime match.
+    /// each `runtime_anchor.structure`/`nominal.backing`/
+    /// `static_data_candidate.runtime` pointer edge followed. A loop-carried
+    /// value can reference itself through those edges, so an unbounded strip
+    /// would hang; reaching `value_wrapper_strip_cap` declines the static
+    /// decision toward a residual runtime match.
     wrapper_strip_depth: usize,
     /// Depth of the wrapper-strip recursion in `materialize`, counting each
     /// `nominal.backing`/`static_data_candidate.runtime`/callable-capture edge
@@ -4824,7 +5052,10 @@ const Cloner = struct {
                 self.subst.restore(change_start);
                 try self.collectCallPatternsInExpr(owner, join_point.remainder);
             },
-            .jump => |jump| try self.collectCallPatternsInExprSpan(owner, jump.args),
+            .jump => |jump| {
+                try self.collectCallPatternsInExprSpan(owner, jump.loop_values);
+                try self.collectCallPatternsInExprSpan(owner, jump.args);
+            },
             .if_initialized_payload => |payload_switch| {
                 try self.collectCallPatternsInExpr(owner, payload_switch.cond);
                 try self.collectCallPatternsInExpr(owner, payload_switch.initialized);
@@ -4971,6 +5202,7 @@ const Cloner = struct {
 
     fn buildArgs(self: *Cloner) Allocator.Error!Ast.Span(Ast.TypedLocal) {
         const source_fn = self.pass.program.getFn(self.source_fn);
+        const source_body = self.pass.sourceBody(self.source_fn);
         const source_args = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
         defer self.pass.allocator.free(source_args);
         if (source_args.len != self.pattern.args.len) Common.invariant("call-pattern argument count differed from source function arity");
@@ -4978,11 +5210,11 @@ const Cloner = struct {
         defer self.current_loc = saved_loc;
         const saved_region = self.current_region;
         defer self.current_region = saved_region;
-        self.current_loc = switch (source_fn.body) {
+        self.current_loc = switch (source_body) {
             .roc => |body| self.pass.program.exprLoc(body),
             .hosted => SourceLoc.none,
         };
-        self.current_region = switch (source_fn.body) {
+        self.current_region = switch (source_body) {
             .roc => |body| self.pass.program.exprRegion(body),
             .hosted => Region.zero(),
         };
@@ -5175,7 +5407,7 @@ const Cloner = struct {
 
                 const base = try self.cloneExpr(update.base);
                 const base_ty = self.pass.program.getExpr(base).ty;
-                if (!sameType(self.pass.program, base_ty, expr.ty)) {
+                if (!try self.pass.program.types.typeEql(&self.pass.program.names, base_ty, expr.ty)) {
                     Common.invariant("record update base type differed from its result type in SpecConstr");
                 }
                 const base_local = try self.pass.program.addLocal(self.pass.symbols.fresh(), base_ty);
@@ -5280,13 +5512,14 @@ const Cloner = struct {
             },
             .call_value => |call| {
                 const callee = try self.cloneExprValueDemandingShapeInto(call.callee, bindings);
-                if (callee == .callable and self.inline_calls.admitsCallable(callee.callable, self.iterator_inline_depth != 0)) {
+                const callee_structure = structuralValue(callee);
+                if (callee_structure == .callable and self.inline_calls.admitsCallable(callee_structure.callable, self.iterator_inline_depth != 0)) {
                     const enters_iterator = self.inline_calls == .iterator_fusion;
                     if (enters_iterator) self.iterator_inline_depth += 1;
                     defer {
                         if (enters_iterator) self.iterator_inline_depth -= 1;
                     }
-                    return try self.inlineCallableCallValue(expr.ty, callee.callable, call.args, expr_id, false, bindings);
+                    return try self.inlineCallableCallValue(expr.ty, callee_structure.callable, call.args, expr_id, false, bindings);
                 }
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .call_value = .{
                     .callee = try self.materialize(callee),
@@ -5387,13 +5620,14 @@ const Cloner = struct {
             },
             .call_value => |call| blk: {
                 const callee = try self.cloneExprValueDemandingShapeInto(call.callee, bindings);
-                if (callee == .callable and self.inline_calls.admitsCallable(callee.callable, self.iterator_inline_depth != 0)) {
+                const callee_structure = structuralValue(callee);
+                if (callee_structure == .callable and self.inline_calls.admitsCallable(callee_structure.callable, self.iterator_inline_depth != 0)) {
                     const enters_iterator = self.inline_calls == .iterator_fusion;
                     if (enters_iterator) self.iterator_inline_depth += 1;
                     defer {
                         if (enters_iterator) self.iterator_inline_depth -= 1;
                     }
-                    break :blk try self.inlineCallableCallValue(expr.ty, callee.callable, call.args, expr_id, true, bindings);
+                    break :blk try self.inlineCallableCallValue(expr.ty, callee_structure.callable, call.args, expr_id, true, bindings);
                 }
                 break :blk .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .call_value = .{
                     .callee = try self.materialize(callee),
@@ -5589,6 +5823,7 @@ const Cloner = struct {
         budget.* -= 1;
         return switch (value) {
             .expr => |expr| if (self.exprCanSubstitute(expr)) .proven else .disproven,
+            .runtime_anchor => |anchor| if (self.exprCanSubstitute(anchor.runtime)) .proven else .disproven,
             .static_data_candidate => |candidate| self.valueCanSubstituteBudgeted(candidate.runtime.*, budget),
             .tag => |tag| blk: {
                 var proof = ProofStatus.proven;
@@ -5696,14 +5931,13 @@ const Cloner = struct {
         fn_ref: @import("../monotype/ast.zig").LiftedFunctionValue,
         bindings: *BindingChain,
     ) Common.LowerError!Value {
-        const source_fn = self.pass.program.getFn(fn_ref.fn_id);
-        if (source_fn.body == .roc and
-            self.pass.inlineBodyAdmission(fn_ref.fn_id, source_fn.body.roc) != .admitted)
-        {
-            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .fn_ref = .{
-                .fn_id = fn_ref.fn_id,
-                .captures = try self.cloneCaptureOperandSpan(fn_ref.captures),
-            } } }) };
+        if (self.pass.inlineSourceBody(fn_ref.fn_id)) |source| {
+            if (!source.size.admits()) {
+                return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .fn_ref = .{
+                    .fn_id = fn_ref.fn_id,
+                    .captures = try self.cloneCaptureOperandSpan(fn_ref.captures),
+                } } }) };
+            }
         }
 
         const capture_count: usize = @intCast(fn_ref.captures.len);
@@ -5840,6 +6074,8 @@ const Cloner = struct {
                     const duplicated = try self.addExpr(.{ .ty = expr.ty, .data = .{ .jump = .{
                         .target = jump.target,
                         .args = try self.cloneExprSpan(jump.args),
+                        .loop_params = try self.cloneLoopUpdateParams(jump.loop_params),
+                        .loop_values = try self.cloneExprSpan(jump.loop_values),
                     } } });
                     try sites.append(self.pass.allocator, duplicated);
                     return duplicated;
@@ -5847,6 +6083,8 @@ const Cloner = struct {
                 break :blk .{ .jump = .{
                     .target = self.clonedJoinTarget(jump.target),
                     .args = try self.cloneExprSpan(jump.args),
+                    .loop_params = try self.cloneLoopUpdateParams(jump.loop_params),
+                    .loop_values = try self.cloneExprSpan(jump.loop_values),
                 } };
             },
             .if_initialized_payload => |payload_switch| .{ .if_initialized_payload = .{
@@ -5868,6 +6106,7 @@ const Cloner = struct {
                     .try_expr = try_expr,
                     .ok_local = ok_local,
                     .err_is_cold = sequence.err_is_cold,
+                    .err_target = if (sequence.err_target) |target| self.clonedJoinTarget(target) else null,
                     .ok_body = ok_body,
                 } };
             },
@@ -5887,6 +6126,7 @@ const Cloner = struct {
                     .rest_local = rest_local,
                     .rest_field = sequence.rest_field,
                     .err_is_cold = sequence.err_is_cold,
+                    .err_target = if (sequence.err_target) |target| self.clonedJoinTarget(target) else null,
                     .ok_body = ok_body,
                 } };
             },
@@ -5912,6 +6152,7 @@ const Cloner = struct {
     }
 
     fn cloneJoinPoint(self: *Cloner, ty: Type.TypeId, join_point: Ast.JoinPointExpr) Common.LowerError!Ast.ExprId {
+        const retained = try self.cloneRetainedLocals(join_point.retained);
         const source_params = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(join_point.params));
         defer self.pass.allocator.free(source_params);
         const params = try self.pass.allocator.alloc(Ast.TypedLocal, source_params.len);
@@ -5941,6 +6182,7 @@ const Cloner = struct {
         return try self.addExpr(.{ .ty = ty, .data = .{ .join_point = .{
             .id = target,
             .params = try self.pass.program.addTypedLocalSpan(params),
+            .retained = retained,
             .body = body,
             .remainder = remainder,
         } } });
@@ -6311,8 +6553,10 @@ const Cloner = struct {
     fn caseExprFromValue(self: *Cloner, value: Value) ?Ast.ExprId {
         const candidate = switch (value) {
             .expr => |expr| expr,
+            .runtime_anchor => |anchor| anchor.runtime,
             .static_data_candidate => |static_candidate| switch (static_candidate.runtime.*) {
                 .expr => |runtime| runtime,
+                .runtime_anchor => |anchor| anchor.runtime,
                 .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => return null,
             },
             .tag, .record, .tuple, .nominal, .callable => return null,
@@ -7174,7 +7418,7 @@ const Cloner = struct {
             if (params.items.len >= let_case_join_param_cap) break :structured;
             if (budget.admit(1) != .admitted) break :structured;
             switch (values[0]) {
-                .expr, .static_data_candidate => break :structured,
+                .expr, .runtime_anchor, .static_data_candidate => break :structured,
                 .tag => |first| {
                     for (values[1..]) |other| {
                         if (other != .tag) break :structured;
@@ -7551,6 +7795,19 @@ const Cloner = struct {
                     return null;
                 },
             };
+            if (let_.recursive) {
+                // Clone the recursive statement through the ordinary path,
+                // which reserves a fresh runtime local before cloning the
+                // initializer and then exposes the initializer's known value
+                // to the remainder. The retained statement is the explicit
+                // graph anchor for every symbolic back-edge to that local.
+                const cloned = try self.cloneStmt(stmt_id);
+                block_bindings.appendChain(cloned.bindings);
+                const anchor = cloned.stmt orelse
+                    Common.invariant("recursive statement dissolved while cloning a transparent block");
+                try block_bindings.appendRecursiveAnchor(self.arena.allocator(), anchor);
+                continue;
+            }
             const value = try self.cloneExprValueInto(let_.value, &block_bindings);
             if (self.caseExprFromValue(value) != null) {
                 self.subst.restore(change_start);
@@ -7768,7 +8025,7 @@ const Cloner = struct {
         value: Value,
         out: *std.ArrayList(Ast.ExprId),
     ) Common.LowerError!void {
-        const structural_value = if (value == .static_data_candidate) value.static_data_candidate.runtime.* else value;
+        const structural_value = structuralValue(value);
         switch (shape) {
             .any => {
                 try out.append(self.pass.allocator, try self.materialize(value));
@@ -7888,7 +8145,7 @@ const Cloner = struct {
                             return .{ .shape = .{ .record = .{ .ty = record.ty, .fields = fields } }, .demoted = demoted };
                         }
                     },
-                    .static_data_candidate, .tag, .tuple, .nominal, .callable => {},
+                    .runtime_anchor, .static_data_candidate, .tag, .tuple, .nominal, .callable => {},
                 }
                 return try self.demoteLoopSlotLeaf(record.ty, value, out);
             },
@@ -7924,7 +8181,7 @@ const Cloner = struct {
                             return .{ .shape = .{ .tuple = .{ .ty = tuple.ty, .items = items } }, .demoted = demoted };
                         }
                     },
-                    .static_data_candidate, .tag, .record, .nominal, .callable => {},
+                    .runtime_anchor, .static_data_candidate, .tag, .record, .nominal, .callable => {},
                 }
                 return try self.demoteLoopSlotLeaf(tuple.ty, value, out);
             },
@@ -7938,7 +8195,7 @@ const Cloner = struct {
                             return .{ .shape = .{ .nominal = .{ .ty = nominal.ty, .backing = backing } }, .demoted = supplied.demoted };
                         }
                     },
-                    .expr, .static_data_candidate, .tag, .record, .tuple, .callable => {},
+                    .expr, .runtime_anchor, .static_data_candidate, .tag, .record, .tuple, .callable => {},
                 }
                 return try self.demoteLoopSlotLeaf(nominal.ty, value, out);
             },
@@ -8064,11 +8321,13 @@ const Cloner = struct {
 
     /// Collapse a match whose scrutinee is a known constructor to the selected
     /// branch's body. `decline_on_no_match` distinguishes the two callers: the
-    /// direct known-match collapse proves exhaustiveness (a known constructor
-    /// always selects a branch), so a miss is an invariant; case-of-case
-    /// distribution instead *offers* a value that a branch may not structurally
-    /// cover (an opaque tag payload the selection cannot verify), so it declines
-    /// and leaves the match materialized.
+    /// direct known-match collapse proves exhaustiveness for a non-empty branch
+    /// set, so a miss there is an invariant; case-of-case distribution instead
+    /// *offers* a value that a branch may not structurally cover (an opaque tag
+    /// payload the selection cannot verify), so it declines and leaves the
+    /// match materialized. An empty branch set is absurd elimination. A symbolic
+    /// structural value does not prove reachability because an eager child may
+    /// itself be an impossible expression, so that match must also remain.
     fn selectKnownMatchValue(
         self: *Cloner,
         scrutinee: Value,
@@ -8077,6 +8336,7 @@ const Cloner = struct {
         bindings: *BindingChain,
     ) Common.LowerError!?Value {
         if (scrutinee == .expr) return null;
+        if (branches_span.len == 0) return null;
         // Read each branch by stable index rather than holding a `branchSpan`
         // borrow: `cloneExprValue(branch.body)` below can append to `branches`
         // through a nested match, which would invalidate a live borrow.
@@ -8127,6 +8387,18 @@ const Cloner = struct {
                     value
                 else
                     try self.makeReusableForMatch(value, bindings);
+                if (base == .runtime_anchor) {
+                    const anchor = base.runtime_anchor;
+                    const prepared_structure = (try self.bindPatToMatchValue(
+                        as.pattern,
+                        anchor.structure.*,
+                        body,
+                        bindings,
+                    )) orelse return null;
+                    const prepared = try self.runtimeAnchoredValue(prepared_structure, anchor.runtime);
+                    try self.subst.put(self.pass.program, as.local, prepared);
+                    return prepared;
+                }
                 const prepared = (try self.bindPatToMatchValue(as.pattern, base, body, bindings)) orelse return null;
                 try self.subst.put(self.pass.program, as.local, prepared);
                 return prepared;
@@ -8134,6 +8406,10 @@ const Cloner = struct {
             .record => |fields_span| {
                 const fields = self.pass.program.recordDestructSpan(fields_span);
                 switch (value) {
+                    .runtime_anchor => |anchor| {
+                        const prepared = (try self.bindPatToMatchValue(pat_id, anchor.structure.*, body, bindings)) orelse return null;
+                        return try self.runtimeAnchoredValue(prepared, anchor.runtime);
+                    },
                     .static_data_candidate => |candidate| return try self.bindStaticDataCandidateToMatchValue(
                         pat_id,
                         candidate,
@@ -8178,6 +8454,10 @@ const Cloner = struct {
             .tuple => |items_span| {
                 const pats = self.pass.program.patSpan(items_span);
                 switch (value) {
+                    .runtime_anchor => |anchor| {
+                        const prepared = (try self.bindPatToMatchValue(pat_id, anchor.structure.*, body, bindings)) orelse return null;
+                        return try self.runtimeAnchoredValue(prepared, anchor.runtime);
+                    },
                     .static_data_candidate => |candidate| return try self.bindStaticDataCandidateToMatchValue(
                         pat_id,
                         candidate,
@@ -8248,8 +8528,9 @@ const Cloner = struct {
                         bindings,
                     );
                 }
-                if (value != .nominal) return null;
-                const nominal = value.nominal;
+                const structure = structuralValue(value);
+                if (structure != .nominal) return null;
+                const nominal = structure.nominal;
                 const backing = try self.arena.allocator().create(Value);
                 backing.* = (try self.bindPatToMatchValueStripped(backing_pat, nominal.backing.*, body, bindings)) orelse return null;
                 return Value{ .nominal = .{
@@ -8402,6 +8683,7 @@ const Cloner = struct {
         budget.* -= 1;
         return switch (value) {
             .expr => .{ .exact = 0 },
+            .runtime_anchor => |anchor| self.knownConstructorSizeBudgeted(anchor.structure.*, budget),
             .static_data_candidate => |candidate| self.knownConstructorSizeBudgeted(candidate.runtime.*, budget),
             .tag => |tag| blk: {
                 var count = ConstructorSize{ .exact = 1 };
@@ -8573,6 +8855,7 @@ const Cloner = struct {
                     .data = .{ .local = local },
                 }) };
             },
+            .runtime_anchor => value,
             .static_data_candidate => |candidate| blk: {
                 const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), candidate.ty);
                 try bindings.appendBinding(self.arena.allocator(), .{
@@ -8649,11 +8932,20 @@ const Cloner = struct {
     fn wrapBindings(self: *Cloner, bindings: BindingChain, expr: Ast.ExprId) Common.LowerError!Ast.ExprId {
         bindings.verify(self.pass.program);
         if (bindings.isEmpty()) return expr;
+        if (bindings.hasRecursiveAnchor()) {
+            var statements = std.ArrayList(Ast.StmtId).empty;
+            defer statements.deinit(self.pass.allocator);
+            try self.appendBindingStmts(bindings, &statements);
+            return try self.addExpr(.{ .ty = self.pass.program.getExpr(expr).ty, .data = .{ .block = .{
+                .statements = try self.pass.program.addStmtSpan(statements.items),
+                .final_expr = expr,
+            } } });
+        }
         const ty = self.pass.program.getExpr(expr).ty;
         var result = expr;
         var current = bindings.last;
         while (current) |node| : (current = node.previous) {
-            const binding = node.binding;
+            const binding = node.binding.strict;
             const pat = try self.pass.program.addPat(.{
                 .ty = binding.ty,
                 .data = .{ .bind = binding.local },
@@ -8672,15 +8964,19 @@ const Cloner = struct {
         bindings.verify(self.pass.program);
         var current = bindings.first;
         while (current) |node| : (current = node.next) {
-            const binding = node.binding;
-            const pat = try self.pass.program.addPat(.{
-                .ty = binding.ty,
-                .data = .{ .bind = binding.local },
-            });
-            try out.append(self.pass.allocator, try self.addStmt(.{ .let_ = .{
-                .pat = pat,
-                .value = binding.value,
-            } }));
+            switch (node.binding) {
+                .strict => |binding| {
+                    const pat = try self.pass.program.addPat(.{
+                        .ty = binding.ty,
+                        .data = .{ .bind = binding.local },
+                    });
+                    try out.append(self.pass.allocator, try self.addStmt(.{ .let_ = .{
+                        .pat = pat,
+                        .value = binding.value,
+                    } }));
+                },
+                .recursive_anchor => |stmt| try out.append(self.pass.allocator, stmt),
+            }
         }
     }
 
@@ -9009,7 +9305,7 @@ const Cloner = struct {
         if (try self.selectKnownMatchValue(inner_value, outer_branches_span, true, bindings)) |value| return value;
         return switch (inner_value) {
             .expr => |expr| try self.cloneCaseOfCaseValue(ty, expr, outer_branches_span),
-            .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => null,
+            .runtime_anchor, .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => null,
         };
     }
 
@@ -9034,21 +9330,18 @@ const Cloner = struct {
                 .args = try self.cloneExprSpan(args_span),
             } } }) };
         }
-        const body = switch (source_fn.body) {
-            .roc => |body| body,
-            .hosted => return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
+        const source = self.pass.inlineSourceBody(callable.fn_id) orelse
+            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
                 .callee = try self.materialize(.{ .callable = callable }),
                 .args = try self.cloneExprSpan(args_span),
-            } } }) },
-        };
-        const body_size = self.pass.inlineBodySize(callable.fn_id, body);
-        if (!body_size.admits()) {
+            } } }) };
+        if (!source.size.admits()) {
             return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
                 .callee = try self.materialize(.{ .callable = callable }),
                 .args = try self.cloneExprSpan(args_span),
             } } }) };
         }
-        if (exprContainsReturn(self.pass.program, body)) {
+        if (exprContainsReturn(self.pass.program, source.expr)) {
             return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
                 .callee = try self.materialize(.{ .callable = callable }),
                 .args = try self.cloneExprSpan(args_span),
@@ -9072,7 +9365,7 @@ const Cloner = struct {
                 } } }) };
             }
         }
-        if (!self.admitInlineBodyGrowth(body_size)) {
+        if (!self.admitInlineBodyGrowth(source.size)) {
             return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
                 .callee = try self.materialize(.{ .callable = callable }),
                 .args = try self.cloneExprSpan(args_span),
@@ -9133,7 +9426,7 @@ const Cloner = struct {
         const saved_inline_scope = self.current_inline_scope;
         defer self.current_inline_scope = saved_inline_scope;
         try self.enterInlineScope(callable.fn_id, self.pass.program.exprLoc(original_expr));
-        return try self.cloneExprValueInto(body, bindings);
+        return try self.cloneExprValueInto(source.expr, bindings);
     }
 
     fn inlineDirectCallValue(
@@ -9153,15 +9446,12 @@ const Cloner = struct {
         if (!sameType(self.pass.program, result_ty, source_fn.ret)) {
             return .{ .expr = try self.cloneExprPlain(original_expr) };
         }
-        const body = switch (source_fn.body) {
-            .roc => |body| body,
-            .hosted => return .{ .expr = try self.cloneExprPlain(original_expr) },
-        };
-        const body_size = self.pass.inlineBodySize(callee, body);
-        if (!body_size.admits()) {
+        const source = self.pass.inlineSourceBody(callee) orelse
+            return .{ .expr = try self.cloneExprPlain(original_expr) };
+        if (!source.size.admits()) {
             return .{ .expr = try self.cloneExprPlain(original_expr) };
         }
-        if (exprContainsReturn(self.pass.program, body)) {
+        if (exprContainsReturn(self.pass.program, source.expr)) {
             return .{ .expr = try self.cloneExprPlain(original_expr) };
         }
         const direct_call_size = self.argsKnownConstructorSize(args_span).plus(self.captureOperandsKnownConstructorSize(captures_span));
@@ -9172,7 +9462,7 @@ const Cloner = struct {
                 return .{ .expr = try self.cloneExprPlain(original_expr) };
             }
         }
-        if (!self.admitInlineBodyGrowth(body_size)) {
+        if (!self.admitInlineBodyGrowth(source.size)) {
             return .{ .expr = try self.cloneExprPlain(original_expr) };
         }
         const source_args = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
@@ -9244,7 +9534,7 @@ const Cloner = struct {
         const saved_inline_scope = self.current_inline_scope;
         defer self.current_inline_scope = saved_inline_scope;
         try self.enterInlineScope(callee, self.pass.program.exprLoc(original_expr));
-        return try self.cloneExprValueInto(body, bindings);
+        return try self.cloneExprValueInto(source.expr, bindings);
     }
 
     fn bindPatToValue(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!MatchVerdict {
@@ -9264,6 +9554,7 @@ const Cloner = struct {
             .record => |fields_span| {
                 const fields = self.pass.program.recordDestructSpan(fields_span);
                 switch (value) {
+                    .runtime_anchor => |anchor| return try self.bindPatToValue(pat_id, anchor.structure.*),
                     .expr => |receiver| {
                         if (!canReadFieldsFromExpr(self.pass.program, receiver)) return .unknown;
                         var verdict: MatchVerdict = .match;
@@ -9284,7 +9575,7 @@ const Cloner = struct {
                 }
                 const record = recordFromValue(value) orelse switch (value) {
                     .tag, .tuple, .callable => Common.invariant("record pattern matched a non-record value"),
-                    .expr, .static_data_candidate, .record, .nominal => Common.invariant("record value had no record backing"),
+                    .expr, .runtime_anchor, .static_data_candidate, .record, .nominal => Common.invariant("record value had no record backing"),
                 };
                 var verdict: MatchVerdict = .match;
                 for (0..fields.len) |index| {
@@ -9303,6 +9594,7 @@ const Cloner = struct {
             .tuple => |items_span| {
                 const pats = self.pass.program.patSpan(items_span);
                 switch (value) {
+                    .runtime_anchor => |anchor| return try self.bindPatToValue(pat_id, anchor.structure.*),
                     .expr => |receiver| {
                         if (!canReadFieldsFromExpr(self.pass.program, receiver)) return .unknown;
                         var verdict: MatchVerdict = .match;
@@ -9326,7 +9618,7 @@ const Cloner = struct {
                 }
                 const tuple = tupleFromValue(value) orelse switch (value) {
                     .tag, .record, .callable => Common.invariant("tuple pattern matched a non-tuple value"),
-                    .expr, .static_data_candidate, .tuple, .nominal => Common.invariant("tuple value had no tuple backing"),
+                    .expr, .runtime_anchor, .static_data_candidate, .tuple, .nominal => Common.invariant("tuple value had no tuple backing"),
                 };
                 if (pats.len != tuple.items.len) Common.invariant("tuple pattern arity differed from the tuple value");
                 var verdict: MatchVerdict = .match;
@@ -9346,7 +9638,7 @@ const Cloner = struct {
                 if (value == .expr) return .unknown;
                 const tag = tagFromValue(value) orelse switch (value) {
                     .record, .tuple, .callable => Common.invariant("tag pattern matched a non-tag value"),
-                    .expr, .static_data_candidate, .tag, .nominal => Common.invariant("tag value had no tag backing"),
+                    .expr, .runtime_anchor, .static_data_candidate, .tag, .nominal => Common.invariant("tag value had no tag backing"),
                 };
                 if (!self.pass.program.names.tagLabelTextEql(tag.name, tag_pat.name)) return .no_match;
                 const pats = self.pass.program.patSpan(tag_pat.payloads);
@@ -9372,6 +9664,7 @@ const Cloner = struct {
                 self.wrapper_strip_depth += 1;
                 defer self.wrapper_strip_depth -= 1;
                 return switch (value) {
+                    .runtime_anchor => |anchor| try self.bindPatToValue(pat_id, anchor.structure.*),
                     .static_data_candidate => |candidate| try self.bindPatToValue(pat_id, candidate.runtime.*),
                     .nominal => |nominal| try self.bindPatToValue(backing_pat, nominal.backing.*),
                     .expr => .unknown,
@@ -9419,7 +9712,7 @@ const Cloner = struct {
             .record => |fields_span| {
                 const fields = self.pass.program.recordDestructSpan(fields_span);
                 switch (value) {
-                    .record, .nominal, .static_data_candidate => {
+                    .record, .nominal, .runtime_anchor, .static_data_candidate => {
                         const record = recordFromValue(value) orelse return false;
                         for (0..fields.len) |index| {
                             const field = GuardedList.at(fields, index);
@@ -9443,7 +9736,7 @@ const Cloner = struct {
             .tuple => |items_span| {
                 const pats = self.pass.program.patSpan(items_span);
                 switch (value) {
-                    .tuple, .nominal, .static_data_candidate => {
+                    .tuple, .nominal, .runtime_anchor, .static_data_candidate => {
                         const tuple = tupleFromValue(value) orelse return false;
                         if (pats.len != tuple.items.len) return false;
                         for (0..pats.len) |index| {
@@ -9485,6 +9778,7 @@ const Cloner = struct {
                 self.wrapper_strip_depth += 1;
                 defer self.wrapper_strip_depth -= 1;
                 return switch (value) {
+                    .runtime_anchor => |anchor| try self.bindPatToFlowValue(pat_id, anchor.structure.*),
                     .static_data_candidate => |candidate| try self.bindPatToFlowValue(pat_id, candidate.runtime.*),
                     .nominal => |nominal| try self.bindPatToFlowValue(backing_pat, nominal.backing.*),
                     .expr, .tag, .record, .tuple, .callable => false,
@@ -9700,10 +9994,100 @@ const Cloner = struct {
         const value = self.subst.getForClone(self.pass.program, source) orelse return source;
         const expr = switch (value) {
             .expr => |expr| expr,
+            .runtime_anchor => |anchor| anchor.runtime,
             .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => Common.invariant("SpecConstr local-id field referenced a non-local substituted value"),
         };
         return localExpr(self.pass.program, expr) orelse
             Common.invariant("SpecConstr local-id field referenced a non-local expression");
+    }
+
+    fn cloneLoopUpdateParams(self: *Cloner, span: Ast.Span(Ast.TypedLocal)) Common.LowerError!Ast.Span(Ast.TypedLocal) {
+        const source = self.pass.program.typedLocalSpan(span);
+        const params = try self.pass.allocator.alloc(Ast.TypedLocal, source.len);
+        defer self.pass.allocator.free(params);
+        for (0..source.len) |index| {
+            const param = GuardedList.at(source, index);
+            params[index] = .{ .local = self.cloneLocalRef(param.local), .ty = param.ty };
+        }
+        return try self.pass.program.addTypedLocalSpan(params);
+    }
+
+    /// Retained ownership follows SpecConstr's exact value substitution. A
+    /// scalarized aggregate has no runtime aggregate local to retain, so keep
+    /// its runtime leaf locals instead of rematerializing the aggregate.
+    fn cloneRetainedLocals(self: *Cloner, span: Ast.Span(Ast.TypedLocal)) Common.LowerError!Ast.Span(Ast.TypedLocal) {
+        const source = self.pass.program.typedLocalSpan(span);
+        var retained: std.ArrayList(Ast.TypedLocal) = .empty;
+        defer retained.deinit(self.pass.allocator);
+        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(self.pass.allocator, self.pass.program.localCount());
+        defer seen.deinit(self.pass.allocator);
+        for (0..source.len) |index| {
+            const typed = GuardedList.at(source, index);
+            if (self.subst.getForClone(self.pass.program, typed.local)) |value| {
+                try self.appendRetainedValueLocals(value, &retained, &seen, 0);
+            } else {
+                try self.appendRetainedLocal(&retained, &seen, typed.local, typed.ty);
+            }
+        }
+        return try self.pass.program.addTypedLocalSpan(retained.items);
+    }
+
+    fn appendRetainedLocal(
+        self: *Cloner,
+        retained: *std.ArrayList(Ast.TypedLocal),
+        seen: *std.bit_set.DynamicBitSetUnmanaged,
+        local: Ast.LocalId,
+        ty: Type.TypeId,
+    ) Allocator.Error!void {
+        const index = @intFromEnum(local);
+        if (seen.isSet(index)) return;
+        seen.set(index);
+        try retained.append(self.pass.allocator, .{ .local = local, .ty = ty });
+    }
+
+    fn appendRetainedExprLocal(
+        self: *Cloner,
+        expr: Ast.ExprId,
+        retained: *std.ArrayList(Ast.TypedLocal),
+        seen: *std.bit_set.DynamicBitSetUnmanaged,
+    ) Common.LowerError!void {
+        const value = self.pass.program.getExpr(expr);
+        if (value.data == .local) {
+            return try self.appendRetainedLocal(retained, seen, value.data.local, value.ty);
+        }
+        if (value.data == .unit or
+            value.data == .@"unreachable" or
+            value.data == .int_lit or
+            value.data == .frac_f32_lit or
+            value.data == .frac_f64_lit or
+            value.data == .dec_lit or
+            value.data == .str_lit or
+            value.data == .bytes_lit or
+            value.data == .uninitialized or
+            value.data == .uninitialized_payload) return;
+        Common.invariant("SpecConstr retained ownership leaf was neither a runtime local nor a static value");
+    }
+
+    fn appendRetainedValueLocals(
+        self: *Cloner,
+        value: Value,
+        retained: *std.ArrayList(Ast.TypedLocal),
+        seen: *std.bit_set.DynamicBitSetUnmanaged,
+        depth: usize,
+    ) Common.LowerError!void {
+        if (depth >= value_wrapper_strip_cap) {
+            Common.invariant("SpecConstr retained ownership followed a cyclic value");
+        }
+        switch (value) {
+            .expr => |expr| try self.appendRetainedExprLocal(expr, retained, seen),
+            .runtime_anchor => |anchor| try self.appendRetainedExprLocal(anchor.runtime, retained, seen),
+            .static_data_candidate => |candidate| try self.appendRetainedValueLocals(candidate.runtime.*, retained, seen, depth + 1),
+            .tag => |tag| for (tag.payloads) |payload| try self.appendRetainedValueLocals(payload, retained, seen, depth),
+            .record => |record| for (record.fields) |field| try self.appendRetainedValueLocals(field.value, retained, seen, depth),
+            .tuple => |tuple| for (tuple.items) |item| try self.appendRetainedValueLocals(item, retained, seen, depth),
+            .nominal => |nominal| try self.appendRetainedValueLocals(nominal.backing.*, retained, seen, depth + 1),
+            .callable => |callable| for (callable.captures) |capture| try self.appendRetainedValueLocals(capture.value, retained, seen, depth),
+        }
     }
 
     fn clonePat(self: *Cloner, pat_id: Ast.PatId, mode: BinderCloneMode) Common.LowerError!Ast.PatId {
@@ -9760,6 +10144,179 @@ const Cloner = struct {
         };
     }
 
+    /// Total node-visit bound for proving which initializer leaves survive a
+    /// recursive statement's scope. Symbolic values can be cyclic or heavily
+    /// shared, so an unbounded structural walk is not total. Exhaustion never
+    /// loses no information: the unresolved sub-value becomes its exact runtime
+    /// expression, preserving correctness and single evaluation while declining
+    /// only the unproved structure. See design.md "Core Principles" on bounded
+    /// post-check walks.
+    const recursive_anchor_scope_work_budget: u32 = 4096;
+
+    /// Whether a structural sub-value cannot safely flow beyond an
+    /// initializer chain. A non-reusable expression could duplicate runtime
+    /// work through later structural use; an expression referencing a chain
+    /// local would escape its lexical scope. Either case must use the retained
+    /// recursive value's exact runtime position instead.
+    fn valueContainsNonReusableOrInitializerLocalExpr(
+        self: *Cloner,
+        bindings: BindingChain,
+        value: Value,
+        budget: *u32,
+    ) Common.LowerError!bool {
+        if (budget.* == 0) return true;
+        budget.* -= 1;
+        return switch (value) {
+            .expr => |expr| !self.exprCanSubstitute(expr) or
+                try bindings.referencedByExpr(self.pass.program, expr),
+            .runtime_anchor => |anchor| !self.exprCanSubstitute(anchor.runtime) or
+                try bindings.referencedByExpr(self.pass.program, anchor.runtime) or
+                try self.valueContainsNonReusableOrInitializerLocalExpr(bindings, anchor.structure.*, budget),
+            .static_data_candidate => |candidate| try self.valueContainsNonReusableOrInitializerLocalExpr(bindings, candidate.runtime.*, budget),
+            .tag => |tag| blk: {
+                for (tag.payloads) |payload| {
+                    if (try self.valueContainsNonReusableOrInitializerLocalExpr(bindings, payload, budget)) break :blk true;
+                }
+                break :blk false;
+            },
+            .record => |record| blk: {
+                for (record.fields) |field| {
+                    if (try self.valueContainsNonReusableOrInitializerLocalExpr(bindings, field.value, budget)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tuple => |tuple| blk: {
+                for (tuple.items) |item| {
+                    if (try self.valueContainsNonReusableOrInitializerLocalExpr(bindings, item, budget)) break :blk true;
+                }
+                break :blk false;
+            },
+            .nominal => |nominal| try self.valueContainsNonReusableOrInitializerLocalExpr(bindings, nominal.backing.*, budget),
+            .callable => |callable| blk: {
+                for (callable.captures) |capture| {
+                    if (try self.valueContainsNonReusableOrInitializerLocalExpr(bindings, capture.value, budget)) break :blk true;
+                }
+                break :blk false;
+            },
+        };
+    }
+
+    fn runtimeAnchoredValue(self: *Cloner, structure: Value, runtime: Ast.ExprId) Allocator.Error!Value {
+        if (std.debug.runtime_safety and !self.exprCanSubstitute(runtime)) {
+            Common.invariant("runtime-anchored structure had a non-reusable runtime expression");
+        }
+        if (std.debug.runtime_safety and
+            !try self.pass.program.types.typeEql(
+                &self.pass.program.names,
+                valueType(self.pass.program, structure),
+                self.pass.program.getExpr(runtime).ty,
+            ))
+        {
+            Common.invariant("runtime anchor and its symbolic structure had different types");
+        }
+        const stored_structure = try self.arena.allocator().create(Value);
+        stored_structure.* = structure;
+        return .{ .runtime_anchor = .{
+            .runtime = runtime,
+            .structure = stored_structure,
+        } };
+    }
+
+    /// Rebase initializer structure onto the exact runtime value which owns
+    /// it. Every structural node with an accessible runtime position keeps
+    /// both views: consumers can specialize through `structure`, while an
+    /// opaque use materializes `runtime` without rebuilding or copying it.
+    /// A child whose runtime position cannot be expressed (tag payloads and
+    /// callable captures) remains structural only when the scope proof shows
+    /// all of its leaves already outlive the initializer.
+    fn reanchorRecursiveValue(
+        self: *Cloner,
+        value: Value,
+        runtime: Ast.ExprId,
+        initializer_bindings: BindingChain,
+        budget: *u32,
+        runtime_has_value_type: bool,
+    ) Common.LowerError!?Value {
+        if (budget.* == 0) return if (runtime_has_value_type) Value{ .expr = runtime } else null;
+        budget.* -= 1;
+
+        switch (value) {
+            .expr => |expr| {
+                if (self.exprCanSubstitute(expr) and
+                    !try initializer_bindings.referencedByExpr(self.pass.program, expr)) return value;
+                return if (runtime_has_value_type) Value{ .expr = runtime } else null;
+            },
+            .runtime_anchor => |anchor| return try self.reanchorRecursiveValue(
+                anchor.structure.*,
+                runtime,
+                initializer_bindings,
+                budget,
+                runtime_has_value_type,
+            ),
+            .record => |record| {
+                const fields = try self.arena.allocator().alloc(FieldValue, record.fields.len);
+                for (record.fields, 0..) |field, index| {
+                    const field_runtime = try self.addFieldAccessExpr(
+                        valueType(self.pass.program, field.value),
+                        runtime,
+                        field.name,
+                    );
+                    fields[index] = .{
+                        .name = field.name,
+                        .value = (try self.reanchorRecursiveValue(
+                            field.value,
+                            field_runtime,
+                            initializer_bindings,
+                            budget,
+                            true,
+                        )) orelse Common.invariant("record field with a runtime position could not be recursively anchored"),
+                    };
+                }
+                const structure = Value{ .record = .{ .ty = record.ty, .fields = fields } };
+                return if (runtime_has_value_type) try self.runtimeAnchoredValue(structure, runtime) else structure;
+            },
+            .tuple => |tuple| {
+                const items = try self.arena.allocator().alloc(Value, tuple.items.len);
+                for (tuple.items, 0..) |item, index| {
+                    const item_runtime = try self.addExpr(.{ .ty = valueType(self.pass.program, item), .data = .{ .tuple_access = .{
+                        .tuple = runtime,
+                        .elem_index = @as(u32, @intCast(index)),
+                    } } });
+                    items[index] = (try self.reanchorRecursiveValue(
+                        item,
+                        item_runtime,
+                        initializer_bindings,
+                        budget,
+                        true,
+                    )) orelse Common.invariant("tuple item with a runtime position could not be recursively anchored");
+                }
+                const structure = Value{ .tuple = .{ .ty = tuple.ty, .items = items } };
+                return if (runtime_has_value_type) try self.runtimeAnchoredValue(structure, runtime) else structure;
+            },
+            .nominal => |nominal| {
+                const backing = try self.arena.allocator().create(Value);
+                backing.* = (try self.reanchorRecursiveValue(
+                    nominal.backing.*,
+                    runtime,
+                    initializer_bindings,
+                    budget,
+                    false,
+                )) orelse {
+                    if (runtime_has_value_type) return Value{ .expr = runtime };
+                    return null;
+                };
+                const structure = Value{ .nominal = .{ .ty = nominal.ty, .backing = backing } };
+                return if (runtime_has_value_type) try self.runtimeAnchoredValue(structure, runtime) else structure;
+            },
+            .static_data_candidate, .tag, .callable => {
+                if (try self.valueContainsNonReusableOrInitializerLocalExpr(initializer_bindings, value, budget)) {
+                    return if (runtime_has_value_type) Value{ .expr = runtime } else null;
+                }
+                return if (runtime_has_value_type) try self.runtimeAnchoredValue(value, runtime) else value;
+            },
+        }
+    }
+
     /// Clone one statement. A binding statement whose value's opaque leaves
     /// can all be named dissolves instead: the returned binding chain is
     /// placed by the caller at this statement's position—the same
@@ -9794,9 +10351,45 @@ const Cloner = struct {
                     null;
                 if (recursive_pat) |pat| try self.markActiveRecursiveValuePat(pat);
                 defer if (recursive_pat) |pat| self.unmarkActiveRecursiveValuePat(pat);
-                const value = try self.cloneExprValueInto(let_.value, &bindings);
-                const value_expr = try self.materialize(value);
-                if (try self.bindPatToReusableValue(let_.pat, value) == .match) {
+                // Bindings produced while cloning a recursive initializer are
+                // in the recursive pattern's scope and may themselves use its
+                // fresh runtime local. Keep that complete chain inside the
+                // initializer; placing it before the recursive statement
+                // would turn those exact back-edges into free locals.
+                var recursive_value_bindings: BindingChain = .{};
+                const value = try self.cloneExprValueInto(
+                    let_.value,
+                    if (let_.recursive) &recursive_value_bindings else &bindings,
+                );
+                const materialized_value = try self.materialize(value);
+                const value_expr = if (let_.recursive)
+                    try self.wrapBindings(recursive_value_bindings, materialized_value)
+                else
+                    materialized_value;
+                const continuation_value = if (let_.recursive and
+                    self.pass.program.getPat(let_.pat).data == .bind and
+                    self.pass.program.getPat(recursive_pat.?).data == .bind)
+                continuation: {
+                    const runtime_local = self.pass.program.getPat(recursive_pat.?).data.bind;
+                    const runtime = try self.addExpr(.{
+                        .ty = self.pass.program.getLocal(runtime_local).ty,
+                        .data = .{ .local = runtime_local },
+                    });
+                    var budget: u32 = recursive_anchor_scope_work_budget;
+                    break :continuation (try self.reanchorRecursiveValue(
+                        value,
+                        runtime,
+                        recursive_value_bindings,
+                        &budget,
+                        true,
+                    )) orelse Common.invariant("whole recursive binding had no runtime anchor");
+                } else value;
+                const value_escapes_recursive_scope = let_.recursive and
+                    self.pass.program.getPat(let_.pat).data != .bind and
+                    try recursive_value_bindings.referencedByExpr(self.pass.program, materialized_value);
+                if (!value_escapes_recursive_scope and
+                    try self.bindPatToReusableValue(let_.pat, continuation_value) == .match)
+                {
                     break :blk .{ .let_ = .{
                         .pat = recursive_pat orelse try self.clonePat(let_.pat, .output_only),
                         .value = value_expr,
@@ -9958,6 +10551,7 @@ const Cloner = struct {
     fn materialize(self: *Cloner, value: Value) Common.LowerError!Ast.ExprId {
         switch (value) {
             .expr => |expr| return expr,
+            .runtime_anchor => |anchor| return anchor.runtime,
             .static_data_candidate => |candidate| {
                 if (self.materialize_strip_depth >= value_wrapper_strip_cap) {
                     Common.invariant("materialize followed a static-data runtime chain past the strip cap; a cyclic value reached materialization");
@@ -10031,11 +10625,14 @@ const Cloner = struct {
                 all_original = false;
                 break;
             };
-            if (value != .expr) {
-                all_original = false;
-                break;
-            }
-            const expr = value.expr;
+            const expr = switch (value) {
+                .expr => |expr| expr,
+                .runtime_anchor => |anchor| anchor.runtime,
+                .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => {
+                    all_original = false;
+                    break;
+                },
+            };
             const local = localExpr(self.pass.program, expr) orelse {
                 all_original = false;
                 break;
@@ -10052,8 +10649,11 @@ const Cloner = struct {
     }
 
     fn activeRecursiveFieldTupleReadRoot(self: *Cloner, value: Value) ?Ast.ExprId {
-        if (value != .expr) return null;
-        const expr_id = value.expr;
+        const expr_id = switch (value) {
+            .expr => |expr| expr,
+            .runtime_anchor => |anchor| anchor.runtime,
+            .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => return null,
+        };
         const data = self.pass.program.getExpr(expr_id).data;
         if (data != .field_access and data != .tuple_access) return null;
         return self.activeRecursiveFieldTupleReadBase(expr_id);
@@ -10122,7 +10722,7 @@ const Cloner = struct {
             return try self.materializeCallableWithCaptures(callable.ty, worker_fn_id, worker.captures, callable.captures);
         }
 
-        const source_body = switch (source_fn.body) {
+        const source_body = switch (self.pass.sourceBody(source_fn_id)) {
             .roc => |body| body,
             .hosted => Common.invariant("hosted callable value needed a rewritten body"),
         };
@@ -10158,8 +10758,11 @@ const Cloner = struct {
                 .data = .{ .local = local },
             });
             if (field_tuple_read_root) |root| {
-                if (capture_value != .expr) unreachable;
-                const source_expr = capture_value.expr;
+                const source_expr = switch (capture_value) {
+                    .expr => |expr| expr,
+                    .runtime_anchor => |anchor| anchor.runtime,
+                    .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => Common.invariant("recursive field/tuple capture had no exact runtime expression"),
+                };
                 worker_capture_values[index] = .{ .id = id, .value = .{ .expr = root } };
                 worker_body_values[index] = .{ .expr = try self.cloneFieldTupleReadReplacingRoot(source_expr, root, local_expr) };
             } else {
@@ -10401,7 +11004,7 @@ const Cloner = struct {
         const source_fn = self.pass.program.getFn(callee);
         self.current_inline_scope = try self.pass.program.addInlineScope(.{
             .source_symbol = source_fn.symbol,
-            .source_loc = switch (source_fn.body) {
+            .source_loc = switch (self.pass.sourceBody(callee)) {
                 .roc => |body| self.pass.program.exprLoc(body),
                 .hosted => SourceLoc.none,
             },
@@ -10504,49 +11107,19 @@ const BodyLocalScope = struct {
         }
     }
 
-    fn bindPat(self: *BodyLocalScope, pat_id: Ast.PatId, added: *std.ArrayList(Ast.LocalId)) Allocator.Error!void {
-        switch (self.program.getPat(pat_id).data) {
-            .bind => |local| {
-                try self.bind(local);
-                try added.append(self.allocator, local);
-            },
-            .wildcard,
-            .int_lit,
-            .dec_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .str_lit,
-            => {},
-            .str_pattern => |str| {
-                const steps = self.program.strPatternStepSpan(str.steps);
-                for (0..steps.len) |index| {
-                    if (GuardedList.at(steps, index).capture) |capture| try self.bindPat(capture, added);
-                }
-            },
-            .as => |as| {
-                try self.bindPat(as.pattern, added);
-                try self.bind(as.local);
-                try added.append(self.allocator, as.local);
-            },
-            .record => |fields| {
-                const destructs = self.program.recordDestructSpan(fields);
-                for (0..destructs.len) |index| try self.bindPat(GuardedList.at(destructs, index).pattern, added);
-            },
-            .tuple => |items| {
-                const children = self.program.patSpan(items);
-                for (0..children.len) |index| try self.bindPat(GuardedList.at(children, index), added);
-            },
-            .list => |list| {
-                const children = self.program.patSpan(list.patterns);
-                for (0..children.len) |index| try self.bindPat(GuardedList.at(children, index), added);
-                if (list.rest) |rest| if (rest.pattern) |rest_pattern| try self.bindPat(rest_pattern, added);
-            },
-            .tag => |tag| {
-                const payloads = self.program.patSpan(tag.payloads);
-                for (0..payloads.len) |index| try self.bindPat(GuardedList.at(payloads, index), added);
-            },
-            .nominal => |backing| try self.bindPat(backing, added),
+    /// Records each bound local into the body-local scope's bound counts.
+    const ScopeBinder = struct {
+        scope: *BodyLocalScope,
+        added: *std.ArrayList(Ast.LocalId),
+
+        pub fn bindLocal(self: ScopeBinder, local: Ast.LocalId) Allocator.Error!void {
+            try self.scope.bind(local);
+            try self.added.append(self.scope.allocator, local);
         }
+    };
+
+    fn bindPat(self: *BodyLocalScope, pat_id: Ast.PatId, added: *std.ArrayList(Ast.LocalId)) Allocator.Error!void {
+        try Ast.forEachBoundLocal(self.program, pat_id, ScopeBinder{ .scope = self, .added = added });
     }
 
     fn walkExprSpan(self: *BodyLocalScope, span: Ast.Span(Ast.ExprId)) Allocator.Error!void {
@@ -10682,12 +11255,22 @@ const BodyLocalScope = struct {
             },
             .try_sequence => |sequence| {
                 try self.walkExpr(sequence.try_expr);
+                if (sequence.err_target) |target| {
+                    const arity = self.joins.get(target) orelse
+                        Common.invariant("rewritten Try sequence targeted a join point outside lexical scope");
+                    if (arity != 1) Common.invariant("rewritten Try sequence error target did not have one parameter");
+                }
                 try self.bind(sequence.ok_local);
                 try self.walkExpr(sequence.ok_body);
                 self.unbind(sequence.ok_local);
             },
             .try_record_sequence => |sequence| {
                 try self.walkExpr(sequence.try_expr);
+                if (sequence.err_target) |target| {
+                    const arity = self.joins.get(target) orelse
+                        Common.invariant("rewritten Try record sequence targeted a join point outside lexical scope");
+                    if (arity != 1) Common.invariant("rewritten Try record sequence error target did not have one parameter");
+                }
                 try self.bind(sequence.value_local);
                 try self.bind(sequence.rest_local);
                 try self.walkExpr(sequence.ok_body);
@@ -10718,6 +11301,8 @@ const BodyLocalScope = struct {
                     Common.invariant("rewritten body redeclared an active join point id");
                 }
                 join_entry.value_ptr.* = join_point.params.len;
+                const retained = self.program.typedLocalSpan(join_point.retained);
+                for (0..retained.len) |index| self.checkUse(GuardedList.at(retained, index).local);
                 var added: std.ArrayList(Ast.LocalId) = .empty;
                 defer added.deinit(self.allocator);
                 try self.bindTypedLocals(join_point.params, &added);
@@ -10734,6 +11319,12 @@ const BodyLocalScope = struct {
                 if (arity != jump.args.len) {
                     Common.invariant("rewritten body jump arity differed from its join point parameters");
                 }
+                const update_params = self.program.typedLocalSpan(jump.loop_params);
+                if (update_params.len != jump.loop_values.len) {
+                    Common.invariant("rewritten body jump loop-update arity differed");
+                }
+                for (0..update_params.len) |index| self.checkUse(GuardedList.at(update_params, index).local);
+                try self.walkExprSpan(jump.loop_values);
                 try self.walkExprSpan(jump.args);
             },
         }
@@ -10912,34 +11503,27 @@ const BodySizeCounter = struct {
                 self.countExpr(join_point.body);
                 self.countExpr(join_point.remainder);
             },
-            .jump => |jump| self.countExprSpan(jump.args),
+            .jump => |jump| {
+                self.countExprSpan(jump.loop_values);
+                self.countExprSpan(jump.args);
+            },
         }
     }
-};
-
-const FnUseSummary = struct {
-    external_calls: usize = 0,
-    external_call_expr: ?Ast.ExprId = null,
-    value_refs: usize = 0,
 };
 
 /// Program-wide procedure-use snapshot shared by SpecConstr graph rewrites.
 /// A transformation that changes edges requires a fresh snapshot; consumers
 /// never combine usage counts from different program generations.
 const ProgramProcedureUsage = struct {
-    contains_return: []bool,
     tail_self_calls: []TailSelfCallSummary,
-    fn_uses: []FnUseSummary,
+    fn_uses: []ProcedureUse,
 
     fn collect(allocator: Allocator, program: *const Ast.Program) Allocator.Error!ProgramProcedureUsage {
         const fn_count = program.fnCount();
-        const contains_return = try allocator.alloc(bool, fn_count);
-        errdefer allocator.free(contains_return);
-        @memset(contains_return, false);
         const tail_self_calls = try allocator.alloc(TailSelfCallSummary, fn_count);
         errdefer allocator.free(tail_self_calls);
         @memset(tail_self_calls, .{});
-        const fn_uses = try allocator.alloc(FnUseSummary, fn_count);
+        const fn_uses = try allocator.alloc(ProcedureUse, fn_count);
         errdefer allocator.free(fn_uses);
         @memset(fn_uses, .{});
 
@@ -10949,7 +11533,7 @@ const ProgramProcedureUsage = struct {
                 .roc => |body| body,
                 .hosted => continue,
             };
-            contains_return[owner_index] = exprContainsReturn(program, body);
+            fn_uses[owner_index].contains_return = exprContainsReturn(program, body);
             tail_self_calls[owner_index] = tailSelfCallSummary(program, body, owner);
             collectAllFnUsesInExpr(program, body, owner, fn_uses);
         }
@@ -10957,16 +11541,20 @@ const ProgramProcedureUsage = struct {
             fn_uses[@intFromEnum(root.fn_id)].value_refs += 1;
         }
         return .{
-            .contains_return = contains_return,
             .tail_self_calls = tail_self_calls,
             .fn_uses = fn_uses,
         };
     }
 
+    fn takeFnUses(self: *ProgramProcedureUsage) []ProcedureUse {
+        const fn_uses = self.fn_uses;
+        self.fn_uses = &.{};
+        return fn_uses;
+    }
+
     fn deinit(self: *ProgramProcedureUsage, allocator: Allocator) void {
-        allocator.free(self.fn_uses);
-        allocator.free(self.tail_self_calls);
-        allocator.free(self.contains_return);
+        if (self.fn_uses.len != 0) allocator.free(self.fn_uses);
+        if (self.tail_self_calls.len != 0) allocator.free(self.tail_self_calls);
         self.* = undefined;
     }
 };
@@ -10975,7 +11563,7 @@ fn collectAllFnUsesInExpr(
     program: *const Ast.Program,
     expr_id: Ast.ExprId,
     owner: Ast.FnId,
-    uses: []FnUseSummary,
+    uses: []ProcedureUse,
 ) void {
     switch (program.getExpr(expr_id).data) {
         .local,
@@ -11039,6 +11627,7 @@ fn collectAllFnUsesInExpr(
                     const summary = &uses[@intFromEnum(callee)];
                     summary.external_calls += 1;
                     summary.external_call_expr = expr_id;
+                    summary.external_call_owner = owner;
                 }
             }
             collectAllFnUsesInExprSpan(program, call.args, owner, uses);
@@ -11094,7 +11683,10 @@ fn collectAllFnUsesInExpr(
             collectAllFnUsesInExpr(program, join_point.body, owner, uses);
             collectAllFnUsesInExpr(program, join_point.remainder, owner, uses);
         },
-        .jump => |jump| collectAllFnUsesInExprSpan(program, jump.args, owner, uses),
+        .jump => |jump| {
+            collectAllFnUsesInExprSpan(program, jump.loop_values, owner, uses);
+            collectAllFnUsesInExprSpan(program, jump.args, owner, uses);
+        },
         .if_initialized_payload => |payload_switch| {
             collectAllFnUsesInExpr(program, payload_switch.cond, owner, uses);
             collectAllFnUsesInExpr(program, payload_switch.initialized, owner, uses);
@@ -11111,17 +11703,17 @@ fn collectAllFnUsesInExpr(
     }
 }
 
-fn collectAllFnUsesInExprSpan(program: *const Ast.Program, span: Ast.Span(Ast.ExprId), owner: Ast.FnId, uses: []FnUseSummary) void {
+fn collectAllFnUsesInExprSpan(program: *const Ast.Program, span: Ast.Span(Ast.ExprId), owner: Ast.FnId, uses: []ProcedureUse) void {
     const exprs = program.exprSpan(span);
     for (0..exprs.len) |index| collectAllFnUsesInExpr(program, GuardedList.at(exprs, index), owner, uses);
 }
 
-fn collectAllFnUsesInCaptureOperands(program: *const Ast.Program, span: Ast.Span(Ast.CaptureOperand), owner: Ast.FnId, uses: []FnUseSummary) void {
+fn collectAllFnUsesInCaptureOperands(program: *const Ast.Program, span: Ast.Span(Ast.CaptureOperand), owner: Ast.FnId, uses: []ProcedureUse) void {
     const operands = program.captureOperandSpan(span);
     for (0..operands.len) |index| collectAllFnUsesInExpr(program, GuardedList.at(operands, index).value, owner, uses);
 }
 
-fn collectAllFnUsesInStmt(program: *const Ast.Program, stmt_id: Ast.StmtId, owner: Ast.FnId, uses: []FnUseSummary) void {
+fn collectAllFnUsesInStmt(program: *const Ast.Program, stmt_id: Ast.StmtId, owner: Ast.FnId, uses: []ProcedureUse) void {
     switch (program.getStmt(stmt_id)) {
         .let_ => |let_| collectAllFnUsesInExpr(program, let_.value, owner, uses),
         .expr, .expect, .dbg => |expr| collectAllFnUsesInExpr(program, expr, owner, uses),
@@ -11335,7 +11927,8 @@ fn exprCallsFn(program: *const Ast.Program, expr_id: Ast.ExprId, fn_id: Ast.FnId
         .break_ => |maybe| if (maybe) |value| exprCallsFn(program, value, fn_id) else false,
         .continue_ => |continue_| exprSpanCallsFn(program, continue_.values, fn_id),
         .join_point => |join_point| exprCallsFn(program, join_point.body, fn_id) or exprCallsFn(program, join_point.remainder, fn_id),
-        .jump => |jump| exprSpanCallsFn(program, jump.args, fn_id),
+        .jump => |jump| exprSpanCallsFn(program, jump.loop_values, fn_id) or
+            exprSpanCallsFn(program, jump.args, fn_id),
         .if_initialized_payload => |payload_switch| exprCallsFn(program, payload_switch.cond, fn_id) or
             exprCallsFn(program, payload_switch.initialized, fn_id) or
             exprCallsFn(program, payload_switch.uninitialized, fn_id),
@@ -11463,7 +12056,8 @@ fn exprContainsReturn(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
         .break_ => |maybe| if (maybe) |value| exprContainsReturn(program, value) else false,
         .continue_ => |continue_| exprSpanContainsReturn(program, continue_.values),
         .join_point => |join_point| exprContainsReturn(program, join_point.body) or exprContainsReturn(program, join_point.remainder),
-        .jump => |jump| exprSpanContainsReturn(program, jump.args),
+        .jump => |jump| exprSpanContainsReturn(program, jump.loop_values) or
+            exprSpanContainsReturn(program, jump.args),
         .if_initialized_payload => |payload_switch| exprContainsReturn(program, payload_switch.cond) or
             exprContainsReturn(program, payload_switch.initialized) or
             exprContainsReturn(program, payload_switch.uninitialized),
@@ -11601,8 +12195,11 @@ fn exprReferencesLocal(program: *const Ast.Program, expr_id: Ast.ExprId, local: 
         .loop_ => |loop| exprSpanReferencesLocal(program, loop.initial_values, local) or exprReferencesLocal(program, loop.body, local),
         .break_ => |maybe| if (maybe) |value| exprReferencesLocal(program, value, local) else false,
         .continue_ => |continue_| exprSpanReferencesLocal(program, continue_.values, local),
-        .join_point => |join_point| exprReferencesLocal(program, join_point.body, local) or exprReferencesLocal(program, join_point.remainder, local),
-        .jump => |jump| exprSpanReferencesLocal(program, jump.args, local),
+        .join_point => |join_point| typedLocalSpanContains(program, join_point.retained, local) or
+            exprReferencesLocal(program, join_point.body, local) or
+            exprReferencesLocal(program, join_point.remainder, local),
+        .jump => |jump| exprSpanReferencesLocal(program, jump.loop_values, local) or
+            exprSpanReferencesLocal(program, jump.args, local),
         .if_initialized_payload => |payload_switch| exprReferencesLocal(program, payload_switch.cond, local) or
             exprReferencesLocal(program, payload_switch.initialized, local) or
             exprReferencesLocal(program, payload_switch.uninitialized, local),
@@ -11616,6 +12213,14 @@ fn exprSpanReferencesLocal(program: *const Ast.Program, span: Ast.Span(Ast.ExprI
     for (0..exprs.len) |index| {
         const expr = GuardedList.at(exprs, index);
         if (exprReferencesLocal(program, expr, local)) return true;
+    }
+    return false;
+}
+
+fn typedLocalSpanContains(program: *const Ast.Program, span: Ast.Span(Ast.TypedLocal), local: Ast.LocalId) bool {
+    const locals = program.typedLocalSpan(span);
+    for (0..locals.len) |index| {
+        if (GuardedList.at(locals, index).local == local) return true;
     }
     return false;
 }
@@ -11744,7 +12349,8 @@ fn exprContainsFreeLoopControl(program: *const Ast.Program, expr_id: Ast.ExprId,
         .continue_ => |continue_| loop_depth == 0 or exprSpanContainsFreeLoopControl(program, continue_.values, loop_depth),
         .join_point => |join_point| exprContainsFreeLoopControl(program, join_point.body, loop_depth) or
             exprContainsFreeLoopControl(program, join_point.remainder, loop_depth),
-        .jump => |jump| exprSpanContainsFreeLoopControl(program, jump.args, loop_depth),
+        .jump => |jump| exprSpanContainsFreeLoopControl(program, jump.loop_values, loop_depth) or
+            exprSpanContainsFreeLoopControl(program, jump.args, loop_depth),
         .if_initialized_payload => |payload_switch| exprContainsFreeLoopControl(program, payload_switch.cond, loop_depth) or
             exprContainsFreeLoopControl(program, payload_switch.initialized, loop_depth) or
             exprContainsFreeLoopControl(program, payload_switch.uninitialized, loop_depth),
@@ -11899,6 +12505,7 @@ fn collectTupleLocalDemandInExpr(
         .break_ => |maybe| if (maybe) |value| collectTupleLocalDemandInExpr(program, local, value, used) else true,
         .continue_ => |continue_| collectTupleLocalDemandInExprSpan(program, local, continue_.values, used),
         .join_point => |join_point| blk: {
+            if (typedLocalSpanContains(program, join_point.retained, local)) @memset(used, true);
             var shadows = false;
             const params = program.typedLocalSpan(join_point.params);
             for (0..params.len) |index| {
@@ -11910,7 +12517,8 @@ fn collectTupleLocalDemandInExpr(
             if (!shadows and !collectTupleLocalDemandInExpr(program, local, join_point.body, used)) break :blk false;
             break :blk collectTupleLocalDemandInExpr(program, local, join_point.remainder, used);
         },
-        .jump => |jump| collectTupleLocalDemandInExprSpan(program, local, jump.args, used),
+        .jump => |jump| collectTupleLocalDemandInExprSpan(program, local, jump.loop_values, used) and
+            collectTupleLocalDemandInExprSpan(program, local, jump.args, used),
         .if_initialized_payload => |payload| blk: {
             if (payload.payload == local) break :blk false;
             break :blk collectTupleLocalDemandInExpr(program, local, payload.cond, used) and
@@ -12076,9 +12684,11 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
                     break;
                 }
             }
-            break :blk body_count + localUseCountInExpr(program, local, join_point.remainder);
+            break :blk @intFromBool(typedLocalSpanContains(program, join_point.retained, local)) +
+                body_count + localUseCountInExpr(program, local, join_point.remainder);
         },
-        .jump => |jump| localUseCountInExprSpan(program, local, jump.args),
+        .jump => |jump| localUseCountInExprSpan(program, local, jump.loop_values) +
+            localUseCountInExprSpan(program, local, jump.args),
         .if_initialized_payload => |payload_switch| localUseCountInExpr(program, local, payload_switch.cond) +
             (if (payload_switch.payload == local) @as(usize, 1) else 0) +
             localUseCountInExpr(program, local, payload_switch.initialized) +
@@ -12199,12 +12809,28 @@ fn recordUpdateFieldSpan(program: *const Ast.Program, ty: Type.TypeId) Type.Span
 fn valueType(program: *const Ast.Program, value: Value) Type.TypeId {
     return switch (value) {
         .expr => |expr| program.getExpr(expr).ty,
+        .runtime_anchor => |anchor| program.getExpr(anchor.runtime).ty,
         .static_data_candidate => |candidate| candidate.ty,
         .tag => |tag| tag.ty,
         .record => |record| record.ty,
         .tuple => |tuple| tuple.ty,
         .nominal => |nominal| nominal.ty,
         .callable => |callable| callable.ty,
+    };
+}
+
+fn structuralValue(value: Value) Value {
+    return structuralValueStripping(value, 0);
+}
+
+fn structuralValueStripping(value: Value, strip_depth: usize) Value {
+    if (strip_depth >= value_wrapper_strip_cap) {
+        Common.invariant("structuralValue followed a value wrapper chain past the strip cap");
+    }
+    return switch (value) {
+        .runtime_anchor => |anchor| structuralValueStripping(anchor.structure.*, strip_depth + 1),
+        .static_data_candidate => |candidate| structuralValueStripping(candidate.runtime.*, strip_depth + 1),
+        .expr, .tag, .record, .tuple, .nominal, .callable => value,
     };
 }
 
@@ -12326,7 +12952,7 @@ fn callPatternMatchesValues(program: *Ast.Program, pattern: CallPattern, values:
 }
 
 fn shapeMatchesValue(program: *Ast.Program, shape: Shape, value: Value) bool {
-    const structural_value = if (value == .static_data_candidate) value.static_data_candidate.runtime.* else value;
+    const structural_value = structuralValue(value);
     return switch (shape) {
         .any => true,
         .tag => |tag| blk: {
@@ -12398,9 +13024,10 @@ fn callableTargetMatches(program: *const Ast.Program, expected: Ast.FnId, actual
 // already proven to be a record, tuple, or tag under some wrapper chain, so
 // following that chain to the read field, item, or tag terminates by
 // construction. A value that references itself through the
-// `nominal.backing`/`static_data_candidate.runtime` pointer edges would loop,
-// so each reader counts the edges it follows and treats reaching
-// `value_wrapper_strip_cap` as a compiler bug.
+// `runtime_anchor.structure`/`nominal.backing`/
+// `static_data_candidate.runtime` pointer edges would loop, so each reader
+// counts the edges it follows and treats reaching `value_wrapper_strip_cap` as
+// a compiler bug.
 fn fieldFromValue(program: *const Ast.Program, value: Value, name: names.RecordFieldNameId) ?Value {
     const field = fieldFromValueStripping(program, value, name, 0) orelse return null;
     if (!isGeneratedIteratorStepField(program, valueType(program, value), name)) return field;
@@ -12410,7 +13037,7 @@ fn fieldFromValue(program: *const Ast.Program, value: Value, name: names.RecordF
             step.iterator_step = true;
             break :blk .{ .callable = step };
         },
-        .expr, .static_data_candidate, .tag, .record, .tuple, .nominal => field,
+        .expr, .runtime_anchor, .static_data_candidate, .tag, .record, .tuple, .nominal => field,
     };
 }
 
@@ -12431,6 +13058,7 @@ fn isGeneratedIteratorStepField(
 fn fieldFromValueStripping(program: *const Ast.Program, value: Value, name: names.RecordFieldNameId, strip_depth: usize) ?Value {
     if (strip_depth >= value_wrapper_strip_cap) Common.invariant("fieldFromValue followed a value wrapper chain past the strip cap");
     return switch (value) {
+        .runtime_anchor => |anchor| fieldFromValueStripping(program, anchor.structure.*, name, strip_depth + 1),
         .static_data_candidate => |candidate| fieldFromValueStripping(program, candidate.runtime.*, name, strip_depth + 1),
         .record => |record| fieldFromRecord(program, record, name),
         .nominal => |nominal| fieldFromValueStripping(program, nominal.backing.*, name, strip_depth + 1),
@@ -12470,6 +13098,7 @@ fn itemFromValue(value: Value, index: u32) ?Value {
 fn itemFromValueStripping(value: Value, index: u32, strip_depth: usize) ?Value {
     if (strip_depth >= value_wrapper_strip_cap) Common.invariant("itemFromValue followed a value wrapper chain past the strip cap");
     return switch (value) {
+        .runtime_anchor => |anchor| itemFromValueStripping(anchor.structure.*, index, strip_depth + 1),
         .static_data_candidate => |candidate| itemFromValueStripping(candidate.runtime.*, index, strip_depth + 1),
         .tuple => |tuple| if (index < tuple.items.len) tuple.items[index] else null,
         .nominal => |nominal| itemFromValueStripping(nominal.backing.*, index, strip_depth + 1),
@@ -12484,6 +13113,7 @@ fn tagFromValue(value: Value) ?TagValue {
 fn tagFromValueStripping(value: Value, strip_depth: usize) ?TagValue {
     if (strip_depth >= value_wrapper_strip_cap) Common.invariant("tagFromValue followed a value wrapper chain past the strip cap");
     return switch (value) {
+        .runtime_anchor => |anchor| tagFromValueStripping(anchor.structure.*, strip_depth + 1),
         .static_data_candidate => |candidate| tagFromValueStripping(candidate.runtime.*, strip_depth + 1),
         .tag => |tag| tag,
         .nominal => |nominal| tagFromValueStripping(nominal.backing.*, strip_depth + 1),
@@ -12498,6 +13128,7 @@ fn recordFromValue(value: Value) ?RecordValue {
 fn recordFromValueStripping(value: Value, strip_depth: usize) ?RecordValue {
     if (strip_depth >= value_wrapper_strip_cap) Common.invariant("recordFromValue followed a value wrapper chain past the strip cap");
     return switch (value) {
+        .runtime_anchor => |anchor| recordFromValueStripping(anchor.structure.*, strip_depth + 1),
         .static_data_candidate => |candidate| recordFromValueStripping(candidate.runtime.*, strip_depth + 1),
         .record => |record| record,
         .nominal => |nominal| recordFromValueStripping(nominal.backing.*, strip_depth + 1),
@@ -12512,6 +13143,7 @@ fn tupleFromValue(value: Value) ?TupleValue {
 fn tupleFromValueStripping(value: Value, strip_depth: usize) ?TupleValue {
     if (strip_depth >= value_wrapper_strip_cap) Common.invariant("tupleFromValue followed a value wrapper chain past the strip cap");
     return switch (value) {
+        .runtime_anchor => |anchor| tupleFromValueStripping(anchor.structure.*, strip_depth + 1),
         .static_data_candidate => |candidate| tupleFromValueStripping(candidate.runtime.*, strip_depth + 1),
         .tuple => |tuple| tuple,
         .nominal => |nominal| tupleFromValueStripping(nominal.backing.*, strip_depth + 1),
@@ -12621,19 +13253,181 @@ test "SpecConstr preserves record update ordering while exposing its final shape
     const read_binding = base_binding.next orelse return error.TestUnexpectedResult;
     try std.testing.expect(read_binding.next == null);
     const read = blk_read: {
-        const scrutinee = program.getExpr(read_binding.binding.value).data;
+        const scrutinee = program.getExpr(read_binding.binding.strict.value).data;
         if (scrutinee != .field_access) return error.TestUnexpectedResult;
         break :blk_read scrutinee.field_access;
     };
     const read_segments = program.fieldAccessSegmentSpan(read.segments);
     try std.testing.expectEqual(@as(usize, 1), GuardedList.borrowLen(read_segments));
     try std.testing.expectEqual(a, GuardedList.at(read_segments, 0).field);
-    try std.testing.expectEqual(base_binding.binding.local, program.getExpr(read.receiver).data.local);
+    try std.testing.expectEqual(base_binding.binding.strict.local, program.getExpr(read.receiver).data.local);
 
     try std.testing.expectEqual(a, record.fields[0].name);
-    try std.testing.expectEqual(read_binding.binding.local, program.getExpr(record.fields[0].value.expr).data.local);
+    try std.testing.expectEqual(read_binding.binding.strict.local, program.getExpr(record.fields[0].value.expr).data.local);
     try std.testing.expectEqual(b, record.fields[1].name);
     try std.testing.expectEqual(update_local, program.getExpr(record.fields[1].value.expr).data.local);
+}
+
+test "SpecConstr keeps a transparent recursive anchor and its initializer bindings in scope" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const u8_ty = try program.types.add(.{ .primitive = .u8 });
+    const field = try program.names.internRecordFieldLabel("field");
+    const record_ty = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &.{
+        .{ .name = field, .ty = u8_ty, .default = null },
+    }) });
+    const source_local = try program.addLocal(@enumFromInt(1), record_ty);
+    const source_pat = try program.addPat(.{ .ty = record_ty, .data = .{ .bind = source_local } });
+    const source_ref = try program.addExpr(.{ .ty = record_ty, .data = .{ .local = source_local } });
+    const initializer = try program.addExpr(.{ .ty = record_ty, .data = .{ .record_update = .{
+        .base = source_ref,
+        .fields = try program.addFieldExprSpan(&.{}),
+    } } });
+    const source_stmt = try program.addStmt(.{ .let_ = .{
+        .pat = source_pat,
+        .value = initializer,
+        .recursive = true,
+    } });
+    const source_block = try program.addExpr(.{ .ty = record_ty, .data = .{ .block = .{
+        .statements = try program.addStmtSpan(&.{source_stmt}),
+        .final_expr = source_ref,
+    } } });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+
+    const cloned = try cloner.cloneExprValue(source_block);
+    const anchor_node = cloned.bindings.first orelse return error.TestUnexpectedResult;
+    try std.testing.expect(anchor_node.next == null);
+    const anchor_id = switch (anchor_node.binding) {
+        .recursive_anchor => |stmt| stmt,
+        .strict => return error.TestUnexpectedResult,
+    };
+    const anchor = program.getStmt(anchor_id).let_;
+    try std.testing.expect(anchor.recursive);
+    const anchor_local = program.getPat(anchor.pat).data.bind;
+    try std.testing.expect(cloned.value == .runtime_anchor);
+    const runtime_anchor = cloned.value.runtime_anchor;
+    try std.testing.expectEqual(anchor_local, program.getExpr(runtime_anchor.runtime).data.local);
+    try std.testing.expect(runtime_anchor.structure.* == .record);
+    try std.testing.expectEqual(runtime_anchor.runtime, try cloner.materialize(cloned.value));
+    switch (try pass.shapeFromValue(cloned.value)) {
+        .proven => |shape| try std.testing.expect(shape == .record),
+        .disproven, .unknown_budget_exhausted => return error.TestUnexpectedResult,
+    }
+
+    // Structure consumers still see the record, but its field is projected
+    // from the retained runtime anchor instead of retaining the initializer's
+    // private temporary or reconstructing the record.
+    const anchored_field = runtime_anchor.structure.record.fields[0].value;
+    if (anchored_field != .expr) return error.TestUnexpectedResult;
+    const field_access = program.getExpr(anchored_field.expr).data.field_access;
+    try std.testing.expectEqual(anchor_local, program.getExpr(field_access.receiver).data.local);
+
+    // A structurally visible leaf must also be reusable, not merely in scope.
+    // Otherwise inspecting the anchor's structure could duplicate strict work
+    // from its initializer. Model such a leaf with an opaque block and verify
+    // that reanchoring replaces it with a projection from the exact runtime
+    // record instead.
+    const zero = try program.addExpr(.{ .ty = u8_ty, .data = .{ .int_lit = .{
+        .bytes = @bitCast(@as(i128, 0)),
+        .kind = .i128,
+    } } });
+    const opaque_field = try program.addExpr(.{ .ty = u8_ty, .data = .{ .block = .{
+        .statements = Ast.Span(Ast.StmtId).empty(),
+        .final_expr = zero,
+    } } });
+    const synthetic_fields = [_]FieldValue{.{
+        .name = field,
+        .value = .{ .expr = opaque_field },
+    }};
+    const no_bindings: BindingChain = .{};
+    var reanchor_budget: u32 = Cloner.recursive_anchor_scope_work_budget;
+    const reanchored = (try cloner.reanchorRecursiveValue(
+        .{ .record = .{ .ty = record_ty, .fields = &synthetic_fields } },
+        runtime_anchor.runtime,
+        no_bindings,
+        &reanchor_budget,
+        true,
+    )) orelse return error.TestUnexpectedResult;
+    if (reanchored != .runtime_anchor) return error.TestUnexpectedResult;
+    const projected_field = reanchored.runtime_anchor.structure.record.fields[0].value;
+    if (projected_field != .expr or projected_field.expr == opaque_field) return error.TestUnexpectedResult;
+    const projected_access = program.getExpr(projected_field.expr).data.field_access;
+    try std.testing.expectEqual(anchor_local, program.getExpr(projected_access.receiver).data.local);
+
+    // The record-update base is strict work created from the recursive
+    // reference. It must remain in the initializer, where the anchor local is
+    // already in scope, rather than preceding the recursive statement.
+    const initializer_let = program.getExpr(anchor.value).data.let_;
+    try std.testing.expectEqual(anchor_local, program.getExpr(initializer_let.value).data.local);
+
+    const wrapped = try cloner.wrapBindings(cloned.bindings, try cloner.materialize(cloned.value));
+    const output_block = program.getExpr(wrapped).data.block;
+    const output_stmts = program.stmtSpan(output_block.statements);
+    try std.testing.expectEqual(@as(usize, 1), output_stmts.len);
+    try std.testing.expectEqual(anchor_id, GuardedList.at(output_stmts, 0));
+    try std.testing.expectEqual(runtime_anchor.runtime, output_block.final_expr);
+
+    _ = try program.addFn(.{
+        .symbol = @enumFromInt(2),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = wrapped },
+        .ret = record_ty,
+    });
+
+    var scope: BodyLocalScope = .{
+        .program = &program,
+        .allocator = allocator,
+        .fn_index = 0,
+        .bound = collections.DenseMap(Ast.LocalId, u32).init(allocator),
+        .joins = collections.DenseMap(Ast.JoinPointId, u32).init(allocator),
+    };
+    defer scope.bound.deinit();
+    defer scope.joins.deinit();
+    try scope.walkExpr(wrapped);
+}
+
+test "SpecConstr accepts a transparent alias record update base" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const u8_ty = try program.types.add(.{ .primitive = .u8 });
+    const field = try program.names.internRecordFieldLabel("field");
+    const record_ty = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &.{
+        .{ .name = field, .ty = u8_ty, .default = null },
+    }) });
+    const module_identity = try program.names.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const type_name = try program.names.internTypeName("RecordAlias");
+    const alias_ty = try program.types.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .alias,
+        .args = Type.Span.empty(),
+        .backing = .{ .ty = record_ty, .use = .inspectable },
+    } });
+    const base_local = try program.addLocal(@enumFromInt(1), record_ty);
+    const update_local = try program.addLocal(@enumFromInt(2), u8_ty);
+    const base = try program.addExpr(.{ .ty = record_ty, .data = .{ .local = base_local } });
+    const update_value = try program.addExpr(.{ .ty = u8_ty, .data = .{ .local = update_local } });
+    const update = try program.addExpr(.{ .ty = alias_ty, .data = .{ .record_update = .{
+        .base = base,
+        .fields = try program.addFieldExprSpan(&.{.{ .name = field, .value = update_value }}),
+    } } });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    const cloned = try cloner.cloneExprValue(update);
+    try std.testing.expect(cloned.value == .record);
+    try std.testing.expectEqual(record_ty, cloned.value.record.ty);
 }
 
 test "call-pattern scans direct call and function reference capture operands" {
@@ -12777,7 +13571,8 @@ test "SpecConstr admission uses body size and worker count before cloning" {
     }
     try std.testing.expectEqual(SpecAdmission.denied_spec_count, pass.newSpecAdmission(0));
     try std.testing.expectEqual(SpecAdmission.denied_body_size, pass.newSpecAdmission(1));
-    try std.testing.expectEqual(SpecAdmission.denied_body_size, pass.inlineBodyAdmission(@enumFromInt(1), large_body));
+    const large_inline_source = pass.inlineSourceBody(@enumFromInt(1)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!large_inline_source.size.admits());
 
     const fn_ty = try program.types.add(.{ .func = .{
         .args = Type.Span.empty(),
@@ -12804,7 +13599,7 @@ test "SpecConstr admission uses body size and worker count before cloning" {
         .body = .{ .roc = unit_expr },
         .ret = large_fn.ret,
     });
-    pass.refreshPreCloneBodySize(1);
+    pass.refreshPreCloneSource(1);
     try std.testing.expectEqual(SpecAdmission.admitted, pass.newSpecAdmission(1));
 }
 
@@ -12877,6 +13672,108 @@ test "SpecConstr bounds cumulative inlining across small acyclic wrappers" {
     }
     try std.testing.expect(retained_call);
     try std.testing.expect(growth < Cloner.inline_body_work_budget * 2);
+}
+
+test "issue 10760 SpecConstr bounds cloning of rewritten inline bodies" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const pair_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ unit_ty, unit_ty }) });
+    const unit_expr = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const pair_expr = try program.addExpr(.{
+        .ty = pair_ty,
+        .data = .{ .tuple = try program.addExprSpan(&.{ unit_expr, unit_expr }) },
+    });
+
+    const leaf_arg = try program.addLocal(@enumFromInt(1), pair_ty);
+    var result_ty = unit_ty;
+    var callee = try program.addFn(.{
+        .symbol = @enumFromInt(2),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = leaf_arg, .ty = pair_ty }}),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = unit_expr },
+        .ret = unit_ty,
+    });
+    // Each source wrapper is tiny. Before source and output bodies were kept
+    // separate, rewriting in source order replaced both calls with the already
+    // rewritten output of the preceding wrapper. Re-cloning the final output
+    // while charging the final wrapper's original body size is the
+    // non-converging path from issue 10760.
+    for (0..9) |depth| {
+        const first = try program.addExpr(.{ .ty = result_ty, .data = .{ .call_proc = .{
+            .callee = .{ .lifted = callee },
+            .args = try program.addExprSpan(&.{pair_expr}),
+            .captures = Ast.Span(Ast.CaptureOperand).empty(),
+        } } });
+        const second = try program.addExpr(.{ .ty = result_ty, .data = .{ .call_proc = .{
+            .callee = .{ .lifted = callee },
+            .args = try program.addExprSpan(&.{pair_expr}),
+            .captures = Ast.Span(Ast.CaptureOperand).empty(),
+        } } });
+        const wrapper_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ result_ty, result_ty }) });
+        const body = try program.addExpr(.{
+            .ty = wrapper_ty,
+            .data = .{ .tuple = try program.addExprSpan(&.{ first, second }) },
+        });
+        const arg = try program.addLocal(
+            @enumFromInt(@as(u32, @intCast(depth + 3))),
+            pair_ty,
+        );
+        callee = try program.addFn(.{
+            .symbol = @enumFromInt(@as(u32, @intCast(depth + 12))),
+            .args = try program.addTypedLocalSpan(&.{.{ .local = arg, .ty = pair_ty }}),
+            .captures = Ast.Span(Ast.TypedLocal).empty(),
+            .body = .{ .roc = body },
+            .ret = wrapper_ty,
+        });
+        result_ty = wrapper_ty;
+    }
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+
+    for (0..pass.plans.len) |index| {
+        try pass.cloneFnBodyInPlace(@enumFromInt(@as(u32, @intCast(index))));
+    }
+
+    const rewritten_body = switch (program.getFn(callee).body) {
+        .roc => |body| body,
+        .hosted => return error.TestUnexpectedResult,
+    };
+    const inline_source = pass.inlineSourceBody(callee) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(inline_source.expr != rewritten_body);
+    const source_work = inline_source.size.exactValue() orelse return error.TestUnexpectedResult;
+    const rewritten_work = switch (exprBodySizeWithin(&program, rewritten_body, Cloner.inline_body_work_budget)) {
+        .exact => |size| size,
+        .over_limit => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(rewritten_work > source_work);
+
+    const root_call = try program.addExpr(.{ .ty = result_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = callee },
+        .args = try program.addExprSpan(&.{pair_expr}),
+        .captures = Ast.Span(Ast.CaptureOperand).empty(),
+    } } });
+    const root_source_size = switch (exprBodySizeWithin(&program, root_call, spec_constr_body_expr_threshold)) {
+        .exact => |size| size,
+        .over_limit => return error.TestUnexpectedResult,
+    };
+
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    cloner.inline_direct_requires_known_arg = true;
+    const before_exprs = program.exprCount();
+    const before_work = cloner.inline_body_growth.remaining;
+    _ = try cloner.cloneExpr(root_call);
+    const growth = program.exprCount() - before_exprs;
+    const charged_work = before_work - cloner.inline_body_growth.remaining;
+
+    // An admitted inline must charge enough source-body work to bound what it
+    // emits. Declining the inline may emit only the original residual call.
+    const growth_limit = charged_work + root_source_size;
+    try std.testing.expectEqual(growth_limit, @max(growth_limit, growth));
 }
 
 test "value-aware call-pattern collection keeps generic producer calls opaque" {
@@ -13245,7 +14142,7 @@ test "call-pattern specialization preserves imported direct calls" {
     var lifted = try @import("lift.zig").run(allocator, mono);
     defer lifted.deinit();
 
-    try run(allocator, &lifted);
+    try run(allocator, &lifted, .all_calls);
 
     const body_data = lifted.getExpr(body).data;
     if (body_data != .call_proc) return error.TestUnexpectedResult;
@@ -13460,13 +14357,49 @@ test "whole-body normalization resolves binder-equivalent argument locals" {
 
     var pass = try Pass.init(allocator, &program);
     defer pass.deinit();
-    try pass.cloneFnBodyInPlace(fn_id, equivalent_ref);
+    try pass.cloneFnBodyInPlace(fn_id);
 
     const cloned_body = switch (program.getFn(fn_id).body) {
         .roc => |body| body,
         .hosted => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(argument, program.getExpr(cloned_body).data.local);
+}
+
+test "substitution resolves equivalent named types with distinct checked provenance" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const module_identity = try program.names.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const type_name = try program.names.internTypeName("Nominal");
+    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
+    const first_ty = try program.types.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = def,
+        .kind = .nominal,
+        .args = Type.Span.empty(),
+    } });
+    const second_ty = try program.types.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
+        .def = def,
+        .kind = .nominal,
+        .args = Type.Span.empty(),
+    } });
+    const binder: check.CheckedModule.PatternBinderId = @enumFromInt(1);
+    const first = try program.addLocalWithBinder(@enumFromInt(1), first_ty, binder);
+    const second = try program.addLocalWithBinder(@enumFromInt(2), second_ty, binder);
+    const replacement = try program.addLocal(@enumFromInt(3), first_ty);
+    const replacement_expr = try program.addExpr(.{ .ty = first_ty, .data = .{ .local = replacement } });
+    const second_expr = try program.addExpr(.{ .ty = second_ty, .data = .{ .local = second } });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    try cloner.subst.put(&program, first, .{ .expr = replacement_expr });
+    const cloned = try cloner.cloneExpr(second_expr);
+    try std.testing.expectEqual(replacement, program.getExpr(cloned).data.local);
 }
 
 test "known match fold aborts on undecidable branches and trips the invariant when every branch is excluded" {
@@ -13534,6 +14467,34 @@ test "known match fold aborts on undecidable branches and trips the invariant wh
             (std.posix.W.IFEXITED(raw_status) and std.posix.W.EXITSTATUS(raw_status) != 0);
         try std.testing.expect(failed);
     }
+}
+
+test "known match fold preserves absurd elimination of a structural product" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const empty_union_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
+    const field_name = try program.names.internRecordFieldLabel("impossible");
+    const record_ty = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &.{
+        .{ .name = field_name, .ty = empty_union_ty, .default = null },
+    }) });
+    const impossible_local = try program.addLocal(@enumFromInt(1), empty_union_ty);
+    const impossible_expr = try program.addExpr(.{ .ty = empty_union_ty, .data = .{ .local = impossible_local } });
+    const record_value = Value{ .record = .{
+        .ty = record_ty,
+        .fields = &.{.{ .name = field_name, .value = .{ .expr = impossible_expr } }},
+    } };
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    var bindings: BindingChain = .{};
+    try std.testing.expectEqual(
+        @as(?Value, null),
+        try cloner.simplifyKnownMatchValue(record_value, Ast.Span(Ast.Branch).empty(), &bindings),
+    );
 }
 
 test "call-pattern specialization declarations are referenced" {

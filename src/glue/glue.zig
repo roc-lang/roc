@@ -791,6 +791,7 @@ fn buildGlueDylib(
         &lowered.lir_result.store,
         lowered.lir_result.boxy_erased_arg_desc_offsets.items,
         lowered.lir_result.boxy_erased_arg_desc_params.items,
+        lowered.lir_result.boxy_worker_procs.items,
     );
     codegen.layout_store = &lowered.lir_result.layouts;
     codegen.plugin_stamp_bytes = std.mem.asBytes(&stamp);
@@ -3653,7 +3654,7 @@ const GlueRocValueWriter = struct {
         return switch (list_layout.tag) {
             .list => list_layout.getIdx(),
             .list_of_zst => .zst,
-            .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => glueInvariant("glue expected list layout, got {s}", .{@tagName(list_layout.tag)}),
+            .scalar, .box, .box_of_zst, .erased_box, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => glueInvariant("glue expected list layout, got {s}", .{@tagName(list_layout.tag)}),
         };
     }
 

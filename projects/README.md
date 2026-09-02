@@ -53,8 +53,9 @@ termination hazard, and one verification coverage gap):
   question, and the capture-id override path.
 
 Within this batch the projects are independent.
-`spec-constr-specialization-limits` pairs naturally with
-`spec-constr-static-match-soundness`.
+(`spec-constr-specialization-limits` used to be paired here with
+`spec-constr-static-match-soundness`, which has since landed and had its
+doc removed.)
 
 A third batch came out of a whole-codebase competing-sources-of-truth
 audit (2026-07-18): a sweep of every subsystem for the same fact
@@ -124,6 +125,144 @@ independent of the earlier batches and of each other:
   module, def) plus a repro command before the stack trace, built from
   thread-local context frames pushed at existing phase boundaries.
 
+A fifth batch (2026-08-24) came out of a duplication audit of the
+stages between type checking and code generation—Monotype, Monotype
+Lifted, SpecConstr, Lambda Solved, the two LIR lowerers, the LIR
+passes, and ARC. It looked specifically for *multiple implementations
+of one semantic rule* rather than for repeated text. The recurring
+shape: `.lss` and `.boxy` were scoped by the phases they skip, but
+value semantics (equality, hashing, `Inspect`, `match` compilation)
+are not phase artifacts and got duplicated along with the phases; and
+inside each strategy, producer/consumer boundaries that design.md
+states as "record the decision, consume it later" are implemented as
+"re-derive it from the emitted shape". Several of these pairs have
+already diverged in behavior, not just in text.
+
+- [big/one-value-semantics-layer.md](big/one-value-semantics-layer.md)—
+  `Inspect` (four implementations, four copies of the format
+  strings), structural equality and hashing (two), and `match`
+  compilation (`.boxy` never adopted the shared decision-tree
+  compiler, contrary to this README and `postcheck/mod.zig`) collapse
+  onto one shape-parameterized layer, plus a standing `.lss`/`.boxy`
+  differential harness.
+- [big/postcheck-lowerer-decomposition.md](big/postcheck-lowerer-decomposition.md)—
+  the god-structs (`BodyContext` at 36.6k lines, `ProcBodyBuilder` at
+  25.1k) that force helpers to be copied rather than shared; 53 and 17
+  duplicated method names respectively, with divergence already
+  present in both.
+- [small/arc-shared-predicates.md](small/arc-shared-predicates.md)—
+  four ARC predicates defined twice, including the refcounted-local
+  predicate where the RC inserter and its own certifier already use
+  different code.
+- [small/erased-ownership-as-lir-data.md](small/erased-ownership-as-lir-data.md)—
+  the lowerer records erased ownership and the certifier re-derives it
+  with a copy of the rule; `.boxy` has no producer at all.
+
+Single-source primitive tables have landed (the batch's first
+project): `CheckedPrimitive`'s four post-check mappings—storage layout,
+inspect low-level op, hasher write op, and builtin owner—each have one
+definition. The first three live in `src/postcheck/common.zig`; the
+owner table lives beside `CheckedPrimitive` itself in
+`src/check/checked_artifact.zig`. A `structural_test.zig` lint fails the
+build if a second definition of any of them appears. None of the copies
+had been forced by a type barrier: `MonoType.Primitive` is a plain alias
+of `checked.CheckedPrimitive`.
+
+Boxy representation queries on the plan have landed: the ~45 queries
+Boxy lowering re-derived are now `Plan.RepQuery` / `Plan.NamedRepQuery`,
+one definition each, and a `structural_test.zig` lint keeps every
+consumer calling them. This closed a live plan/lower disagreement—the
+planner's `repSubtreeHasDescriptorInOtherChildren` skips siblings the
+selected child's subtree already covers, and both lowering copies
+lacked that carve-out, so lowering could refuse an unwrap the planner
+had planned. It also separated two predicates a shared name had blurred:
+exact-role equality and `sameChildRoleKind`, which answers false for
+every role carrying a payload.
+
+One call-result fusion machinery has landed: `return_slot` and
+`str_append` were the same pass twice, and the walk, the single-use
+liveness guard, and the variant clone now live once in `body_clone.zig`,
+whose charter already named them. Each pass keeps only what is genuinely
+its rule—which consumer statement it matches, and how it rewrites the
+variant's returns. The merge fixed a silent drop: `str_append`'s variant
+clone did not carry `erased_reuse_arg` through, so a fused
+erased-callable proc lost it. `box_reuse` adopted the shared
+eligibility predicate; `loop_append_promote` deliberately did not,
+because its gate is a genuinely different one (it admits non-Roc ABI
+procs), which is recorded here rather than papered over.
+
+One correction to the batch, from implementing it. The audit filed a
+`spec-constr-single-cloner` project on the claim that Monotype Lifted's
+two cloners cover 29 and 44 expression variants and that the narrower
+one declines the difference *silently*, so a new variant would be
+half-supported without a build error. That claim was wrong.
+`Pass.cloneExprFresh` ends in an explicit 19-variant arm returning null,
+and `grep -c 'else =>' src/postcheck/monotype_lifted/spec_constr.zig` is
+zero—the repo's ban on non-exhaustive switch prongs already forces both
+cloners to make a decision about every variant. The coverage gap is a
+deliberate, compiler-enforced decline set, not a silent one, so the
+project's premise did not survive contact and the risky part of it (one
+traversal through a compile-time-hot pass, for a drift the compiler
+already catches) was not worth doing.
+
+The real duplication that project found *was* there, one layer down:
+the pattern walk that collects a pattern's bound locals existed three
+times—the lift pass's bound-set scan, its capture graph builder, and
+SpecConstr's body-local scope—identical in every position, differing
+only in what each does at a binding site. That is now
+`Ast.forEachBoundLocal`, taking the binding action as a comptime
+parameter, with a `structural_test.zig` lint keeping it single. Three
+copies could have come to disagree about whether a given position
+binds—a list rest pattern, say—and only one would have been right.
+
+A second correction, also from implementing it. The audit filed a
+`postcheck-ir-store-boilerplate` project proposing a comptime
+`FlatStore(Spec)` mixin that *generates* each store's `add*`, `get*`,
+`set*`, `*Count`, `*View`, and `*Span` surface. Zig 0.16 removed
+`usingnamespace`, so a mixin cannot inject named declarations into a
+struct at all; every accessor has to stay a hand-written name whatever
+sits behind it. The project's mechanism does not exist in this compiler,
+so the doc is deleted rather than left proposing it.
+
+The duplication it counted is real—57 byte-identical bodies between
+`monotype/ast.zig` and `monotype_lifted/ast.zig`—but most of those
+bodies are already one-line delegations whose only content is the field
+they name, which is the part that legitimately differs per store. The
+part with real duplicated logic was the span append: three lines
+(`len()`, `appendSlice`, construct the span) written out 33 times across
+the three stores. That is now `Common.appendSpan` /
+`Common.appendNonemptySpan`, with `Span` itself single-sourced, and a
+`structural_test.zig` lint keeps the hand-written form from coming back.
+`addTypedLocalSpan` deliberately kept its own body: it preallocates
+through `ensureUnusedCapacity`, which is a different append, not the
+same one spelled differently.
+
+Two doc claims were also corrected in the code. `match_tree.zig` and
+`postcheck/mod.zig` both described the decision-tree match compiler as
+"shared by both LIR lowerers"; it is used by `.lss` only, and a doc
+comment asserting a sharing invariant that does not hold is worse than
+no comment, because the next reader budgets for one match semantics when
+there are two. Both now say what is true, and a lint pins the claim to
+the imports so it moves when the gap closes.
+
+Housekeeping in the same pass. `float-range-flat-representation.md` was
+carrying its own "Status: Resolved" section rather than a project: range
+syntax now constructs a reusable `Num.Range(num)` whose single
+`Builtin.Num.Range.iter` is the monomorphization-recognized iterator
+source, so integer, `Dec`, and float ranges all keep flat by-value
+iterator state and the element-type performance cliff is gone. Its
+verification lives in `src/eval/test/eval_iter_alloc_tests.zig` and
+`src/eval/test/lir_inline_test.zig`, both present and covering it, so
+the doc is deleted. Twelve cross-references to four project docs that
+landed and were removed (`silent-drift-guards`,
+`store-generation-counters`, `spec-constr-static-match-soundness`,
+`audit-solver-mutating-rewrites`) were dangling links; they now read as
+plain names marked landed, and the two recommended-order lists dropped
+their landed entry and renumbered.
+
+Within the rest of this batch, the two `big` projects compose in either
+order. The rest are independent.
+
 ## Recommended order
 
 ### Start here—enforcement layers, cheap and load-bearing
@@ -131,13 +270,10 @@ independent of the earlier batches and of each other:
 1. [small/cross-phase-coverage-parity-tests.md](small/cross-phase-coverage-parity-tests.md)—
    the divergence-classification parity suite; a regression net the big
    lowering projects inherit.
-2. [small/silent-drift-guards.md](small/silent-drift-guards.md)—
-   finishes the monotype identity unification: one identity-field
-   visitor for digest and equality, and alias-transparent cached digests.
-3. [small/rceffect-conformance.md](small/rceffect-conformance.md)—
+2. [small/rceffect-conformance.md](small/rceffect-conformance.md)—
    comptime validity plus a per-op refcount conformance harness for the
    central ownership table (the PR 10023 bug class).
-4. [small/cache-and-identity-residuals.md](small/cache-and-identity-residuals.md)—
+3. [small/cache-and-identity-residuals.md](small/cache-and-identity-residuals.md)—
    closes the four small seams left after the identity/cache cures
    (name-text fallback, hand-enrolled serde contracts, split version
    hashes, `type_name` in nominal keys).
@@ -184,12 +320,17 @@ Small:
   static-data and builtin-call materialization for constant/repeated
   lists, ending the one-local-per-element explosion behind issue 9898.
 
-The decision-tree match compiler has landed: both LIR pipelines lower
-`match` through one shared Maranget-style module
-(src/postcheck/match_tree.zig)—one multiway switch per tested position,
-one discriminant read, strings and list-length buckets as ordinary arms—
-with the sharing invariant documented in design.md and enforced by a debug
-statement-count lint.
+The decision-tree match compiler has landed for `.lss`: the direct
+solved-to-LIR lowering compiles `match` through one shared Maranget-style
+module (src/postcheck/match_tree.zig)—one multiway switch per tested
+position, one discriminant read, strings and list-length buckets as
+ordinary arms—with the sharing invariant documented in design.md and
+enforced by a debug statement-count lint. The 2026-08-24 audit found
+`.boxy` never adopted it (`grep -rn match_tree src/postcheck/boxy/` is
+empty; `boxy/lower.zig` folds branches into a sequential chain), so the
+"shared by both LIR lowerers" claim in `src/postcheck/mod.zig` is not yet
+true. Closing that is step 6 of
+[big/one-value-semantics-layer.md](big/one-value-semantics-layer.md).
 
 Single-source builtin registration has landed: the seven hand-typed
 `roc_builtins_*` symbol/ABI tables now derive from one comptime registry
@@ -202,11 +343,10 @@ If one person or agent works through everything serially, this order
 front-loads leverage and keeps prerequisites satisfied:
 
 1. `small/cross-phase-coverage-parity-tests.md`
-2. `small/silent-drift-guards.md`
-3. `small/rceffect-conformance.md`
-4. `small/cache-and-identity-residuals.md`
-5. `small/pin-deferred-spec-requests.md`
-6. `small/hoist-consumes-dispatch-evidence.md`
-7. `small/hosted-extern-declared-abi.md`
-8. `small/frame-partitioned-checker-state.md`
-9. `small/compact-constant-aggregates.md`
+2. `small/rceffect-conformance.md`
+3. `small/cache-and-identity-residuals.md`
+4. `small/pin-deferred-spec-requests.md`
+5. `small/hoist-consumes-dispatch-evidence.md`
+6. `small/hosted-extern-declared-abi.md`
+7. `small/frame-partitioned-checker-state.md`
+8. `small/compact-constant-aggregates.md`

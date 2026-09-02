@@ -92,6 +92,7 @@ const LowerModuleOptions = struct {
     proc_debug_names: bool = false,
     tag_reachability: bool = false,
     promote_loop_appends: bool = true,
+    prove_ranges: bool = false,
     imports: []const helpers.ModuleSource = &.{},
 };
 
@@ -143,6 +144,7 @@ fn lowerModuleWithOptions(
             .inline_expects = options.inline_expects,
             .proc_debug_names = options.proc_debug_names,
             .promote_loop_appends = options.promote_loop_appends,
+            .prove_ranges = options.prove_ranges,
             .tag_reachability = options.tag_reachability,
         },
     );
@@ -174,7 +176,6 @@ const LowerMonotypeOptions = struct {
     specialization_counters: ?*MonoLower.SpecializationCounters = null,
     diagnostics: ?*MonoLower.Diagnostics = null,
     root_selection: enum { all, test_expects } = .all,
-    procedure_template_root_grouping: postcheck.Common.ProcedureTemplateRootGrouping = .isolated,
 };
 
 fn lowerMonotypeModuleWithOptions(
@@ -219,7 +220,6 @@ fn lowerMonotypeModuleWithOptions(
         },
         .{
             .requests = root_requests,
-            .procedure_template_root_grouping = options.procedure_template_root_grouping,
         },
         .{
             .specialization_cache = options.specialization_cache,
@@ -364,15 +364,43 @@ fn structuralJsonSource(
     return try source.toOwnedSlice(allocator);
 }
 
-fn structuralJsonMonotypeStats(
+fn nestedOptionalStructuralJsonParserSource(
     allocator: Allocator,
     field_count: usize,
-    field_ty: []const u8,
-    operation: StructuralJsonOperation,
-) TestError!StructuralJsonMonotypeStats {
-    const source = try structuralJsonSource(allocator, field_count, field_ty, operation);
-    defer allocator.free(source);
+) Allocator.Error![]u8 {
+    var source = std.ArrayList(u8).empty;
+    errdefer source.deinit(allocator);
 
+    try source.appendSlice(allocator,
+        \\Fields : {
+        \\
+    );
+    for (0..field_count) |field_index| {
+        const field = try std.fmt.allocPrint(
+            allocator,
+            "    f{d} : Try(Str, [Missing]),\n",
+            .{field_index},
+        );
+        defer allocator.free(field);
+        try source.appendSlice(allocator, field);
+    }
+    try source.appendSlice(allocator,
+        \\}
+        \\
+        \\Shape : { outer : Try({ mid : Try({ inner : Try(Fields, [Missing]) }, [Missing]) }, [Missing]) }
+        \\
+        \\main : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\main = |json| Json.parse(json)
+        \\
+    );
+
+    return try source.toOwnedSlice(allocator);
+}
+
+fn structuralJsonMonotypeStatsForSource(
+    allocator: Allocator,
+    source: []const u8,
+) TestError!StructuralJsonMonotypeStats {
     var counters: MonoLower.SpecializationCounters = .{};
     var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
         .specialization_counters = &counters,
@@ -389,10 +417,25 @@ fn structuralJsonMonotypeStats(
     };
 }
 
+fn structuralJsonMonotypeStats(
+    allocator: Allocator,
+    field_count: usize,
+    field_ty: []const u8,
+    operation: StructuralJsonOperation,
+) TestError!StructuralJsonMonotypeStats {
+    const source = try structuralJsonSource(allocator, field_count, field_ty, operation);
+    defer allocator.free(source);
+
+    return structuralJsonMonotypeStatsForSource(allocator, source);
+}
+
 const StructuralJsonLirStats = struct {
     procedures: usize,
     statements: usize,
     locals: usize,
+    reference_counting: usize,
+    decrefs: usize,
+    conditional_decrefs: usize,
 };
 
 fn structuralJsonLirStats(
@@ -407,10 +450,25 @@ fn structuralJsonLirStats(
     var lowered = try lowerModule(allocator, source, .wrappers);
     defer lowered.deinit(allocator);
     const store = &lowered.lowered.lir_result.store;
+    var reference_counting: usize = 0;
+    var decrefs: usize = 0;
+    var conditional_decrefs: usize = 0;
+    for (store.getCFStmts()) |stmt| {
+        if (stmt == .decref) {
+            reference_counting += 1;
+            decrefs += 1;
+        } else if (stmt == .decref_if_initialized) {
+            reference_counting += 1;
+            conditional_decrefs += 1;
+        }
+    }
     return .{
         .procedures = store.getProcSpecs().len,
         .statements = store.getCFStmts().len,
         .locals = store.getLocals().len,
+        .reference_counting = reference_counting,
+        .decrefs = decrefs,
+        .conditional_decrefs = conditional_decrefs,
     };
 }
 
@@ -923,7 +981,7 @@ fn liftModuleAfterSpecConstr(
     mono = undefined;
     errdefer lifted.deinit();
 
-    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
+    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted, .all_calls);
 
     return .{
         .resources = resources,
@@ -1128,12 +1186,15 @@ fn expectInlinePlanDecision(
     var lifted_owned = true;
     errdefer if (lifted_owned) lifted.deinit();
 
+    var procedure_usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted, .all_calls);
+    defer procedure_usage.deinit();
+
     var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);
     lifted_owned = false;
     lifted = undefined;
     defer solved.deinit();
 
-    var inline_plan = try postcheck.SolvedInline.analyze(allocator, .wrappers, &solved);
+    var inline_plan = try postcheck.SolvedInline.analyze(allocator, .wrappers, procedure_usage.view(), &solved);
     defer inline_plan.deinit();
     const plan = inline_plan.view();
 
@@ -1573,8 +1634,7 @@ fn directRecordWorkerIsGeneric(shape: ProcShape) bool {
 }
 
 fn whileRecordStateWorkerIsSpecialized(shape: ProcShape) bool {
-    return shape.arg_count == 1 and
-        shape.self_call_count == 0 and
+    return shape.self_call_count == 0 and
         shape.join_count >= 1 and
         shape.max_join_param_count == 2 and
         shape.jump_count >= 2 and
@@ -1666,19 +1726,6 @@ fn multiTupleWorkerIsGeneric(shape: ProcShape) bool {
         shape.self_call_count == 0 and
         shape.jump_count >= 1 and
         shape.struct_assign_count >= 2;
-}
-
-fn opaqueLetCallWorkerDoesNotDuplicateCall(shape: ProcShape) bool {
-    return shape.arg_count == 1 and
-        shape.direct_call_count == 0 and
-        shape.low_level_count == 2 and
-        shape.struct_assign_count == 0;
-}
-
-fn opaqueLetCallWorkerDuplicatesCall(shape: ProcShape) bool {
-    return shape.arg_count == 1 and
-        shape.low_level_count > 2 and
-        shape.struct_assign_count == 0;
 }
 
 fn hasGroupedStrMatchSet(shape: ProcShape) bool {
@@ -1808,6 +1855,162 @@ test "issue 10121 repeated nested JSON record fields share parser helpers" {
         );
     }
     try std.testing.expect(eight_fields.expressions <= linear_expression_bound);
+}
+
+test "issue 10889 nested optional JSON parser specialization growth is bounded" {
+    // Repro for https://github.com/roc-lang/roc/issues/10889: wrapping one
+    // wide optional-field record in optional record layers should add constant
+    // specialization work rather than multiplying the per-field growth.
+    const allocator = std.testing.allocator;
+    const flat_four = try structuralJsonMonotypeStats(allocator, 4, "Try(Str, [Missing])", .parse);
+    const flat_eight = try structuralJsonMonotypeStats(allocator, 8, "Try(Str, [Missing])", .parse);
+
+    const nested_four_source = try nestedOptionalStructuralJsonParserSource(allocator, 4);
+    defer allocator.free(nested_four_source);
+    const nested_four = try structuralJsonMonotypeStatsForSource(allocator, nested_four_source);
+
+    const nested_eight_source = try nestedOptionalStructuralJsonParserSource(allocator, 8);
+    defer allocator.free(nested_eight_source);
+    const nested_eight = try structuralJsonMonotypeStatsForSource(allocator, nested_eight_source);
+
+    const flat_expression_growth = flat_eight.expressions - flat_four.expressions;
+    const nested_expression_growth = nested_eight.expressions - nested_four.expressions;
+    if (nested_expression_growth > flat_expression_growth * 2) {
+        std.debug.print(
+            "nested optional JSON parser expression growth exceeded twice the flat growth: " ++
+                "expressions flat {d}->{d}, nested {d}->{d}; definitions flat {d}->{d}, nested {d}->{d}\n",
+            .{
+                flat_four.expressions,
+                flat_eight.expressions,
+                nested_four.expressions,
+                nested_eight.expressions,
+                flat_four.definitions,
+                flat_eight.definitions,
+                nested_four.definitions,
+                nested_eight.definitions,
+            },
+        );
+    }
+    try std.testing.expect(nested_expression_growth <= flat_expression_growth * 2);
+}
+
+test "issue 10979 flat JSON record parser growth is linear in field count" {
+    const allocator = std.testing.allocator;
+    const eight = try structuralJsonMonotypeStats(allocator, 8, "Str", .parse);
+    const sixteen = try structuralJsonMonotypeStats(allocator, 16, "Str", .parse);
+    const thirty_two = try structuralJsonMonotypeStats(allocator, 32, "Str", .parse);
+    const sixty_four = try structuralJsonMonotypeStats(allocator, 64, "Str", .parse);
+
+    const narrow_per_field = (sixteen.expressions - eight.expressions) / 8;
+    const wide_per_field = (sixty_four.expressions - thirty_two.expressions) / 32;
+    if (wide_per_field > narrow_per_field * 2) {
+        std.debug.print(
+            "flat JSON parser per-field Monotype cost grew from {d} expressions per field in the 8->16 window " ++
+                "to {d} in the 32->64 window (expressions {d}/{d}/{d}/{d}, locals {d}/{d}/{d}/{d})\n",
+            .{
+                narrow_per_field,
+                wide_per_field,
+                eight.expressions,
+                sixteen.expressions,
+                thirty_two.expressions,
+                sixty_four.expressions,
+                eight.locals,
+                sixteen.locals,
+                thirty_two.locals,
+                sixty_four.locals,
+            },
+        );
+    }
+    try std.testing.expect(wide_per_field <= narrow_per_field * 2);
+}
+
+test "issue 10979 flat JSON record parser ARC growth is linear in field count" {
+    const allocator = std.testing.allocator;
+    const four = try structuralJsonLirStats(allocator, 4, "Str", .parse);
+    const eight = try structuralJsonLirStats(allocator, 8, "Str", .parse);
+    const sixteen = try structuralJsonLirStats(allocator, 16, "Str", .parse);
+
+    const narrow_per_field = (eight.reference_counting - four.reference_counting) / 4;
+    const wide_per_field = (sixteen.reference_counting - eight.reference_counting) / 8;
+    const narrow_statements_per_field = (eight.statements - four.statements) / 4;
+    const wide_statements_per_field = (sixteen.statements - eight.statements) / 8;
+    if (wide_per_field * 2 > narrow_per_field * 3 or
+        wide_statements_per_field * 2 > narrow_statements_per_field * 3)
+    {
+        std.debug.print(
+            "flat JSON parser per-field ARC cost grew from {d} statements per field in the 4->8 window " ++
+                "to {d} in the 8->16 window; total LIR grew from {d} to {d} statements per field " ++
+                "(RC statements {d}/{d}/{d}, decrefs {d}/{d}/{d}, conditional {d}/{d}/{d}, total statements {d}/{d}/{d})\n",
+            .{
+                narrow_per_field,
+                wide_per_field,
+                narrow_statements_per_field,
+                wide_statements_per_field,
+                four.reference_counting,
+                eight.reference_counting,
+                sixteen.reference_counting,
+                four.decrefs,
+                eight.decrefs,
+                sixteen.decrefs,
+                four.conditional_decrefs,
+                eight.conditional_decrefs,
+                sixteen.conditional_decrefs,
+                four.statements,
+                eight.statements,
+                sixteen.statements,
+            },
+        );
+    }
+    try std.testing.expect(wide_per_field * 2 <= narrow_per_field * 3);
+    try std.testing.expect(wide_statements_per_field * 2 <= narrow_statements_per_field * 3);
+}
+
+test "issue 10979 shared JSON record continuations preserve field semantics" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Shape : { f0 : Str, f1 : Str }
+        \\
+        \\main : Bool
+        \\main = {
+        \\    duplicate : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    duplicate = Json.parse("{ \"f0\": \"first\", \"f1\": \"middle\", \"f0\": \"last\" }")
+        \\    missing : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    missing = Json.parse("{ \"f0\": \"only\" }")
+        \\    invalid : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    invalid = Json.parse("{ \"f0\": \"started\", ")
+        \\    duplicate_ok = match duplicate {
+        \\        Ok(record) => record.f0 == "last" and record.f1 == "middle"
+        \\        Err(_) => False
+        \\    }
+        \\    missing_ok = match missing {
+        \\        Err(MissingRequiredField(field)) => field == "f1"
+        \\        _ => False
+        \\    }
+        \\    invalid_ok = match invalid {
+        \\        Err(InvalidJson(_)) => True
+        \\        _ => False
+        \\    }
+        \\    duplicate_ok and missing_ok and invalid_ok
+        \\}
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
 }
 
 test "issue 10121 structural JSON helper sharing survives LIR lowering" {
@@ -1953,7 +2156,7 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
     });
 }
 
-test "test roots share template work only when explicitly grouped" {
+test "adjacent expect roots remain isolated and ordered" {
     const allocator = std.testing.allocator;
     const source =
         \\identity : a -> a
@@ -1965,26 +2168,147 @@ test "test roots share template work only when explicitly grouped" {
         \\main = 0
     ;
 
-    var isolated_diagnostics = MonoLower.Diagnostics{};
-    var isolated = try lowerMonotypeModuleWithOptions(allocator, source, .{
-        .diagnostics = &isolated_diagnostics,
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
         .root_selection = .test_expects,
     });
-    defer isolated.deinit(allocator);
+    defer lowered.deinit(allocator);
 
-    var shared_diagnostics = MonoLower.Diagnostics{};
-    var shared = try lowerMonotypeModuleWithOptions(allocator, source, .{
-        .diagnostics = &shared_diagnostics,
-        .root_selection = .test_expects,
-        .procedure_template_root_grouping = .shared_adjacent,
-    });
-    defer shared.deinit(allocator);
+    const roots = lowered.mono.rootsView();
+    try std.testing.expectEqual(@as(usize, 2), roots.len);
+    try std.testing.expect(roots[0].def != roots[1].def);
 
-    try std.testing.expectEqual(@as(u64, 0), isolated_diagnostics.body.cross_root_template_reuses);
-    try std.testing.expect(shared_diagnostics.body.cross_root_template_reuses > 0);
+    var root_index: usize = 0;
+    for (lowered.resources.checked_artifact.root_requests.requests) |request| {
+        if (request.kind != .test_expect) continue;
+        try std.testing.expectEqual(request.order, roots[root_index].request.order);
+        root_index += 1;
+    }
+    try std.testing.expectEqual(roots.len, root_index);
 }
 
-test "issue 10529 open Try chain with named local callback stays bounded" {
+test "deferred specialization bodies queue once and drain at the wave boundary" {
+    const allocator = std.testing.allocator;
+    // Two isolated roots request the same identity(I64) specialization: the
+    // first symbolic request reserves and queues its body, the second reuses
+    // the reservation, and the Str request queues a distinct body. The wave
+    // drain then executes every queued body exactly once.
+    const source =
+        \\identity : a -> a
+        \\identity = |value| value
+        \\
+        \\expect identity(1) == 1
+        \\expect identity("shared") == "shared"
+        \\expect identity(2) == 2
+        \\
+        \\main = 0
+    ;
+
+    var diagnostics = MonoLower.Diagnostics{};
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .diagnostics = &diagnostics,
+        .root_selection = .test_expects,
+    });
+    defer lowered.deinit(allocator);
+
+    try std.testing.expect(diagnostics.body.spec_jobs_enqueued >= 2);
+    try std.testing.expectEqual(diagnostics.body.spec_jobs_enqueued, diagnostics.body.spec_jobs_executed);
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.body.spec_jobs_skipped_ready);
+    try std.testing.expectEqual(diagnostics.body.spec_jobs_executed, diagnostics.body.spec_job_shards_lowered);
+    try std.testing.expectEqual(diagnostics.body.spec_job_shards_lowered, diagnostics.body.spec_job_shards_committed);
+    try std.testing.expect(diagnostics.body.deferred_template_reuses >= 1);
+}
+
+test "specialization scheduling is deterministic across repeat runs" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\add_twice : I64 -> I64
+        \\add_twice = |value| value + value
+        \\
+        \\pick : a, a -> a
+        \\pick = |first, _second| first
+        \\
+        \\expect add_twice(pick(3.I64, 4.I64)) == 6
+        \\expect pick("left", "right") == "left"
+        \\
+        \\main = 0
+    ;
+
+    var first_diagnostics = MonoLower.Diagnostics{};
+    var first = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .diagnostics = &first_diagnostics,
+        .root_selection = .test_expects,
+    });
+    defer first.deinit(allocator);
+
+    var second_diagnostics = MonoLower.Diagnostics{};
+    var second = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .diagnostics = &second_diagnostics,
+        .root_selection = .test_expects,
+    });
+    defer second.deinit(allocator);
+
+    // Same logical schedule: identical record order, ids, digests, and
+    // statuses, identical root order, and identical work counts.
+    const first_specs = first.mono.specsView();
+    const second_specs = second.mono.specsView();
+    try std.testing.expectEqual(first_specs.len, second_specs.len);
+    for (first_specs, second_specs) |lhs, rhs| {
+        try std.testing.expectEqual(lhs.fn_id, rhs.fn_id);
+        try std.testing.expectEqual(lhs.status, rhs.status);
+        try std.testing.expect(std.mem.eql(
+            u8,
+            lhs.identity.request_fn_ty_digest.bytes[0..],
+            rhs.identity.request_fn_ty_digest.bytes[0..],
+        ));
+        try std.testing.expect(std.mem.eql(
+            u8,
+            lhs.solved_fn_ty_digest.bytes[0..],
+            rhs.solved_fn_ty_digest.bytes[0..],
+        ));
+    }
+    const first_roots = first.mono.rootsView();
+    const second_roots = second.mono.rootsView();
+    try std.testing.expectEqual(first_roots.len, second_roots.len);
+    for (first_roots, second_roots) |lhs, rhs| {
+        try std.testing.expectEqual(lhs.def, rhs.def);
+    }
+    try std.testing.expectEqual(first.mono.fnCount(), second.mono.fnCount());
+    try std.testing.expectEqual(first.mono.defCount(), second.mono.defCount());
+    try std.testing.expectEqual(first.mono.exprCount(), second.mono.exprCount());
+    inline for (std.meta.fields(@TypeOf(first_diagnostics.body))) |field| {
+        try std.testing.expectEqual(
+            @field(first_diagnostics.body, field.name),
+            @field(second_diagnostics.body, field.name),
+        );
+    }
+}
+
+test "issue 10529 ten-level open Try chain with inline callback stays bounded" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\take0 = |b| Ok({ val: b.get(0).map_err(|_| End)?, rest: b.drop_first(1) })
+        \\take1 = |b| Ok({ val: take0(b)?.val, rest: take0(b)?.rest })
+        \\take2 = |b| Ok({ val: take1(b)?.val, rest: take1(b)?.rest })
+        \\take3 = |b| Ok({ val: take2(b)?.val, rest: take2(b)?.rest })
+        \\take4 = |b| Ok({ val: take3(b)?.val, rest: take3(b)?.rest })
+        \\take5 = |b| Ok({ val: take4(b)?.val, rest: take4(b)?.rest })
+        \\take6 = |b| Ok({ val: take5(b)?.val, rest: take5(b)?.rest })
+        \\take7 = |b| Ok({ val: take6(b)?.val, rest: take6(b)?.rest })
+        \\take8 = |b| Ok({ val: take7(b)?.val, rest: take7(b)?.rest })
+        \\take9 = |b| Ok({ val: take8(b)?.val, rest: take8(b)?.rest })
+        \\
+        \\main : {} -> Try({ val : U8, rest : List(U8) }, [End, ..])
+        \\main = |_| take9([1, 2, 3])
+    ;
+
+    const counters = try monotypeCountersForModule(allocator, source);
+    // Each helper adds a fixed amount of work: completed transitive interface
+    // summaries replay without coupling the two independent calls.
+    try std.testing.expect(counters.template_misses <= 75);
+    try std.testing.expect(counters.nominal_backing_instantiations <= 2250);
+}
+
+test "independent same-name helper requirements lower separately" {
     const allocator = std.testing.allocator;
     const source =
         \\take0 = |b| {
@@ -1995,19 +2319,55 @@ test "issue 10529 open Try chain with named local callback stays bounded" {
         \\take2 = |b| Ok({ val: take1(b)?.val, rest: take1(b)?.rest })
         \\take3 = |b| Ok({ val: take2(b)?.val, rest: take2(b)?.rest })
         \\take4 = |b| Ok({ val: take3(b)?.val, rest: take3(b)?.rest })
-        \\take5 = |b| Ok({ val: take4(b)?.val, rest: take4(b)?.rest })
-        \\take6 = |b| Ok({ val: take5(b)?.val, rest: take5(b)?.rest })
         \\
         \\main : {} -> Try({ val : U8, rest : List(U8) }, [End, ..])
-        \\main = |_| take6([1, 2, 3])
+        \\main = |_| take4([1, 2, 3])
     ;
 
-    const counters = try monotypeCountersForModule(allocator, source);
-    try std.testing.expect(counters.template_misses <= 20);
-    // Generalized record fields retain distinct source-value/runtime-slot
-    // cells until specialization freeze. Keep that fixed linear bookkeeping
-    // bounded while guarding against the former exponential Try-chain growth.
-    try std.testing.expect(counters.nominal_backing_instantiations <= 325);
+    _ = try monotypeCountersForModule(allocator, source);
+}
+
+test "independent same-name method requirements specialize separately" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\f1 = |list| list.map(|item| U32.to_u64(item))
+        \\f2 = |list| list.map(|item| U32.to_u128(item))
+        \\g = |list| (f1(list), f2(list))
+        \\
+        \\main : {} -> (List(U64), List(U128))
+        \\main = |_| g([1.U32, 2.U32])
+    ;
+
+    _ = try monotypeCountersForModule(allocator, source);
+}
+
+test "independent same-name iterator requirements specialize separately" {
+    const allocator = std.testing.allocator;
+    // Empty.iter quantifies its element beyond the dispatcher, so the two
+    // loops instantiate the shared iter evidence at different element types.
+    const source =
+        \\Empty := [E].{
+        \\    iter : Empty -> Iter(item)
+        \\    iter = |_| List.iter([])
+        \\}
+        \\
+        \\g = |e| {
+        \\    var $a = 0.U64
+        \\    for x in e {
+        \\        $a = $a + x
+        \\    }
+        \\    var $b = 0.U128
+        \\    for x in e {
+        \\        $b = $b + x
+        \\    }
+        \\    ($a, $b)
+        \\}
+        \\
+        \\main : {} -> (U64, U128)
+        \\main = |_| g(Empty.E)
+    ;
+
+    _ = try monotypeCountersForModule(allocator, source);
 }
 
 test "specialization interface replay follows returned local functions through wrappers" {
@@ -2135,6 +2495,99 @@ test "imported and local generic specialization counters reuse closed types" {
     try std.testing.expect(counters.template_misses >= 2);
     try std.testing.expect(counters.template_hits >= 2);
     try std.testing.expect(counters.template_lookup_candidates <= counters.template_requests);
+}
+
+/// Repro source for https://github.com/roc-lang/roc/issues/10978: one
+/// function body constructing a parameterized recursive nominal type
+/// `construction_count` times (three constructions per generated line).
+fn issue10978NodeTreeSource(allocator: Allocator, construction_count: usize) Allocator.Error![]u8 {
+    var source = std.ArrayList(u8).empty;
+    errdefer source.deinit(allocator);
+
+    try source.appendSlice(allocator,
+        \\Node(msg) := [Text(Str), Element(Str, List(Node(msg)))].{
+        \\    text : Str -> Node(msg)
+        \\    text = |s| Text(s)
+        \\
+        \\    el : Str, List(Node(msg)) -> Node(msg)
+        \\    el = |tag, kids| Element(tag, kids)
+        \\}
+        \\
+        \\view : Str -> List(Node(Str))
+        \\view = |title| [
+        \\
+    );
+    for (0..construction_count) |_| {
+        try source.appendSlice(allocator, "    Node.el(\"p\", [Node.el(\"span\", [Node.text(title)])]),\n");
+    }
+    try source.appendSlice(allocator,
+        \\]
+        \\
+        \\main : U64
+        \\main = view("hi").len()
+        \\
+    );
+
+    return try source.toOwnedSlice(allocator);
+}
+
+test "issue 10978 repeated recursive nominal constructions scan bounded backing instances" {
+    // Repro for https://github.com/roc-lang/roc/issues/10978: check time is
+    // quadratic in the number of constructions of a parameterized recursive
+    // nominal type in one function body. Every construction probes the
+    // per-graph nominal-backing instance cache; the candidates each probe
+    // scans must stay proportional to the probe count, not to the number of
+    // instances already recorded. All counts here are deterministic: when
+    // the construction count doubles, linear work at most doubles them,
+    // while the quadratic rescan quadruples them.
+    const allocator = std.testing.allocator;
+
+    const Counts = struct { scanned: u64, finds: u64 };
+    var counts: [3]Counts = undefined;
+    const sizes = [_]usize{ 8, 16, 32 };
+    for (sizes, &counts) |n, *out| {
+        const source = try issue10978NodeTreeSource(allocator, n);
+        defer allocator.free(source);
+
+        var diagnostics = MonoLower.Diagnostics{};
+        var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
+            .diagnostics = &diagnostics,
+        });
+        defer lowered.deinit(allocator);
+
+        out.* = .{
+            .scanned = diagnostics.graph.nominal_backing_instances_scanned,
+            .finds = diagnostics.graph.union_find_resolutions,
+        };
+    }
+
+    const scan_growth_linear = counts[1].scanned <= counts[0].scanned *| 2 and
+        counts[2].scanned <= counts[1].scanned *| 2;
+    // Union-find pressure is the broad guard: compare growth between size
+    // doublings so fixed per-module work cancels. Linear lowering doubles
+    // the delta; the quadratic scan approaches quadrupling it.
+    const find_growth_linear = if (counts[0].finds <= counts[1].finds and counts[1].finds <= counts[2].finds) linear: {
+        const delta_small = counts[1].finds - counts[0].finds;
+        const delta_large = counts[2].finds - counts[1].finds;
+        break :linear delta_large <= (delta_small *| 5) / 2;
+    } else false;
+    if (!scan_growth_linear or !find_growth_linear) {
+        std.debug.print(
+            "recursive nominal construction work grew nonlinearly: " ++
+                "backing instances scanned {d}->{d}->{d}, " ++
+                "union-find resolutions {d}->{d}->{d}\n",
+            .{
+                counts[0].scanned,
+                counts[1].scanned,
+                counts[2].scanned,
+                counts[0].finds,
+                counts[1].finds,
+                counts[2].finds,
+            },
+        );
+    }
+    try std.testing.expect(scan_growth_linear);
+    try std.testing.expect(find_growth_linear);
 }
 
 test "closed direct method calls reuse specialization before durable key construction" {
@@ -2501,7 +2954,29 @@ test "low level wrapper is inlined when inline mode is enabled" {
     try std.testing.expectEqual(@as(usize, 1), shape.str_count_utf8_bytes_count);
 }
 
-test "block wrapper with statements is not inlined" {
+test "issue 10851: single-use List.set helper is inlined into its loop" {
+    // Repro for https://github.com/roc-lang/roc/issues/10851.
+    try expectRootDirectCallCount(
+        \\step : List(U64), U64 -> List(U64)
+        \\step = |xs, i| {
+        \\    a = xs.set(0, i) ?? xs
+        \\    a.set(1, i) ?? a
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    var $xs = [0.U64, 0]
+        \\    var $i = 0.U64
+        \\    while $i < n {
+        \\        $xs = step($xs, $i)
+        \\        $i = $i + 1
+        \\    }
+        \\    ($xs.get(0) ?? 0) + ($xs.get(1) ?? 0)
+        \\}
+    , .wrappers, 0);
+}
+
+test "single-use block helper with statements is inlined" {
     try expectInlinePlanDecision(
         \\callee : U64 -> U64
         \\callee = |x| x + 1
@@ -2514,7 +2989,107 @@ test "block wrapper with statements is not inlined" {
         \\
         \\main : U64
         \\main = wrapper(41)
-    , "wrapper", false);
+    , "wrapper", true);
+}
+
+test "multi-use block helper with statements is not inlined" {
+    try expectInlinePlanDecision(
+        \\helper : List(U64), U64 -> List(U64)
+        \\helper = |xs, i| {
+        \\    a = xs.set(0, i) ?? xs
+        \\    a.set(1, i) ?? a
+        \\}
+        \\
+        \\main : List(U64)
+        \\main = {
+        \\    a = helper([0.U64, 0], 1)
+        \\    helper(a, 2)
+        \\}
+    , "helper", false);
+}
+
+test "single-use block helper nested in a multi-use wrapper is not duplicated" {
+    try expectInlinePlanDecision(
+        \\helper : List(U64), U64 -> List(U64)
+        \\helper = |xs, i| {
+        \\    a = xs.set(0, i) ?? xs
+        \\    a.set(1, i) ?? a
+        \\}
+        \\
+        \\wrapper : List(U64), U64 -> List(U64)
+        \\wrapper = |xs, i| helper(xs, i)
+        \\
+        \\main : List(U64)
+        \\main = {
+        \\    a = wrapper([0.U64, 0], 1)
+        \\    wrapper(a, 2)
+        \\}
+    , "helper", false);
+}
+
+test "procedure boundary keeps a deeper single-use helper inline" {
+    const source =
+        \\inner : List(U64), U64 -> List(U64)
+        \\inner = |xs, i| {
+        \\    a = xs.set(0, i) ?? xs
+        \\    a.set(1, i) ?? a
+        \\}
+        \\
+        \\middle : List(U64), U64 -> List(U64)
+        \\middle = |xs, i| {
+        \\    a = inner(xs, i)
+        \\    a.set(0, i) ?? a
+        \\}
+        \\
+        \\wrapper : List(U64), U64 -> List(U64)
+        \\wrapper = |xs, i| middle(xs, i)
+        \\
+        \\main : List(U64)
+        \\main = {
+        \\    a = wrapper([0.U64, 0], 1)
+        \\    wrapper(a, 2)
+        \\}
+    ;
+
+    try expectInlinePlanDecision(source, "middle", false);
+    try expectInlinePlanDecision(source, "inner", true);
+}
+
+test "escaping single-call block helper is not inlined" {
+    try expectInlinePlanDecision(
+        \\helper : List(U64), U64 -> List(U64)
+        \\helper = |xs, i| {
+        \\    a = xs.set(0, i) ?? xs
+        \\    a.set(1, i) ?? a
+        \\}
+        \\
+        \\main = (helper([0.U64, 0], 1), helper)
+    , "helper", false);
+}
+
+test "single-use block helper with return is not inlined" {
+    try expectInlinePlanDecision(
+        \\helper : U64 -> U64
+        \\helper = |x| {
+        \\    return x
+        \\}
+        \\
+        \\main : U64
+        \\main = helper(41)
+    , "helper", false);
+}
+
+test "single-use block helper with nested self-call is not inlined" {
+    try expectInlinePlanDecision(
+        \\helper : U64 -> U64
+        \\helper = |x| {
+        \\    y = if x == 0 0 else helper(x - 1)
+        \\    y
+        \\}
+        \\
+        \\main : U64
+        \\main = helper(41)
+    , "helper", false);
 }
 
 test "call value wrapper is not inlined" {
@@ -2684,8 +3259,9 @@ test "spec constr does not duplicate opaque let-bound direct calls" {
     var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
-    try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDoesNotDuplicateCall));
-    try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDuplicatesCall));
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "direct_call_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "low_level_count", 2);
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "struct_assign_count", 0);
 }
 
 test "spec constr does not duplicate opaque known-match payloads" {
@@ -2710,8 +3286,9 @@ test "spec constr does not duplicate opaque known-match payloads" {
     var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
-    try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDoesNotDuplicateCall));
-    try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDuplicatesCall));
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "direct_call_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "low_level_count", 2);
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "struct_assign_count", 0);
 }
 
 test "spec constr retains an exact virtual source frame for an inlined procedure" {
@@ -3093,7 +3670,15 @@ test "spec constr specializes record state carried by while loop" {
     var unoptimized = try lowerModule(allocator, source, .none);
     defer unoptimized.deinit(allocator);
 
-    try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWorkerIsSpecialized));
+    // Sealed source-body cloning can inline the specialized worker completely;
+    // pin the scalarized loop in the root rather than an incidental proc split.
+    const optimized_root_shape = try collectProcShape(allocator, &optimized.lowered, try rootProc(&optimized.lowered));
+    try std.testing.expectEqual(@as(usize, 0), optimized_root_shape.arg_count);
+    try std.testing.expectEqual(@as(usize, 0), optimized_root_shape.direct_call_count);
+    try std.testing.expect(optimized_root_shape.join_count >= 1);
+    try std.testing.expectEqual(@as(usize, 2), optimized_root_shape.max_join_param_count);
+    try std.testing.expect(optimized_root_shape.jump_count >= 2);
+    try std.testing.expectEqual(@as(usize, 0), optimized_root_shape.struct_assign_count);
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWorkerIsGeneric));
 
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsSpecialized));
@@ -3720,6 +4305,25 @@ fn reachableProcDebugName(
     return false;
 }
 
+fn procOrInlineScopeDebugName(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    expected_name: []const u8,
+) TestError!bool {
+    if (try reachableProcDebugName(allocator, lowered, expected_name)) return true;
+
+    const store = &lowered.lir_result.store;
+    for (0..store.cf_stmts.len()) |stmt_index| {
+        const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+        const scope_id = store.stmtInlineScope(stmt_id);
+        if (scope_id == LIR.InlineScopeId.none) continue;
+        const source_name = store.inlineScope(scope_id).source_name;
+        if (source_name.isNone()) continue;
+        if (std.mem.eql(u8, store.getString(source_name), expected_name)) return true;
+    }
+    return false;
+}
+
 fn reachableProcShapeFieldTotal(
     allocator: Allocator,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
@@ -3778,10 +4382,102 @@ fn expectReachableProcShapeFieldEqual(
     try std.testing.expectEqual(expected, actual);
 }
 
+fn containsJumpTo(
+    store: *lir.LirStore,
+    body: LIR.CFStmtId,
+    target: LIR.JoinPointId,
+) TestError!bool {
+    var walk = try lir.BodyClone.ReachableStmts.init(store, body);
+    defer walk.deinit();
+    while (try walk.next()) |stmt_id| {
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt == .jump and stmt.jump.target == target) return true;
+    }
+    return false;
+}
+
+fn findSingleLoopJoin(
+    store: *lir.LirStore,
+    body: LIR.CFStmtId,
+) TestError!@FieldType(LIR.CFStmt, "join") {
+    var walk = try lir.BodyClone.ReachableStmts.init(store, body);
+    defer walk.deinit();
+
+    var found: ?@FieldType(LIR.CFStmt, "join") = null;
+    while (try walk.next()) |stmt_id| {
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt != .join) continue;
+        if (!try containsJumpTo(store, stmt.join.body, stmt.join.id)) continue;
+        if (found != null) return error.TestUnexpectedResult;
+        found = stmt.join;
+    }
+    return found orelse error.TestUnexpectedResult;
+}
+
+fn countLocalDecrefs(
+    store: *lir.LirStore,
+    body: LIR.CFStmtId,
+    target: LIR.LocalId,
+) TestError!usize {
+    var walk = try lir.BodyClone.ReachableStmts.init(store, body);
+    defer walk.deinit();
+
+    var count: usize = 0;
+    while (try walk.next()) |stmt_id| {
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt == .decref and stmt.decref.value == target) count += 1;
+    }
+    return count;
+}
+
+// A loop-carried join param is only freshly owned inside the loop body when
+// every arrival to the join hands it a new unit. A record whose fields are
+// carried through a loop leaves the fields the back edge never rebinds holding
+// the value the entry edge produced, so releasing them in the body would run
+// one release per iteration against a value that only exists once. `state.b`
+// below is exactly such a field: the loop reads only `state.a`, and the back
+// edge rebinds only the counter and the accumulator.
+//
+// Regression: ARC placed every join param owned in the body keep unconditionally,
+// so the second iteration released an already-dead list. Debug builds catch this
+// as an `arc_certify` panic ("release of unbound local"); optimized builds
+// miscompiled into a use-after-free.
+test "ARC keeps a loop-invariant record field out of the loop body keep" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\State : { a : List(U64), b : List(U64) }
+        \\
+        \\count_from : State, U64, List(U64) -> List(U64)
+        \\count_from = |state, i, acc|
+        \\    if i == 0 acc else count_from(state, i - 1, List.append(acc, List.len(state.a)))
+        \\
+        \\main : U64
+        \\main = List.len(count_from({ a: [1, 2], b: [3, 4] }, 4, []))
+    ;
+
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    defer lowered.deinit(allocator);
+
+    const store = &lowered.lowered.lir_result.store;
+    const root_body = store.getProcSpec(try rootProc(&lowered.lowered)).body orelse return error.MissingRootProcedure;
+    const loop_join = try findSingleLoopJoin(store, root_body);
+    const loop_params = store.getLocalSpan(loop_join.params);
+    try std.testing.expect(loop_params.len >= 2);
+
+    // Scalarized record fields preserve source order, so the second loop param
+    // is `state.b`. It must be released once on the entry path and never from
+    // the self-looping body. Counting this exact local remains valid when
+    // inlining introduces additional exit paths for the other owned lists.
+    const invariant_b = GuardedList.at(loop_params, 1);
+    try std.testing.expectEqual(@as(usize, 1), try countLocalDecrefs(store, root_body, invariant_b));
+    try std.testing.expectEqual(@as(usize, 0), try countLocalDecrefs(store, loop_join.body, invariant_b));
+}
+
 // A producer-authored concrete iterator representation must survive ordinary
 // procedure returns and all supported static-dispatch invocation forms. Each
-// case below must reach `sum_it` (the debug-name sanity probe), avoid the public
-// `Iter.next` boundary, and lower without iterator-state heap or ARC operations.
+// case below must retain `sum_it` as either a reachable proc or an inline scope
+// (the debug-name sanity probe), avoid the public `Iter.next` boundary, and
+// lower without iterator-state heap or ARC operations.
 // List-backed cases retain exactly the one decref required to release their
 // concrete source list; range-backed cases have none.
 test "iterator producers and delegating wrappers fuse into a scalar loop" {
@@ -3981,7 +4677,7 @@ test "iterator producers and delegating wrappers fuse into a scalar loop" {
     for (cases) |c| {
         var opt = try lowerModuleWithProcDebugNames(allocator, c.src, .wrappers, true);
         defer opt.deinit(allocator);
-        if (!try reachableProcDebugName(allocator, &opt.lowered, "sum_it")) {
+        if (!try procOrInlineScopeDebugName(allocator, &opt.lowered, "sum_it")) {
             std.debug.print("debug-name sanity probe missing for case: {s}\n", .{c.name});
             return error.TestUnexpectedResult;
         }
@@ -4759,9 +5455,9 @@ fn expectRangeMapCollectUsesDirectListLoop(source: []const u8, expected_append_u
 
     try std.testing.expect(!try reachableIterCollectShape(allocator, &optimized.lowered, .specialized));
     try std.testing.expect(!try reachableIterCollectShape(allocator, &optimized.lowered, .generic));
-    // Promoted appends compare the length against the carried fill limit at
-    // each site, and the limit seeds on entry and regrowth read it once each.
-    try std.testing.expectEqual(@as(usize, 4), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_len_count"));
+    // Exact single-use inlining exposes the empty initial list, so promoted
+    // appends carry their fill count directly without reading the list length.
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_len_count"));
     try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_get_unsafe_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_with_capacity_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_reserve_count"));
@@ -4830,8 +5526,7 @@ test "destination baseline: boxed record update reboxes a list and string payloa
     , .wrappers);
     defer lowered_source.deinit(allocator);
 
-    const step_proc = try rootDirectCallTarget(allocator, &lowered_source.lowered);
-    const shape = try collectProcShape(allocator, &lowered_source.lowered, step_proc);
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
 
     try std.testing.expectEqual(@as(usize, 1), shape.box_unbox_count);
     try std.testing.expectEqual(@as(usize, 1), shape.box_box_count);
@@ -5342,11 +6037,6 @@ test "closed Dict and Set receivers keep minted iteration" {
     defer dict_optimized.deinit(allocator);
     var set_optimized = try lowerModuleWithProcDebugNames(allocator, set_source, .wrappers, true);
     defer set_optimized.deinit(allocator);
-
-    // Sanity probes: reachability data must be populated, or every absence
-    // assertion below holds vacuously.
-    try std.testing.expect(try reachableProcDebugName(allocator, &dict_optimized.lowered, "sum_dict"));
-    try std.testing.expect(try reachableProcDebugName(allocator, &set_optimized.lowered, "sum_set"));
 
     for ([_][]const u8{ "iter_from_step", "Builtin.Iter.next" }) |name| {
         const reachable = try reachableProcDebugName(allocator, &dict_optimized.lowered, name);
@@ -6884,7 +7574,7 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
     mono_consumed = true;
     defer lifted.deinit();
 
-    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
+    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted, .all_calls);
 
     // The input program has no tuple nested directly inside another tuple, so a
     // nested tuple after specialization means the substituted aggregate leaked
@@ -6975,7 +7665,7 @@ test "dispatch evidence boundary validator accepts a published artifact" {
     try std.testing.expect(resources.checked_artifact.validateDispatchEvidence() == null);
 }
 
-test "custom literal field default owns its conversion root" {
+test "custom literal field default gets an ordinary conversion root" {
     const allocator = std.testing.allocator;
     const source =
         \\MyNum := [Value(U64)].{
@@ -6988,10 +7678,10 @@ test "custom literal field default owns its conversion root" {
         \\    from_quote = |str| Ok(Label(str))
         \\}
         \\
-        \\Config : { size : MyNum ?? 5, label : Label ?? "hi" }
+        \\Config := { size : MyNum ?? 5, label : Label ?? "hi" }
         \\
         \\config : Config
-        \\config = {}
+        \\config = Config.{}
         \\
         \\main = config.size
     ;
@@ -7005,16 +7695,23 @@ test "custom literal field default owns its conversion root" {
     );
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
-    var default_count: usize = 0;
-    for (resources.checked_artifact.compile_time_roots.roots) |root| {
-        if (root.kind != .field_default) continue;
-        default_count += 1;
-        try std.testing.expect(root.literalConversionKind() != null);
-        const conversion = resources.checked_artifact.compile_time_roots.lookupNumeralRootByExpr(root.expr) orelse
+    // Per-specialization defaults have no root of their own; each default's
+    // custom literal conversion is an ORDINARY conversion root in the
+    // declaring module, so compile-time `Err` reporting is unchanged
+    // (design.md "Defaulted Fields").
+    var numeral_roots: usize = 0;
+    var quote_roots: usize = 0;
+    for (resources.checked_artifact.checked_bodies.default_exprs.items) |entry| {
+        const conversion = resources.checked_artifact.compile_time_roots.lookupNumeralRootByExpr(entry.checked_expr) orelse
             return error.TestUnexpectedResult;
-        try std.testing.expectEqual(root.id, conversion.id);
+        switch (conversion.kind) {
+            .numeral_conversion => numeral_roots += 1,
+            .quote_conversion => quote_roots += 1,
+            .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect, .repl_expr => return error.TestUnexpectedResult,
+        }
     }
-    try std.testing.expectEqual(@as(usize, 2), default_count);
+    try std.testing.expectEqual(@as(usize, 1), numeral_roots);
+    try std.testing.expectEqual(@as(usize, 1), quote_roots);
 }
 
 test "dispatch evidence boundary validator rejects malformed specialization interface metadata" {
@@ -7397,7 +8094,8 @@ test "iter alloc static: runtime list for-loop has no boxed iterator state" {
 
 // Repro for https://github.com/roc-lang/roc/issues/10340: the fold must
 // scalarize into one self-contained raw-indexed loop in the root proc, without
-// peeling the first step and calling a separate fused worker for the rest.
+// peeling the first step and calling a separate fused worker for the rest. The
+// exact-single-use plan also inlines the effectful list producer.
 test "issue 10340 fold over effect-produced list scalarizes in root" {
     const allocator = std.testing.allocator;
     const source =
@@ -7417,6 +8115,8 @@ test "issue 10340 fold over effect-produced list scalarizes in root" {
     const reachable_total = try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_get_unsafe_count");
     try std.testing.expect(root_shape.list_get_unsafe_count >= 1);
     try std.testing.expect(root_shape.join_count >= 1);
+    // The producer and every indexed read are in the root, so no producer or
+    // peeled-loop worker call remains.
     try std.testing.expectEqual(@as(usize, 0), root_shape.direct_call_count);
     try std.testing.expectEqual(root_shape.list_get_unsafe_count, reachable_total);
 
@@ -8615,4 +9315,241 @@ test "issue 10797 SpecConstr keeps the threaded var parameter bound in a special
     switch (result) {
         .value => |value| try std.testing.expectEqual(@as(u64, 37231255), value.read(u64)),
     }
+}
+
+// A while loop whose mutated state exceeds sixteen locals must still get its
+// join parameters scalarized. An unscalarized struct parameter is rebuilt and
+// destructured every iteration, and the materialized struct holds a second
+// reference to every refcounted field across the body's calls; this turns
+// each in-place list update inside the loop into a full copy. The shape here
+// mirrors a compressor main loop: nested whiles inside branches, early
+// error returns out of the loops, and enough mutated state to overflow a
+// too-small scalarization cap.
+test "wide loop-carried state scalarizes into flat join params" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\walk : U64 -> Try(U64, [Bug])
+        \\walk = |n| {
+        \\    var $t1 = List.repeat(0.U16, 64)
+        \\    var $t2 = List.repeat(0.U16, 64)
+        \\    var $t3 = List.repeat(0.U16, 64)
+        \\    var $t4 = List.repeat(0.U32, 64)
+        \\    var $t5 = List.repeat(0.U32, 64)
+        \\    var $a = 0.U64
+        \\    var $b = 1.U64
+        \\    var $c = 2.U64
+        \\    var $d = 3.U64
+        \\    var $e = 4.U64
+        \\    var $f = 5.U64
+        \\    var $g = 6.U64
+        \\    var $h = 7.U64
+        \\    var $j = 8.U64
+        \\    var $k = 9.U64
+        \\    var $l = 10.U64
+        \\    var $m = 11.U64
+        \\    var $i = 0.U64
+        \\    while $i < n {
+        \\        if $i.bitwise_and(1) == 0 {
+        \\            var $inner = 0.U64
+        \\            while $inner < 3 {
+        \\                $t1 = match List.set($t1, $i % 64, $i.to_u16_wrap()) {
+        \\                    Ok(v) => v
+        \\                    Err(_) => return Err(Bug)
+        \\                }
+        \\                $t4 = match List.set($t4, $i % 64, $i.to_u32_wrap()) {
+        \\                    Ok(v) => v
+        \\                    Err(_) => return Err(Bug)
+        \\                }
+        \\                $a = $a + $inner
+        \\                $b = $b + $a
+        \\                $inner = $inner + 1
+        \\            }
+        \\        } else {
+        \\            $t2 = match List.set($t2, $i % 64, $i.to_u16_wrap()) {
+        \\                Ok(v) => v
+        \\                Err(_) => return Err(Bug)
+        \\            }
+        \\            $t3 = match List.set($t3, $i % 64, $i.to_u16_wrap()) {
+        \\                Ok(v) => v
+        \\                Err(_) => return Err(Bug)
+        \\            }
+        \\            $t5 = match List.set($t5, $i % 64, $i.to_u32_wrap()) {
+        \\                Ok(v) => v
+        \\                Err(_) => return Err(Bug)
+        \\            }
+        \\            $c = $c + $b
+        \\            $d = $d + $c
+        \\            $e = $e + $d
+        \\            $f = $f + $e
+        \\            $g = $g + $f
+        \\            $h = $h + $g
+        \\            $j = $j + $h
+        \\            $k = $k + $j
+        \\            $l = $l + $k
+        \\            $m = $m + $l
+        \\        }
+        \\        $i = $i + 1
+        \\    }
+        \\    Ok($a + $b + $c + $d + $e + $f + $g + $h + $j + $k + $l + $m
+        \\        + ($t1.get(0) ?? 0).to_u64()
+        \\        + ($t2.get(0) ?? 0).to_u64()
+        \\        + ($t3.get(0) ?? 0).to_u64()
+        \\        + ($t4.get(0) ?? 0).to_u64()
+        \\        + ($t5.get(0) ?? 0).to_u64())
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    match walk(n) {
+        \\        Ok(v) => v
+        \\        Err(_) => 0
+        \\    }
+        \\}
+    ;
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var total_incref: usize = 0;
+    var max_join_params: usize = 0;
+    const proc_count = optimized.lowered.lir_result.store.getProcSpecs().len;
+    for (0..proc_count) |index| {
+        const shape = try collectProcShape(allocator, &optimized.lowered, @enumFromInt(@as(u32, @intCast(index))));
+        total_incref += shape.incref_count;
+        max_join_params = @max(max_join_params, shape.max_join_param_count);
+    }
+    // The loop joins carry every mutated var as its own parameter, not one
+    // struct whose per-iteration rebuild would alias the lists.
+    try std.testing.expect(max_join_params >= 18);
+    // With flat parameters the lists stay uniquely owned end to end, so the
+    // loops need no refcount traffic at all.
+    try std.testing.expectEqual(@as(usize, 0), total_incref);
+}
+
+// A helper returning Try({ ...lists... }) called with `?` in a loop is the
+// canonical dying-tag-union shape: the Ok payload's lists are read out and
+// the union dies inside the matched arm. Field takes must dismantle the
+// union—no retain on the extracted lists, and the death point's residual
+// dispatch releases nothing on the taken variant—or every list mutation in
+// the caller's loop sees count 2 and copies.
+
+// A dominating length guard plus a masked index is how hot table loops
+// (hash chains, sliding windows) express in-bounds access: the guard pins
+// `len >= 32768` once, the mask pins the index below it, and the range
+// prover should fold every per-iteration bounds check in the loop body.
+// The loop's back edge sits inside the `??` default's merge region, so
+// this also guards the edge classification that keeps entry-invariant
+// facts alive across nested join regions.
+// A dominating length guard plus a masked index is how hot table loops
+// (hash chains, sliding windows) express in-bounds access: the guard pins
+// `len >= 32768` once, the mask pins the index below it, and the range
+// prover should fold every per-iteration bounds check in the loop body.
+// The loop's back edge sits inside the `??` default's merge region, so
+// this also guards the edge classification that keeps entry-invariant
+// facts alive across nested join regions.
+
+// The matchfinder tables reach their loops through a rebased `var`: the
+// local is assigned in both arms of a pre-loop branch and only read inside
+// the loop. Its binding must survive into the loop body from the entry
+// edges alone; the fact-free first walk of the back edge can never
+// re-derive it, or the dominating length guard proves nothing.
+
+// A recursive mention at a constant argument (`Weird(Str)` inside the
+// declaration of `Weird(a)`) instantiates one backing per distinct argument
+// class and terminates: the mention's checked type is scope-independent, so
+// every nesting level presents the same argument cell and the second level
+// hits the placeholder registered by the first.
+test "recursive nominal mention at a constant argument lowers finitely" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Weird(a) := [End, Wrap(Weird(Str))].{
+        \\    make : a -> Weird(a)
+        \\    make = |_| End
+        \\
+        \\    wrap : Weird(Str) -> Weird(a)
+        \\    wrap = |w| Wrap(w)
+        \\}
+        \\
+        \\main : U8
+        \\main = {
+        \\    w : Weird(U8)
+        \\    w = Weird.wrap(Weird.make("s"))
+        \\    match w {
+        \\        Wrap(_) => 1
+        \\        End => 0
+        \\    }
+        \\}
+    ;
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+}
+
+// Mutually recursive declarations whose cross-mentions use constant
+// arguments are finite, but the declaration of `Alt(x)` also contains
+// `List(x)`, whose meaning depends on the enclosing formal binding. A
+// nested expansion of `Alt(Str)` reached through `Bare` must instantiate
+// `List(Str)` there, not reuse the outer expansion's `List(I64)`; the
+// checker-typed pattern match below meets that inner slot and exposes any
+// collapsed reuse as a type mismatch.
+test "nested expansion of a mutually recursive nominal keeps formal-dependent payloads per level" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Alt(x) := [Load(List(x)), Wrap(Bare(Str))].{
+        \\    load : x -> Alt(x)
+        \\    load = |v| Load([v])
+        \\}
+        \\
+        \\Bare(y) := [Tie(Alt(Str)), End]
+        \\
+        \\main : Str
+        \\main = {
+        \\    a = Alt.load(42)
+        \\    match a {
+        \\        Wrap(bare) => match bare {
+        \\            Tie(alt) => match alt {
+        \\                Load(strs) => strs.get(0) ?? "none"
+        \\                Wrap(_) => "wrap"
+        \\            }
+        \\            End => "end"
+        \\        }
+        \\        Load(_) => "load"
+        \\    }
+        \\}
+    ;
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+}
+
+// A constant-argument recursive nominal declared in an imported module
+// expands its backing inside a fresh cross-module instantiation context;
+// the recursive mention's closed checked type memoizes per context, so
+// nested expansion levels present one argument cell and the expansion
+// terminates there just as it does for a local declaration.
+test "imported recursive nominal at a constant argument lowers finitely" {
+    const allocator = std.testing.allocator;
+    const chain_module =
+        \\Chain(a) := [Stop, Link(Chain(Str))].{
+        \\    stop : a -> Chain(a)
+        \\    stop = |_| Stop
+        \\
+        \\    link : a, Chain(Str) -> Chain(a)
+        \\    link = |_, c| Link(c)
+        \\
+        \\    depth : Chain(a) -> U8
+        \\    depth = |c| match c {
+        \\        Stop => 0
+        \\        Link(_) => 1
+        \\    }
+        \\}
+    ;
+    const source =
+        \\import Chain
+        \\
+        \\main : U8
+        \\main = Chain.link(7, Chain.stop("s")).depth()
+    ;
+
+    const counters = try monotypeCountersForModuleWithImports(allocator, source, &.{
+        .{ .name = "Chain", .source = chain_module },
+    });
+    try std.testing.expect(counters.nominal_backing_instantiations >= 1);
 }

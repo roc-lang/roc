@@ -385,7 +385,7 @@ is_match = from_flags(1) == { primary: Color2, secondary: Color4 }
 		(p-assign (ident "is_match"))
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 596)
+				(e-call (constraint-fn-var 609)
 					(e-lookup-local
 						(p-assign (ident "from_flags")))
 					(e-num (value "1"))))

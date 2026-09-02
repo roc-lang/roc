@@ -86,10 +86,12 @@ const UnsupportedGeneratedMethod = problem_mod.UnsupportedGeneratedMethod;
 const AssociatedItemNotFound = problem_mod.AssociatedItemNotFound;
 const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
 const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
+const EffectfulComptimeExpression = problem_mod.EffectfulComptimeExpression;
 const EffectfulExpect = problem_mod.EffectfulExpect;
 const EffectfulFunctionName = problem_mod.EffectfulFunctionName;
 
 // Comptime errors
+const ComptimeOrigin = problem_mod.ComptimeOrigin;
 const ComptimeCrash = problem_mod.ComptimeCrash;
 const ComptimeInvalidNumeral = problem_mod.ComptimeInvalidNumeral;
 const ComptimeInvalidQuote = problem_mod.ComptimeInvalidQuote;
@@ -102,7 +104,6 @@ const TupleAccessNeedsAnnotation = problem_mod.TupleAccessNeedsAnnotation;
 const InvalidTupleAccess = problem_mod.InvalidTupleAccess;
 const OptionalAccessOfRequiredField = problem_mod.OptionalAccessOfRequiredField;
 const EffectfulDefaultValue = problem_mod.EffectfulDefaultValue;
-const NonConcreteDefaultValue = problem_mod.NonConcreteDefaultValue;
 const RecursiveDefaultValue = problem_mod.RecursiveDefaultValue;
 const CircularValueDefinition = problem_mod.CircularValueDefinition;
 const LiteralDefaulted = problem_mod.LiteralDefaulted;
@@ -557,22 +558,41 @@ pub const ReportBuilder = struct {
         }
         try report.document.addLineBreak();
 
-        // Print the actual
-        try D.renderSlice(actual_label, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        const actual_type_str = try report.addOwnedString(self.getFormattedString(actual_snapshot));
-        try report.document.addCodeBlock(actual_type_str);
+        const actual_formatted = self.getFormattedString(actual_snapshot);
+        const expected_formatted = self.getFormattedString(expected_snapshot);
 
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        if (std.mem.eql(u8, actual_formatted, expected_formatted)) {
+            try D.renderSlice(&.{D.bytes("The type involved is:")}, self, &report);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const type_str = try report.addOwnedString(actual_formatted);
+            try report.document.addCodeBlock(type_str);
 
-        // Print the expected
-        try D.renderSlice(expected_label, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        const expected_type_str = try report.addOwnedString(self.getFormattedString(expected_snapshot));
-        try report.document.addCodeBlock(expected_type_str);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try D.renderSlice(
+                &.{D.bytes("The difference is inside this type, but it is not visible in this display.")},
+                self,
+                &report,
+            );
+        } else {
+            // Print the actual
+            try D.renderSlice(actual_label, self, &report);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const actual_type_str = try report.addOwnedString(actual_formatted);
+            try report.document.addCodeBlock(actual_type_str);
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            // Print the expected
+            try D.renderSlice(expected_label, self, &report);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const expected_type_str = try report.addOwnedString(expected_formatted);
+            try report.document.addCodeBlock(expected_type_str);
+        }
 
         // Print static hints
         for (hints, 0..) |hint, i| {
@@ -782,6 +802,14 @@ pub const ReportBuilder = struct {
                         },
                     }
                 },
+                // Usually diverted before this renderer runs: `build` probes
+                // the mismatch's top-level snapshot pair
+                // (`findFieldDefaultMismatch`) and emits the dedicated
+                // Incompatible Defaults report when the default conflict is
+                // the sole finding. A builder can still re-compare a NESTED
+                // snapshot pair (e.g. record-update field payloads), or the
+                // conflict can accompany other findings, so render the hint
+                // inline here rather than assuming unreachability.
                 .field_default_mismatch => |fdm| {
                     try D.renderSlice(&.{
                         D.bytes("Hint:").withAnnotation(.emphasized),
@@ -789,20 +817,8 @@ pub const ReportBuilder = struct {
                         D.ident(fdm.field).withAnnotation(.inline_code),
                         D.bytes("field has a"),
                         D.bytes("??").withAnnotation(.inline_code),
-                        D.bytes("default in both types, but they are two DIFFERENT defaults—two separately written defaults never merge, even when their values look the same. To share one default, declare the record type once (e.g. as a type alias) and annotate both values with it."),
+                        D.bytes("default in both types, but they are two different defaults\u{2014}two separately written defaults never merge, even when their values look the same."),
                     }, self, report);
-                    if (self.defaultDeclRegion(fdm.expected_default)) |region| {
-                        try report.document.addLineBreak();
-                        try D.renderSlice(&.{D.bytes("One default is declared here:")}, self, report);
-                        try report.document.addLineBreak();
-                        try self.addSourceHighlightRegion(report, region);
-                    }
-                    if (self.defaultDeclRegion(fdm.actual_default)) |region| {
-                        try report.document.addLineBreak();
-                        try D.renderSlice(&.{D.bytes("And the other is declared here:")}, self, report);
-                        try report.document.addLineBreak();
-                        try self.addSourceHighlightRegion(report, region);
-                    }
                 },
                 .ext_mismatch => |em| {
                     switch (em.type) {
@@ -877,6 +893,15 @@ pub const ReportBuilder = struct {
 
         switch (problem) {
             .type_mismatch => |mismatch| {
+                // A defaulted-field identity conflict gets its own dedicated
+                // report before any per-context mismatch builder runs: the
+                // generic shape renders two often identical-looking types,
+                // hiding that the real difference is two distinct `??`
+                // default identities (design.md "Defaulted Fields"—two
+                // separately written defaults never merge).
+                if (try self.findFieldDefaultMismatch(mismatch.types)) |fdm| {
+                    return self.buildIncompatibleDefaultsReport(mismatch.types, fdm);
+                }
                 // All error contexts are now handled via mismatch.context
                 return switch (mismatch.context) {
                     .if_condition => self.buildIfConditionReport(mismatch.types),
@@ -987,6 +1012,9 @@ pub const ReportBuilder = struct {
             .effectful_top_level => |data| {
                 return self.buildEffectfulTopLevelReport(data);
             },
+            .effectful_comptime_expression => |data| {
+                return self.buildEffectfulComptimeExpressionReport(data);
+            },
             .effectful_expect => |data| {
                 return self.buildEffectfulExpectReport(data);
             },
@@ -1032,8 +1060,10 @@ pub const ReportBuilder = struct {
             .tuple_access_needs_annotation => |data| return self.buildTupleAccessNeedsAnnotationReport(data),
             .invalid_tuple_access => |data| return self.buildInvalidTupleAccessReport(data),
             .optional_access_of_required_field => |data| return self.buildOptionalAccessOfRequiredFieldReport(data),
+            .unset_of_required_field => |data| return self.buildUnsetOfRequiredFieldReport(data),
+            .unset_of_defaulted_field => |data| return self.buildUnsetOfDefaultedFieldReport(data),
             .effectful_default_value => |data| return self.buildEffectfulDefaultValueReport(data),
-            .non_concrete_default_value => |data| return self.buildNonConcreteDefaultValueReport(data),
+            .default_constrains_type_parameter => |data| return self.buildDefaultConstrainsTypeParameterReport(data),
             .recursive_default_value => |data| return self.buildRecursiveDefaultValueReport(data),
             .circular_value_definition => |data| return self.buildCircularValueDefinitionReport(data),
             .literal_defaulted => |data| return self.buildLiteralDefaultedReport(data),
@@ -2136,7 +2166,7 @@ pub const ReportBuilder = struct {
 
         try D.renderSlice(&.{
             D.bytes("A where alias names a set of method constraints, declared like"),
-            D.bytes("a.Sortable : where [a.compare : a -> [LT, EQ, GT]]").withAnnotation(.inline_code),
+            D.bytes("a.Sortable : where [a.order_relative_to : a -> [Before, Same, After]]").withAnnotation(.inline_code),
             D.bytes("and written in a where clause as"),
             D.bytes("where [a.Sortable]").withAnnotation(.inline_code),
         }, self, &report);
@@ -3057,18 +3087,157 @@ pub const ReportBuilder = struct {
     /// run effects at unpredictable times (design.md "Defaulted Fields").
     /// A default is evaluated once at compile time, so its type must be
     /// concrete (design.md "Defaulted Fields").
-    fn buildNonConcreteDefaultValueReport(
+    /// Probe a mismatch's two snapshots for a defaulted-field identity
+    /// conflict (design.md "Defaulted Fields": `defaulted(d1) ~
+    /// defaulted(d2)` unifies only when d1 = d2). The conflict is fully
+    /// visible in the snapshots, so no unify-side detail channel is needed.
+    ///
+    /// The dedicated Incompatible Defaults report exists for the case where
+    /// the generic report would render two identical-looking types, hiding
+    /// that the real difference is two distinct default identities. So this
+    /// only reports a conflict when it is the SOLE finding: any other hint
+    /// kind means the generic report has something visible to say, and
+    /// diverting would replace it with a report about a possibly unrelated
+    /// field (the conflict still renders as an inline hint there, in
+    /// `renderDiffHints`).
+    fn findFieldDefaultMismatch(self: *Self, types: TypePair) Allocator.Error!?diff.FieldDefaultMismatch {
+        const hints = try diff.compareTypes(
+            self.snapshots,
+            self.module_env.getIdentStoreConst(),
+            types.expected_snapshot,
+            types.actual_snapshot,
+            self.gpa,
+            &self.diff_fields,
+            &self.diff_tags,
+        );
+        var found: ?diff.FieldDefaultMismatch = null;
+        for (hints.slice()) |hint| {
+            switch (hint) {
+                .field_default_mismatch => |fdm| {
+                    if (found == null) found = fdm;
+                },
+                .arity_mismatch,
+                .fields_missing,
+                .field_typo,
+                .tag_typo,
+                .effect_mismatch,
+                .ext_mismatch,
+                .field_presence_mismatch,
+                => return null,
+            }
+        }
+        return found;
+    }
+
+    /// Build the dedicated report for a defaulted-field identity conflict:
+    /// both types default the named field with two DIFFERENT identities, so
+    /// unification rejected the pair—merging would leave no coherent
+    /// default for construction sites (design.md "Defaulted Fields").
+    fn buildIncompatibleDefaultsReport(
         self: *Self,
-        data: NonConcreteDefaultValue,
+        types: TypePair,
+        fdm: diff.FieldDefaultMismatch,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Default Value Not Concrete", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Incompatible Defaults", "", .runtime_error);
         errdefer report.deinit();
 
         try D.renderSliceInto(&.{
-            D.bytes("The default value for the"),
-            D.ident(data.field_name).withAnnotation(.inline_code),
-            D.bytes("field does not have a concrete type."),
+            D.bytes("The"),
+            D.ident(fdm.field).withAnnotation(.inline_code),
+            D.bytes("field has a"),
+            D.bytes("??").withAnnotation(.inline_code),
+            D.bytes("default in both of these types, but they are two different defaults\u{2014}two separately written defaults never merge, even when their values look the same."),
         }, self, &report, &report.headline);
+
+        try self.addSourceHighlight(&report, regionIdxFrom(types.actual_var));
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{D.bytes("One type is:")}, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        const actual_type_str = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        try report.document.addCodeBlock(actual_type_str);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{D.bytes("The other is:")}, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        const expected_type_str = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        try report.document.addCodeBlock(expected_type_str);
+        try report.document.addLineBreak();
+
+        // A foreign default's declaration is not reachable from this
+        // module's report (`defaultDeclRegion` is null), so render only
+        // the locally declared side(s), with labels that read correctly
+        // for two, one, or zero available declarations.
+        var decl_regions: [2]Region = undefined;
+        var decl_count: usize = 0;
+        if (self.defaultDeclRegion(fdm.actual_default)) |region| {
+            decl_regions[decl_count] = region;
+            decl_count += 1;
+        }
+        if (self.defaultDeclRegion(fdm.expected_default)) |region| {
+            decl_regions[decl_count] = region;
+            decl_count += 1;
+        }
+        if (decl_count == 2) {
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{D.bytes("One default is declared here:")}, self, &report);
+            try report.document.addLineBreak();
+            try self.addSourceHighlightRegion(&report, decl_regions[0]);
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{D.bytes("And the other is declared here:")}, self, &report);
+            try report.document.addLineBreak();
+            try self.addSourceHighlightRegion(&report, decl_regions[1]);
+        } else if (decl_count == 1) {
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{D.bytes("One of the defaults is declared here; the other comes from another module:")}, self, &report);
+            try report.document.addLineBreak();
+            try self.addSourceHighlightRegion(&report, decl_regions[0]);
+        }
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("To share one default, declare it once on a nominal type and use that type in both places.");
+
+        return report;
+    }
+
+    fn buildDefaultConstrainsTypeParameterReport(
+        self: *Self,
+        data: problem_mod.DefaultConstrainsTypeParameter,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Default Constrains A Type Parameter", "", .runtime_error);
+        errdefer report.deinit();
+
+        if (data.method_name) |method_name| {
+            try D.renderSliceInto(&.{
+                D.bytes("The default value for the"),
+                D.ident(data.field_name).withAnnotation(.inline_code),
+                D.bytes("field requires the type parameter"),
+                D.ident(data.type_param).withAnnotation(.inline_code),
+                D.bytes("to have a"),
+                D.ident(method_name).withAnnotation(.inline_code),
+                D.bytes("method."),
+            }, self, &report, &report.headline);
+        } else if (data.aliased_param) |aliased_param| {
+            try D.renderSliceInto(&.{
+                D.bytes("The default value for the"),
+                D.ident(data.field_name).withAnnotation(.inline_code),
+                D.bytes("field forces the type parameters"),
+                D.ident(data.type_param).withAnnotation(.inline_code),
+                D.bytes("and"),
+                D.ident(aliased_param).withAnnotation(.inline_code),
+                D.bytes("to be the same type."),
+            }, self, &report, &report.headline);
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes("The default value for the"),
+                D.ident(data.field_name).withAnnotation(.inline_code),
+                D.bytes("field forces the type parameter"),
+                D.ident(data.type_param).withAnnotation(.inline_code),
+                D.bytes("to a concrete type."),
+            }, self, &report, &report.headline);
+        }
 
         const region_info = self.module_env.calcRegionInfo(data.region);
         try report.document.addSourceRegion(
@@ -3079,7 +3248,7 @@ pub const ReportBuilder = struct {
             self.module_env.getLineStarts(),
         );
         try report.document.addLineBreak();
-        try report.document.addReflowingText("A default is evaluated once at compile time and filled in wherever construction omits the field, so it must have exactly one runtime representation. Annotate the field (or the default) with a concrete type.");
+        try report.document.addReflowingText("A field default can never place a requirement on the type's parameters: type declarations do not carry where clauses, and the compiler never infers such requirements onto a type. Make the field's type concrete, or use a default value that demands nothing of the parameter.");
 
         return report;
     }
@@ -3189,6 +3358,68 @@ pub const ReportBuilder = struct {
         try report.document.addReflowingText(". Use ");
         try report.document.addAnnotated(".", .inline_code);
         try report.document.addReflowingText(" to access it directly.");
+
+        return report;
+    }
+
+    /// Build a report for unsetting (`x: _`) a field whose presence resolved
+    /// to `required`: the field is always present, so there is no missing
+    /// state to select (design.md "In Progress: Unsetting an Optional Field").
+    fn buildUnsetOfRequiredFieldReport(
+        self: *Self,
+        data: problem_mod.UnsetOfRequiredField,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Unset Of Required Field", "", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSliceInto(&.{
+            D.bytes("The"),
+            D.ident(data.field_name).withAnnotation(.inline_code),
+            D.bytes("field is required, but it is being unset as if it were optional."),
+        }, self, &report, &report.headline);
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Unsetting a field selects the missing state of an optional field\u{2014}but a required field is always present, so there is no missing state to select. You cannot change whether a field is required or optional here. To get a record without this field, construct a new record that omits it.");
+
+        return report;
+    }
+
+    /// Build a report for unsetting (`x: _`) a field whose presence resolved
+    /// to `defaulted`: the field is an inline slot with no missing state, and
+    /// "unsetting" it would have to rematerialize the default—construction
+    /// behavior, not update (design.md "In Progress: Unsetting an Optional
+    /// Field").
+    fn buildUnsetOfDefaultedFieldReport(
+        self: *Self,
+        data: problem_mod.UnsetOfDefaultedField,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Unset Of Defaulted Field", "", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSliceInto(&.{
+            D.bytes("The"),
+            D.ident(data.field_name).withAnnotation(.inline_code),
+            D.bytes("field has a default value, but it is being unset as if it were optional."),
+        }, self, &report, &report.headline);
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("A defaulted field always has a value, so there is no missing state to select. If you want the field to take its default, construct a new record that omits the field instead.");
 
         return report;
     }
@@ -3383,16 +3614,14 @@ pub const ReportBuilder = struct {
                 };
 
                 if (mb_expected_field) |expected_field| {
-                    // A supplied update field has creation semantics: its
-                    // kind-flexible probe joins an optional base field, so a
-                    // mismatch that lands here on an optional field is a
-                    // PAYLOAD-type mismatch, rendered below like any other
-                    // incompatible field type (design.md "Field Kinds").
-
-                    // If the expected  field exist, but we're here in a
-                    // type mismatch, then it must mean that the fields are
-                    // incompatible
-
+                    // A mismatch that lands here is a PAYLOAD-type mismatch:
+                    // every update probe's kind is flexible (a fresh
+                    // `.unknown` presence var), so presence unification
+                    // always merges. Rejecting an unset of a
+                    // `required`/`defaulted` base field is the judgment's
+                    // job (`judgeOptionalFieldAccesses`), reported as Unset
+                    // Of Required/Defaulted Field (design.md "Field Kinds",
+                    // "In Progress: Unsetting an Optional Field").
                     return try self.makeMismatchReport(
                         ProblemRegion{ .simple = ctx.field_region_idx },
                         &.{
@@ -3901,6 +4130,11 @@ pub const ReportBuilder = struct {
                 D.ident(type_name_ident).withAnnotation(.type_variable),
                 D.bytes("contains recursion that never passes back through a nominal type."),
             }, self, &report, &report.headline),
+            .growing_args => try D.renderSliceInto(&.{
+                D.bytes("The nominal type"),
+                D.ident(type_name_ident).withAnnotation(.type_variable),
+                D.bytes("passes changing type arguments to its own recursion, so it would need infinitely many instantiations."),
+            }, self, &report, &report.headline),
         }
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.decl_var)))) |region| {
@@ -3926,12 +4160,26 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        try D.renderSlice(&.{
-            D.bytes("Hint:").withAnnotation(.emphasized),
-            D.bytes("Recursion in a nominal type is only allowed inside a tag union payload or record field—for example"),
-            D.bytes("ConsList(a) := [Nil, Cons(a, ConsList(a))]").withAnnotation(.inline_code),
-            D.bytes(".").withNoPrecedingSpace(),
-        }, self, &report);
+        switch (data.kind) {
+            .infinite, .anonymous => try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("Recursion in a nominal type is only allowed inside a tag union payload or record field—for example"),
+                D.bytes("ConsList(a) := [Nil, Cons(a, ConsList(a))]").withAnnotation(.inline_code),
+                D.bytes(".").withNoPrecedingSpace(),
+            }, self, &report),
+            .growing_args => try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("A recursive use of a nominal type must pass each of its type parameters through unchanged, like"),
+                D.bytes("Tree(a) := [Leaf(a), Node(Tree(a), Tree(a))]").withAnnotation(.inline_code),
+                D.bytes(", or apply it to a type with no type variables, like").withNoPrecedingSpace(),
+                D.bytes("Chain(a) := [End, Link(a, Chain(Str))]").withAnnotation(.inline_code),
+                D.bytes(". An argument that wraps a type parameter, like").withNoPrecedingSpace(),
+                D.bytes("Nest(List(a))").withAnnotation(.inline_code),
+                D.bytes("inside the declaration of"),
+                D.bytes("Nest(a)").withAnnotation(.inline_code),
+                D.bytes(", would create a different type at every level of the recursion.").withNoPrecedingSpace(),
+            }, self, &report),
+        }
 
         return report;
     }
@@ -4255,6 +4503,20 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    fn buildEffectfulComptimeExpressionReport(self: *Self, data: EffectfulComptimeExpression) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Effectful Compile Time Expression", "This REPL expression performs an effect, but REPL expressions are evaluated at compile time.", .runtime_error);
+        errdefer report.deinit();
+
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Use a pure expression here, or run effectful code from a Roc application."),
+        }, self, &report);
+        return report;
+    }
+
     fn buildEffectfulExpectReport(self: *Self, data: EffectfulExpect) Allocator.Error!Report {
         var report = try Report.init(self.gpa, "Effectful Expect", "This expect performs an effect while evaluating its condition.", .runtime_error);
         errdefer report.deinit();
@@ -4382,6 +4644,20 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Format a compile-time failure's foreign origin (source inlined from
+    /// another module, e.g. a `??` field default materialized per
+    /// specialization) as `Module (line N, column M),` owned by the report.
+    /// Shared by every comptime problem kind that carries provenance.
+    fn comptimeOriginLocation(self: *Self, report: *Report, origin: ComptimeOrigin) Allocator.Error![]const u8 {
+        const location = try std.fmt.allocPrint(self.gpa, "{s} (line {d}, column {d}),", .{
+            self.problems.getExtraString(origin.module_name),
+            origin.line,
+            origin.column,
+        });
+        defer self.gpa.free(location);
+        return try report.addOwnedString(location);
+    }
+
     /// Build a report for compile-time crash
     fn buildComptimeInvalidNumeralReport(self: *Self, data: ComptimeInvalidNumeral) Allocator.Error!Report {
         var report = try Report.init(self.gpa, "Invalid Number", "The from_numeral implementation for this number literal's type rejected it.", .runtime_error);
@@ -4402,9 +4678,20 @@ pub const ReportBuilder = struct {
         );
         try report.document.addLineBreak();
 
-        try D.renderSlice(&.{
-            D.bytes("It returned this error message:"),
-        }, self, &report);
+        if (data.origin) |origin| {
+            // The rejected literal was inlined from another module (see
+            // ComptimeOrigin); name its declaring module and exact location.
+            const owned_origin_location = try self.comptimeOriginLocation(&report, origin);
+            try D.renderSlice(&.{
+                D.bytes("The rejected literal is in the module"),
+                D.bytes(owned_origin_location).withAnnotation(.emphasized),
+                D.bytes("and the implementation returned this error message:"),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("It returned this error message:"),
+            }, self, &report);
+        }
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addCodeBlock(owned_message);
@@ -4431,9 +4718,20 @@ pub const ReportBuilder = struct {
         );
         try report.document.addLineBreak();
 
-        try D.renderSlice(&.{
-            D.bytes("It returned this error message:"),
-        }, self, &report);
+        if (data.origin) |origin| {
+            // The rejected literal was inlined from another module (see
+            // ComptimeOrigin); name its declaring module and exact location.
+            const owned_origin_location = try self.comptimeOriginLocation(&report, origin);
+            try D.renderSlice(&.{
+                D.bytes("The rejected literal is in the module"),
+                D.bytes(owned_origin_location).withAnnotation(.emphasized),
+                D.bytes("and the implementation returned this error message:"),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("It returned this error message:"),
+            }, self, &report);
+        }
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addCodeBlock(owned_message);
@@ -4459,6 +4757,26 @@ pub const ReportBuilder = struct {
             self.module_env.getLineStarts(),
         );
         try report.document.addLineBreak();
+
+        if (data.origin) |origin| {
+            // The crash was in source inlined from another module (e.g. a
+            // `??` field default materialized per specialization), so the
+            // failing expression is not in this module's source; name its
+            // declaring module and exact location instead.
+            const owned_origin_location = try self.comptimeOriginLocation(&report, origin);
+            try D.renderSlice(&.{
+                D.bytes("The"),
+                D.bytes("crash").withAnnotation(.keyword),
+                D.bytes("happened in the module"),
+                D.bytes(owned_origin_location).withAnnotation(.emphasized),
+                D.bytes("with this message:"),
+            }, self, &report);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addCodeBlock(owned_message);
+
+            return report;
+        }
 
         try D.renderSlice(&.{
             D.bytes("The"),
@@ -4491,11 +4809,26 @@ pub const ReportBuilder = struct {
         );
         try report.document.addLineBreak();
         try report.document.addLineBreak();
-        try D.renderSlice(&.{
-            D.bytes("The"),
-            D.bytes("expect").withAnnotation(.keyword),
-            D.bytes("failed with this message:"),
-        }, self, &report);
+        if (data.origin) |origin| {
+            // The expect was in source inlined from another module (e.g. a
+            // `??` field default materialized per specialization), so the
+            // failing statement is not in this module's source; name its
+            // declaring module and exact location instead.
+            const owned_origin_location = try self.comptimeOriginLocation(&report, origin);
+            try D.renderSlice(&.{
+                D.bytes("The"),
+                D.bytes("expect").withAnnotation(.keyword),
+                D.bytes("failed in the module"),
+                D.bytes(owned_origin_location).withAnnotation(.emphasized),
+                D.bytes("with this message:"),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("The"),
+                D.bytes("expect").withAnnotation(.keyword),
+                D.bytes("failed with this message:"),
+            }, self, &report);
+        }
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addCodeBlock(owned_message);

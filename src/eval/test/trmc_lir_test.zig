@@ -108,7 +108,7 @@ test "ptr_alloca slot is zeroed and ptr_store/ptr_load round trip" {
     const sum = try b.addLocal(allocator, .u64);
 
     const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } });
-    const add = try lowLevelStmt(&store, sum, .num_plus, &.{ pre, post }, ret);
+    const add = try lowLevelStmt(&store, sum, .num_int_add_wrap, &.{ pre, post }, ret);
     const load_post = try lowLevelStmt(&store, post, .ptr_load, &.{slot}, add);
     const store_v = try lowLevelStmt(&store, st, .ptr_store, &.{ slot, v }, load_post);
     const v_lit = try store.addCFStmt(.{ .assign_literal = .{
@@ -153,7 +153,7 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
         .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } },
         .next = ret,
     } });
-    const add = try lowLevelStmt(&store, sum, .num_plus, &.{ pre, post }, drop_cell);
+    const add = try lowLevelStmt(&store, sum, .num_int_add_wrap, &.{ pre, post }, drop_cell);
     const load_post = try lowLevelStmt(&store, post, .ptr_load, &.{p}, add);
     const store_v = try lowLevelStmt(&store, st, .ptr_store, &.{ p, v }, load_post);
     const v_lit = try store.addCFStmt(.{ .assign_literal = .{
@@ -258,7 +258,7 @@ test "box_prepare_update copies a shared box and leaves the original unchanged" 
         .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } },
         .next = drop_boxed,
     } });
-    const add = try lowLevelStmt(&store, sum, .num_plus, &.{ old_value, new_value }, drop_prepared);
+    const add = try lowLevelStmt(&store, sum, .num_int_add_wrap, &.{ old_value, new_value }, drop_prepared);
     const load_new = try lowLevelStmt(&store, new_value, .ptr_load, &.{new_p}, add);
     const load_old = try lowLevelStmt(&store, old_value, .ptr_load, &.{old_p}, load_new);
     const store_replacement = try lowLevelStmt(&store, st, .ptr_store, &.{ new_p, replacement }, load_old);
@@ -323,7 +323,7 @@ test "ptr ops round trip a multi-word payload through a heap cell" {
         .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_pair } },
         .next = ret,
     } });
-    const add = try lowLevelStmt(&store, sum, .num_plus, &.{ f0, f1 }, drop_cell);
+    const add = try lowLevelStmt(&store, sum, .num_int_add_wrap, &.{ f0, f1 }, drop_cell);
     const get_f1 = try store.addCFStmt(.{ .assign_ref = .{
         .target = f1,
         .op = .{ .field = .{ .source = loaded, .field_idx = 1 } },
@@ -464,7 +464,7 @@ fn buildRepeatProc(
         .args = try store.addLocalSpan(&.{m}),
         .next = mk_cell,
     } });
-    const mk_m = try lowLevelStmt(store, m, .num_minus, &.{ a_n, one }, call);
+    const mk_m = try lowLevelStmt(store, m, .num_int_sub_wrap, &.{ a_n, one }, call);
     const mk_one = try store.addCFStmt(.{ .assign_literal = .{
         .target = one,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
@@ -743,8 +743,8 @@ fn buildCountdownProc(allocator: Allocator, b: *ProcBuilder, store: *LirStore) T
         .args = try store.addLocalSpan(&.{ m, acc2 }),
         .next = ret_r,
     } });
-    const mk_acc2 = try lowLevelStmt(store, acc2, .num_plus, &.{ a_acc, one }, call);
-    const mk_m = try lowLevelStmt(store, m, .num_minus, &.{ a_n, one }, mk_acc2);
+    const mk_acc2 = try lowLevelStmt(store, acc2, .num_int_add_wrap, &.{ a_acc, one }, call);
+    const mk_m = try lowLevelStmt(store, m, .num_int_sub_wrap, &.{ a_n, one }, mk_acc2);
     const mk_one = try store.addCFStmt(.{ .assign_literal = .{
         .target = one,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
@@ -830,7 +830,7 @@ test "tce loop-back copies swapped params through temps" {
         .args = try store.addLocalSpan(&.{ a_b, a_a, m }),
         .next = ret_r,
     } });
-    const mk_m = try lowLevelStmt(&store, m, .num_minus, &.{ a_n, one }, call);
+    const mk_m = try lowLevelStmt(&store, m, .num_int_sub_wrap, &.{ a_n, one }, call);
     const mk_one = try store.addCFStmt(.{ .assign_literal = .{
         .target = one,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
@@ -919,7 +919,7 @@ test "mixed construct and plain-tail branches both become jumps" {
         .args = try store.addLocalSpan(&.{m_tail}),
         .next = tail_jump,
     } });
-    const mk_m_tail = try lowLevelStmt(&store, m_tail, .num_minus, &.{ a_n, one }, tail_call);
+    const mk_m_tail = try lowLevelStmt(&store, m_tail, .num_int_sub_wrap, &.{ a_n, one }, tail_call);
 
     // even: res = S(weird(n - 1))—the construct branch
     const cons_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
@@ -947,7 +947,7 @@ test "mixed construct and plain-tail branches both become jumps" {
         .args = try store.addLocalSpan(&.{m_cons}),
         .next = mk_cell,
     } });
-    const mk_m_cons = try lowLevelStmt(&store, m_cons, .num_minus, &.{ a_n, one }, cons_call);
+    const mk_m_cons = try lowLevelStmt(&store, m_cons, .num_int_sub_wrap, &.{ a_n, one }, cons_call);
 
     // odd/even dispatch
     const parity_branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = mk_m_tail }});
@@ -1042,7 +1042,7 @@ test "golden: repeat IR before and after the trmc transform" {
         \\          jump j0
         \\        default:
         \\          l4:u64 = literal 1
-        \\          l5:u64 = low_level num_minus(l0, l4)
+        \\          l5:u64 = low_level num_int_sub_wrap(l0, l4)
         \\          l6:tag_union#25 = call p0(l5)
         \\          l7:box#26 = low_level box_box(l6)
         \\          l8:struct_#27 = struct(l7)
@@ -1078,7 +1078,7 @@ test "golden: repeat IR before and after the trmc transform" {
         \\              jump j0
         \\            default:
         \\              l4:u64 = literal 1
-        \\              l5:u64 = low_level num_minus(l0, l4)
+        \\              l5:u64 = low_level num_int_sub_wrap(l0, l4)
         \\              l7:box#26 = low_level box_alloc_zeroed()
         \\              l15:ptr#29 = low_level ptr_cast(l7)
         \\              l8:struct_#27 = struct(l7)
@@ -1169,9 +1169,9 @@ test "must not transform: result used twice, constructor not returned, non-union
         const r = try b.addLocal(allocator, .u64);
         const s = try b.addLocal(allocator, .u64);
         const ret_s = try store.addCFStmt(.{ .ret = .{ .value = s } });
-        const mk_s = try lowLevelStmt(&store, s, .num_plus, &.{ r, one }, ret_s);
+        const mk_s = try lowLevelStmt(&store, s, .num_int_add_wrap, &.{ r, one }, ret_s);
         const call = try store.addCFStmt(.{ .assign_call = .{ .target = r, .proc = proc, .args = try store.addLocalSpan(&.{m}), .next = mk_s } });
-        const mk_m = try lowLevelStmt(&store, m, .num_minus, &.{ a_n, one }, call);
+        const mk_m = try lowLevelStmt(&store, m, .num_int_sub_wrap, &.{ a_n, one }, call);
         const mk_one = try store.addCFStmt(.{ .assign_literal = .{ .target = one, .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } }, .next = mk_m } });
         const proc_ptr = store.getProcSpecPtr(proc);
         proc_ptr.body = mk_one;

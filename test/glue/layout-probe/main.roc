@@ -115,6 +115,7 @@ platform ""
 		wasm32: {
 			inputs: ["host.wasm", app],
 			output: Shared,
+			exports: ["wasm_main", "wasm_result_len", "wasm_alloc_count", "wasm_dealloc_count"],
 		},
 	}
 

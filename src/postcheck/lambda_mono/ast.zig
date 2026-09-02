@@ -50,16 +50,8 @@ pub const PackedListLiteral = Mono.PackedListLiteral;
 pub const ComptimeSiteId = enum(u32) { _ };
 
 /// Slice descriptor over one of the program side arrays.
-pub fn Span(comptime _: type) type {
-    return extern struct {
-        start: u32,
-        len: u32,
-
-        pub fn empty() @This() {
-            return .{ .start = 0, .len = 0 };
-        }
-    };
-}
+/// Span into one of this IR's flat side tables.
+pub const Span = Common.Span;
 
 /// Local binding with its symbol, type, and optional checked binder.
 pub const Local = struct {
@@ -79,6 +71,7 @@ pub const TypedLocal = struct {
 pub const JoinPointExpr = struct {
     id: JoinPointId,
     params: Span(TypedLocal),
+    retained: Span(TypedLocal) = Span(TypedLocal).empty(),
     body: ExprId,
     remainder: ExprId,
 };
@@ -87,6 +80,10 @@ pub const JoinPointExpr = struct {
 pub const JumpExpr = struct {
     target: JoinPointId,
     args: Span(ExprId),
+    /// Explicit sparse rebinding of lexically enclosing loop parameters before
+    /// the jump. Both spans are parallel and use simultaneous assignment.
+    loop_params: Span(TypedLocal) = Span(TypedLocal).empty(),
+    loop_values: Span(ExprId) = Span(ExprId).empty(),
 };
 
 /// Record field expression entry.
@@ -149,6 +146,9 @@ pub const TrySequence = struct {
     /// The Err propagation edge is compiler-proven cold. LIR lowering may
     /// preserve this as explicit branch metadata; backends must not infer it.
     err_is_cold: bool = false,
+    /// Explicit enclosing continuation for shared generated-code error
+    /// propagation. Null preserves ordinary inline Err construction.
+    err_target: ?JoinPointId = null,
     ok_body: ExprId,
 };
 
@@ -164,6 +164,9 @@ pub const TryRecordSequence = struct {
     /// The Err propagation edge is compiler-proven cold. LIR lowering may
     /// preserve this as explicit branch metadata; backends must not infer it.
     err_is_cold: bool = false,
+    /// Explicit enclosing continuation for shared generated-code error
+    /// propagation. Null preserves ordinary inline Err construction.
+    err_target: ?JoinPointId = null,
     ok_body: ExprId,
 };
 
@@ -495,7 +498,7 @@ pub const Program = struct {
     comptime_sites: ProgramList(ComptimeSite, "comptime_sites"),
     /// Source file table for `SourceLoc.file` indices (copied from the lifted
     /// program; owned by this program).
-    source_files: ProgramList([]const u8, "source_files"),
+    source_files: ProgramList(base.SourceFileEntry, "source_files"),
     /// Source location per expression, parallel to `exprs`.
     expr_locs: ProgramList(base.SourceLoc, "expr_locs"),
     /// Checked source region per expression, parallel to `exprs`.
@@ -569,7 +572,10 @@ pub const Program = struct {
         self.stmt_locs.deinit(self.allocator);
         self.expr_regions.deinit(self.allocator);
         self.expr_locs.deinit(self.allocator);
-        for (self.source_files.unsafeRawItemsForView()) |file| self.allocator.free(file);
+        for (self.source_files.unsafeRawItemsForView()) |file| {
+            self.allocator.free(file.name);
+            self.allocator.free(file.qualified_name);
+        }
         self.source_files.deinit(self.allocator);
         for (self.comptime_sites.unsafeRawItemsForView()) |site| {
             self.allocator.free(site.branch_regions);
@@ -720,64 +726,43 @@ pub const Program = struct {
     }
 
     pub fn addExprSpan(self: *Program, ids: []const ExprId) std.mem.Allocator.Error!Span(ExprId) {
-        const start: u32 = @intCast(self.expr_ids.len());
-        try self.expr_ids.appendSlice(self.allocator, ids);
-        return .{ .start = start, .len = @intCast(ids.len) };
+        return try Common.appendSpan(ExprId, &self.expr_ids, self.allocator, ids);
     }
 
     pub fn addPatSpan(self: *Program, ids: []const PatId) std.mem.Allocator.Error!Span(PatId) {
-        const start: u32 = @intCast(self.pat_ids.len());
-        try self.pat_ids.appendSlice(self.allocator, ids);
-        return .{ .start = start, .len = @intCast(ids.len) };
+        return try Common.appendSpan(PatId, &self.pat_ids, self.allocator, ids);
     }
 
     pub fn addTypedLocalSpan(self: *Program, values: []const TypedLocal) std.mem.Allocator.Error!Span(TypedLocal) {
-        const start: u32 = @intCast(self.typed_locals.len());
-        try self.typed_locals.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendSpan(TypedLocal, &self.typed_locals, self.allocator, values);
     }
 
     pub fn addStmtSpan(self: *Program, ids: []const StmtId) std.mem.Allocator.Error!Span(StmtId) {
-        const start: u32 = @intCast(self.stmt_ids.len());
-        try self.stmt_ids.appendSlice(self.allocator, ids);
-        return .{ .start = start, .len = @intCast(ids.len) };
+        return try Common.appendSpan(StmtId, &self.stmt_ids, self.allocator, ids);
     }
 
     pub fn addFieldExprSpan(self: *Program, values: []const FieldExpr) std.mem.Allocator.Error!Span(FieldExpr) {
-        const start: u32 = @intCast(self.field_exprs.len());
-        try self.field_exprs.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendSpan(FieldExpr, &self.field_exprs, self.allocator, values);
     }
 
     pub fn addFieldAccessSegmentSpan(self: *Program, values: []const FieldAccessSegment) std.mem.Allocator.Error!Span(FieldAccessSegment) {
-        if (values.len == 0) Common.invariant("field access segment span must be nonempty");
-        const start: u32 = @intCast(self.field_access_segments.len());
-        try self.field_access_segments.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendNonemptySpan(FieldAccessSegment, &self.field_access_segments, self.allocator, values, "field access segment span must be nonempty");
     }
 
     pub fn addRecordDestructSpan(self: *Program, values: []const RecordDestruct) std.mem.Allocator.Error!Span(RecordDestruct) {
-        const start: u32 = @intCast(self.record_destructs.len());
-        try self.record_destructs.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendSpan(RecordDestruct, &self.record_destructs, self.allocator, values);
     }
 
     pub fn addStrPatternStepSpan(self: *Program, values: []const StrPatternStep) std.mem.Allocator.Error!Span(StrPatternStep) {
-        const start: u32 = @intCast(self.str_pattern_steps.len());
-        try self.str_pattern_steps.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendSpan(StrPatternStep, &self.str_pattern_steps, self.allocator, values);
     }
 
     pub fn addBranchSpan(self: *Program, values: []const Branch) std.mem.Allocator.Error!Span(Branch) {
-        const start: u32 = @intCast(self.branches.len());
-        try self.branches.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendSpan(Branch, &self.branches, self.allocator, values);
     }
 
     pub fn addIfBranchSpan(self: *Program, values: []const IfBranch) std.mem.Allocator.Error!Span(IfBranch) {
-        const start: u32 = @intCast(self.if_branches.len());
-        try self.if_branches.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendSpan(IfBranch, &self.if_branches, self.allocator, values);
     }
 
     pub fn exprSpan(self: *const Program, span_: Span(ExprId)) ProgramSpanBorrow(ExprId, "expr_ids") {
@@ -849,7 +834,7 @@ pub const Program = struct {
         return self.runtime_schema_requests.len();
     }
 
-    pub fn sourceFileNames(self: *const Program) []const []const u8 {
+    pub fn sourceFiles(self: *const Program) []const base.SourceFileEntry {
         return self.source_files.unsafeRawItemsForView();
     }
 

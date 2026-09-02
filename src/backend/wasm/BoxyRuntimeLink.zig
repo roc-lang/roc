@@ -1,5 +1,6 @@
-//! Surgical Wasm linking for the standalone Boxy runtime and its exact LIR
-//! sidecar. Both CLI builds and in-process evaluation use this path.
+//! Wasm composition for the standalone Boxy runtime and its exact LIR sidecar.
+//! CLI builds seal the result before platform linking; in-process evaluation
+//! merges it directly into its private module.
 
 const std = @import("std");
 const lir = @import("lir");
@@ -22,8 +23,8 @@ pub const Error = WasmModule.StaticDataError || WasmModule.ParseError || WasmMod
 
 /// Merge the exact descriptor, layout, and string tables for this LIR.
 ///
-/// A cached prepared host already contains the runtime, so standalone dev
-/// builds use this entrypoint without merging the runtime a second time.
+/// CLI builds use this entrypoint while assembling their compiler-only object;
+/// the runtime object is added by the subsequent relocatable composition.
 pub fn mergeSidecar(
     allocator: std.mem.Allocator,
     module: *WasmModule,
@@ -54,7 +55,7 @@ pub fn merge(
 ) Error!void {
     try mergeSidecar(allocator, module, input.sidecar_blob, input.sidecar_desc, mode);
 
-    var runtime_module = try WasmModule.preload(allocator, input.runtime_object, true);
+    var runtime_module = try WasmModule.preload(allocator, input.runtime_object, .relocatable_for_merge);
     defer runtime_module.deinit();
     var runtime_merge = try module.mergeModuleMode(&runtime_module, mode);
     runtime_merge.deinit();

@@ -1086,10 +1086,19 @@ pub const FileDependencyState = enum(u8) {
 pub const FileDependency = extern struct {
     relative_path: StringLiteral.Idx,
     state: FileDependencyState,
-    _padding: [3]u8,
+    _padding: [3]u8 = .{ 0, 0, 0 },
     content_hash: [32]u8,
+    start_offset: u32,
+    end_offset: u32,
 
     pub const SafeList = collections.SafeList(@This());
+
+    pub fn region(self: @This()) Region {
+        return .{
+            .start = .{ .offset = self.start_offset },
+            .end = .{ .offset = self.end_offset },
+        };
+    }
 };
 
 /// Relocate all pointers in the ModuleEnv by the given offset.
@@ -1367,13 +1376,15 @@ pub fn deinitCachedModule(self: *Self) void {
 }
 
 /// Record a relative file dependency before its final read state is known.
-pub fn recordFileDependency(self: *Self, relative_path: []const u8) Allocator.Error!FileDependency.SafeList.Idx {
+pub fn recordFileDependency(self: *Self, relative_path: []const u8, start_offset: u32, end_offset: u32) Allocator.Error!FileDependency.SafeList.Idx {
     const path_idx = try self.insertString(relative_path);
     return try self.file_dependencies.append(self.gpa, .{
         .relative_path = path_idx,
         .state = .pending,
         ._padding = .{ 0, 0, 0 },
         .content_hash = [_]u8{0} ** 32,
+        .start_offset = start_offset,
+        .end_offset = end_offset,
     });
 }
 
@@ -2777,6 +2788,39 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .internal_builtin_type => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            const parent_bytes = self.getIdent(data.parent_name);
+            const nested_bytes = self.getIdent(data.nested_name);
+
+            var report = try Report.init(allocator, "Internal Builtin Type", "", .runtime_error);
+            const parent_name = try report.addOwnedString(parent_bytes);
+            const nested_name = try report.addOwnedString(nested_bytes);
+
+            try report.headline.addInlineCode(nested_name);
+            try report.headline.addReflowingText(" is internal to ");
+            try report.headline.addInlineCode(parent_name);
+            try report.headline.addReflowingText(", so it can't be named here.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addReflowingText("It describes how a builtin format tracks its own state while encoding or parsing, which is why it has no spelling in Roc code. To require that a type can be encoded or parsed, name the constraint instead, as in ");
+            try report.document.addInlineCode(switch (data.kind) {
+                .json => "where [a.Json.Encodable([])]",
+                .http_header => "where [a.Encoding.HttpHeader.Parseable([])]",
+            });
+            try report.document.addReflowingText(".");
+
+            break :blk report;
+        },
         .nested_value_not_found => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -2888,6 +2932,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getSourceAll(),
                 self.getLineStartsAll(),
             );
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" ");
+            try report.document.addInlineCode("where");
+            try report.document.addReflowingText(" clauses can only go on function type annotations.");
 
             break :blk report;
         },
@@ -2938,15 +2987,15 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        .record_default_not_literal => |data| blk: {
+        .record_default_reference_cycle => |data| blk: {
             const field_name = self.getIdent(data.field_name);
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = try Report.init(allocator, "Default Value Must Be A Literal", "", .runtime_error);
+            var report = try Report.init(allocator, "Default Value Cycle", "", .runtime_error);
             const owned_field_name = try report.addOwnedString(field_name);
             try report.headline.addReflowingText("The default value for the ");
             try report.headline.addRecordField(owned_field_name);
-            try report.headline.addReflowingText(" field is not a literal.");
+            try report.headline.addReflowingText(" field depends on itself.");
 
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
@@ -2960,7 +3009,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addReflowingText("A field default (");
             try report.document.addInlineCode("??");
-            try report.document.addReflowingText(") is materialized by the compiler at every construction site that omits the field, so it must be a literal: a number, an interpolation-free string, a tag, or a list, record, or tuple built only from literals. Anything that refers to another value could form an evaluation cycle the compiler will not chase.");
+            try report.document.addReflowingText(") is materialized at every construction site that omits the field. This default reaches itself again—through values it references, or through constructions that omit the field and would materialize it—so there is no value to start from. Break the cycle by supplying the field at one of the constructions involved, or by removing the self-dependent reference from the default.");
 
             break :blk report;
         },
@@ -3009,6 +3058,56 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getSourceAll(),
                 self.getLineStartsAll(),
             );
+
+            break :blk report;
+        },
+        .default_not_allowed_in_structural_record => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Default Not Allowed In Structural Record", "", .runtime_error);
+            try report.headline.addReflowingText("Field defaults (");
+            try report.headline.addInlineCode("??");
+            try report.headline.addReflowingText(") are only allowed on the fields of a nominal record type declaration's backing record, not in structural record types (type aliases, inline annotations, or nested records).");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" A default belongs to one named type, so declare a nominal type (with ");
+            try report.document.addInlineCode(":=");
+            try report.document.addReflowingText(") whose backing record carries the default, and use that type here.");
+
+            break :blk report;
+        },
+        .default_not_allowed_on_local_type_decl => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Default Not Allowed On Local Type Declaration", "", .runtime_error);
+            try report.headline.addReflowingText("Field defaults (");
+            try report.headline.addInlineCode("??");
+            try report.headline.addReflowingText(") are only allowed on nominal type declarations at the top level of a module, not on type declarations inside a function or block.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" A default is materialized at every construction site that omits the field, so it cannot depend on the locals of one function. Move the type declaration to the module top level, or remove the default.");
 
             break :blk report;
         },
@@ -4606,6 +4705,14 @@ pub fn addRecordField(self: *Self, expr: CIR.RecordField, region: Region) std.me
     return expr_idx;
 }
 
+/// Add a new unset record field (`name: _`) to the node store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addUnsetField(self: *Self, unset_field: CIR.UnsetField, region: Region) std.mem.Allocator.Error!CIR.UnsetField.Idx {
+    const unset_idx = try self.store.addUnsetField(unset_field, region);
+    self.debugAssertArraysInSync();
+    return unset_idx;
+}
+
 /// Add a new record destructuring to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addRecordDestruct(self: *Self, expr: CIR.Pattern.RecordDestruct, region: Region) std.mem.Allocator.Error!CIR.Pattern.RecordDestruct.Idx {
@@ -4738,6 +4845,17 @@ pub fn sliceExternalDecls(self: *const Self, span: CIR.ExternalDecl.Span) []cons
 /// Retrieves the text of an identifier by its index
 pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
     return self.getIdent(idx);
+}
+
+/// The coordinator-assigned package-qualified module identifier (e.g.
+/// `pf.Utils`), unique across the build's packages. Module identity
+/// comparisons in diagnostics must use this rather than the bare module
+/// name, which can collide between packages. Environments constructed
+/// outside the coordinator (unit tests) have no qualified ident; they are
+/// single-module worlds, so the bare name is their qualified name.
+pub fn qualifiedModuleName(self: *const Self) []const u8 {
+    if (self.qualified_module_ident.isNone()) return self.module_name;
+    return self.getIdent(self.qualified_module_ident);
 }
 
 /// Builds a mapping from platform for-clause alias ident indices to the

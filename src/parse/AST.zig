@@ -420,7 +420,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
 
     return switch (diagnostic.tag) {
         .multiple_platforms => reportParseProblem(ctx, "Multiple Platforms", "I was parsing an app header, and it names more than one platform.", "An app can use exactly one `platform` entry. Keep the platform entry you want to run with, and make every other dependency a normal package string.", .{ .example = "app [main] { pf: platform \"../platform/main.roc\", json: \"../json/main.roc\" }" }),
-        .no_platform => reportParseProblem(ctx, "Missing Platform", "I was parsing an app header, and I could not find a platform entry.", "App headers must include one field whose value starts with `platform`. That platform tells Roc how to run the app.", .{ .example = "app [main] { pf: platform \"../basic-cli/platform.roc\" }" }),
         .invalid_roc_version => reportParseProblem(ctx, "Invalid Roc Version", "I was parsing the `roc` entry of a header, and I did not recognize this version.", "The `roc` entry pins the version of the Roc compiler this file is written for. It must be a string holding either a nightly tag or a release version.", .{ .example = "roc: \"nightly-2026-08-05-24f0b47\"", .show_found = false }),
         .duplicate_roc_version => reportParseProblem(ctx, "Duplicate Roc Version", "I was parsing a header, and it pins the `roc` version more than once.", "A header can pin at most one compiler version. Remove the extra `roc` entries.", .{ .example = "roc: \"nightly-2026-08-05-24f0b47\"", .show_found = false }),
         .roc_version_key_is_reserved => reportParseProblem(ctx, "Reserved Dependency Name", "I was parsing a dependency record, and `roc` is used as the name of a platform or package.", "The `roc` name is reserved for pinning the compiler version, so it cannot name a dependency. Pick a different name for this one.", .{ .example = "pf: platform \"../platform/main.roc\"", .show_found = false }),
@@ -515,7 +514,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .var_only_allowed_in_a_body => reportParseProblem(ctx, "Var Outside Body", "I was parsing a statement, and `var` appeared outside a function or block body.", "Mutable variables are local body statements. Move this `var` into a body, or use an ordinary top-level declaration.", .{ .example = "main = {\n    var count = 0\n    count\n}" }),
         .var_must_have_ident => reportParseProblem(ctx, "Expected Var Name", "I was parsing a `var` statement, and I expected a lowercase name.", "A mutable variable declaration starts with `var`, followed by the variable name.", .{ .example = "var count = 0" }),
         .var_expected_equals => reportParseProblem(ctx, "Expected Var Initializer", "I was parsing a `var` statement, and I expected `=` before the initial value.", "Mutable variables must be initialized when they are declared.", .{ .example = "var count = 0" }),
-        .var_type_anno_needs_var_keyword => reportParseProblem(ctx, "Var Annotation Needs Keyword", "I was parsing a type annotation for a mutable variable, and I expected the `var` keyword.", "Dollar-prefixed mutable names must be introduced with `var` when they have a type annotation.", .{ .example = "var $count : U64" }),
+        .var_type_anno_needs_var_keyword => reportParseProblem(ctx, "Expected Var Keyword", "I was parsing a mutable variable declaration, and I expected the `var` keyword.", "Dollar-prefixed mutable names must be introduced with `var` when they have a type annotation.", .{ .example = "var $count : U64" }),
         .for_expected_in => reportParseProblem(ctx, "Expected In", "I was parsing a `for` expression or statement, and I expected `in` after the pattern.", "A `for` loop writes the pattern first, then `in`, then the collection being iterated.", .{ .example = "for item in items {\n    item\n}" }),
         .match_branch_wrong_arrow => reportParseProblem(ctx, "Wrong Match Arrow", "I was parsing a match branch, and I found `->` where Roc uses `=>`.", "Match branches use a fat arrow between the pattern and the branch body.", .{ .example = "Ok(value) => value", .show_found = false }),
         .match_branch_missing_arrow => reportParseProblem(ctx, "Missing Match Arrow", "I was parsing a match branch, and I expected `=>` before the branch body.", "Add `=>` after the pattern or guard.", .{ .example = "Err(msg) => crash msg" }),
@@ -532,8 +531,8 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .file_import_invalid_type => reportParseProblem(ctx, "Invalid File Import Type", "I was parsing a file import type, and only `Str` or `List(U8)` is allowed.", "Use `Str` for text files and `List(U8)` for raw bytes.", .{ .example = "import \"data.txt\" as data : Str" }),
         .nominal_associated_cannot_have_final_expression => reportParseProblem(ctx, "Unexpected Associated Expression", "I was parsing associated items for a nominal type, and I found a plain final expression.", "Associated item blocks can contain associated types and values. Remove the trailing expression or turn it into a named associated value.", .{ .example = "Id := U64 implements [\n    zero = @Id 0\n]" }),
         .type_alias_cannot_have_associated => reportParseProblem(ctx, "Type Alias With Associated Items", "I was parsing a type alias, but only nominal types can have associated items.", "Use `:=` to define a nominal type with associated items, or remove the associated item block from this alias.", .{ .example = "Id := U64 implements [\n    zero = @Id 0\n]" }),
-        .where_alias_cannot_have_associated => reportParseProblem(ctx, "Where Alias With Associated Items", "I was parsing a where alias, but only nominal types can have associated items.", "A where alias names a set of method constraints, so it has no associated items. Remove the associated item block.", .{ .example = "a.Sortable : where [a.compare : a -> [LT, EQ, GT]]" }),
-        .where_alias_expected_where => reportParseProblem(ctx, "Expected Where Clause", "I was parsing a where alias declaration, and I expected `where` after the `:`.", "A where alias is declared by naming a type variable and giving it a set of method constraints.", .{ .example = "a.Sortable : where [a.compare : a -> [LT, EQ, GT]]" }),
+        .where_alias_cannot_have_associated => reportParseProblem(ctx, "Where Alias With Associated Items", "I was parsing a where alias, but only nominal types can have associated items.", "A where alias names a set of method constraints, so it has no associated items. Remove the associated item block.", .{ .example = "a.Sortable : where [a.order_relative_to : a -> [Before, Same, After]]" }),
+        .where_alias_expected_where => reportParseProblem(ctx, "Expected Where Clause", "I was parsing a where alias declaration, and I expected `where` after the `:`.", "A where alias is declared by naming a type variable and giving it a set of method constraints.", .{ .example = "a.Sortable : where [a.order_relative_to : a -> [Before, Same, After]]" }),
         .deprecated_number_suffix => reportDeprecatedNumberSuffix(ctx),
         .expected_targets_colon => reportParseProblem(ctx, "Expected Targets Colon", "I was parsing a `targets` section, and I expected `:` after `targets`.", "The targets section starts with `targets:` followed by a configuration record.", .{ .example = "targets: { linux: { inputs: [app] } }" }),
         .expected_targets_open_curly => reportParseProblem(ctx, "Expected Targets Record", "I was parsing a `targets` section, and I expected `{`.", "Targets are configured with fields inside a record.", .{ .example = "targets: { linux: { inputs: [app] } }" }),
@@ -559,7 +558,6 @@ pub const Diagnostic = struct {
     /// different types of diagnostic errors
     pub const Tag = enum {
         multiple_platforms,
-        no_platform,
         invalid_roc_version,
         duplicate_roc_version,
         roc_version_key_is_reserved,
@@ -754,56 +752,23 @@ pub fn resolve(self: *const AST, token: Token.Idx) []const u8 {
 /// pin at all rather than guessing at what was meant.
 pub fn rocVersionText(self: *const AST, field_idx: RecordField.Idx) ?[]const u8 {
     const field = self.store.getRecordField(field_idx);
-    const value = field.value orelse return null;
-    const token = self.store.singleStringPartToken(value) orelse return null;
+    if (field.value != .supplied) return null;
+    const token = self.store.singleStringPartToken(field.value.supplied) orelse return null;
     return self.resolve(token);
 }
 
-/// Resolves a fully qualified name from a chain of qualifier tokens and a final token.
-/// If there are qualifiers, returns a slice from the first qualifier to the final token.
-/// Otherwise, returns the final token text with any leading dot stripped based on the token type.
-pub fn resolveQualifiedName(
-    self: *const AST,
-    qualifiers: Token.Span,
-    final_token: Token.Idx,
-    strip_dot_from_tokens: []const Token.Tag,
-) []const u8 {
-    const qualifier_tokens = self.store.tokenSlice(qualifiers);
-
-    if (qualifier_tokens.len > 0) {
-        // Get the region of the first qualifier token
-        const first_qualifier_tok = @as(Token.Idx, @intCast(qualifier_tokens[0]));
-        const first_region = self.tokens.resolve(first_qualifier_tok);
-
-        // Get the region of the final token
-        const final_region = self.tokens.resolve(final_token);
-
-        // Slice from the start of the first qualifier to the end of the final token
-        const start_offset = first_region.start.offset;
-        const end_offset = final_region.end.offset;
-
-        return self.env.source[@intCast(start_offset)..@intCast(end_offset)];
-    } else {
-        // Get the raw token text and strip leading dot if it's one of the specified tokens
-        const raw_text = self.resolve(final_token);
-        const token_tag = self.tokens.tokens.items(.tag)[@intCast(final_token)];
-
-        for (strip_dot_from_tokens) |dot_token_tag| {
-            if (token_tag == dot_token_tag and raw_text.len > 0 and raw_text[0] == '.') {
-                return raw_text[1..];
-            }
-        }
-
-        return raw_text;
-    }
-}
-
-/// Push a qualified name assembled from its interned identifier tokens. Unlike
-/// `resolveQualifiedName`, this intentionally excludes trivia between segments.
-fn pushQualifiedNameString(
+/// Push a qualified name assembled from its interned identifier tokens, as a
+/// `key`-tagged pair when `key` is given and as a bare atom otherwise.
+///
+/// Assembling from interned segments is what makes the name correct: a
+/// dotted-identifier token interns as `Bar` but spans the leading `.`, and the
+/// parser accepts whitespace between segments, so neither a source slice nor a
+/// single token's text spells the name.
+fn pushQualifiedName(
     self: *const AST,
     env: *const CommonEnv,
     tree: *SExprTree,
+    key: ?[]const u8,
     qualifiers: Token.Span,
     final_token: Token.Idx,
 ) std.mem.Allocator.Error!void {
@@ -831,7 +796,11 @@ fn pushQualifiedNameString(
     std.mem.copyForwards(u8, buffer[offset..][0..final_text.len], final_text);
     offset += final_text.len;
     std.debug.assert(offset == buffer.len);
-    try tree.pushReservedString(begin, buffer);
+    if (key) |pair_key| {
+        try tree.pushReservedStringPair(pair_key, begin, buffer);
+    } else {
+        try tree.pushReservedString(begin, buffer);
+    }
 }
 
 /// Resolves the complete target spelling selected by import parsing.
@@ -1837,7 +1806,10 @@ pub const File = struct {
 pub const Header = union(enum) {
     app: struct {
         provides: Collection.Idx,
-        platform_idx: RecordField.Idx,
+        /// The `pf: platform "..."` entry of `packages`, or null when the
+        /// header names no platform. An app that names no platform gets the
+        /// built-in Echo platform, exactly as a headerless app does.
+        platform_idx: ?RecordField.Idx,
         packages: Collection.Idx,
         /// The optional `roc: "<version>"` entry of `packages`. Like
         /// `platform_idx`, this still appears in `packages` too.
@@ -1927,8 +1899,10 @@ pub const Header = union(enum) {
                 try tree.endNode(provides_begin, attrs2);
 
                 // Platform
-                const platform = ast.store.getRecordField(a.platform_idx);
-                try platform.pushToSExprTree(gpa, env, ast, tree);
+                if (a.platform_idx) |platform_idx| {
+                    const platform = ast.store.getRecordField(platform_idx);
+                    try platform.pushToSExprTree(gpa, env, ast, tree);
+                }
 
                 // Packages
                 const packages_coll = ast.store.getCollection(a.packages);
@@ -2269,9 +2243,7 @@ pub const ExposedItem = union(enum) {
                 try ast.appendRegionInfoToSexprTree(env, tree, i.region);
 
                 // text attribute
-                const strip_tokens = [_]Token.Tag{ .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent };
-                const text = ast.resolveQualifiedName(i.qualifiers, i.ident, &strip_tokens);
-                try tree.pushStringPair("text", text);
+                try ast.pushQualifiedName(env, tree, "text", i.qualifiers, i.ident);
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -2568,9 +2540,7 @@ pub const TypeAnno = union(enum) {
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
 
                 // Resolve the fully qualified name
-                const strip_tokens = [_]Token.Tag{.NoSpaceDotUpperIdent};
-                const fully_qualified_name = ast.resolveQualifiedName(a.qualifiers, a.token, &strip_tokens);
-                try tree.pushStringPair("name", fully_qualified_name);
+                try ast.pushQualifiedName(env, tree, "name", a.qualifiers, a.token);
                 const attrs = tree.beginNode();
 
                 try tree.endNode(begin, attrs);
@@ -2763,7 +2733,7 @@ pub const WhereClause = union(enum) {
     ///
     /// Example:
     /// ```roc
-    /// elem.Sort : where [elem.order : elem -> [LT, EQ, GT]]
+    /// elem.Sort : where [elem.order : elem -> [Before, Same, After]]
     ///
     /// sort : List(elem) -> List(elem) where [elem.Sort]
     /// ```
@@ -3227,9 +3197,10 @@ pub const Expr = union(enum) {
                     const field_node = tree.beginNode();
                     try tree.pushStaticAtom("field");
                     try tree.pushStringPair("field", ast.resolve(record_field.name));
+                    if (record_field.value == .unset) try tree.pushBoolPair("unset", true);
                     const attrs2 = tree.beginNode();
-                    if (record_field.value) |value_id| {
-                        try ast.store.getExpr(value_id).pushToSExprTree(gpa, env, ast, tree);
+                    if (record_field.value == .supplied) {
+                        try ast.store.getExpr(record_field.value.supplied).pushToSExprTree(gpa, env, ast, tree);
                     }
                     try tree.endNode(field_node, attrs2);
                 }
@@ -3243,7 +3214,7 @@ pub const Expr = union(enum) {
 
                 const raw_begin = tree.beginNode();
                 try tree.pushStaticAtom("raw");
-                try ast.pushQualifiedNameString(env, tree, tag.qualifiers, tag.token);
+                try ast.pushQualifiedName(env, tree, null, tag.qualifiers, tag.token);
                 const raw_attrs = tree.beginNode();
                 try tree.endNode(raw_begin, raw_attrs);
                 const attrs = tree.beginNode();
@@ -3343,7 +3314,7 @@ pub const Expr = union(enum) {
                 // Add raw attribute
                 const raw_begin = tree.beginNode();
                 try tree.pushStaticAtom("raw");
-                try ast.pushQualifiedNameString(env, tree, ident.qualifiers, ident.token);
+                try ast.pushQualifiedName(env, tree, null, ident.qualifiers, ident.token);
                 const attrs2 = tree.beginNode();
                 try tree.endNode(raw_begin, attrs2);
 
@@ -3389,9 +3360,10 @@ pub const Expr = union(enum) {
                     const field_node = tree.beginNode();
                     try tree.pushStaticAtom("field");
                     try tree.pushStringPair("field", ast.resolve(record_field.name));
+                    if (record_field.value == .unset) try tree.pushBoolPair("unset", true);
                     const attrs2 = tree.beginNode();
-                    if (record_field.value) |value_id| {
-                        try ast.store.getExpr(value_id).pushToSExprTree(gpa, env, ast, tree);
+                    if (record_field.value == .supplied) {
+                        try ast.store.getExpr(record_field.value.supplied).pushToSExprTree(gpa, env, ast, tree);
                     }
                     try tree.endNode(field_node, attrs2);
                 }
@@ -3594,11 +3566,27 @@ pub const PatternRecordField = struct {
     pub const Span = struct { span: base.DataSpan };
 };
 
-/// TODO
+/// One field in an expression record. A field's value is exactly one of:
+/// supplied (`x: expr`), punned (`x` alone), or unset (`x: _`)—unset marks
+/// the field Missing in a construction or update rather than carrying a
+/// value expression.
 pub const RecordField = struct {
     name: Token.Idx,
-    value: ?Expr.Idx,
+    value: Value,
     region: TokenizedRegion,
+
+    pub const Value = union(enum) {
+        supplied: Expr.Idx,
+        punned,
+        unset,
+
+        pub fn asSupplied(self: Value) ?Expr.Idx {
+            return switch (self) {
+                .supplied => |idx| idx,
+                .punned, .unset => null,
+            };
+        }
+    };
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -3612,10 +3600,16 @@ pub const RecordField = struct {
         try tree.pushString(ast.resolve(self.name));
         const attrs2 = tree.beginNode();
         try tree.endNode(name, attrs2);
+        // No unset rendering here: only header paths (an app header's
+        // platform entry and package lists) call this method, and header
+        // record fields are always `name: value`—never unset. Expression
+        // records render their own field shape inline (the `.record` and
+        // `.record_builder` arms of Expr.pushToSExprTree), including the
+        // unset flag.
         const attrs = tree.beginNode();
 
-        if (self.value) |idx| {
-            const value = ast.store.getExpr(idx);
+        if (self.value == .supplied) {
+            const value = ast.store.getExpr(self.value.supplied);
             try value.pushToSExprTree(gpa, env, ast, tree);
         }
 

@@ -11,6 +11,7 @@ const check = @import("check");
 const core = @import("lir_core");
 
 const Arc = @import("arc.zig");
+const ImmortalLocals = @import("immortal_locals.zig");
 const Trmc = @import("trmc.zig");
 const BoxReuse = @import("box_reuse.zig");
 const ReturnSlot = @import("return_slot.zig");
@@ -20,7 +21,9 @@ const LoopAppendPromote = @import("loop_append_promote.zig");
 const RangeProve = @import("range_prove.zig");
 const TagReachability = @import("tag_reachability.zig");
 const ReachableProcs = @import("reachable_procs.zig");
+const DebugPrint = @import("debug_print.zig");
 const LIR = core.LIR;
+const CheckedArithmetic = core.CheckedArithmetic;
 const LirImage = @import("lir_image.zig");
 const LirProgram = core.Program;
 const postcheck = @import("postcheck");
@@ -59,24 +62,30 @@ pub const RootRequestSet = struct {
     /// Restore eligible stored constants as internal readonly static values.
     include_internal_static_data: bool = false,
     test_plan_metadata: []const postcheck.Common.RootTestPlanMetadata = &.{},
-    /// Explicitly select whether adjacent procedure-template roots share one
-    /// Monotype instantiation graph.
-    procedure_template_root_grouping: postcheck.Common.ProcedureTemplateRootGrouping = .isolated,
 };
 
 /// Target settings and checked module state for the checked-to-LIR pipeline.
 pub const TargetConfig = struct {
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     specialization_strategy: SpecializationStrategy = .lss,
+    /// Reuse checking workers for generic post-check tasks when available.
+    post_check_executor: ?base.post_check_task_executor.Executor = null,
     checked_module_state: CheckedModuleState = .complete,
     inline_mode: InlineMode = .none,
+    /// Direct-call inlining scope for SpecConstr's value-aware clones.
+    /// Optimized builds use `.all_calls`; dev builds use `.iterator_fusion`
+    /// so post-check time and emitted program size stay bounded. Consulted
+    /// only when `inline_mode` is not `.none`, since that is what gates
+    /// SpecConstr itself.
+    spec_constr_clone_inlining: SpecConstrCloneInlining = .all_calls,
     inline_expects: InlineExpectMode = .run,
     /// Whether ARC may consume a dead Box lender while unboxing.
     consume_dead_boxes: bool = false,
-    /// Allow `List.map` to reuse a unique input list's allocation when the
-    /// input and output element layouts are interchangeable. Optimized builds
-    /// enable this; dev builds and compile-time evaluation leave it off so
-    /// the in-place branch is dropped during lowering.
+    /// Allow `List.map` and `List.update` to reuse a unique input list's
+    /// allocation. Map additionally requires interchangeable input and output
+    /// element layouts. Optimized builds enable this; dev builds and
+    /// compile-time evaluation leave it off so the in-place branches are
+    /// dropped during lowering.
     list_in_place_map: bool = false,
     /// Preserve source-level procedure names in LIR for runtime diagnostics.
     proc_debug_names: bool = false,
@@ -350,6 +359,7 @@ pub const RuntimeRecordSchema = postcheck.SolvedLirLower.RuntimeRecordSchema;
 pub const RuntimeTagSchema = postcheck.SolvedLirLower.RuntimeTagSchema;
 pub const RuntimeTagUnionSchema = postcheck.SolvedLirLower.RuntimeTagUnionSchema;
 pub const InlineMode = postcheck.SolvedInline.Mode;
+pub const SpecConstrCloneInlining = postcheck.MonotypeLifted.SpecConstr.CloneInlining;
 pub const InlineExpectMode = postcheck.SolvedLirLower.InlineExpectMode;
 pub const MonotypeCacheControl = postcheck.Monotype.Lower.SpecializationCacheControl;
 
@@ -522,8 +532,9 @@ pub fn lowerCheckedModulesToLir(
         checkedModules(modules),
         rootRequests(roots, layout_requests, static_data_requests),
         .{
-            .proc_debug_names = target.proc_debug_names,
+            .proc_debug_names = target.proc_debug_names or LirDump.filter() != null,
             .specialization_cache = target.monotype_cache,
+            .post_check_executor = target.post_check_executor,
             .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
             .target_usize = target.target_usize,
             .inline_expects = switch (target.inline_expects) {
@@ -555,11 +566,13 @@ pub fn lowerCheckedModulesToLir(
     errdefer if (lifted_owned) lifted.deinit();
     if (target.timing) |timing| timing.finish(lift_started_ns, .lift);
 
-    if (target.inline_mode != .none) {
+    var procedure_usage = if (target.inline_mode != .none) blk: {
         const spec_constr_started_ns = if (target.timing) |timing| timing.start() else 0;
-        try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
+        const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted, target.spec_constr_clone_inlining);
         if (target.timing) |timing| timing.finish(spec_constr_started_ns, .spec_constr);
-    }
+        break :blk usage;
+    } else postcheck.MonotypeLifted.SpecConstr.OwnedProcedureUsage.empty(allocator);
+    defer procedure_usage.deinit();
 
     if (target.lifted_expr_count_out) |slot| slot.* = lifted.exprCount();
 
@@ -576,7 +589,7 @@ pub fn lowerCheckedModulesToLir(
         if (target.timing) |timing| timing.start() else 0
     else
         0;
-    var inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, &solved);
+    var inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved);
     defer inline_plan.deinit();
     if (target.inline_mode != .none) {
         if (target.timing) |timing| timing.finish(inline_plan_started_ns, .inline_plan);
@@ -594,7 +607,7 @@ pub fn lowerCheckedModulesToLir(
             .complete => .runtime,
             .checking_finalization => .comptime_zero,
         },
-        .proc_debug_names = target.proc_debug_names,
+        .proc_debug_names = target.proc_debug_names or LirDump.filter() != null,
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = roots.test_plan_metadata,
         .debug_materialized_out = target.debug_materialized_out,
@@ -611,6 +624,7 @@ fn finishLoweredOutput(
     target: TargetConfig,
     lowered: anytype,
 ) LowerResourceError!LoweredProgram {
+    verifyArithmeticBoundary(&lowered.lir_result.store, false);
     const lir_passes_started_ns = if (target.timing) |timing| timing.start() else 0;
 
     // TRMC/TCE must rewrite recursive procs before ARC insertion: it deletes
@@ -621,6 +635,7 @@ fn finishLoweredOutput(
     if (target.promote_loop_appends) {
         try LoopAppendPromote.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     }
+    verifyArithmeticBoundary(&lowered.lir_result.store, true);
     if (target.prove_ranges) {
         try RangeProve.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     }
@@ -640,6 +655,12 @@ fn finishLoweredOutput(
         .consume_dead_boxes = target.consume_dead_boxes,
     });
     if (target.timing) |timing| timing.finish(arc_started_ns, .arc);
+
+    // After the certifier has checked ARC's ledger, so that what it verified
+    // is the placement ARC produced.
+    _ = try ImmortalLocals.elide(allocator, &lowered.lir_result.store);
+
+    try LirDump.run(&lowered.lir_result);
 
     if (roots.requests.len != 0 and lowered.lir_result.root_procs.items.len == 0) {
         checkedPipelineInvariant("explicit root set produced no LIR roots");
@@ -699,6 +720,24 @@ fn lowerBoxyCheckedModulesToLir(
     errdefer lowered.deinit();
 
     return finishLoweredOutput(allocator, roots, target, &lowered);
+}
+
+fn verifyArithmeticBoundary(store: *const core.LirStore, before_prover: bool) void {
+    if (builtin.mode != .Debug) return;
+    for (store.getCFStmts()) |stmt| {
+        if (stmt != .assign_low_level) continue;
+        const op = stmt.assign_low_level.op;
+        if (CheckedArithmetic.isSourcePolicyOp(op)) {
+            checkedPipelineInvariant("source-policy arithmetic operation reached LIR");
+        }
+        if (before_prover) {
+            if (CheckedArithmetic.classify(op)) |entry| {
+                if (entry.mode == .proven_cannot_overflow) {
+                    checkedPipelineInvariant("proven integer arithmetic existed before range proving");
+                }
+            }
+        }
+    }
 }
 
 fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Allocator.Error!void {
@@ -794,7 +833,6 @@ fn rootRequests(
         .layout_requests = layout_requests,
         .static_data_requests = static_data_requests,
         .test_plan_metadata = roots.test_plan_metadata,
-        .procedure_template_root_grouping = roots.procedure_template_root_grouping,
     };
 }
 
@@ -893,3 +931,39 @@ fn checkedPipelineInvariant(comptime message: []const u8) noreturn {
 test "checked pipeline declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
+
+/// Print the final LIR of every procedure whose debug name contains
+/// `ROC_LIR_DUMP`, for reading what the passes actually produced. Off unless
+/// the variable is set, and absent on targets without an environment.
+/// Printing the final LIR of selected procedures, for reading what the passes
+/// actually produced. Selected by comptime target so a build without an
+/// environment or a standard error stream carries none of it.
+const LirDump = if (builtin.os.tag == .freestanding) struct {
+    fn filter() ?[]const u8 {
+        return null;
+    }
+
+    fn run(_: *const LirProgram.Result) Allocator.Error!void {}
+} else struct {
+    fn filter() ?[]const u8 {
+        const raw = std.c.getenv("ROC_LIR_DUMP") orelse return null;
+        return std.mem.span(raw);
+    }
+
+    fn run(result: *const LirProgram.Result) Allocator.Error!void {
+        const name_filter = filter() orelse return;
+        const store = &result.store;
+        const layouts = &result.layouts;
+        for (0..store.procSpecCount()) |index| {
+            const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+            const name = store.procDebugName(proc_id) orelse continue;
+            if (name_filter.len != 0 and std.mem.find(u8, name, name_filter) == null) continue;
+            var buffer: std.Io.Writer.Allocating = .init(store.allocator);
+            defer buffer.deinit();
+            DebugPrint.writeProc(store.allocator, store, layouts, proc_id, &buffer.writer) catch |err| switch (err) {
+                error.OutOfMemory, error.WriteFailed => return error.OutOfMemory,
+            };
+            std.debug.print("=== LIR {s} (p{d}) ===\n{s}\n", .{ name, index, buffer.written() });
+        }
+    }
+};

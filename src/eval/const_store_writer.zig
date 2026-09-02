@@ -99,7 +99,7 @@ pub const Writer = struct {
         const plan = self.constPlan(root.plan);
         try self.collectStrBackings(root.plan, root.ret_layout, value);
         return switch (root.request.kind) {
-            .compile_time_constant => .{ .const_node = try self.storeValue(root.plan, root.ret_layout, value) },
+            .compile_time_constant, .repl_expr => .{ .const_node = try self.storeValue(root.plan, root.ret_layout, value) },
             .compile_time_callable => switch (plan) {
                 .fn_value => |set| .{ .fn_value = try self.storeFnValue(set, root.ret_layout, value) },
                 .erased_fn => |set| .{ .fn_value = try self.storeErasedFn(set, value) },
@@ -121,7 +121,6 @@ pub const Writer = struct {
             .platform_required_binding,
             .hosted_export,
             .test_expect,
-            .repl_expr,
             .dev_expr,
             => writerInvariant("non compile-time root reached ConstStore writer"),
         };
@@ -443,6 +442,7 @@ pub const Writer = struct {
             },
             .erased_callable => try self.storeValue(elem_plan, layout_idx, value),
             .scalar,
+            .erased_box,
             .list,
             .list_of_zst,
             .struct_,
@@ -774,6 +774,7 @@ pub const Writer = struct {
             },
             .erased_callable => try self.collectStrBackings(elem_plan, layout_idx, value),
             .scalar,
+            .erased_box,
             .list,
             .list_of_zst,
             .struct_,
@@ -938,6 +939,7 @@ pub const Writer = struct {
             .scalar,
             .box,
             .box_of_zst,
+            .erased_box,
             .list,
             .list_of_zst,
             .struct_,
@@ -980,6 +982,7 @@ pub const Writer = struct {
             },
             .scalar,
             .box_of_zst,
+            .erased_box,
             .list,
             .list_of_zst,
             .struct_,
@@ -1022,6 +1025,7 @@ pub const Writer = struct {
                 break :blk @intFromPtr(roc_str.asSlice().ptr);
             } else null,
             .box_of_zst,
+            .erased_box,
             .list_of_zst,
             .struct_,
             .closure,
@@ -1044,6 +1048,7 @@ pub const Writer = struct {
                 } else 0,
                 .box,
                 .box_of_zst,
+                .erased_box,
                 .list_of_zst,
                 .struct_,
                 .closure,

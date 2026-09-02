@@ -23,7 +23,6 @@
 //! `out` with an explicit destination store instead of building a temporary.
 
 const std = @import("std");
-const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -66,22 +65,12 @@ const ReturnSlotPass = struct {
     variants: std.AutoHashMap(VariantKey, LIR.LirProcSpecId),
 
     fn transformProc(self: *ReturnSlotPass, proc_id: LIR.LirProcSpecId) ResourceError!void {
-        const proc = self.store.getProcSpec(proc_id);
-        if (proc.body == null or proc.hosted != null or proc.abi != .roc) return;
-        const body = proc.body.?;
+        const body = body_clone.rewritableProcBody(self.store, proc_id) orelse return;
 
-        var work = std.ArrayList(CFStmtId).empty;
-        defer work.deinit(self.store.allocator);
-        var visited = collections.DenseMap(CFStmtId, void).init(self.store.allocator);
-        defer visited.deinit();
-
-        try work.append(self.store.allocator, body);
-        while (work.pop()) |stmt_id| {
-            const entry = try visited.getOrPut(stmt_id);
-            if (entry.found_existing) continue;
-
+        var stmts = try body_clone.ReachableStmts.init(self.store, body);
+        defer stmts.deinit();
+        while (try stmts.next()) |stmt_id| {
             _ = try self.rewriteAt(body, stmt_id);
-            try body_clone.appendSuccessors(self.store, &work, stmt_id);
         }
     }
 
@@ -117,7 +106,7 @@ const ReturnSlotPass = struct {
         if (destination_layout.tag != .ptr) return false;
         if (destination_layout.getIdx() != result_layout) return false;
 
-        if (!try self.chainIsSingleUse(proc_body, chain.items)) return false;
+        if (!try body_clone.chainIsSingleUse(self.store, proc_body, chain.items)) return false;
 
         const variant = try self.returnSlotVariant(call_stmt.proc, result_layout);
 
@@ -140,25 +129,13 @@ const ReturnSlotPass = struct {
         return true;
     }
 
-    /// Every local in `chain` must have exactly one read across the proc: the
-    /// call result is aliased or stored exactly once, each alias feeds the next
-    /// link exactly once, and the final value is the matched store's only
-    /// consumer. Any extra read means the fusion would orphan a still-live local.
-    fn chainIsSingleUse(self: *ReturnSlotPass, proc_body: CFStmtId, chain: []const LocalId) ResourceError!bool {
-        var reads = try body_clone.countReachableReads(self.store, proc_body);
-        defer reads.deinit();
-        for (chain) |local| {
-            if (reads.get(local) != 1) return false;
-        }
-        return true;
-    }
-
     fn returnSlotEligible(self: *const ReturnSlotPass, result_layout: layout_mod.Idx) bool {
         return switch (self.layouts.getLayout(result_layout).tag) {
             .struct_, .tag_union => true,
             .scalar,
             .box,
             .box_of_zst,
+            .erased_box,
             .list,
             .list_of_zst,
             .closure,
@@ -187,68 +164,21 @@ const ReturnSlotPass = struct {
         source: LIR.LirProcSpecId,
         result_layout: layout_mod.Idx,
     ) ResourceError!LIR.LirProcSpecId {
-        const source_spec = self.store.getProcSpec(source);
-        const source_body = source_spec.body orelse unreachable;
-        const source_args = self.store.getLocalSpan(source_spec.args);
-        const out_ptr_layout = try self.layouts.insertPtr(result_layout);
-
-        const out_ptr = try self.store.addLocal(.{ .layout_idx = out_ptr_layout });
+        const out_ptr = try self.store.addLocal(.{ .layout_idx = try self.layouts.insertPtr(result_layout) });
         const store_unit = try self.store.addLocal(.{ .layout_idx = .zst });
-
-        var variant_args = try std.ArrayList(LocalId).initCapacity(self.store.allocator, source_args.len + 1);
-        defer variant_args.deinit(self.store.allocator);
-        variant_args.appendAssumeCapacity(out_ptr);
-
-        for (0..source_args.len) |index| {
-            const source_arg = GuardedList.at(source_args, index);
-            const arg = try self.store.addLocal(.{ .layout_idx = self.store.getLocal(source_arg).layout_idx });
-            variant_args.appendAssumeCapacity(arg);
-        }
-
-        var cloner = try Cloner.init(self.store, .{ .out_ptr = out_ptr, .store_unit = store_unit });
-        defer cloner.deinit();
-
-        for (0..source_args.len) |index| {
-            const source_arg = GuardedList.at(source_args, index);
-            const variant_arg = variant_args.items[index + 1];
-            cloner.local_map[@intFromEnum(source_arg)] = variant_arg;
-        }
-
-        const source_frame = self.store.getLocalSpan(source_spec.frame_locals);
-        try cloner.new_locals.appendSlice(self.store.allocator, variant_args.items);
-        try cloner.new_locals.append(self.store.allocator, store_unit);
-        for (0..source_frame.len) |index| {
-            _ = try cloner.mapLocal(GuardedList.at(source_frame, index));
-        }
-
-        const body = try cloner.cloneStmt(source_body);
-        const erased_reuse_arg = if (source_spec.erased_reuse_arg) |source_arg|
-            try cloner.mapLocal(source_arg)
-        else
-            null;
-
-        var frame_locals = try std.ArrayList(LocalId).initCapacity(self.store.allocator, cloner.new_locals.items.len);
-        defer frame_locals.deinit(self.store.allocator);
-        frame_locals.appendSliceAssumeCapacity(cloner.new_locals.items);
-        std.mem.sort(LocalId, frame_locals.items, {}, body_clone.localIdLessThan);
-        const unique_len = body_clone.uniqueSortedLocals(frame_locals.items);
-
-        const variant = try self.store.addProcSpec(.{
-            .name = self.store.freshSyntheticSymbol(),
-            .args = try self.store.addLocalSpan(variant_args.items),
-            .erased_reuse_arg = erased_reuse_arg,
-            .frame_locals = try self.store.addLocalSpan(frame_locals.items[0..unique_len]),
-            .body = body,
-            .ret_layout = .zst,
-            .abi = .roc,
-        });
-        try self.store.copyProcDebugInfo(variant, source);
-
-        return variant;
+        return try body_clone.cloneCallVariant(
+            ReturnSlotRewriter,
+            self.store,
+            source,
+            .{ .out_ptr = out_ptr, .store_unit = store_unit },
+            .{
+                .leading_args = &.{out_ptr},
+                .extra_frame_locals = &.{store_unit},
+                .ret_layout = .zst,
+            },
+        );
     }
 };
-
-const Cloner = body_clone.BodyCloner(ReturnSlotRewriter);
 
 /// Return rewriter that stores each source return value into the caller's
 /// destination pointer, folding a direct struct or tag construction into a

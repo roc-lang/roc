@@ -59,12 +59,16 @@ You cannot define a where clause inside a type declaration.
 A(a) : a where [a.a1 : (a, a,) -> Str, a.a2 : (a, a,) -> Str,]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Hint: where clauses can only go on function type annotations.
+
 ── ✗ where clause not allowed in type declaration ──────────── everything.md:7:1
 
 You cannot define a where clause inside a type declaration.
 
 B(b) : b where [b.b1 : (b, b,) -> Str, b.b2 : (b, b,) -> Str,]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Hint: where clauses can only go on function type annotations.
 
 ── ● unused variable ─────────────────────────────────────── everything.md:24:10
 
@@ -164,8 +168,8 @@ g : e -> e where [e.A, e.B,]
                    ^^
 
 A where alias names a set of method constraints, declared like a.Sortable :
-where [a.compare : a -> [LT, EQ, GT]] and written in a where clause as where
-[a.Sortable]
+where [a.order_relative_to : a -> [Before, Same, After]] and written in a where
+clause as where [a.Sortable]
 
 ── ✗ not a where alias ───────────────────────────────────── everything.md:14:25
 
@@ -175,8 +179,8 @@ g : e -> e where [e.A, e.B,]
                         ^^
 
 A where alias names a set of method constraints, declared like a.Sortable :
-where [a.compare : a -> [LT, EQ, GT]] and written in a where clause as where
-[a.Sortable]
+where [a.order_relative_to : a -> [Before, Same, After]] and written in a where
+clause as where [a.Sortable]
 
 ── ● declaration has no value ─────────────────────────────── everything.md:14:1
 
@@ -562,7 +566,7 @@ h = |
 												(p-assign (ident "y"))))))))))
 				(s-let
 					(p-assign (ident "h2"))
-					(e-call (constraint-fn-var 359)
+					(e-call (constraint-fn-var 361)
 						(e-lookup-local
 							(p-assign (ident "h")))
 						(e-lookup-local

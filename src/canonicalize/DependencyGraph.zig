@@ -17,6 +17,7 @@ const collections = @import("collections");
 const types = @import("types");
 const CIR = @import("CIR.zig");
 const ModuleEnv = @import("ModuleEnv.zig");
+const default_omissions = @import("default_omissions.zig");
 const Var = types.Var;
 
 /// Represents a directed graph of dependencies between top-level definitions.
@@ -269,6 +270,14 @@ const DemandAnalyzer = struct {
     scheme_use_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, u32) = .{},
     summaries: std.AutoHashMapUnmanaged(CIR.Expr.Idx, DemandSummary) = .{},
     active_lambdas: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
+    /// Dedups omitted-default expression pushes per walk, mirroring
+    /// `collectNameReferences`'s `scratch_seen_defaults` (see its doc
+    /// comment): a default expression is shared across construction sites,
+    /// and a chain of defaults that each construct omitting more defaults
+    /// would otherwise re-walk with product growth. Demand contributions are
+    /// set-based and frames fold into their parents, so one visit per walk
+    /// reaches the walk's output. Cleared per walk root.
+    scratch_seen_defaults: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
 
     fn init(
         cir: *const ModuleEnv,
@@ -288,9 +297,12 @@ const DemandAnalyzer = struct {
             try analyzer.graph_def_set.put(allocator, def_idx, {});
         }
 
+        var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
+        defer binders.deinit(allocator);
+        var binder_scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
+        defer binder_scratch.deinit(allocator);
         for (summary_defs) |def_idx| {
-            const def = cir.store.getDef(def_idx);
-            try analyzer.pattern_to_def.put(allocator, def.pattern, def_idx);
+            try mapDefBinderPatterns(cir, &analyzer.pattern_to_def, def_idx, &binders, &binder_scratch, allocator);
         }
 
         for (resolved_literal_targets) |target| {
@@ -330,6 +342,7 @@ const DemandAnalyzer = struct {
         self.resolved_literal_targets.deinit(self.allocator);
         self.scheme_use_by_node.deinit(self.allocator);
         self.active_lambdas.deinit(self.allocator);
+        self.scratch_seen_defaults.deinit(self.allocator);
     }
 
     fn computeSummaries(self: *DemandAnalyzer) std.mem.Allocator.Error!void {
@@ -481,6 +494,7 @@ const DemandAnalyzer = struct {
     ) std.mem.Allocator.Error!void {
         var walk = Walk{};
         defer walk.deinit(self.allocator);
+        self.scratch_seen_defaults.clearRetainingCapacity();
         try walk.push(self.allocator, .{ .visit = root_expr });
 
         try self.drainWalk(&walk, out, local_callables);
@@ -527,6 +541,7 @@ const DemandAnalyzer = struct {
     ) std.mem.Allocator.Error!void {
         var walk = Walk{};
         defer walk.deinit(self.allocator);
+        self.scratch_seen_defaults.clearRetainingCapacity();
         try walk.push(self.allocator, .{ .visit_pattern = root_pattern });
 
         try self.drainWalk(&walk, out, local_callables);
@@ -825,8 +840,29 @@ const DemandAnalyzer = struct {
                 }
             },
             .e_tag => |tag| try self.pushExprSpanReversed(walk, tag.args),
-            .e_nominal => |nominal| try walk.push(self.allocator, .{ .visit = nominal.backing_expr }),
+            .e_nominal => |nominal| {
+                // A local construction that omits declared defaulted fields
+                // materializes those defaults here, so the omitted defaults'
+                // expressions contribute this walk's demands: explicit
+                // omission edges, mirroring DefaultCycles' cycle graph via
+                // the shared enumeration (design.md "Defaulted Fields").
+                // DefaultCycles runs before any demand graph is built and
+                // drops every name-resolvable cyclic default, so the
+                // omission relation walked here is acyclic and the walk
+                // terminates; `scratch_seen_defaults` dedups the pushes so
+                // shared defaults don't re-walk with product growth.
+                var omissions = default_omissions.omittedDefaults(self.cir, nominal.nominal_type_decl, nominal.backing_expr);
+                while (omissions.next()) |omitted| {
+                    const entry = try self.scratch_seen_defaults.getOrPut(self.allocator, omitted.default_expr);
+                    if (entry.found_existing) continue;
+                    try walk.push(self.allocator, .{ .visit = omitted.default_expr });
+                }
+                try walk.push(self.allocator, .{ .visit = nominal.backing_expr });
+            },
             .e_run_low_level => |run_ll| try self.pushExprSpanReversed(walk, run_ll.args),
+            // A foreign construction's omitted defaults live in the foreign
+            // module and are that module's own compile-time roots; only the
+            // supplied values contribute local demands.
             .e_nominal_external => |nominal| try walk.push(self.allocator, .{ .visit = nominal.backing_expr }),
             .e_dbg => |dbg| try walk.push(self.allocator, .{ .visit = dbg.expr }),
             .e_expect_err => |expect_err| try walk.push(self.allocator, .{ .visit = expect_err.expr }),
@@ -1017,61 +1053,136 @@ const DemandAnalyzer = struct {
         pending.append(stack_allocator, root) catch return false;
         while (pending.pop()) |current| {
             if (current == needle) return true;
-            switch (self.cir.store.getPattern(current)) {
-                .as => |as_pattern| pending.append(stack_allocator, as_pattern.pattern) catch return false,
-                .applied_tag => |tag| {
-                    for (self.cir.store.slicePatterns(tag.args)) |arg| {
-                        pending.append(stack_allocator, arg) catch return false;
-                    }
-                },
-                .nominal => |nominal| pending.append(stack_allocator, nominal.backing_pattern) catch return false,
-                .nominal_external => |nominal| pending.append(stack_allocator, nominal.backing_pattern) catch return false,
-                .record_destructure => |record| {
-                    for (self.cir.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
-                        const destruct = self.cir.store.getRecordDestruct(destruct_idx);
-                        pending.append(stack_allocator, destruct.kind.toPatternIdx()) catch return false;
-                    }
-                },
-                .list => |list| {
-                    for (self.cir.store.slicePatterns(list.patterns)) |item| {
-                        pending.append(stack_allocator, item) catch return false;
-                    }
-                    if (list.rest_info) |rest| {
-                        if (rest.pattern) |rest_pattern| {
-                            pending.append(stack_allocator, rest_pattern) catch return false;
-                        }
-                    }
-                },
-                .tuple => |tuple| {
-                    for (self.cir.store.slicePatterns(tuple.patterns)) |item| {
-                        pending.append(stack_allocator, item) catch return false;
-                    }
-                },
-                .str_interpolation => |str| {
-                    for (0..str.steps.span.len) |offset| {
-                        const step = self.cir.store.getStrPatternStep(str.steps, @intCast(offset));
-                        if (step.capture) |capture| {
-                            pending.append(stack_allocator, capture) catch return false;
-                        }
-                    }
-                },
-                .assign,
-                .num_literal,
-                .num_from_numeral_literal,
-                .small_dec_literal,
-                .dec_literal,
-                .frac_f32_literal,
-                .frac_f64_literal,
-                .str_literal,
-                .underscore,
-                .runtime_error,
-                => {},
-            }
+            appendChildPatterns(self.cir, current, &pending, stack_allocator) catch return false;
         }
 
         return false;
     }
 };
+
+/// Append the patterns nested directly inside `pattern_idx`.
+fn appendChildPatterns(
+    cir: *const ModuleEnv,
+    pattern_idx: CIR.Pattern.Idx,
+    out: *std.ArrayList(CIR.Pattern.Idx),
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!void {
+    switch (cir.store.getPattern(pattern_idx)) {
+        .as => |as_pattern| try out.append(allocator, as_pattern.pattern),
+        .applied_tag => |tag| {
+            for (cir.store.slicePatterns(tag.args)) |arg| {
+                try out.append(allocator, arg);
+            }
+        },
+        .nominal => |nominal| try out.append(allocator, nominal.backing_pattern),
+        .nominal_external => |nominal| try out.append(allocator, nominal.backing_pattern),
+        .record_destructure => |record| {
+            for (cir.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                const destruct = cir.store.getRecordDestruct(destruct_idx);
+                try out.append(allocator, destruct.kind.toPatternIdx());
+            }
+        },
+        .list => |list| {
+            for (cir.store.slicePatterns(list.patterns)) |item| {
+                try out.append(allocator, item);
+            }
+            if (list.rest_info) |rest| {
+                if (rest.pattern) |rest_pattern| {
+                    try out.append(allocator, rest_pattern);
+                }
+            }
+        },
+        .tuple => |tuple| {
+            for (cir.store.slicePatterns(tuple.patterns)) |item| {
+                try out.append(allocator, item);
+            }
+        },
+        .str_interpolation => |str| {
+            for (0..str.steps.span.len) |offset| {
+                const step = cir.store.getStrPatternStep(str.steps, @intCast(offset));
+                if (step.capture) |capture| {
+                    try out.append(allocator, capture);
+                }
+            }
+        },
+        .assign,
+        .num_literal,
+        .num_from_numeral_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        .underscore,
+        .runtime_error,
+        => {},
+    }
+}
+
+/// Append every binder pattern (`assign` or `as`) inside `root`, `root`
+/// itself included, in a deterministic order.
+///
+/// The walk is an explicit worklist (zero-recursion policy).
+pub fn appendPatternBinders(
+    cir: *const ModuleEnv,
+    root: CIR.Pattern.Idx,
+    out: *std.ArrayList(CIR.Pattern.Idx),
+    scratch: *std.ArrayList(CIR.Pattern.Idx),
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!void {
+    scratch.clearRetainingCapacity();
+    try scratch.append(allocator, root);
+    while (scratch.pop()) |pattern_idx| {
+        if (patternBindsName(cir.store.getPattern(pattern_idx))) {
+            try out.append(allocator, pattern_idx);
+        }
+        try appendChildPatterns(cir, pattern_idx, scratch, allocator);
+    }
+}
+
+/// Whether a pattern node itself binds a name (nested binders aside).
+fn patternBindsName(pattern: CIR.Pattern) bool {
+    return switch (pattern) {
+        .assign, .as => true,
+        .applied_tag,
+        .nominal,
+        .nominal_external,
+        .record_destructure,
+        .list,
+        .tuple,
+        .str_interpolation,
+        .num_literal,
+        .num_from_numeral_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        .underscore,
+        .runtime_error,
+        => false,
+    };
+}
+
+/// Map every name a def's pattern binds to that def. A def whose pattern
+/// destructures its right-hand side binds several names, and a reference to
+/// any of them is a reference to the def that computes the whole value, so
+/// each one must resolve to the def for the name-reference graph to see the
+/// dependency (and any cycle) it creates.
+fn mapDefBinderPatterns(
+    cir: *const ModuleEnv,
+    pattern_to_def: *std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Def.Idx),
+    def_idx: CIR.Def.Idx,
+    binders: *std.ArrayList(CIR.Pattern.Idx),
+    scratch: *std.ArrayList(CIR.Pattern.Idx),
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!void {
+    binders.clearRetainingCapacity();
+    try appendPatternBinders(cir, cir.store.getDef(def_idx).pattern, binders, scratch, allocator);
+    for (binders.items) |binder| {
+        try pattern_to_def.put(allocator, binder, def_idx);
+    }
+}
 
 /// Build a dependency graph for all definitions
 pub fn buildDependencyGraph(
@@ -1245,6 +1356,16 @@ pub fn getConstantsInDependencyOrder(
 /// type-directed and contributes no edge; the checker discovers those
 /// dependencies during inference and resolves them at group boundaries.
 ///
+/// A local nominal construction that omits declared defaulted fields also
+/// walks those defaults' expressions (the checker materializes the default at
+/// the construction site, so checking this def needs the default's referenced
+/// defs checked first). `scratch_seen_defaults` dedups those pushes per call:
+/// unlike the tree structure, a default expression is shared across
+/// construction sites—and because this walk enters lambda bodies, an
+/// un-deduped push could revisit a construction of the same declaration
+/// through a lambda-valued default (a shape DefaultCycles deliberately keeps:
+/// materializing it only creates the closure).
+///
 /// The walk is an explicit worklist (zero-recursion policy).
 pub fn collectNameReferences(
     cir: *const ModuleEnv,
@@ -1252,9 +1373,11 @@ pub fn collectNameReferences(
     root_expr: CIR.Expr.Idx,
     out: *std.AutoHashMapUnmanaged(CIR.Def.Idx, void),
     scratch_stack: *std.ArrayList(CIR.Expr.Idx),
+    scratch_seen_defaults: *std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!void {
     scratch_stack.clearRetainingCapacity();
+    scratch_seen_defaults.clearRetainingCapacity();
     try scratch_stack.append(allocator, root_expr);
 
     while (scratch_stack.pop()) |expr_idx| {
@@ -1386,7 +1509,21 @@ pub fn collectNameReferences(
             .e_tag => |tag| {
                 for (cir.store.sliceExpr(tag.args)) |arg| try scratch_stack.append(allocator, arg);
             },
-            .e_nominal => |nominal| try scratch_stack.append(allocator, nominal.backing_expr),
+            .e_nominal => |nominal| {
+                // Omitted defaulted fields materialize at this construction,
+                // so their expressions' references are this def's references
+                // (shared enumeration with DefaultCycles; see the doc
+                // comment for why the pushes dedup).
+                var omissions = default_omissions.omittedDefaults(cir, nominal.nominal_type_decl, nominal.backing_expr);
+                while (omissions.next()) |omitted| {
+                    const entry = try scratch_seen_defaults.getOrPut(allocator, omitted.default_expr);
+                    if (entry.found_existing) continue;
+                    try scratch_stack.append(allocator, omitted.default_expr);
+                }
+                try scratch_stack.append(allocator, nominal.backing_expr);
+            },
+            // Foreign defaults are the foreign module's concern; only the
+            // supplied values contribute local references.
             .e_nominal_external => |nominal| try scratch_stack.append(allocator, nominal.backing_expr),
             .e_run_low_level => |run_ll| {
                 for (cir.store.sliceExpr(run_ll.args)) |arg| try scratch_stack.append(allocator, arg);
@@ -1457,9 +1594,12 @@ pub fn computeCheckOrder(
     // Source position of each def, for the deterministic tie-break.
     var def_position: std.AutoHashMapUnmanaged(CIR.Def.Idx, u32) = .{};
     defer def_position.deinit(allocator);
+    var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binders.deinit(allocator);
+    var binder_scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binder_scratch.deinit(allocator);
     for (defs_slice, 0..) |def_idx, position| {
-        const def = cir.store.getDef(def_idx);
-        try pattern_to_def.put(allocator, def.pattern, def_idx);
+        try mapDefBinderPatterns(cir, &pattern_to_def, def_idx, &binders, &binder_scratch, allocator);
         try def_position.put(allocator, def_idx, @intCast(position));
     }
 
@@ -1470,11 +1610,13 @@ pub fn computeCheckOrder(
     defer refs.deinit(allocator);
     var scratch_stack: std.ArrayList(CIR.Expr.Idx) = .empty;
     defer scratch_stack.deinit(allocator);
+    var scratch_seen_defaults: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{};
+    defer scratch_seen_defaults.deinit(allocator);
 
     for (defs_slice) |def_idx| {
         refs.clearRetainingCapacity();
         const def = cir.store.getDef(def_idx);
-        try collectNameReferences(cir, &pattern_to_def, def.expr, &refs, &scratch_stack, allocator);
+        try collectNameReferences(cir, &pattern_to_def, def.expr, &refs, &scratch_stack, &scratch_seen_defaults, allocator);
         var ref_iter = refs.keyIterator();
         while (ref_iter.next()) |ref_def_idx| {
             try graph.addEdge(def_idx, ref_def_idx.*);

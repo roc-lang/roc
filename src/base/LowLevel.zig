@@ -84,6 +84,7 @@ pub const LowLevel = enum(u16) {
     list_take_first,
     list_take_last,
     list_reverse,
+    list_sort_with,
     list_reserve,
     list_release_excess_capacity,
     list_split_first,
@@ -139,14 +140,24 @@ pub const LowLevel = enum(u16) {
     num_abs,
     num_abs_diff,
     num_plus,
-    num_plus_wrap,
-    num_plus_checked,
     num_minus,
-    num_minus_wrap,
-    num_minus_checked,
     num_times,
-    num_times_wrap,
-    num_times_checked,
+    num_int_add_wrap,
+    num_int_add_crash_on_overflow,
+    num_int_add_overflows,
+    num_int_add_proven_cannot_overflow,
+    num_int_sub_wrap,
+    num_int_sub_crash_on_overflow,
+    num_int_sub_overflows,
+    num_int_sub_proven_cannot_overflow,
+    num_int_mul_wrap,
+    num_int_mul_crash_on_overflow,
+    num_int_mul_overflows,
+    num_int_mul_proven_cannot_overflow,
+    num_float_add,
+    num_float_sub,
+    num_float_mul,
+    dec_mul,
     num_div_by,
     num_div_by_checked,
     num_div_trunc_by,
@@ -858,6 +869,7 @@ pub const LowLevel = enum(u16) {
             .list_sublist_borrowed => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
 
             .list_reverse,
+            .list_sort_with,
             .list_reserve,
             .list_release_excess_capacity,
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
@@ -885,10 +897,12 @@ pub const LowLevel = enum(u16) {
 
             // Moves the list's ownership unit into a new local before the
             // reuse query, forcing ARC to preserve every later use first.
+            // List.map and List.update both use this ownership transfer.
             .list_map_prepare_reuse => RcEffect.consumesArgsReturningConsumedArgs(argMask(&.{0})),
 
             // Reads the prepared list's refcount (and slice bit) without
-            // changing it.
+            // changing it. List.map additionally gates this result on item
+            // representation compatibility during lowering.
             .list_map_can_reuse => RcEffect.none(),
 
             // Retypes a unique non-slice list to the output element type,
@@ -1034,14 +1048,24 @@ pub const LowLevel = enum(u16) {
             .num_abs_checked,
             .num_abs_diff,
             .num_plus,
-            .num_plus_wrap,
-            .num_plus_checked,
             .num_minus,
-            .num_minus_wrap,
-            .num_minus_checked,
             .num_times,
-            .num_times_wrap,
-            .num_times_checked,
+            .num_int_add_wrap,
+            .num_int_add_crash_on_overflow,
+            .num_int_add_overflows,
+            .num_int_add_proven_cannot_overflow,
+            .num_int_sub_wrap,
+            .num_int_sub_crash_on_overflow,
+            .num_int_sub_overflows,
+            .num_int_sub_proven_cannot_overflow,
+            .num_int_mul_wrap,
+            .num_int_mul_crash_on_overflow,
+            .num_int_mul_overflows,
+            .num_int_mul_proven_cannot_overflow,
+            .num_float_add,
+            .num_float_sub,
+            .num_float_mul,
+            .dec_mul,
             .num_div_by,
             .num_div_by_checked,
             .num_div_trunc_by,
@@ -1437,33 +1461,5 @@ pub const LowLevel = enum(u16) {
             mask |= @as(u64, 1) << arg;
         }
         return mask;
-    }
-
-    pub const NumericParseSpec = union(enum) {
-        int: struct {
-            width_bytes: u8,
-            signed: bool,
-        },
-        float: struct {
-            width_bytes: u8,
-        },
-        dec,
-    };
-
-    pub fn numericParseSpec(self: LowLevel) ?NumericParseSpec {
-        if (self == .u8_from_str) return .{ .int = .{ .width_bytes = 1, .signed = false } };
-        if (self == .i8_from_str) return .{ .int = .{ .width_bytes = 1, .signed = true } };
-        if (self == .u16_from_str) return .{ .int = .{ .width_bytes = 2, .signed = false } };
-        if (self == .i16_from_str) return .{ .int = .{ .width_bytes = 2, .signed = true } };
-        if (self == .u32_from_str) return .{ .int = .{ .width_bytes = 4, .signed = false } };
-        if (self == .i32_from_str) return .{ .int = .{ .width_bytes = 4, .signed = true } };
-        if (self == .u64_from_str) return .{ .int = .{ .width_bytes = 8, .signed = false } };
-        if (self == .i64_from_str) return .{ .int = .{ .width_bytes = 8, .signed = true } };
-        if (self == .u128_from_str) return .{ .int = .{ .width_bytes = 16, .signed = false } };
-        if (self == .i128_from_str) return .{ .int = .{ .width_bytes = 16, .signed = true } };
-        if (self == .f32_from_str) return .{ .float = .{ .width_bytes = 4 } };
-        if (self == .f64_from_str) return .{ .float = .{ .width_bytes = 8 } };
-        if (self == .dec_from_str) return .dec;
-        return null;
     }
 };

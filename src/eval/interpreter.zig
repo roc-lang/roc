@@ -24,6 +24,7 @@ const rc_conformance = @import("rc_conformance.zig");
 const backend = @import("backend");
 const host_trampoline = @import("host_trampoline.zig");
 const builtins = @import("builtins");
+const numeric_conversion = base.numeric_conversion;
 const sljmp = @import("sljmp");
 const build_options = @import("build_options");
 const boxy_runtime = @import("boxy_runtime.zig");
@@ -92,14 +93,19 @@ const longjmp = sljmp.longjmp;
 pub const ExpectFailure = struct {
     message: []const u8,
     region: base.Region,
+    /// Resolved location of the failing `expect` statement. Its file entry
+    /// names the declaring module, so the failure is never rendered against
+    /// another module's source (source inlined across modules, e.g. `??`
+    /// field defaults materialized per specialization).
+    loc: base.SourceLoc,
 };
 
 /// Environment for interpreter-managed RocOps forwarding.
 ///
-/// The interpreter always evaluates with the RocOps it was initialized with.
-/// These callbacks forward the caller's alloc/dealloc/realloc/dbg/expect/crash
-/// hooks while retaining local bookkeeping for crash and expect messages so
-/// hosts that care can inspect the last message after evaluation.
+/// These callbacks forward through the RocOps for the current host entry while
+/// retaining local bookkeeping for crash and expect messages so hosts that care
+/// can inspect the last message after evaluation. A retained interpreter
+/// rebinds this pointer when the host invokes one of its callables later.
 const InterpreterRocEnv = struct {
     allocator: Allocator,
     crashed: bool = false,
@@ -178,12 +184,13 @@ const InterpreterRocEnv = struct {
         self.expect_failures.clearRetainingCapacity();
     }
 
-    fn recordExpectFailure(self: *InterpreterRocEnv, msg: []const u8, region: base.Region) Allocator.Error!void {
+    fn recordExpectFailure(self: *InterpreterRocEnv, msg: []const u8, region: base.Region, loc: base.SourceLoc) Allocator.Error!void {
         const owned_msg = try self.allocator.dupe(u8, msg);
         errdefer self.allocator.free(owned_msg);
         try self.expect_failures.append(self.allocator, .{
             .message = owned_msg,
             .region = region,
+            .loc = loc,
         });
     }
 
@@ -302,14 +309,22 @@ pub const Interpreter = struct {
     const max_debug_value_visits: usize = 16;
     pub const erased_callable_context_alignment: usize = builtins.erased_callable.capture_alignment;
 
+    const ErasedCallableCaptureDrop = enum(u8) {
+        none,
+        rc_helper,
+        boxy_capture,
+    };
+
     pub const ErasedCallableInterpreterContext = extern struct {
+        owner: ?*Retained,
         interpreter: *LirInterpreter,
-        capture_desc: ?*const LirProgram.BoxyTypeDesc,
         result_desc: ?*const LirProgram.BoxyTypeDesc,
         proc_id: u32,
-        capture_layout_plus_one: u32,
+        drop_layout_plus_one: u32,
         capture_value_offset: u32,
-        padding: u32,
+        drop_desc_field_offset: u32,
+        drop_kind: u8,
+        padding: [3]u8,
     };
 
     pub const erased_callable_context_capture_offset: usize =
@@ -320,6 +335,9 @@ pub const Interpreter = struct {
     layout_store: *const layout_mod.Store,
     helper: LayoutHelper,
     float_nan_mode: builtins.float_bits.NanMode,
+    /// Arena for runtime-created descriptors whose identities can escape in a
+    /// retained callable or host result and must survive later evaluations.
+    descriptor_arena: base.SingleThreadArena,
     /// Arena for interpreter-allocated memory (temporaries, copies).
     arena: base.SingleThreadArena,
     /// RocOps environment for builtin dispatch.
@@ -375,6 +393,9 @@ pub const Interpreter = struct {
     failed_stmt_inline_scope: InlineScopeId = InlineScopeId.none,
     comptime_branch_hits: std.ArrayList(ComptimeBranchHit),
     comptime_failed_site: ?LIR.ComptimeSiteId = null,
+    /// Heap-pinned owner used by host-facing integrations whose erased
+    /// callables can outlive the evaluation that created them.
+    retained_owner: ?*Retained = null,
 
     const RcPresence = enum(u2) {
         unknown,
@@ -599,6 +620,112 @@ pub const Interpreter = struct {
 
     pub const BoxyTables = boxy_runtime.BoxyTables;
 
+    /// Heap-pinned interpreter lifetime for host-facing execution. The root
+    /// call owns the initial reference and every interpreter-created erased
+    /// callable owns another. The recursive execution lock keeps reentrant
+    /// host callbacks working while serializing calls from other threads into
+    /// the same single-threaded interpreter state.
+    pub const Retained = struct {
+        allocator: Allocator,
+        references: std.atomic.Value(usize),
+        synchronization_io: std.Io,
+        execution_mutex: std.Io.Mutex = .init,
+        execution_owner: std.atomic.Value(std.Thread.Id) = .init(0),
+        execution_depth: usize = 0,
+        interpreter: LirInterpreter,
+
+        pub fn createWithBoxyTables(
+            allocator: Allocator,
+            store: *const LirStore,
+            layout_store: *const layout_mod.Store,
+            boxy_tables: BoxyTables,
+            caller_roc_ops: *RocOps,
+            float_nan_mode: builtins.float_bits.NanMode,
+            synchronization_io: std.Io,
+        ) Allocator.Error!*Retained {
+            const self = try allocator.create(Retained);
+            errdefer allocator.destroy(self);
+
+            self.* = .{
+                .allocator = allocator,
+                .references = .init(1),
+                .synchronization_io = synchronization_io,
+                .interpreter = try LirInterpreter.initWithBoxyTables(
+                    allocator,
+                    store,
+                    layout_store,
+                    boxy_tables,
+                    caller_roc_ops,
+                    float_nan_mode,
+                ),
+            };
+            self.interpreter.retained_owner = self;
+            return self;
+        }
+
+        pub fn retain(self: *Retained) void {
+            const previous = self.references.fetchAdd(1, .monotonic);
+            if (builtin.mode == .Debug) std.debug.assert(previous > 0);
+        }
+
+        pub fn release(self: *Retained) void {
+            const previous = self.references.fetchSub(1, .release);
+            if (builtin.mode == .Debug) std.debug.assert(previous > 0);
+            if (previous != 1) return;
+            _ = self.references.load(.acquire);
+            if (builtin.mode == .Debug) {
+                std.debug.assert(self.execution_owner.load(.acquire) == 0);
+                std.debug.assert(self.execution_depth == 0);
+            }
+
+            const allocator = self.allocator;
+            self.interpreter.deinit();
+            allocator.destroy(self);
+        }
+
+        pub fn enter(self: *Retained) void {
+            // Freestanding targets have no OS threads, and std.Thread cannot
+            // produce an identity for them. Their only possible nesting is
+            // same-thread reentrancy, so depth alone is the execution gate.
+            if (comptime is_freestanding) {
+                if (self.execution_depth == 0) self.interpreter.resetRetainedExecution();
+                self.execution_depth += 1;
+                return;
+            }
+
+            const thread_id = std.Thread.getCurrentId();
+            if (self.execution_owner.load(.acquire) == thread_id) {
+                self.execution_depth += 1;
+                return;
+            }
+
+            self.execution_mutex.lockUncancelable(self.synchronization_io);
+            if (builtin.mode == .Debug) std.debug.assert(self.execution_owner.load(.monotonic) == 0);
+            self.interpreter.resetRetainedExecution();
+            self.execution_depth = 1;
+            self.execution_owner.store(thread_id, .release);
+        }
+
+        pub fn leave(self: *Retained) void {
+            if (comptime is_freestanding) {
+                if (builtin.mode == .Debug) std.debug.assert(self.execution_depth > 0);
+                self.execution_depth -= 1;
+                return;
+            }
+
+            const thread_id = std.Thread.getCurrentId();
+            if (builtin.mode == .Debug) {
+                std.debug.assert(self.execution_owner.load(.acquire) == thread_id);
+                std.debug.assert(self.execution_depth > 0);
+            }
+            self.execution_depth -= 1;
+            if (self.execution_depth != 0) return;
+
+            self.execution_owner.store(0, .release);
+            self.execution_mutex.unlock(self.synchronization_io);
+        }
+    };
+
     pub fn init(
         allocator: Allocator,
         store: *const LirStore,
@@ -700,6 +827,7 @@ pub const Interpreter = struct {
             .layout_store = layout_store,
             .helper = LayoutHelper.init(layout_store),
             .float_nan_mode = float_nan_mode,
+            .descriptor_arena = base.SingleThreadArena.init(allocator),
             .arena = base.SingleThreadArena.init(allocator),
             .roc_env = roc_env,
             .roc_ops = RocOps{
@@ -766,6 +894,7 @@ pub const Interpreter = struct {
         self.roc_env.deinit();
         self.allocator.destroy(self.roc_env);
         self.static_strings.deinit();
+        self.descriptor_arena.deinit();
         self.arena.deinit();
         self.tag_variant_plans.deinit(self.allocator);
         self.struct_field_plans.deinit(self.allocator);
@@ -859,6 +988,7 @@ pub const Interpreter = struct {
                 .scalar,
                 .box,
                 .box_of_zst,
+                .erased_box,
                 .list,
                 .list_of_zst,
                 .closure,
@@ -924,6 +1054,20 @@ pub const Interpreter = struct {
     pub fn getFailedCheckedRegion(self: *const LirInterpreter) ?base.Region {
         if (self.failed_stmt_loc.hasLocation()) return self.failed_stmt_region;
         return null;
+    }
+
+    /// The source-file entry (display name plus package-qualified module
+    /// identity) of the statement that first failed, resolved through the LIR
+    /// store's explicit source-file table. The lowerer stamps every statement
+    /// with its declaring module's file entry (including source inlined
+    /// across modules, e.g. `??` field defaults materialized per
+    /// specialization), so this is the failed region's owning module.
+    pub fn getFailedSourceFile(self: *const LirInterpreter) ?base.SourceFileEntry {
+        if (!self.failed_stmt_loc.hasLocation()) return null;
+        return .{
+            .name = self.store.sourceFileName(self.failed_stmt_loc.file),
+            .qualified_name = self.store.sourceFileQualifiedName(self.failed_stmt_loc.file),
+        };
     }
 
     /// The innermost virtual source frame of the failed statement. Callers can
@@ -1042,8 +1186,36 @@ pub const Interpreter = struct {
         self.boxy_runtime.runtime_boxy_tag_payload_descs = &self.runtime_boxy_tag_payload_descs;
         self.boxy_runtime.runtime_boxy_payload_steps = &self.runtime_boxy_payload_steps;
         self.boxy_runtime.roc_ops = &self.roc_ops;
-        self.boxy_runtime.descriptor_arena = self.evalAllocator();
+        self.boxy_runtime.descriptor_arena = self.descriptor_arena.allocator();
         self.boxy_runtime.eval_arena = self.evalAllocator();
+    }
+
+    /// Discard operation-local allocations between independent host entries.
+    /// Descriptor identities live in `descriptor_arena` and remain stable for
+    /// every callable retained from this interpreter.
+    fn resetRetainedExecution(self: *LirInterpreter) void {
+        self.call_stack = .empty;
+        self.failed_call_stack = .empty;
+        self.comptime_branch_hits = .empty;
+        _ = self.arena.reset(.retain_capacity);
+
+        self.roc_env.resetForEval();
+        self.active_stmt_loc = base.SourceLoc.none;
+        self.active_stmt_region = base.Region.zero();
+        self.active_stmt_inline_scope = InlineScopeId.none;
+        self.failed_stmt_loc = base.SourceLoc.none;
+        self.failed_stmt_region = base.Region.zero();
+        self.failed_stmt_inline_scope = InlineScopeId.none;
+        self.comptime_failed_site = null;
+        if (builtin.mode == .Debug) self.inflight_zeroed_box_payloads.clearRetainingCapacity();
+    }
+
+    fn bindCallerRocOps(self: *LirInterpreter, caller_roc_ops: *RocOps) void {
+        // A host-created callable can synchronously invoke this interpreter's
+        // callable again with the interpreter's forwarding RocOps. Preserve
+        // the ultimate host in that case instead of forwarding back to self.
+        if (caller_roc_ops == &self.roc_ops) return;
+        self.roc_env.caller_roc_ops = caller_roc_ops;
     }
 
     /// Frame-aware services the boxy runtime calls back into: descriptor and
@@ -1148,7 +1320,7 @@ pub const Interpreter = struct {
         }
 
         pub fn layoutContainsRc(self: BoxyFrameHooks, layout_idx: layout_mod.Idx) bool {
-            return self.interp.layout_store.layoutContainsRcErasedBox(self.interp.layout_store.getLayout(layout_idx));
+            return self.interp.layout_store.layoutContainsRefcounted(self.interp.layout_store.getLayout(layout_idx));
         }
 
         pub fn allocValue(self: BoxyFrameHooks, layout_idx: layout_mod.Idx) Error!Value {
@@ -1160,15 +1332,15 @@ pub const Interpreter = struct {
         }
 
         pub fn rcPlanFor(self: BoxyFrameHooks, helper: layout_mod.RcHelperKey) layout_mod.RcHelperPlan {
-            return self.interp.layout_store.rcHelperPlanErasedBox(helper);
+            return self.interp.layout_store.rcHelperPlan(helper);
         }
 
         pub fn rcStructFieldPlan(self: BoxyFrameHooks, struct_plan: layout_mod.RcStructPlan, field_index: u32) ?layout_mod.RcFieldPlan {
-            return self.interp.layout_store.rcHelperStructFieldPlanErasedBox(struct_plan, field_index);
+            return self.interp.layout_store.rcHelperStructFieldPlan(struct_plan, field_index);
         }
 
         pub fn rcTagVariantPlan(self: BoxyFrameHooks, tag_plan: layout_mod.RcTagUnionPlan, variant_index: u32) ?layout_mod.RcHelperKey {
-            return self.interp.layout_store.rcHelperTagUnionVariantPlanErasedBox(tag_plan, variant_index);
+            return self.interp.layout_store.rcHelperTagUnionVariantPlan(tag_plan, variant_index);
         }
 
         pub fn traceProcId(self: BoxyFrameHooks) u32 {
@@ -1605,7 +1777,7 @@ pub const Interpreter = struct {
                     }
                 }
             },
-            .zst, .box_of_zst => return,
+            .zst, .box_of_zst, .erased_box => return,
             // Compiler-internal pointers (TRMC holes) are opaque here: the slot they
             // point at may be a not-yet-filled hole, so there is nothing to validate.
             .ptr => return,
@@ -2112,7 +2284,7 @@ pub const Interpreter = struct {
         const layout_val = self.layout_store.getLayout(layout_idx);
         debugPrint("{s}{d}: {s}\n", .{ debugIndent(indent), @intFromEnum(layout_idx), @tagName(layout_val.tag) });
         switch (layout_val.tag) {
-            .scalar, .zst, .box_of_zst, .list_of_zst, .erased_callable => {},
+            .scalar, .zst, .box_of_zst, .erased_box, .list_of_zst, .erased_callable => {},
             .box, .ptr => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
             .list => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
             .closure => self.debugPrintLayoutShapeLines(layout_val.getClosure().captures_layout_idx, indent + 1, visited),
@@ -2317,7 +2489,7 @@ pub const Interpreter = struct {
                 const expected_layout_val = self.layout_store.getLayout(param_layout);
                 if (actual_layout_val.tag == .struct_ or expected_layout_val.tag == .struct_ or
                     actual_layout_val.tag == .tag_union or expected_layout_val.tag == .tag_union or
-                    (actual_layout_val.tag == .scalar and (expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst)))
+                    (actual_layout_val.tag == .scalar and (expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst or expected_layout_val.tag == .erased_box)))
                 {
                     debugPrint(
                         "LIR/interpreter invariant violated before proc arg coercion: proc={d} name={d} arg_index={d} actual_layout={d} ({s}) expected_layout={d} ({s}) param_local={d}\n",
@@ -3101,7 +3273,7 @@ pub const Interpreter = struct {
                         self.store.getLocal(cond_local).layout_idx,
                     );
                     if (cond_value == 0) {
-                        try self.roc_env.recordExpectFailure("expect failed", self.store.stmtRegion(current));
+                        try self.roc_env.recordExpectFailure("expect failed", self.store.stmtRegion(current), self.store.stmtLoc(current));
                         self.roc_ops.expectFailed("expect failed");
                     }
                     current = expect_stmt.next;
@@ -3936,6 +4108,7 @@ pub const Interpreter = struct {
                     .scalar,
                     .box,
                     .box_of_zst,
+                    .erased_box,
                     .list,
                     .list_of_zst,
                     .closure,
@@ -4121,7 +4294,21 @@ pub const Interpreter = struct {
         out_desc: *?*const anyopaque,
     ) callconv(.c) void {
         const context = erasedCallableInterpreterContextFromCapture(capture);
-        context.interpreter.callInterpreterErasedCallable(context, ops, ret, args, reuse, out_desc) catch |err| switch (err) {
+        const owner = context.owner;
+        if (owner) |retained| {
+            retained.retain();
+            retained.enter();
+        }
+        context.interpreter.callInterpreterErasedCallable(context, ops, ret, args, reuse, out_desc) catch |err| {
+            leaveAndReleaseErasedCallableOwner(owner);
+            reportInterpreterErasedCallableError(ops, err);
+            return;
+        };
+        leaveAndReleaseErasedCallableOwner(owner);
+    }
+
+    fn reportInterpreterErasedCallableError(ops: *RocOps, err: Error) void {
+        switch (err) {
             error.OutOfMemory => ops.crash("LIR/interpreter erased callable trampoline ran out of memory"),
             error.RuntimeError => ops.crash("LIR/interpreter erased callable trampoline hit runtime error"),
             error.ComptimeExhaustiveness => ops.crash("LIR/interpreter erased callable trampoline hit compile-time exhaustiveness marker"),
@@ -4132,50 +4319,113 @@ pub const Interpreter = struct {
             // expect_err statements only occur in top-level expect test
             // roots, never in callable bodies.
             error.ExpectErr => unreachable,
-        };
+        }
+    }
+
+    fn leaveAndReleaseErasedCallableOwner(owner: ?*Retained) void {
+        if (owner) |retained| {
+            retained.leave();
+            retained.release();
+        }
     }
 
     fn interpreterErasedCallableOnDrop(capture: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
         const context = erasedCallableInterpreterContextFromCapture(capture);
-        const capture_layout: layout_mod.Idx = if (context.capture_layout_plus_one == 0)
-            return
+        const owner = context.owner;
+        if (owner) |retained| retained.enter();
+        context.interpreter.bindCallerRocOps(roc_ops);
+
+        context.interpreter.dropInterpreterErasedCallableCapture(context, capture) catch |err| {
+            leaveAndReleaseErasedCallableOwner(owner);
+            reportInterpreterErasedCallableDropError(roc_ops, err);
+            return;
+        };
+        leaveAndReleaseErasedCallableOwner(owner);
+    }
+
+    fn dropInterpreterErasedCallableCapture(
+        self: *LirInterpreter,
+        context: *ErasedCallableInterpreterContext,
+        capture: ?[*]u8,
+    ) Error!void {
+        const drop_kind: ErasedCallableCaptureDrop = @enumFromInt(context.drop_kind);
+        if (drop_kind == .none) return;
+        const capture_layout: layout_mod.Idx = if (context.drop_layout_plus_one == 0)
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: erased callable capture drop lacked a layout",
+                .{},
+            )
         else
-            @enumFromInt(context.capture_layout_plus_one - 1);
-        if (capture_layout == .zst) return;
+            @enumFromInt(context.drop_layout_plus_one - 1);
         const capture_value_ptr = (capture orelse unreachable) + context.capture_value_offset;
-        if (context.capture_desc) |capture_desc| {
-            context.interpreter.boxy_runtime.performBoxyLayoutDrop(
-                context.interpreter.boxyFrameHooks(null),
+        switch (drop_kind) {
+            .none => unreachable,
+            .rc_helper => self.performRcHelperRequired(
+                .{ .op = .decref, .layout_idx = capture_layout },
                 .{ .ptr = capture_value_ptr },
-                capture_layout,
-                capture_desc,
-                .decref,
                 1,
                 .atomic,
-            ) catch |err| switch (err) {
-                error.OutOfMemory => roc_ops.crash("LIR/interpreter erased callable capture drop ran out of memory"),
-                error.RuntimeError => roc_ops.crash("LIR/interpreter erased callable capture drop hit runtime error"),
-                error.ComptimeExhaustiveness => roc_ops.crash("LIR/interpreter erased callable capture drop hit compile-time exhaustiveness marker"),
-                error.DivisionByZero => roc_ops.crash("LIR/interpreter erased callable capture drop hit division by zero"),
-                error.Crash => roc_ops.crash("LIR/interpreter erased callable capture drop hit Roc crash"),
-                error.UnsupportedHostedFunction => roc_ops.crash("LIR/interpreter erased callable capture drop reached an unsupported hosted function"),
-                error.InvalidHostedFunctionSignature => roc_ops.crash("LIR/interpreter erased callable capture drop reached an invalid hosted function signature"),
-                error.ExpectErr => unreachable,
-            };
-            return;
+            ),
+            .boxy_capture => {
+                const desc_address = self.readPointerInt(.{
+                    .ptr = capture_value_ptr + context.drop_desc_field_offset,
+                });
+                const desc: *const LirProgram.BoxyTypeDesc = if (desc_address == 0)
+                    self.invariantFailed(
+                        "LIR/interpreter invariant violated: Boxy erased callable capture drop descriptor was null",
+                        .{},
+                    )
+                else
+                    @ptrFromInt(desc_address);
+                try self.boxy_runtime.performBoxyLayoutDrop(
+                    self.boxyFrameHooks(null),
+                    .{ .ptr = capture_value_ptr },
+                    capture_layout,
+                    desc,
+                    .decref,
+                    1,
+                    .atomic,
+                );
+            },
         }
-        context.interpreter.performRawRc(.decref, .{ .ptr = capture_value_ptr }, capture_layout, 1);
+    }
+
+    fn reportInterpreterErasedCallableDropError(roc_ops: *RocOps, err: Error) void {
+        switch (err) {
+            error.OutOfMemory => roc_ops.crash("LIR/interpreter erased callable capture drop ran out of memory"),
+            error.RuntimeError => roc_ops.crash("LIR/interpreter erased callable capture drop hit runtime error"),
+            error.ComptimeExhaustiveness => roc_ops.crash("LIR/interpreter erased callable capture drop hit compile-time exhaustiveness marker"),
+            error.DivisionByZero => roc_ops.crash("LIR/interpreter erased callable capture drop hit division by zero"),
+            error.Crash => roc_ops.crash("LIR/interpreter erased callable capture drop hit Roc crash"),
+            error.UnsupportedHostedFunction => roc_ops.crash("LIR/interpreter erased callable capture drop reached an unsupported hosted function"),
+            error.InvalidHostedFunctionSignature => roc_ops.crash("LIR/interpreter erased callable capture drop reached an invalid hosted function signature"),
+            error.ExpectErr => unreachable,
+        }
     }
 
     fn callInterpreterErasedCallable(
         self: *LirInterpreter,
         context: *ErasedCallableInterpreterContext,
-        _: *RocOps,
+        ops: *RocOps,
         ret: ?[*]u8,
         args: ?[*]const u8,
         reuse_ptr: ?[*]u8,
         out_desc: *?*const anyopaque,
     ) Error!void {
+        self.bindCallerRocOps(ops);
+        self.bindBoxyRuntime();
+        if (sljmp.supported) {
+            var call_jmp_buf: JmpBuf = undefined;
+            const prev_jmp_buf = self.roc_env.installJumpBuf(&call_jmp_buf);
+            defer self.roc_env.restoreJumpBuf(prev_jmp_buf);
+            const sj = setjmp(&call_jmp_buf);
+            if (sj != 0) {
+                self.recordActiveFailureLocIfUnset();
+                self.recordFailedCallStackIfUnset() catch {};
+                return error.Crash;
+            }
+        }
+
         const proc_id: LIR.LirProcSpecId = @enumFromInt(context.proc_id);
         const proc_spec = self.store.getProcSpec(proc_id);
         const proc_arg_locals = self.store.getLocalSpan(proc_spec.args);
@@ -4574,6 +4824,7 @@ pub const Interpreter = struct {
                 );
             }
         }
+        const result = try self.alloc(target_layout);
         const capture_size = erased_callable_context_capture_offset + capture_value_size;
         const data_ptr = if (assign.reuse) |reuse_local| blk: {
             const reuse_value = try self.getLocalChecked(frame, reuse_local);
@@ -4603,12 +4854,24 @@ pub const Interpreter = struct {
             builtins.erased_callable.allocation_has_refcounted_children,
         );
 
-        const on_drop: ?builtins.erased_callable.OnDropFn = switch (assign.on_drop) {
-            .none => null,
-            .rc_helper => &interpreterErasedCallableOnDrop,
-            .boxy_capture => &interpreterErasedCallableOnDrop,
-            .interpreter_context_drop => &interpreterErasedCallableOnDrop,
+        const capture_drop_kind: ErasedCallableCaptureDrop = switch (assign.on_drop) {
+            .none, .interpreter_context_drop => .none,
+            .rc_helper => .rc_helper,
+            .boxy_capture => .boxy_capture,
         };
+        const drop_layout: ?layout_mod.Idx = switch (assign.on_drop) {
+            .none, .interpreter_context_drop => null,
+            .rc_helper => |helper| helper.layout_idx,
+            .boxy_capture => |plan| plan.capture_layout,
+        };
+        const drop_desc_field_offset: u32 = switch (assign.on_drop) {
+            .boxy_capture => |plan| plan.desc_field_offset,
+            .none, .rc_helper, .interpreter_context_drop => 0,
+        };
+        const on_drop: ?builtins.erased_callable.OnDropFn = if (self.retained_owner != null or capture_drop_kind != .none)
+            &interpreterErasedCallableOnDrop
+        else
+            null;
         const payload = builtins.erased_callable.payloadPtr(data_ptr);
         payload.* = .{
             .callable_fn_ptr = &interpreterErasedCallableTrampoline,
@@ -4616,32 +4879,33 @@ pub const Interpreter = struct {
         };
 
         const context = erasedCallableInterpreterContextFromPayload(data_ptr);
-        const capture_desc = if (assign.capture) |capture_local|
-            frame.localDesc(capture_local) orelse try self.resolveOptionalBoxyDescRef(frame, self.store.getLocal(capture_local).boxy_desc)
+        const capture_value = if (assign.capture) |capture_local|
+            try self.getLocalChecked(frame, capture_local)
         else
             null;
         const result_desc = try self.resolveOptionalBoxyDescRef(frame, assign.result_desc);
+        if (self.retained_owner) |owner| owner.retain();
         context.* = .{
+            .owner = self.retained_owner,
             .interpreter = self,
-            .capture_desc = capture_desc,
             .result_desc = result_desc,
             .proc_id = @intFromEnum(assign.proc),
-            .capture_layout_plus_one = if (assign.capture_layout) |layout_idx| @intFromEnum(layout_idx) + 1 else 0,
+            .drop_layout_plus_one = if (drop_layout) |layout_idx| @intFromEnum(layout_idx) + 1 else 0,
             .capture_value_offset = @intCast(erased_callable_context_capture_offset),
-            .padding = 0,
+            .drop_desc_field_offset = drop_desc_field_offset,
+            .drop_kind = @intFromEnum(capture_drop_kind),
+            .padding = .{ 0, 0, 0 },
         };
 
-        if (assign.capture) |capture_local| {
+        if (capture_value) |value| {
             const capture_layout = assign.capture_layout orelse unreachable;
-            const capture_value = try self.getLocalChecked(frame, capture_local);
             const capture_ptr = erasedCallableInterpreterCaptureValuePtr(data_ptr);
             const size = self.helper.sizeOf(capture_layout);
             if (size > 0) {
-                @memcpy(capture_ptr[0..size], capture_value.ptr[0..size]);
+                @memcpy(capture_ptr[0..size], value.ptr[0..size]);
             }
         }
 
-        const result = try self.alloc(target_layout);
         self.writeBoxedDataPointer(result, data_ptr);
         return result;
     }
@@ -4700,6 +4964,7 @@ pub const Interpreter = struct {
                 };
             },
             .scalar,
+            .erased_box,
             .list,
             .list_of_zst,
             .closure,
@@ -5392,7 +5657,7 @@ pub const Interpreter = struct {
     }
 
     fn builtinInternalContainsRefcounted(self: *LirInterpreter, comptime _: []const u8, layout_idx: layout_mod.Idx) bool {
-        return self.layout_store.layoutContainsRcErasedBox(self.layout_store.getLayout(layout_idx));
+        return self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(layout_idx));
     }
 
     fn rcHelperForLayout(self: *LirInterpreter, op: RcOp, layout_idx: layout_mod.Idx) layout_mod.RcHelper {
@@ -5404,7 +5669,7 @@ pub const Interpreter = struct {
     }
 
     fn performRcHelperRequired(self: *LirInterpreter, helper: layout_mod.RcHelper, val: Value, count: u16, atomicity: RcAtomicity) void {
-        const plan = self.layout_store.rcHelperPlanErasedBox(helper);
+        const plan = self.layout_store.rcHelperPlan(helper);
         if (plan == .noop) {
             self.invariantFailed(
                 "LIR/interpreter invariant violated: explicit RC statement used noop helper for layout {d}",
@@ -5417,7 +5682,7 @@ pub const Interpreter = struct {
     fn cachedRcPlan(self: *LirInterpreter, helper: layout_mod.RcHelperKey) layout_mod.RcHelperPlan {
         const id = helper.encode();
         if (self.rc_plans.get(id)) |plan| return plan;
-        const plan = self.layout_store.rcHelperPlanErasedBox(helper);
+        const plan = self.layout_store.rcHelperPlan(helper);
         self.rc_plans.putAssumeCapacity(id, plan);
         return plan;
     }
@@ -5429,7 +5694,7 @@ pub const Interpreter = struct {
     ) ?layout_mod.RcFieldPlan {
         const id = helperChildPlanId(@intCast(struct_plan.struct_idx.int_idx), struct_plan.child_op, field_index);
         if (self.struct_field_plans.get(id)) |plan| return plan;
-        const plan = self.layout_store.rcHelperStructFieldPlanErasedBox(struct_plan, field_index);
+        const plan = self.layout_store.rcHelperStructFieldPlan(struct_plan, field_index);
         self.struct_field_plans.putAssumeCapacity(id, plan);
         return plan;
     }
@@ -5441,7 +5706,7 @@ pub const Interpreter = struct {
     ) ?layout_mod.RcHelperKey {
         const id = helperChildPlanId(@intCast(tag_plan.tag_union_idx.int_idx), tag_plan.child_op, variant_index);
         if (self.tag_variant_plans.get(id)) |plan| return plan;
-        const plan = self.layout_store.rcHelperTagUnionVariantPlanErasedBox(tag_plan, variant_index);
+        const plan = self.layout_store.rcHelperTagUnionVariantPlan(tag_plan, variant_index);
         self.tag_variant_plans.putAssumeCapacity(id, plan);
         return plan;
     }
@@ -5840,7 +6105,7 @@ pub const Interpreter = struct {
     fn listElementRcContext(self: *LirInterpreter, ll: LowLevelEvalInput, list_layout: layout_mod.Idx) Error!ListElementRcContext {
         const elem_layout = self.listElemLayout(list_layout);
         const elem_layout_value = self.layout_store.getLayout(elem_layout);
-        const elem_is_erased_box = elem_layout_value.tag == .box_of_zst;
+        const elem_is_erased_box = elem_layout_value.tag == .erased_box;
         const elem_is_box = elem_is_erased_box or elem_layout_value.tag == .box;
         var elem_desc: ?*const LirProgram.BoxyTypeDesc = null;
 
@@ -5916,7 +6181,8 @@ pub const Interpreter = struct {
             ll.ret_layout;
 
         return switch (ll.op) {
-            .num_plus_wrap, .num_minus_wrap, .num_times_wrap => unreachable,
+            .num_plus, .num_minus, .num_times => unreachable,
+            .list_sort_with => self.evalListSortWith(args[0], args[1], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
             // ── String ops ──
             .str_is_eq => blk: {
                 const result = builtins.str.strEqual(valueToRocStr(args[0]), valueToRocStr(args[1]));
@@ -6159,6 +6425,7 @@ pub const Interpreter = struct {
                             .scalar,
                             .box,
                             .box_of_zst,
+                            .erased_box,
                             .list,
                             .list_of_zst,
                             .closure,
@@ -6253,38 +6520,23 @@ pub const Interpreter = struct {
             },
 
             // ── Numeric to_str ops ──
-            .u8_to_str => self.numToStr(u8, args[0], ll.ret_layout),
-            .i8_to_str => self.numToStr(i8, args[0], ll.ret_layout),
-            .u16_to_str => self.numToStr(u16, args[0], ll.ret_layout),
-            .i16_to_str => self.numToStr(i16, args[0], ll.ret_layout),
-            .u32_to_str => self.numToStr(u32, args[0], ll.ret_layout),
-            .i32_to_str => self.numToStr(i32, args[0], ll.ret_layout),
-            .u64_to_str => self.numToStr(u64, args[0], ll.ret_layout),
             .i64_to_str => blk: {
                 trace.log("i64_to_str: arg={d} ret_layout={any}", .{ args[0].read(i64), ll.ret_layout });
-                break :blk self.numToStr(i64, args[0], ll.ret_layout);
+                break :blk self.numberToString(comptime numeric_conversion.getStringConversionSpec(.i64_to_str).?, args[0], ll.ret_layout);
             },
-            .u128_to_str => self.numToStr(u128, args[0], ll.ret_layout),
-            .i128_to_str => self.numToStr(i128, args[0], ll.ret_layout),
-            .dec_to_str => blk: {
-                const dec = RocDec{ .num = args[0].read(i128) };
-                var crash_boundary = self.enterCrashBoundary();
-                defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
-                const result = builtins.dec.to_str(dec, &self.roc_ops);
-                break :blk self.rocStrToValue(result, ll.ret_layout);
-            },
-            .f32_to_str => blk: {
-                const bits: u64 = @as(u64, @as(u32, @bitCast(args[0].read(f32))));
-                const result = builtins.str.floatToStrFromBits(bits, true, &self.roc_ops);
-                break :blk self.rocStrToValue(result, ll.ret_layout);
-            },
-            .f64_to_str => blk: {
-                const bits: u64 = @bitCast(args[0].read(f64));
-                const result = builtins.str.floatToStrFromBits(bits, false, &self.roc_ops);
-                break :blk self.rocStrToValue(result, ll.ret_layout);
-            },
+            inline .u8_to_str,
+            .i8_to_str,
+            .u16_to_str,
+            .i16_to_str,
+            .u32_to_str,
+            .i32_to_str,
+            .u64_to_str,
+            .u128_to_str,
+            .i128_to_str,
+            .dec_to_str,
+            .f32_to_str,
+            .f64_to_str,
+            => |op| self.numberToString(comptime numeric_conversion.getStringConversionSpec(op).?, args[0], ll.ret_layout),
             .f32_to_bits => blk: {
                 const val = try self.alloc(ll.ret_layout);
                 val.write(u32, builtins.float_bits.normalizeF32NanBits(@bitCast(args[0].read(f32))));
@@ -6345,11 +6597,10 @@ pub const Interpreter = struct {
             .list_capacity => blk: {
                 const rl = self.valueToRocListForLayout(args[0], arg_layout);
                 const val = try self.alloc(ll.ret_layout);
-                // Canonical zero-width lists carry no allocation, so their
-                // stored capacity is zero even when they hold elements; every
-                // held element is trivially within capacity.
-                const capacity = @max(rl.getCapacity(), rl.len());
-                val.write(u64, @intCast(capacity));
+                // A list of zero-width elements never allocates, so its stored
+                // capacity is zero however many elements it holds. Report the
+                // stored capacity as it is.
+                val.write(u64, @intCast(rl.getCapacity()));
                 break :blk val;
             },
             .list_slack_unique => blk: {
@@ -6928,12 +7179,23 @@ pub const Interpreter = struct {
             .list_split_last => self.evalListSplitLast(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
 
             // ── Arithmetic ──
-            .num_plus => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .add, null),
-            .num_plus_checked => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .add, .num_plus_checked),
-            .num_minus => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .sub, null),
-            .num_minus_checked => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .sub, .num_minus_checked),
-            .num_times => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mul, null),
-            .num_times_checked => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mul, .num_times_checked),
+            .num_int_add_wrap,
+            .num_int_add_crash_on_overflow,
+            .num_int_add_overflows,
+            .num_int_add_proven_cannot_overflow,
+            .num_int_sub_wrap,
+            .num_int_sub_crash_on_overflow,
+            .num_int_sub_overflows,
+            .num_int_sub_proven_cannot_overflow,
+            .num_int_mul_wrap,
+            .num_int_mul_crash_on_overflow,
+            .num_int_mul_overflows,
+            .num_int_mul_proven_cannot_overflow,
+            => self.evalIntegerFamily(ll.op, args[0], args[1], ll.ret_layout, arg_layout),
+            .num_float_add => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .add, null),
+            .num_float_sub => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .sub, null),
+            .num_float_mul => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mul, null),
+            .dec_mul => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mul, null),
             .num_div_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div, null),
             .num_div_by_checked => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div, .num_div_by_checked),
             .num_div_trunc_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div_trunc, null),
@@ -7197,7 +7459,7 @@ pub const Interpreter = struct {
             .f32_from_str,
             .f64_from_str,
             => blk: {
-                const parse_spec = ll.op.numericParseSpec() orelse
+                const parse_spec = numeric_conversion.getNumericParseSpec(ll.op) orelse
                     return self.runtimeError("typed from_str low-level missing numeric parse spec");
                 const ret_layout_val = self.layout_store.getLayout(ll.ret_layout);
                 if (ret_layout_val.tag != .tag_union) {
@@ -7238,258 +7500,253 @@ pub const Interpreter = struct {
             },
 
             // ── Numeric conversions ──
-            .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128 => self.numWiden(u8, args[0], ll.ret_layout),
-            .u8_to_f32, .u8_to_f64 => self.intToFloat(u8, args[0], ll.ret_layout),
-            .u8_to_dec => self.intToDec(u8, args[0], ll.ret_layout),
-            .u8_to_i8_wrap => self.numTruncate(u8, i8, args[0], ll.ret_layout),
-            .u8_to_i8_try => self.numTry(u8, i8, args[0], ll.ret_layout),
-
-            .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128 => self.numWiden(i8, args[0], ll.ret_layout),
-            .i8_to_u8_wrap => self.numTruncate(i8, u8, args[0], ll.ret_layout),
-            .i8_to_u8_try => self.numTry(i8, u8, args[0], ll.ret_layout),
-            .i8_to_u16_wrap => self.numTruncateWiden(i8, i16, u16, args[0], ll.ret_layout),
-            .i8_to_u16_try => self.numTry(i8, u16, args[0], ll.ret_layout),
-            .i8_to_u32_wrap => self.numTruncateWiden(i8, i32, u32, args[0], ll.ret_layout),
-            .i8_to_u32_try => self.numTry(i8, u32, args[0], ll.ret_layout),
-            .i8_to_u64_wrap => self.numTruncateWiden(i8, i64, u64, args[0], ll.ret_layout),
-            .i8_to_u64_try => self.numTry(i8, u64, args[0], ll.ret_layout),
-            .i8_to_u128_wrap => self.numTruncateWiden(i8, i128, u128, args[0], ll.ret_layout),
-            .i8_to_u128_try => self.numTry(i8, u128, args[0], ll.ret_layout),
-            .i8_to_f32, .i8_to_f64 => self.intToFloat(i8, args[0], ll.ret_layout),
-            .i8_to_dec => self.intToDec(i8, args[0], ll.ret_layout),
-
-            .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u32, .u16_to_u64, .u16_to_u128 => self.numWiden(u16, args[0], ll.ret_layout),
-            .u16_to_i8_wrap => self.numTruncate(u16, i8, args[0], ll.ret_layout),
-            .u16_to_i8_try => self.numTry(u16, i8, args[0], ll.ret_layout),
-            .u16_to_i16_wrap => self.numTruncate(u16, i16, args[0], ll.ret_layout),
-            .u16_to_i16_try => self.numTry(u16, i16, args[0], ll.ret_layout),
-            .u16_to_u8_wrap => self.numTruncate(u16, u8, args[0], ll.ret_layout),
-            .u16_to_u8_try => self.numTry(u16, u8, args[0], ll.ret_layout),
-            .u16_to_f32, .u16_to_f64 => self.intToFloat(u16, args[0], ll.ret_layout),
-            .u16_to_dec => self.intToDec(u16, args[0], ll.ret_layout),
-
-            .i16_to_i32, .i16_to_i64, .i16_to_i128 => self.numWiden(i16, args[0], ll.ret_layout),
-            .i16_to_i8_wrap => self.numTruncate(i16, i8, args[0], ll.ret_layout),
-            .i16_to_i8_try => self.numTry(i16, i8, args[0], ll.ret_layout),
-            .i16_to_u8_wrap => self.numTruncate(i16, u8, args[0], ll.ret_layout),
-            .i16_to_u8_try => self.numTry(i16, u8, args[0], ll.ret_layout),
-            .i16_to_u16_wrap => self.numTruncate(i16, u16, args[0], ll.ret_layout),
-            .i16_to_u16_try => self.numTry(i16, u16, args[0], ll.ret_layout),
-            .i16_to_u32_wrap => self.numTruncateWiden(i16, i32, u32, args[0], ll.ret_layout),
-            .i16_to_u32_try => self.numTry(i16, u32, args[0], ll.ret_layout),
-            .i16_to_u64_wrap => self.numTruncateWiden(i16, i64, u64, args[0], ll.ret_layout),
-            .i16_to_u64_try => self.numTry(i16, u64, args[0], ll.ret_layout),
-            .i16_to_u128_wrap => self.numTruncateWiden(i16, i128, u128, args[0], ll.ret_layout),
-            .i16_to_u128_try => self.numTry(i16, u128, args[0], ll.ret_layout),
-            .i16_to_f32, .i16_to_f64 => self.intToFloat(i16, args[0], ll.ret_layout),
-            .i16_to_dec => self.intToDec(i16, args[0], ll.ret_layout),
-
-            .u32_to_i64, .u32_to_i128, .u32_to_u64, .u32_to_u128 => self.numWiden(u32, args[0], ll.ret_layout),
-            .u32_to_i8_wrap => self.numTruncate(u32, i8, args[0], ll.ret_layout),
-            .u32_to_i8_try => self.numTry(u32, i8, args[0], ll.ret_layout),
-            .u32_to_i16_wrap => self.numTruncate(u32, i16, args[0], ll.ret_layout),
-            .u32_to_i16_try => self.numTry(u32, i16, args[0], ll.ret_layout),
-            .u32_to_i32_wrap => self.numTruncate(u32, i32, args[0], ll.ret_layout),
-            .u32_to_i32_try => self.numTry(u32, i32, args[0], ll.ret_layout),
-            .u32_to_u8_wrap => self.numTruncate(u32, u8, args[0], ll.ret_layout),
-            .u32_to_u8_try => self.numTry(u32, u8, args[0], ll.ret_layout),
-            .u32_to_u16_wrap => self.numTruncate(u32, u16, args[0], ll.ret_layout),
-            .u32_to_u16_try => self.numTry(u32, u16, args[0], ll.ret_layout),
-            .u32_to_f32, .u32_to_f64 => self.intToFloat(u32, args[0], ll.ret_layout),
-            .u32_to_dec => self.intToDec(u32, args[0], ll.ret_layout),
-
-            .i32_to_i64, .i32_to_i128 => self.numWiden(i32, args[0], ll.ret_layout),
-            .i32_to_i8_wrap => self.numTruncate(i32, i8, args[0], ll.ret_layout),
-            .i32_to_i8_try => self.numTry(i32, i8, args[0], ll.ret_layout),
-            .i32_to_i16_wrap => self.numTruncate(i32, i16, args[0], ll.ret_layout),
-            .i32_to_i16_try => self.numTry(i32, i16, args[0], ll.ret_layout),
-            .i32_to_u8_wrap => self.numTruncate(i32, u8, args[0], ll.ret_layout),
-            .i32_to_u8_try => self.numTry(i32, u8, args[0], ll.ret_layout),
-            .i32_to_u16_wrap => self.numTruncate(i32, u16, args[0], ll.ret_layout),
-            .i32_to_u16_try => self.numTry(i32, u16, args[0], ll.ret_layout),
-            .i32_to_u32_wrap => self.numTruncate(i32, u32, args[0], ll.ret_layout),
-            .i32_to_u32_try => self.numTry(i32, u32, args[0], ll.ret_layout),
-            .i32_to_u64_wrap => self.numTruncateWiden(i32, i64, u64, args[0], ll.ret_layout),
-            .i32_to_u64_try => self.numTry(i32, u64, args[0], ll.ret_layout),
-            .i32_to_u128_wrap => self.numTruncateWiden(i32, i128, u128, args[0], ll.ret_layout),
-            .i32_to_u128_try => self.numTry(i32, u128, args[0], ll.ret_layout),
-            .i32_to_f32, .i32_to_f64 => self.intToFloat(i32, args[0], ll.ret_layout),
-            .i32_to_dec => self.intToDec(i32, args[0], ll.ret_layout),
-
-            .u64_to_i128, .u64_to_u128 => self.numWiden(u64, args[0], ll.ret_layout),
-            .u64_to_i8_wrap => self.numTruncate(u64, i8, args[0], ll.ret_layout),
-            .u64_to_i8_try => self.numTry(u64, i8, args[0], ll.ret_layout),
-            .u64_to_i16_wrap => self.numTruncate(u64, i16, args[0], ll.ret_layout),
-            .u64_to_i16_try => self.numTry(u64, i16, args[0], ll.ret_layout),
-            .u64_to_i32_wrap => self.numTruncate(u64, i32, args[0], ll.ret_layout),
-            .u64_to_i32_try => self.numTry(u64, i32, args[0], ll.ret_layout),
-            .u64_to_i64_wrap => self.numTruncate(u64, i64, args[0], ll.ret_layout),
-            .u64_to_i64_try => self.numTry(u64, i64, args[0], ll.ret_layout),
-            .u64_to_u8_wrap => self.numTruncate(u64, u8, args[0], ll.ret_layout),
-            .u64_to_u8_try => self.numTry(u64, u8, args[0], ll.ret_layout),
-            .u64_to_u16_wrap => self.numTruncate(u64, u16, args[0], ll.ret_layout),
-            .u64_to_u16_try => self.numTry(u64, u16, args[0], ll.ret_layout),
-            .u64_to_u32_wrap => self.numTruncate(u64, u32, args[0], ll.ret_layout),
-            .u64_to_u32_try => self.numTry(u64, u32, args[0], ll.ret_layout),
-            .u64_to_f32, .u64_to_f64 => self.intToFloat(u64, args[0], ll.ret_layout),
-            .u64_to_dec => self.intToDec(u64, args[0], ll.ret_layout),
-
-            .i64_to_i128 => self.numWiden(i64, args[0], ll.ret_layout),
-            .i64_to_i8_wrap => self.numTruncate(i64, i8, args[0], ll.ret_layout),
-            .i64_to_i8_try => self.numTry(i64, i8, args[0], ll.ret_layout),
-            .i64_to_i16_wrap => self.numTruncate(i64, i16, args[0], ll.ret_layout),
-            .i64_to_i16_try => self.numTry(i64, i16, args[0], ll.ret_layout),
-            .i64_to_i32_wrap => self.numTruncate(i64, i32, args[0], ll.ret_layout),
-            .i64_to_i32_try => self.numTry(i64, i32, args[0], ll.ret_layout),
-            .i64_to_u8_wrap => self.numTruncate(i64, u8, args[0], ll.ret_layout),
-            .i64_to_u8_try => self.numTry(i64, u8, args[0], ll.ret_layout),
-            .i64_to_u16_wrap => self.numTruncate(i64, u16, args[0], ll.ret_layout),
-            .i64_to_u16_try => self.numTry(i64, u16, args[0], ll.ret_layout),
-            .i64_to_u32_wrap => self.numTruncate(i64, u32, args[0], ll.ret_layout),
-            .i64_to_u32_try => self.numTry(i64, u32, args[0], ll.ret_layout),
-            .i64_to_u64_wrap => self.numTruncate(i64, u64, args[0], ll.ret_layout),
-            .i64_to_u64_try => self.numTry(i64, u64, args[0], ll.ret_layout),
-            .i64_to_u128_wrap => self.numTruncateWiden(i64, i128, u128, args[0], ll.ret_layout),
-            .i64_to_u128_try => self.numTry(i64, u128, args[0], ll.ret_layout),
-            .i64_to_f32, .i64_to_f64 => self.intToFloat(i64, args[0], ll.ret_layout),
-            .i64_to_dec => self.intToDec(i64, args[0], ll.ret_layout),
-
-            .u128_to_i8_wrap => self.numTruncate(u128, i8, args[0], ll.ret_layout),
-            .u128_to_i8_try => self.numTry(u128, i8, args[0], ll.ret_layout),
-            .u128_to_i16_wrap => self.numTruncate(u128, i16, args[0], ll.ret_layout),
-            .u128_to_i16_try => self.numTry(u128, i16, args[0], ll.ret_layout),
-            .u128_to_i32_wrap => self.numTruncate(u128, i32, args[0], ll.ret_layout),
-            .u128_to_i32_try => self.numTry(u128, i32, args[0], ll.ret_layout),
-            .u128_to_i64_wrap => self.numTruncate(u128, i64, args[0], ll.ret_layout),
-            .u128_to_i64_try => self.numTry(u128, i64, args[0], ll.ret_layout),
-            .u128_to_i128_wrap => self.numTruncate(u128, i128, args[0], ll.ret_layout),
-            .u128_to_i128_try => self.numTry(u128, i128, args[0], ll.ret_layout),
-            .u128_to_u8_wrap => self.numTruncate(u128, u8, args[0], ll.ret_layout),
-            .u128_to_u8_try => self.numTry(u128, u8, args[0], ll.ret_layout),
-            .u128_to_u16_wrap => self.numTruncate(u128, u16, args[0], ll.ret_layout),
-            .u128_to_u16_try => self.numTry(u128, u16, args[0], ll.ret_layout),
-            .u128_to_u32_wrap => self.numTruncate(u128, u32, args[0], ll.ret_layout),
-            .u128_to_u32_try => self.numTry(u128, u32, args[0], ll.ret_layout),
-            .u128_to_u64_wrap => self.numTruncate(u128, u64, args[0], ll.ret_layout),
-            .u128_to_u64_try => self.numTry(u128, u64, args[0], ll.ret_layout),
-            .u128_to_f32, .u128_to_f64 => self.intToFloat(u128, args[0], ll.ret_layout),
-            .u128_to_dec_try_unsafe => self.intToDecTry(u128, args[0], ll.ret_layout),
-
-            .i128_to_i8_wrap => self.numTruncate(i128, i8, args[0], ll.ret_layout),
-            .i128_to_i8_try => self.numTry(i128, i8, args[0], ll.ret_layout),
-            .i128_to_i16_wrap => self.numTruncate(i128, i16, args[0], ll.ret_layout),
-            .i128_to_i16_try => self.numTry(i128, i16, args[0], ll.ret_layout),
-            .i128_to_i32_wrap => self.numTruncate(i128, i32, args[0], ll.ret_layout),
-            .i128_to_i32_try => self.numTry(i128, i32, args[0], ll.ret_layout),
-            .i128_to_i64_wrap => self.numTruncate(i128, i64, args[0], ll.ret_layout),
-            .i128_to_i64_try => self.numTry(i128, i64, args[0], ll.ret_layout),
-            .i128_to_u8_wrap => self.numTruncate(i128, u8, args[0], ll.ret_layout),
-            .i128_to_u8_try => self.numTry(i128, u8, args[0], ll.ret_layout),
-            .i128_to_u16_wrap => self.numTruncate(i128, u16, args[0], ll.ret_layout),
-            .i128_to_u16_try => self.numTry(i128, u16, args[0], ll.ret_layout),
-            .i128_to_u32_wrap => self.numTruncate(i128, u32, args[0], ll.ret_layout),
-            .i128_to_u32_try => self.numTry(i128, u32, args[0], ll.ret_layout),
-            .i128_to_u64_wrap => self.numTruncate(i128, u64, args[0], ll.ret_layout),
-            .i128_to_u64_try => self.numTry(i128, u64, args[0], ll.ret_layout),
-            .i128_to_u128_wrap => self.numTruncate(i128, u128, args[0], ll.ret_layout),
-            .i128_to_u128_try => self.numTry(i128, u128, args[0], ll.ret_layout),
-            .i128_to_f32, .i128_to_f64 => self.intToFloat(i128, args[0], ll.ret_layout),
-            .i128_to_dec_try_unsafe => self.intToDecTry(i128, args[0], ll.ret_layout),
-
-            // Float → int (truncating)
-            .f32_to_i8_trunc => self.floatToInt(f32, i8, args[0], ll.ret_layout),
-            .f32_to_i16_trunc => self.floatToInt(f32, i16, args[0], ll.ret_layout),
-            .f32_to_i32_trunc => self.floatToInt(f32, i32, args[0], ll.ret_layout),
-            .f32_to_i64_trunc => self.floatToInt(f32, i64, args[0], ll.ret_layout),
-            .f32_to_i128_trunc => self.floatToInt(f32, i128, args[0], ll.ret_layout),
-            .f32_to_u8_trunc => self.floatToInt(f32, u8, args[0], ll.ret_layout),
-            .f32_to_u16_trunc => self.floatToInt(f32, u16, args[0], ll.ret_layout),
-            .f32_to_u32_trunc => self.floatToInt(f32, u32, args[0], ll.ret_layout),
-            .f32_to_u64_trunc => self.floatToInt(f32, u64, args[0], ll.ret_layout),
-            .f32_to_u128_trunc => self.floatToInt(f32, u128, args[0], ll.ret_layout),
-            .f32_to_f64 => self.floatWiden(f32, f64, args[0], ll.ret_layout),
-            // Float → int (try)
-            .f32_to_i8_try_unsafe => self.floatToIntTry(f32, i8, args[0], ll.ret_layout),
-            .f32_to_i16_try_unsafe => self.floatToIntTry(f32, i16, args[0], ll.ret_layout),
-            .f32_to_i32_try_unsafe => self.floatToIntTry(f32, i32, args[0], ll.ret_layout),
-            .f32_to_i64_try_unsafe => self.floatToIntTry(f32, i64, args[0], ll.ret_layout),
-            .f32_to_i128_try_unsafe => self.floatToIntTry(f32, i128, args[0], ll.ret_layout),
-            .f32_to_u8_try_unsafe => self.floatToIntTry(f32, u8, args[0], ll.ret_layout),
-            .f32_to_u16_try_unsafe => self.floatToIntTry(f32, u16, args[0], ll.ret_layout),
-            .f32_to_u32_try_unsafe => self.floatToIntTry(f32, u32, args[0], ll.ret_layout),
-            .f32_to_u64_try_unsafe => self.floatToIntTry(f32, u64, args[0], ll.ret_layout),
-            .f32_to_u128_try_unsafe => self.floatToIntTry(f32, u128, args[0], ll.ret_layout),
-
-            .f64_to_i8_trunc => self.floatToInt(f64, i8, args[0], ll.ret_layout),
-            .f64_to_i16_trunc => self.floatToInt(f64, i16, args[0], ll.ret_layout),
-            .f64_to_i32_trunc => self.floatToInt(f64, i32, args[0], ll.ret_layout),
-            .f64_to_i64_trunc => self.floatToInt(f64, i64, args[0], ll.ret_layout),
-            .f64_to_i128_trunc => self.floatToInt(f64, i128, args[0], ll.ret_layout),
-            .f64_to_u8_trunc => self.floatToInt(f64, u8, args[0], ll.ret_layout),
-            .f64_to_u16_trunc => self.floatToInt(f64, u16, args[0], ll.ret_layout),
-            .f64_to_u32_trunc => self.floatToInt(f64, u32, args[0], ll.ret_layout),
-            .f64_to_u64_trunc => self.floatToInt(f64, u64, args[0], ll.ret_layout),
-            .f64_to_u128_trunc => self.floatToInt(f64, u128, args[0], ll.ret_layout),
-            .f64_to_f32_wrap => self.floatNarrow(f64, f32, args[0], ll.ret_layout),
-            .f64_to_i8_try_unsafe => self.floatToIntTry(f64, i8, args[0], ll.ret_layout),
-            .f64_to_i16_try_unsafe => self.floatToIntTry(f64, i16, args[0], ll.ret_layout),
-            .f64_to_i32_try_unsafe => self.floatToIntTry(f64, i32, args[0], ll.ret_layout),
-            .f64_to_i64_try_unsafe => self.floatToIntTry(f64, i64, args[0], ll.ret_layout),
-            .f64_to_i128_try_unsafe => self.floatToIntTry(f64, i128, args[0], ll.ret_layout),
-            .f64_to_u8_try_unsafe => self.floatToIntTry(f64, u8, args[0], ll.ret_layout),
-            .f64_to_u16_try_unsafe => self.floatToIntTry(f64, u16, args[0], ll.ret_layout),
-            .f64_to_u32_try_unsafe => self.floatToIntTry(f64, u32, args[0], ll.ret_layout),
-            .f64_to_u64_try_unsafe => self.floatToIntTry(f64, u64, args[0], ll.ret_layout),
-            .f64_to_u128_try_unsafe => self.floatToIntTry(f64, u128, args[0], ll.ret_layout),
-            .f64_to_f32_try_unsafe => blk: {
-                const sv = args[0].read(f64);
-                if (builtins.numeric_conversions.f64FitsF32(sv)) {
-                    break :blk try self.writeLowLevelTryRecord(f32, ll.ret_layout, @floatCast(sv));
-                } else {
-                    break :blk try self.writeLowLevelTryRecord(f32, ll.ret_layout, null);
-                }
-            },
-
-            // Dec → numeric
-            .dec_to_i8_trunc => self.decToInt(i8, args[0], ll.ret_layout),
-            .dec_to_i16_trunc => self.decToInt(i16, args[0], ll.ret_layout),
-            .dec_to_i32_trunc => self.decToInt(i32, args[0], ll.ret_layout),
-            .dec_to_i64_trunc => self.decToInt(i64, args[0], ll.ret_layout),
-            .dec_to_i128_trunc => self.decToInt(i128, args[0], ll.ret_layout),
-            .dec_to_u8_trunc => self.decToInt(u8, args[0], ll.ret_layout),
-            .dec_to_u16_trunc => self.decToInt(u16, args[0], ll.ret_layout),
-            .dec_to_u32_trunc => self.decToInt(u32, args[0], ll.ret_layout),
-            .dec_to_u64_trunc => self.decToInt(u64, args[0], ll.ret_layout),
-            .dec_to_u128_trunc => self.decToInt(u128, args[0], ll.ret_layout),
-            .dec_to_i8_try_unsafe => self.decToIntTry(i8, args[0], ll.ret_layout),
-            .dec_to_i16_try_unsafe => self.decToIntTry(i16, args[0], ll.ret_layout),
-            .dec_to_i32_try_unsafe => self.decToIntTry(i32, args[0], ll.ret_layout),
-            .dec_to_i64_try_unsafe => self.decToIntTry(i64, args[0], ll.ret_layout),
-            .dec_to_u8_try_unsafe => self.decToIntTry(u8, args[0], ll.ret_layout),
-            .dec_to_u16_try_unsafe => self.decToIntTry(u16, args[0], ll.ret_layout),
-            .dec_to_u32_try_unsafe => self.decToIntTry(u32, args[0], ll.ret_layout),
-            .dec_to_u64_try_unsafe => self.decToIntTry(u64, args[0], ll.ret_layout),
-            .dec_to_u128_try_unsafe => self.decToIntTry(u128, args[0], ll.ret_layout),
-            .dec_to_f32_wrap => blk: {
-                const dec = RocDec{ .num = args[0].read(i128) };
-                const val = try self.alloc(ll.ret_layout);
-                val.write(f32, builtins.dec.toF32(dec));
-                break :blk val;
-            },
-            .dec_to_f32_try_unsafe => blk: {
-                const dec = RocDec{ .num = args[0].read(i128) };
-                if (builtins.dec.toF32Try(dec)) |f| {
-                    break :blk try self.writeLowLevelTryRecord(f32, ll.ret_layout, f);
-                } else {
-                    break :blk try self.writeLowLevelTryRecord(f32, ll.ret_layout, null);
-                }
-            },
-            .dec_to_f64 => blk: {
-                const dec = RocDec{ .num = args[0].read(i128) };
-                const val = try self.alloc(ll.ret_layout);
-                val.write(f64, dec.toF64());
-                break :blk val;
-            },
+            // ── Numeric conversions ──
+            inline .u8_to_i16,
+            .u8_to_i32,
+            .u8_to_i64,
+            .u8_to_i128,
+            .u8_to_u16,
+            .u8_to_u32,
+            .u8_to_u64,
+            .u8_to_u128,
+            .u8_to_f32,
+            .u8_to_f64,
+            .u8_to_dec,
+            .u8_to_i8_wrap,
+            .u8_to_i8_try,
+            .i8_to_i16,
+            .i8_to_i32,
+            .i8_to_i64,
+            .i8_to_i128,
+            .i8_to_u8_wrap,
+            .i8_to_u8_try,
+            .i8_to_u16_wrap,
+            .i8_to_u16_try,
+            .i8_to_u32_wrap,
+            .i8_to_u32_try,
+            .i8_to_u64_wrap,
+            .i8_to_u64_try,
+            .i8_to_u128_wrap,
+            .i8_to_u128_try,
+            .i8_to_f32,
+            .i8_to_f64,
+            .i8_to_dec,
+            .u16_to_i32,
+            .u16_to_i64,
+            .u16_to_i128,
+            .u16_to_u32,
+            .u16_to_u64,
+            .u16_to_u128,
+            .u16_to_i8_wrap,
+            .u16_to_i8_try,
+            .u16_to_i16_wrap,
+            .u16_to_i16_try,
+            .u16_to_u8_wrap,
+            .u16_to_u8_try,
+            .u16_to_f32,
+            .u16_to_f64,
+            .u16_to_dec,
+            .i16_to_i32,
+            .i16_to_i64,
+            .i16_to_i128,
+            .i16_to_i8_wrap,
+            .i16_to_i8_try,
+            .i16_to_u8_wrap,
+            .i16_to_u8_try,
+            .i16_to_u16_wrap,
+            .i16_to_u16_try,
+            .i16_to_u32_wrap,
+            .i16_to_u32_try,
+            .i16_to_u64_wrap,
+            .i16_to_u64_try,
+            .i16_to_u128_wrap,
+            .i16_to_u128_try,
+            .i16_to_f32,
+            .i16_to_f64,
+            .i16_to_dec,
+            .u32_to_i64,
+            .u32_to_i128,
+            .u32_to_u64,
+            .u32_to_u128,
+            .u32_to_i8_wrap,
+            .u32_to_i8_try,
+            .u32_to_i16_wrap,
+            .u32_to_i16_try,
+            .u32_to_i32_wrap,
+            .u32_to_i32_try,
+            .u32_to_u8_wrap,
+            .u32_to_u8_try,
+            .u32_to_u16_wrap,
+            .u32_to_u16_try,
+            .u32_to_f32,
+            .u32_to_f64,
+            .u32_to_dec,
+            .i32_to_i64,
+            .i32_to_i128,
+            .i32_to_i8_wrap,
+            .i32_to_i8_try,
+            .i32_to_i16_wrap,
+            .i32_to_i16_try,
+            .i32_to_u8_wrap,
+            .i32_to_u8_try,
+            .i32_to_u16_wrap,
+            .i32_to_u16_try,
+            .i32_to_u32_wrap,
+            .i32_to_u32_try,
+            .i32_to_u64_wrap,
+            .i32_to_u64_try,
+            .i32_to_u128_wrap,
+            .i32_to_u128_try,
+            .i32_to_f32,
+            .i32_to_f64,
+            .i32_to_dec,
+            .u64_to_i128,
+            .u64_to_u128,
+            .u64_to_i8_wrap,
+            .u64_to_i8_try,
+            .u64_to_i16_wrap,
+            .u64_to_i16_try,
+            .u64_to_i32_wrap,
+            .u64_to_i32_try,
+            .u64_to_i64_wrap,
+            .u64_to_i64_try,
+            .u64_to_u8_wrap,
+            .u64_to_u8_try,
+            .u64_to_u16_wrap,
+            .u64_to_u16_try,
+            .u64_to_u32_wrap,
+            .u64_to_u32_try,
+            .u64_to_f32,
+            .u64_to_f64,
+            .u64_to_dec,
+            .i64_to_i128,
+            .i64_to_i8_wrap,
+            .i64_to_i8_try,
+            .i64_to_i16_wrap,
+            .i64_to_i16_try,
+            .i64_to_i32_wrap,
+            .i64_to_i32_try,
+            .i64_to_u8_wrap,
+            .i64_to_u8_try,
+            .i64_to_u16_wrap,
+            .i64_to_u16_try,
+            .i64_to_u32_wrap,
+            .i64_to_u32_try,
+            .i64_to_u64_wrap,
+            .i64_to_u64_try,
+            .i64_to_u128_wrap,
+            .i64_to_u128_try,
+            .i64_to_f32,
+            .i64_to_f64,
+            .i64_to_dec,
+            .u128_to_i8_wrap,
+            .u128_to_i8_try,
+            .u128_to_i16_wrap,
+            .u128_to_i16_try,
+            .u128_to_i32_wrap,
+            .u128_to_i32_try,
+            .u128_to_i64_wrap,
+            .u128_to_i64_try,
+            .u128_to_i128_wrap,
+            .u128_to_i128_try,
+            .u128_to_u8_wrap,
+            .u128_to_u8_try,
+            .u128_to_u16_wrap,
+            .u128_to_u16_try,
+            .u128_to_u32_wrap,
+            .u128_to_u32_try,
+            .u128_to_u64_wrap,
+            .u128_to_u64_try,
+            .u128_to_f32,
+            .u128_to_f64,
+            .u128_to_dec_try_unsafe,
+            .i128_to_i8_wrap,
+            .i128_to_i8_try,
+            .i128_to_i16_wrap,
+            .i128_to_i16_try,
+            .i128_to_i32_wrap,
+            .i128_to_i32_try,
+            .i128_to_i64_wrap,
+            .i128_to_i64_try,
+            .i128_to_u8_wrap,
+            .i128_to_u8_try,
+            .i128_to_u16_wrap,
+            .i128_to_u16_try,
+            .i128_to_u32_wrap,
+            .i128_to_u32_try,
+            .i128_to_u64_wrap,
+            .i128_to_u64_try,
+            .i128_to_u128_wrap,
+            .i128_to_u128_try,
+            .i128_to_f32,
+            .i128_to_f64,
+            .i128_to_dec_try_unsafe,
+            .f32_to_i8_trunc,
+            .f32_to_i16_trunc,
+            .f32_to_i32_trunc,
+            .f32_to_i64_trunc,
+            .f32_to_i128_trunc,
+            .f32_to_u8_trunc,
+            .f32_to_u16_trunc,
+            .f32_to_u32_trunc,
+            .f32_to_u64_trunc,
+            .f32_to_u128_trunc,
+            .f32_to_f64,
+            .f32_to_i8_try_unsafe,
+            .f32_to_i16_try_unsafe,
+            .f32_to_i32_try_unsafe,
+            .f32_to_i64_try_unsafe,
+            .f32_to_i128_try_unsafe,
+            .f32_to_u8_try_unsafe,
+            .f32_to_u16_try_unsafe,
+            .f32_to_u32_try_unsafe,
+            .f32_to_u64_try_unsafe,
+            .f32_to_u128_try_unsafe,
+            .f64_to_i8_trunc,
+            .f64_to_i16_trunc,
+            .f64_to_i32_trunc,
+            .f64_to_i64_trunc,
+            .f64_to_i128_trunc,
+            .f64_to_u8_trunc,
+            .f64_to_u16_trunc,
+            .f64_to_u32_trunc,
+            .f64_to_u64_trunc,
+            .f64_to_u128_trunc,
+            .f64_to_f32_wrap,
+            .f64_to_i8_try_unsafe,
+            .f64_to_i16_try_unsafe,
+            .f64_to_i32_try_unsafe,
+            .f64_to_i64_try_unsafe,
+            .f64_to_i128_try_unsafe,
+            .f64_to_u8_try_unsafe,
+            .f64_to_u16_try_unsafe,
+            .f64_to_u32_try_unsafe,
+            .f64_to_u64_try_unsafe,
+            .f64_to_u128_try_unsafe,
+            .f64_to_f32_try_unsafe,
+            .dec_to_i8_trunc,
+            .dec_to_i16_trunc,
+            .dec_to_i32_trunc,
+            .dec_to_i64_trunc,
+            .dec_to_i128_trunc,
+            .dec_to_u8_trunc,
+            .dec_to_u16_trunc,
+            .dec_to_u32_trunc,
+            .dec_to_u64_trunc,
+            .dec_to_u128_trunc,
+            .dec_to_i8_try_unsafe,
+            .dec_to_i16_try_unsafe,
+            .dec_to_i32_try_unsafe,
+            .dec_to_i64_try_unsafe,
+            .dec_to_u8_try_unsafe,
+            .dec_to_u16_try_unsafe,
+            .dec_to_u32_try_unsafe,
+            .dec_to_u64_try_unsafe,
+            .dec_to_u128_try_unsafe,
+            .dec_to_f32_wrap,
+            .dec_to_f32_try_unsafe,
+            .dec_to_f64,
+            => |op| self.numericConversion(comptime numeric_conversion.getConversionSpec(op).?, args[0], ll.ret_layout),
 
             // ── Box ops ──
             .box_box => try self.evalBoxBox(args[0], ll.ret_layout),
@@ -7803,6 +8060,79 @@ pub const Interpreter = struct {
         return val;
     }
 
+    fn evalIntegerFamily(
+        self: *LirInterpreter,
+        low_level: LIR.LowLevel,
+        a: Value,
+        b: Value,
+        ret_layout: layout_mod.Idx,
+        arg_layout: layout_mod.Idx,
+    ) Error!Value {
+        const entry = CheckedArithmetic.classify(low_level) orelse unreachable;
+        if (entry.mode == .overflows) {
+            return self.evalIntegerOverflows(a, b, ret_layout, arg_layout, entry.operation);
+        }
+
+        const op: NumOp = switch (entry.operation) {
+            .add => .add,
+            .sub => .sub,
+            .mul => .mul,
+        };
+        if (builtin.mode == .Debug and entry.mode == .proven_cannot_overflow) {
+            if (try self.integerOperationOverflows(a, b, arg_layout, entry.operation)) {
+                return self.invariantFailedError("range prover emitted {s} for overflowing operands", .{@tagName(low_level)});
+            }
+        }
+        const checked_op: ?LIR.LowLevel = if (entry.mode == .crash_on_overflow) low_level else null;
+        return self.numBinOp(a, b, ret_layout, arg_layout, op, checked_op);
+    }
+
+    fn evalIntegerOverflows(
+        self: *LirInterpreter,
+        a: Value,
+        b: Value,
+        ret_layout: layout_mod.Idx,
+        arg_layout: layout_mod.Idx,
+        operation: CheckedArithmetic.Operation,
+    ) Error!Value {
+        const overflowed = try self.integerOperationOverflows(a, b, arg_layout, operation);
+        const value = try self.alloc(ret_layout);
+        value.write(u8, @intFromBool(overflowed));
+        return value;
+    }
+
+    fn integerOperationOverflows(
+        self: *LirInterpreter,
+        a: Value,
+        b: Value,
+        arg_layout: layout_mod.Idx,
+        operation: CheckedArithmetic.Operation,
+    ) Error!bool {
+        return switch (try self.numericOperandKind(arg_layout)) {
+            .unsigned_int => |bits| switch (bits) {
+                8 => intBinOverflows(u8, a.read(u8), b.read(u8), operation),
+                16 => intBinOverflows(u16, a.read(u16), b.read(u16), operation),
+                32 => intBinOverflows(u32, a.read(u32), b.read(u32), operation),
+                64 => intBinOverflows(u64, a.read(u64), b.read(u64), operation),
+                128 => intBinOverflows(u128, a.read(u128), b.read(u128), operation),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer width {d}", .{bits}),
+            },
+            .signed_int => |bits| switch (bits) {
+                8 => intBinOverflows(i8, a.read(i8), b.read(i8), operation),
+                16 => intBinOverflows(i16, a.read(i16), b.read(i16), operation),
+                32 => intBinOverflows(i32, a.read(i32), b.read(i32), operation),
+                64 => intBinOverflows(i64, a.read(i64), b.read(i64), operation),
+                128 => intBinOverflows(i128, a.read(i128), b.read(i128), operation),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer width {d}", .{bits}),
+            },
+            .dec => if (operation == .mul)
+                return self.invariantFailedError("LIR/interpreter invariant violated: Dec multiplication used the integer arithmetic family", .{})
+            else
+                intBinOverflows(i128, a.read(i128), b.read(i128), operation),
+            .float => return self.invariantFailedError("LIR/interpreter invariant violated: integer arithmetic predicate used a float layout", .{}),
+        };
+    }
+
     fn numUnaryOp(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx, op: NumOp, checked_op: ?LIR.LowLevel) Error!Value {
         return self.numBinOp(a, a, ret_layout, arg_layout, op, checked_op);
     }
@@ -7814,7 +8144,7 @@ pub const Interpreter = struct {
         if (op == .eq and switch (layout_val.tag) {
             .zst, .struct_, .list, .list_of_zst, .tag_union => true,
             .scalar => layout_val.getScalar().tag == .str,
-            .box, .box_of_zst, .closure, .erased_callable, .ptr => false,
+            .box, .box_of_zst, .erased_box, .closure, .erased_callable, .ptr => false,
         }) {
             val.write(u8, if (try self.valuesEqual(a, b, arg_layout)) 1 else 0);
             return val;
@@ -7877,7 +8207,7 @@ pub const Interpreter = struct {
 
     fn evalCompare(self: *LirInterpreter, a: Value, b: Value, arg_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
-        // Runtime tag order for [LT, EQ, GT]: EQ=0, GT=1, LT=2.
+        // Runtime tag order for [Before, Same, After]: After=0, Before=1, Same=2.
         const result: u8 = switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
                 8 => cmpOrder(u8, a.read(u8), b.read(u8)),
@@ -8369,6 +8699,123 @@ pub const Interpreter = struct {
         return self.writeLowLevelTryRecord(i128, ret_layout, null);
     }
 
+    fn floatNarrowTry(self: *LirInterpreter, comptime Src: type, comptime Dst: type, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
+        if (Src != f64 or Dst != f32) @compileError("f64 to f32 is the only narrowing that can fail");
+        const sv = arg.read(f64);
+        const narrowed: ?f32 = if (builtins.numeric_conversions.f64FitsF32(sv)) @floatCast(sv) else null;
+        return self.writeLowLevelTryRecord(f32, ret_layout, narrowed);
+    }
+
+    fn decToFloat(self: *LirInterpreter, comptime Dst: type, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
+        const dec = RocDec{ .num = arg.read(i128) };
+        const val = try self.alloc(ret_layout);
+        if (Dst == f32) {
+            val.write(f32, builtins.dec.toF32(dec));
+        } else if (Dst == f64) {
+            val.write(f64, dec.toF64());
+        } else {
+            @compileError("Dec converts only to f32 and f64");
+        }
+        return val;
+    }
+
+    fn decToFloatTry(self: *LirInterpreter, comptime Dst: type, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
+        if (Dst != f32) @compileError("f32 is the only float Dec can fail to reach");
+        const dec = RocDec{ .num = arg.read(i128) };
+        return self.writeLowLevelTryRecord(f32, ret_layout, builtins.dec.toF32Try(dec));
+    }
+
+    /// Perform a conversion. Routes on the source and destination classes;
+    /// each leaf switches on the mode.
+    fn numericConversion(self: *LirInterpreter, comptime spec: numeric_conversion.Conversion, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
+        return switch (comptime spec.src.class()) {
+            .int => self.intToNumeric(spec, arg, ret_layout),
+            .float => self.floatToNumeric(spec, arg, ret_layout),
+            .dec => self.decToNumeric(spec, arg, ret_layout),
+        };
+    }
+
+    fn intToNumeric(self: *LirInterpreter, comptime spec: numeric_conversion.Conversion, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
+        const Src = comptime spec.src.ZigType();
+        return switch (comptime spec.dst.class()) {
+            .int => switch (comptime spec.mode) {
+                .exact => self.numWiden(Src, arg, ret_layout),
+                // A signed source widening to an unsigned destination sign-extends
+                // first, so it reinterprets the full-width value.
+                .wrap => if (comptime spec.src.bits() >= spec.dst.bits())
+                    self.numTruncate(Src, spec.dst.ZigType(), arg, ret_layout)
+                else
+                    self.numTruncateWiden(Src, std.meta.Int(.signed, spec.dst.bits()), spec.dst.ZigType(), arg, ret_layout),
+                .@"try" => self.numTry(Src, spec.dst.ZigType(), arg, ret_layout),
+                .trunc, .try_unsafe => unreachable,
+            },
+            .float => switch (comptime spec.mode) {
+                .exact => self.intToFloat(Src, arg, ret_layout),
+                .wrap, .trunc, .@"try", .try_unsafe => unreachable,
+            },
+            .dec => switch (comptime spec.mode) {
+                .exact => self.intToDec(Src, arg, ret_layout),
+                .try_unsafe => self.intToDecTry(Src, arg, ret_layout),
+                .wrap, .trunc, .@"try" => unreachable,
+            },
+        };
+    }
+
+    fn floatToNumeric(self: *LirInterpreter, comptime spec: numeric_conversion.Conversion, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
+        const Src = comptime spec.src.ZigType();
+        return switch (comptime spec.dst.class()) {
+            .int => switch (comptime spec.mode) {
+                .trunc => self.floatToInt(Src, spec.dst.ZigType(), arg, ret_layout),
+                .try_unsafe => self.floatToIntTry(Src, spec.dst.ZigType(), arg, ret_layout),
+                .exact, .wrap, .@"try" => unreachable,
+            },
+            .float => switch (comptime spec.mode) {
+                .exact => self.floatWiden(Src, spec.dst.ZigType(), arg, ret_layout),
+                .wrap => self.floatNarrow(Src, spec.dst.ZigType(), arg, ret_layout),
+                .try_unsafe => self.floatNarrowTry(Src, spec.dst.ZigType(), arg, ret_layout),
+                .trunc, .@"try" => unreachable,
+            },
+            .dec => unreachable,
+        };
+    }
+
+    fn decToNumeric(self: *LirInterpreter, comptime spec: numeric_conversion.Conversion, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
+        return switch (comptime spec.dst.class()) {
+            .int => switch (comptime spec.mode) {
+                .trunc => self.decToInt(spec.dst.ZigType(), arg, ret_layout),
+                .try_unsafe => self.decToIntTry(spec.dst.ZigType(), arg, ret_layout),
+                .exact, .wrap, .@"try" => unreachable,
+            },
+            .float => switch (comptime spec.mode) {
+                .exact, .wrap => self.decToFloat(spec.dst.ZigType(), arg, ret_layout),
+                .try_unsafe => self.decToFloatTry(spec.dst.ZigType(), arg, ret_layout),
+                .trunc, .@"try" => unreachable,
+            },
+            .dec => unreachable,
+        };
+    }
+
+    /// Render a number as its decimal text.
+    fn numberToString(self: *LirInterpreter, comptime spec: numeric_conversion.StringConversion, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
+        comptime std.debug.assert(spec.direction == .to_str);
+        return switch (comptime spec.num.class()) {
+            .int => self.numToStr(spec.num.ZigType(), arg, ret_layout),
+            .float => blk: {
+                const is_f32 = comptime spec.num == .f32;
+                const bits: u64 = if (is_f32) @as(u32, @bitCast(arg.read(f32))) else @bitCast(arg.read(f64));
+                break :blk self.rocStrToValue(builtins.str.floatToStrFromBits(bits, is_f32, &self.roc_ops), ret_layout);
+            },
+            .dec => blk: {
+                const dec = RocDec{ .num = arg.read(i128) };
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                break :blk self.rocStrToValue(builtins.dec.to_str(dec, &self.roc_ops), ret_layout);
+            },
+        };
+    }
+
     fn numToStr(self: *LirInterpreter, comptime T: type, arg: Value, _: layout_mod.Idx) Error!Value {
         const arena = self.arena.allocator();
         const formatted = std.fmt.allocPrint(arena, "{d}", .{arg.read(T)}) catch return error.OutOfMemory;
@@ -8560,6 +9007,38 @@ pub const Interpreter = struct {
         return self.rocListToValue(result, ret_layout);
     }
 
+    fn evalListSortWith(self: *LirInterpreter, list_arg: Value, callable_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
+        const rl = self.valueToRocListForLayout(list_arg, list_layout);
+        const info = self.listElemInfo(list_layout);
+        if (info.width == 0) return self.rocListToValue(canonicalZstList(rl.len()), ret_layout);
+        const callable = self.readBoxedDataPointer(callable_arg) orelse return self.invariantFailedError(
+            "LIR/interpreter invariant violated: list_sort_with received a null erased callable",
+            .{},
+        );
+        const elems_rc = self.builtinListElemRc(list_layout);
+        var crash_boundary = self.enterCrashBoundary();
+        defer crash_boundary.deinit();
+        const sj = crash_boundary.set();
+        if (sj != 0) return error.Crash;
+        var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
+        const result = builtins.list.listSortWith(
+            rl,
+            callable,
+            info.alignment,
+            info.width,
+            elems_rc,
+            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+            if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+            if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
+            update_mode,
+            false,
+            null,
+            &self.roc_ops,
+        );
+        return self.rocListToValue(result, ret_layout);
+    }
+
     fn evalListSplitFirst(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
         const rl = self.valueToRocListForLayout(list_arg, list_layout);
         const info = self.listElemInfo(list_layout);
@@ -8725,6 +9204,14 @@ pub const Interpreter = struct {
         return result[0];
     }
 
+    fn intBinOverflows(comptime T: type, av: T, bv: T, operation: CheckedArithmetic.Operation) bool {
+        return switch (operation) {
+            .add => @addWithOverflow(av, bv)[1] != 0,
+            .sub => @subWithOverflow(av, bv)[1] != 0,
+            .mul => @mulWithOverflow(av, bv)[1] != 0,
+        };
+    }
+
     fn checkedIntNegate(comptime T: type, av: T) ?T {
         const result = @subWithOverflow(@as(T, 0), av);
         if (result[1] != 0) return null;
@@ -8774,8 +9261,14 @@ pub const Interpreter = struct {
     /// Dec (fixed-point i128 with 10^18 scale) binary operation.
     fn decBinOp(self: *LirInterpreter, av: i128, bv: i128, op: NumOp, checked_op: ?LIR.LowLevel) Error!i128 {
         return switch (op) {
-            .add => av +% bv,
-            .sub => av -% bv,
+            .add => if (checked_op) |op_tag|
+                checkedIntAdd(i128, av, bv) orelse return self.checkedOverflow(op_tag)
+            else
+                av +% bv,
+            .sub => if (checked_op) |op_tag|
+                checkedIntSub(i128, av, bv) orelse return self.checkedOverflow(op_tag)
+            else
+                av -% bv,
             .negate => -%av,
             .abs => blk: {
                 if (checked_op != null and av == std.math.minInt(i128)) {
@@ -8809,9 +9302,9 @@ pub const Interpreter = struct {
     }
 
     fn cmpOrder(comptime T: type, av: T, bv: T) u8 {
-        if (av == bv) return 0; // EQ
-        if (av > bv) return 1; // GT
-        return 2; // LT
+        if (av == bv) return 2; // Same
+        if (av < bv) return 1; // Before
+        return 0; // After
     }
 
     fn shiftOp(comptime T: type, av: T, amount: u8, op: ShiftOp) T {
@@ -9226,6 +9719,7 @@ pub const Interpreter = struct {
             },
             .scalar,
             .box_of_zst,
+            .erased_box,
             .list,
             .list_of_zst,
             .closure,
@@ -9422,6 +9916,7 @@ pub const Interpreter = struct {
                 return result;
             },
             .scalar,
+            .erased_box,
             .list,
             .list_of_zst,
             .struct_,

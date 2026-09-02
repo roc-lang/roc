@@ -222,6 +222,7 @@ const DiagnosticNodeTag = enum {
     diag_type_from_missing_module,
     diag_module_not_imported,
     diag_nested_type_not_found,
+    diag_internal_builtin_type,
     diag_nested_value_not_found,
     diag_record_builder_map2_not_found,
     diag_too_many_exports,
@@ -233,7 +234,7 @@ const DiagnosticNodeTag = enum {
     diag_open_ext_not_allowed_in_type_decl,
     diag_unnamed_field_not_allowed_in_structural_record,
     diag_optional_field_cannot_have_default,
-    diag_record_default_not_literal,
+    diag_record_default_reference_cycle,
     diag_type_module_missing_matching_type,
     diag_type_module_has_alias_not_nominal,
     diag_default_app_missing_main,
@@ -267,6 +268,8 @@ const DiagnosticNodeTag = enum {
     diag_deprecated_number_suffix,
     diag_range_op_chained,
     diag_unnamed_field_cannot_have_default,
+    diag_default_not_allowed_in_structural_record,
+    diag_default_not_allowed_on_local_type_decl,
 };
 
 gpa: Allocator,
@@ -481,6 +484,7 @@ const Scratch = struct {
     statements: base.Scratch(CIR.Statement.Idx),
     exprs: base.Scratch(CIR.Expr.Idx),
     record_fields: base.Scratch(CIR.RecordField.Idx),
+    record_unset_fields: base.Scratch(CIR.UnsetField.Idx),
     match_branches: base.Scratch(CIR.Expr.Match.Branch.Idx),
     match_branch_patterns: base.Scratch(CIR.Expr.Match.BranchPattern.Idx),
     if_branches: base.Scratch(CIR.Expr.IfBranch.Idx),
@@ -504,6 +508,8 @@ const Scratch = struct {
         errdefer exprs.deinit();
         var record_fields = try base.Scratch(CIR.RecordField.Idx).init(gpa);
         errdefer record_fields.deinit();
+        var record_unset_fields = try base.Scratch(CIR.UnsetField.Idx).init(gpa);
+        errdefer record_unset_fields.deinit();
         var match_branches = try base.Scratch(CIR.Expr.Match.Branch.Idx).init(gpa);
         errdefer match_branches.deinit();
         var match_branch_patterns = try base.Scratch(CIR.Expr.Match.BranchPattern.Idx).init(gpa);
@@ -533,6 +539,7 @@ const Scratch = struct {
             .statements = statements,
             .exprs = exprs,
             .record_fields = record_fields,
+            .record_unset_fields = record_unset_fields,
             .match_branches = match_branches,
             .match_branch_patterns = match_branch_patterns,
             .if_branches = if_branches,
@@ -554,6 +561,7 @@ const Scratch = struct {
         self.statements.deinit();
         self.exprs.deinit();
         self.record_fields.deinit();
+        self.record_unset_fields.deinit();
         self.match_branches.deinit();
         self.match_branch_patterns.deinit();
         self.if_branches.deinit();
@@ -741,7 +749,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 92;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 95;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
@@ -1615,10 +1623,12 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             // Retrieve fields span and ext from span_with_node_data
             const fields_ext = store.span_with_node_data.items.items[p.fields_ext_idx];
             const ext = if (fields_ext.node == 0) null else @as(CIR.Expr.Idx, @enumFromInt(fields_ext.node));
+            const unsets = store.span2_data.items.items[p.unsets_span2_idx];
 
             return CIR.Expr{
                 .e_record = .{
                     .fields = .{ .span = .{ .start = fields_ext.start, .len = fields_ext.len } },
+                    .unsets = .{ .span = .{ .start = unsets.start, .len = unsets.len } },
                     .ext = ext,
                 },
             };
@@ -2645,17 +2655,23 @@ pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CI
     const p = payload.annotation;
     const anno: CIR.TypeAnno.Idx = @enumFromInt(p.anno);
 
-    const where_clause = if (p.has_where)
+    const where_clause = if (p.flags.has_where)
         store.loadWhereClauseSpan(p.where_span2_idx)
     else
         null;
 
+    const name_region: ?base.Region = if (p.flags.has_name_region) blk: {
+        const span = store.span2_data.items.items[p.name_region_span2_idx];
+        break :blk base.Region.from_raw_offsets(span.start, span.start + span.len);
+    } else null;
+
     return CIR.Annotation{
         .anno = anno,
         .where = where_clause,
-        .mentions_type_var = p.mentions_type_var,
-        .introduces_type_var = p.introduces_type_var,
-        .contains_underscore = p.contains_underscore,
+        .name_region = name_region,
+        .mentions_type_var = p.flags.mentions_type_var,
+        .introduces_type_var = p.flags.introduces_type_var,
+        .contains_underscore = p.flags.contains_underscore,
     };
 }
 
@@ -3329,9 +3345,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .len = e.fields.span.len,
                 .node = ext_value,
             });
+            const unsets_span2_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{ .start = e.unsets.span.start, .len = e.unsets.span.len });
 
             node.setPayload(.{ .expr_record = .{
                 .fields_ext_idx = fields_ext_idx,
+                .unsets_span2_idx = unsets_span2_idx,
             } });
         },
         .e_empty_record => {
@@ -3433,6 +3452,21 @@ pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField, region: b
     node.setPayload(.{ .record_field = .{
         .name = @bitCast(recordField.name),
         .expr = @intFromEnum(recordField.value),
+    } });
+
+    const nid = try store.nodes.append(store.gpa, node);
+    _ = try store.regions.append(store.gpa, region);
+    return @enumFromInt(@intFromEnum(nid));
+}
+
+/// Adds an unset record field (`name: _`) to the store.
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `ModuleEnv`.
+pub fn addUnsetField(store: *NodeStore, unset_field: CIR.UnsetField, region: base.Region) Allocator.Error!CIR.UnsetField.Idx {
+    var node = Node.init(.record_unset_field);
+    node.setPayload(.{ .record_unset_field = .{
+        .name = @bitCast(unset_field.name),
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
@@ -3941,6 +3975,26 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.Recor
     return @enumFromInt(@intFromEnum(nid));
 }
 
+/// Drop the `??` default from a defaulted annotation record field, degrading
+/// it to a plain required field in place. The default-cycle pass uses this as
+/// its recovery so check and lowering never see a cyclic default (design.md
+/// "Defaulted Fields"); the default expression node stays in the store (it
+/// was canonicalized and diagnosed) but nothing references it.
+pub fn dropAnnoRecordFieldDefault(store: *NodeStore, field_idx: CIR.TypeAnno.RecordField.Idx) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(field_idx));
+    var node = store.nodes.get(node_idx);
+    std.debug.assert(node.tag == .ty_record_field_defaulted);
+    const payload = node.getPayload().ty_record_field_defaulted;
+    node = Node.init(.ty_record_field);
+    node.setPayload(.{ .ty_record_field = .{
+        .name = payload.name,
+        .ty = payload.ty,
+        .is_optional = false,
+        .is_unnamed = false,
+    } });
+    store.nodes.set(node_idx, node);
+}
+
 /// Adds an annotation to the store.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
@@ -3954,26 +4008,32 @@ pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base
     const introduces_type_var = store.typeAnnoHasTypeVar(annotation.anno, .introduced_only);
     const contains_underscore = store.annotationContainsUnderscore(annotation.anno, annotation.where);
 
-    if (annotation.where) |where_clause| {
-        const where_span2_idx = try store.storeWhereClauseSpan(where_clause);
-        node.setPayload(.{ .annotation = .{
-            .anno = @intFromEnum(annotation.anno),
-            .where_span2_idx = where_span2_idx,
-            .has_where = true,
+    const where_span2_idx: u32 = if (annotation.where) |where_clause|
+        try store.storeWhereClauseSpan(where_clause)
+    else
+        0;
+
+    const name_region_span2_idx: u32 = if (annotation.name_region) |name_region| blk: {
+        const idx: u32 = @intCast(store.span2_data.len());
+        _ = try store.span2_data.append(store.gpa, .{
+            .start = name_region.start.offset,
+            .len = name_region.end.offset - name_region.start.offset,
+        });
+        break :blk idx;
+    } else 0;
+
+    node.setPayload(.{ .annotation = .{
+        .anno = @intFromEnum(annotation.anno),
+        .where_span2_idx = where_span2_idx,
+        .name_region_span2_idx = name_region_span2_idx,
+        .flags = .{
+            .has_where = annotation.where != null,
             .mentions_type_var = mentions_type_var,
             .introduces_type_var = introduces_type_var,
             .contains_underscore = contains_underscore,
-        } });
-    } else {
-        node.setPayload(.{ .annotation = .{
-            .anno = @intFromEnum(annotation.anno),
-            .where_span2_idx = 0,
-            .has_where = false,
-            .mentions_type_var = mentions_type_var,
-            .introduces_type_var = introduces_type_var,
-            .contains_underscore = contains_underscore,
-        } });
-    }
+            .has_name_region = annotation.name_region != null,
+        },
+    } });
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
@@ -4210,6 +4270,15 @@ pub fn getRecordField(store: *const NodeStore, idx: CIR.RecordField.Idx) CIR.Rec
     return CIR.RecordField{
         .name = @bitCast(payload.record_field.name),
         .value = @enumFromInt(payload.record_field.expr),
+    };
+}
+
+/// Retrieves an unset record field from the store.
+pub fn getUnsetField(store: *const NodeStore, idx: CIR.UnsetField.Idx) CIR.UnsetField {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
+    const payload = node.getPayload();
+    return CIR.UnsetField{
+        .name = @bitCast(payload.record_unset_field.name),
     };
 }
 
@@ -4498,6 +4567,11 @@ pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CI
 /// Returns a span from the scratch record fields starting at the given index.
 pub fn recordFieldSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.RecordField.Span {
     return try store.spanFrom("record_fields", CIR.RecordField.Span, start);
+}
+
+/// Returns a span from the scratch unset record fields starting at the given index.
+pub fn unsetFieldSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.UnsetField.Span {
+    return try store.spanFrom("record_unset_fields", CIR.UnsetField.Span, start);
 }
 
 /// Returns a span from the scratch where clauses starting at the given index,
@@ -4862,6 +4936,11 @@ pub fn sliceRecordFields(store: *const NodeStore, span: CIR.RecordField.Span) []
     return store.sliceFromSpan(CIR.RecordField.Idx, span.span);
 }
 
+/// Returns a slice of unset record fields from the store.
+pub fn sliceUnsetFields(store: *const NodeStore, span: CIR.UnsetField.Span) []CIR.UnsetField.Idx {
+    return store.sliceFromSpan(CIR.UnsetField.Idx, span.span);
+}
+
 /// Retrieve a slice of IfBranch Idx's from a span
 pub fn sliceIfBranches(store: *const NodeStore, span: CIR.Expr.IfBranch.Span) []CIR.Expr.IfBranch.Idx {
     return store.sliceFromSpan(CIR.Expr.IfBranch.Idx, span.span);
@@ -5186,8 +5265,16 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_unnamed_field_cannot_have_default;
             region = r.region;
         },
-        .record_default_not_literal => |r| {
-            node.tag = .diag_record_default_not_literal;
+        .default_not_allowed_in_structural_record => |r| {
+            node.tag = .diag_default_not_allowed_in_structural_record;
+            region = r.region;
+        },
+        .default_not_allowed_on_local_type_decl => |r| {
+            node.tag = .diag_default_not_allowed_on_local_type_decl;
+            region = r.region;
+        },
+        .record_default_reference_cycle => |r| {
+            node.tag = .diag_record_default_reference_cycle;
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.field_name) } });
         },
@@ -5341,6 +5428,15 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_nested_type_not_found;
             region = r.region;
             node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.parent_name), .ident2 = @bitCast(r.nested_name) } });
+        },
+        .internal_builtin_type => |r| {
+            node.tag = .diag_internal_builtin_type;
+            region = r.region;
+            node.setPayload(.{ .diag_internal_builtin_type = .{
+                .parent_name = @bitCast(r.parent_name),
+                .nested_name = @bitCast(r.nested_name),
+                .kind = @intFromEnum(r.kind),
+            } });
         },
         .nested_value_not_found => |r| {
             node.tag = .diag_nested_value_not_found;
@@ -5732,6 +5828,15 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 .region = store.getRegionAt(node_idx),
             } };
         },
+        .diag_internal_builtin_type => {
+            const p = payload.diag_internal_builtin_type;
+            return CIR.Diagnostic{ .internal_builtin_type = .{
+                .parent_name = @as(base.Ident.Idx, @bitCast(p.parent_name)),
+                .nested_name = @as(base.Ident.Idx, @bitCast(p.nested_name)),
+                .kind = @enumFromInt(p.kind),
+                .region = store.getRegionAt(node_idx),
+            } };
+        },
         .diag_nested_value_not_found => {
             const p = payload.diag_two_idents;
             return CIR.Diagnostic{ .nested_value_not_found = .{
@@ -5777,7 +5882,13 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_unnamed_field_cannot_have_default => return CIR.Diagnostic{ .unnamed_field_cannot_have_default = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_record_default_not_literal => return CIR.Diagnostic{ .record_default_not_literal = .{
+        .diag_default_not_allowed_in_structural_record => return CIR.Diagnostic{ .default_not_allowed_in_structural_record = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_default_not_allowed_on_local_type_decl => return CIR.Diagnostic{ .default_not_allowed_on_local_type_decl = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_record_default_reference_cycle => return CIR.Diagnostic{ .record_default_reference_cycle = .{
             .field_name = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
         } },

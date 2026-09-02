@@ -22,6 +22,10 @@ pub const TestSyntaxDriver = struct {
     highlight_calls: usize = 0,
     document_symbol_calls: usize = 0,
     completion_calls: usize = 0,
+    rename_calls: usize = 0,
+    prepare_rename_calls: usize = 0,
+    references_calls: usize = 0,
+    inlay_hint_calls: usize = 0,
 
     pub const CheckError = syntax.SyntaxChecker.CheckError;
     pub const QueryError = syntax.SyntaxChecker.QueryError;
@@ -41,6 +45,7 @@ pub const TestSyntaxDriver = struct {
     pub const DefinitionResult = struct {
         uri: []const u8,
         range: LspRange,
+        origin_selection_range: ?LspRange = null,
 
         pub fn deinit(self: DefinitionResult, allocator: std.mem.Allocator) void {
             allocator.free(self.uri);
@@ -132,6 +137,52 @@ pub const TestSyntaxDriver = struct {
         _: u32,
     ) QueryError!?completion_handler.CompletionResult {
         self.completion_calls += 1;
+        return null;
+    }
+
+    pub fn getRenameEditsAtPosition(
+        self: *TestSyntaxDriver,
+        _: []const u8,
+        _: ?[]const u8,
+        _: u32,
+        _: u32,
+        _: []const u8,
+    ) QueryError!?syntax.SyntaxChecker.RenameOutcome {
+        self.rename_calls += 1;
+        return null;
+    }
+
+    pub fn prepareRenameAtPosition(
+        self: *TestSyntaxDriver,
+        _: []const u8,
+        _: ?[]const u8,
+        _: u32,
+        _: u32,
+    ) QueryError!?syntax.SyntaxChecker.PrepareRenameResult {
+        self.prepare_rename_calls += 1;
+        return null;
+    }
+
+    pub fn getReferencesAtPosition(
+        self: *TestSyntaxDriver,
+        _: []const u8,
+        _: ?[]const u8,
+        _: u32,
+        _: u32,
+        _: bool,
+    ) QueryError!?syntax.SyntaxChecker.ReferencesResult {
+        self.references_calls += 1;
+        return null;
+    }
+
+    pub fn getInlayHints(
+        self: *TestSyntaxDriver,
+        _: []const u8,
+        _: ?[]const u8,
+        _: u32,
+        _: u32,
+    ) QueryError!?syntax.SyntaxChecker.InlayHintsResult {
+        self.inlay_hint_calls += 1;
         return null;
     }
 };

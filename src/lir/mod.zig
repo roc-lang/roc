@@ -43,6 +43,8 @@ pub const Trmc = @import("trmc.zig");
 pub const DebugPrint = @import("debug_print.zig");
 /// Checked integer arithmetic metadata shared by LIR producers and consumers.
 pub const CheckedArithmetic = core.CheckedArithmetic;
+/// Exact predicate/result peephole shared by direct backends.
+pub const OverflowFusion = @import("overflow_fusion.zig");
 /// ARC-stage per-proc ownership signatures.
 pub const ArcSig = @import("arc_sig.zig");
 /// ARC borrow-inference solver over ownership-neutral LIR.
@@ -54,6 +56,8 @@ pub const ArcCertify = @import("arc_certify.zig");
 pub const ArcDismantle = @import("arc_dismantle.zig");
 /// Shared-memory ARC-inserted LIR image for interpreter-shim execution.
 pub const LirImage = @import("lir_image.zig");
+
+pub const ImmortalLocals = @import("immortal_locals.zig");
 
 /// Symbol identifiers used throughout statement-only LIR.
 pub const Symbol = LIR.Symbol;
@@ -152,6 +156,7 @@ test "lir tests" {
     std.testing.refAllDecls(RangeProve);
     std.testing.refAllDecls(TagReachability);
     std.testing.refAllDecls(CheckedArithmetic);
+    std.testing.refAllDecls(OverflowFusion);
     std.testing.refAllDecls(Arc);
     std.testing.refAllDecls(ArcSig);
     std.testing.refAllDecls(ArcSolve);

@@ -22,6 +22,8 @@ You cannot define a where clause inside a type declaration.
 A(a) : a where [a.a1 : (a, a) -> Str]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Hint: where clauses can only go on function type annotations.
+
 ── ✗ type parameter conflict ───────────────────────────── fuzz_crash_083.md:2:6
 
 The type parameter b in type C conflicts with another declaration.

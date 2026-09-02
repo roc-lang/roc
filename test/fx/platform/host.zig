@@ -29,9 +29,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const shim_io = @import("shim_io");
 const builtin = @import("builtin");
-const base = @import("base");
 const builtins = @import("builtins");
 const host_alloc = @import("host_alloc");
+const host_crash_handlers = @import("host_crash_handlers");
 const build_options = @import("build_options");
 const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
 
@@ -66,103 +66,6 @@ fn panicImpl(msg: []const u8, addr: ?usize) noreturn {
     std.process.abort();
 }
 
-/// Error message to display on stack overflow in a Roc program
-const STACK_OVERFLOW_MESSAGE = "\nThis Roc application overflowed its stack memory and crashed.\n\n";
-
-/// Callback for stack overflow in a Roc program
-fn handleRocStackOverflow() noreturn {
-    if (comptime builtin.os.tag == .windows) {
-        const DWORD = u32;
-        const HANDLE = ?*anyopaque;
-        const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
-
-        const kernel32 = struct {
-            extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
-            extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) i32;
-            extern "kernel32" fn TerminateProcess(hProcess: HANDLE, uExitCode: c_uint) callconv(.winapi) i32;
-            extern "kernel32" fn GetCurrentProcess() callconv(.winapi) HANDLE;
-        };
-
-        const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
-        var bytes_written: DWORD = 0;
-        _ = kernel32.WriteFile(stderr_handle, STACK_OVERFLOW_MESSAGE.ptr, STACK_OVERFLOW_MESSAGE.len, &bytes_written, null);
-        // Use TerminateProcess instead of ExitProcess: after a stack overflow the
-        // stack is blown and ExitProcess's DLL cleanup can trigger a secondary crash.
-        _ = kernel32.TerminateProcess(kernel32.GetCurrentProcess(), 134);
-        @trap();
-    } else if (comptime builtin.os.tag != .wasi) {
-        std.debug.print("{s}", .{STACK_OVERFLOW_MESSAGE});
-        std.process.exit(134);
-    } else {
-        std.process.exit(134);
-    }
-}
-
-/// Callback for access violation in a Roc program
-fn handleRocAccessViolation(fault_addr: usize, _: base.signal_handler.AccessViolationContext) noreturn {
-    if (comptime builtin.os.tag == .windows) {
-        const DWORD = u32;
-        const HANDLE = ?*anyopaque;
-        const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
-
-        const kernel32 = struct {
-            extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
-            extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) i32;
-            extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(.winapi) noreturn;
-        };
-
-        var addr_buf: [18]u8 = undefined;
-        const addr_str = base.signal_handler.formatHex(fault_addr, &addr_buf);
-
-        const msg1 = "\nSegmentation fault (SIGSEGV) in this Roc program.\nFault address: ";
-        const msg2 = "\n\n";
-        const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
-        var bytes_written: DWORD = 0;
-        _ = kernel32.WriteFile(stderr_handle, msg1.ptr, msg1.len, &bytes_written, null);
-        _ = kernel32.WriteFile(stderr_handle, addr_str.ptr, @intCast(addr_str.len), &bytes_written, null);
-        _ = kernel32.WriteFile(stderr_handle, msg2.ptr, msg2.len, &bytes_written, null);
-        kernel32.ExitProcess(139);
-    } else {
-        // POSIX (and WASI fallback)
-        const msg = "\nSegmentation fault (SIGSEGV) in this Roc program.\nFault address: ";
-        std.debug.print("{s}", .{msg});
-
-        var addr_buf: [18]u8 = undefined;
-        const addr_str = base.signal_handler.formatHex(fault_addr, &addr_buf);
-        std.debug.print("{s}", .{addr_str});
-        std.debug.print("{s}", .{"\n\n"});
-        std.process.exit(139);
-    }
-}
-
-/// Error message to display on division by zero in a Roc program
-const DIVISION_BY_ZERO_MESSAGE = "\nThis Roc application divided by zero and crashed.\n\n";
-
-/// Callback for arithmetic errors (division by zero) in a Roc program
-fn handleRocArithmeticError() noreturn {
-    if (comptime builtin.os.tag == .windows) {
-        const DWORD = u32;
-        const HANDLE = ?*anyopaque;
-        const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
-
-        const kernel32 = struct {
-            extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
-            extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) i32;
-            extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(.winapi) noreturn;
-        };
-
-        const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
-        var bytes_written: DWORD = 0;
-        _ = kernel32.WriteFile(stderr_handle, DIVISION_BY_ZERO_MESSAGE.ptr, DIVISION_BY_ZERO_MESSAGE.len, &bytes_written, null);
-        kernel32.ExitProcess(136);
-    } else if (comptime builtin.os.tag != .wasi) {
-        std.debug.print("{s}", .{DIVISION_BY_ZERO_MESSAGE});
-        std.process.exit(136); // 128 + 8 (SIGFPE)
-    } else {
-        std.process.exit(136);
-    }
-}
-
 const HostSelfTest = enum {
     none,
     stack_overflow,
@@ -170,11 +73,7 @@ const HostSelfTest = enum {
 };
 
 fn installRuntimeSignalHandlers() void {
-    _ = base.signal_handler.installForCurrentThread(.{
-        .stack_overflow = handleRocStackOverflow,
-        .access_violation = handleRocAccessViolation,
-        .arithmetic_error = handleRocArithmeticError,
-    });
+    host_crash_handlers.installForCurrentThread();
 }
 
 fn triggerSelfTest(mode: HostSelfTest) noreturn {

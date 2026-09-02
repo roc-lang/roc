@@ -21,12 +21,16 @@ You cannot define a where clause inside a type declaration.
 Hash(a, hasher) : a
     where [a.hash : hasher -> hasher, hasher.Hasher]
 
+Hint: where clauses can only go on function type annotations.
+
 ── ✗ where clause not allowed in type declaration ─────── where_clauses_1.md:4:1
 
 You cannot define a where clause inside a type declaration.
 
 Decode(a) : a where [a.decode : List(U8) -> a]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Hint: where clauses can only go on function type annotations.
 
 # TOKENS
 ~~~zig

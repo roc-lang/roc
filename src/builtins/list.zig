@@ -4,19 +4,24 @@
 //! Seamless slice optimization reduces memory overhead for substring operations.
 const std = @import("std");
 
+const builtin = @import("builtin");
 const utils = @import("utils.zig");
 const UpdateMode = utils.UpdateMode;
 const TestEnv = utils.TestEnv;
 const RocOps = @import("host_abi.zig").RocOps;
 const RocStr = @import("str.zig").RocStr;
+const erased_callable = @import("erased_callable.zig");
+const sort = @import("sort.zig");
 
 /// Pointer to the bytes of a list element or similar data
 pub const Opaque = ?[*]u8;
 /// Function copying data between 2 Opaques with a slot for the element's width
 pub const CopyFallbackFn = *const fn (Opaque, Opaque, usize) callconv(.c) void;
 
-const Inc = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
-const Dec = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
+/// Retains one list element through an opaque layout-specific context.
+pub const Inc = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
+/// Releases one list element through an opaque layout-specific context.
+pub const Dec = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
 
 /// The low bit tags whether a List is a seamless slice.
 pub const SEAMLESS_SLICE_TAG: usize = 1;
@@ -322,7 +327,22 @@ pub const RocList = extern struct {
     /// allocation. Empty lists are vacuously exclusive because they have no
     /// allocation and no other possible owner.
     pub inline fn isExclusive(self: RocList, update_mode: UpdateMode, roc_ops: *RocOps) bool {
-        return update_mode == .InPlace or self.isUnique(roc_ops);
+        if (update_mode == .InPlace) {
+            // `.InPlace` is the compiler's claim that nothing else holds this
+            // allocation, and it is the one path where the count is never
+            // consulted. A wrong claim writes through a shared allocation and
+            // corrupts whatever else points at it, with nothing downstream able
+            // to notice. Debug builds hold the claim against the runtime truth
+            // so a mistaken proof fails a test instead of silently corrupting
+            // memory.
+            if (comptime builtin.mode == .Debug) {
+                if (!self.isUnique(roc_ops)) {
+                    roc_ops.crash("List written in place while another reference to it was live");
+                }
+            }
+            return true;
+        }
+        return self.isUnique(roc_ops);
     }
 
     /// Returns true when treating this value's allocation as exclusively owned
@@ -1041,6 +1061,21 @@ pub fn listAppendLeBytes(
     const count: usize = @intCast(count_u64);
     if (count == 0) return list;
     const original_len = list.len();
+
+    // A unique list with a full word of spare capacity takes one unaligned
+    // little-endian store and a length bump: the low `count` bytes become the
+    // appended data and the rest of the word lands in capacity slack, which
+    // nothing can observe. Bit-writer flushes hit this path on every call.
+    if (!list.isSeamlessSlice() and list.getCapacity() >= original_len + 8 and
+        list.isExclusive(update_mode, roc_ops))
+    {
+        if (list.bytes) |bytes| {
+            std.mem.writeInt(u64, bytes[original_len..][0..8], value, .little);
+            var output = list;
+            output.length = original_len + count;
+            return output;
+        }
+    }
 
     var output = listReserveForAppend(
         list,
@@ -1829,6 +1864,77 @@ pub fn listReverse(
     }
 
     return new_list;
+}
+
+const SortWithContext = struct {
+    callable: [*]u8,
+    args: [*]u8,
+    second_offset: usize,
+    element_width: usize,
+    inc_context: ?*anyopaque,
+    inc: Inc,
+    elements_refcounted: bool,
+    in_process: bool,
+    test_context: ?*anyopaque,
+    roc_ops: *RocOps,
+    invoke_context: ?*anyopaque,
+    invoke: *const fn (?*anyopaque, [*]u8, [*]u8) callconv(.c) u8,
+};
+
+fn compareErasedCallable(context_bytes: Opaque, first: Opaque, second: Opaque) callconv(.c) u8 {
+    const context: *SortWithContext = @ptrCast(@alignCast(context_bytes orelse unreachable));
+    const first_ptr = first orelse unreachable;
+    const second_ptr = second orelse unreachable;
+    @memcpy(context.args[0..context.element_width], first_ptr[0..context.element_width]);
+    @memcpy(context.args[context.second_offset..][0..context.element_width], second_ptr[0..context.element_width]);
+    if (context.elements_refcounted) {
+        // Erased callable arguments are owned: the generated callable consumes
+        // and decrefs them. These increfs create the ownership transferred by
+        // the copied argument values, so no matching decrefs belong here.
+        context.inc(context.inc_context, context.args);
+        context.inc(context.inc_context, context.args + context.second_offset);
+    }
+    return context.invoke(context.invoke_context, context.callable, context.args);
+}
+
+fn invokeErasedCallable(context_bytes: ?*anyopaque, callable_bytes: [*]u8, args: [*]u8) callconv(.c) u8 {
+    const context: *SortWithContext = @ptrCast(@alignCast(context_bytes orelse unreachable));
+    var ordering: u8 = undefined;
+    var result_desc: ?*const anyopaque = null;
+    const payload = erased_callable.payloadPtr(callable_bytes);
+    if (context.in_process) {
+        const InProcessFn = *const fn (*RocOps, ?*anyopaque, ?[*]u8, ?[*]const u8, ?[*]u8, ?[*]u8, *?*const anyopaque) callconv(.c) void;
+        const callable: InProcessFn = @ptrCast(@alignCast(payload.callable_fn_ptr));
+        callable(context.roc_ops, context.test_context, @ptrCast(&ordering), args, erased_callable.capturePtr(callable_bytes), null, &result_desc);
+    } else {
+        payload.callable_fn_ptr(context.roc_ops, @ptrCast(&ordering), args, erased_callable.capturePtr(callable_bytes), null, &result_desc);
+    }
+    return ordering;
+}
+
+/// Stable Fluxsort through the uniform boxed erased-callable ABI.
+pub fn listSortWith(list: RocList, callable: [*]u8, alignment: u32, element_width: usize, elements_refcounted: bool, inc_context: ?*anyopaque, inc: Inc, dec_context: ?*anyopaque, dec: Dec, update_mode: UpdateMode, in_process: bool, test_context: ?*anyopaque, roc_ops: *RocOps) RocList {
+    if (list.len() < 2 or element_width == 0) return list;
+    var result = if (update_mode == .InPlace) list else list.makeUnique(alignment, element_width, elements_refcounted, inc_context, inc, dec_context, dec, roc_ops);
+    const second_offset = std.mem.alignForward(usize, element_width, alignment);
+    const args = roc_ops.alloc(alignment, second_offset + element_width);
+    defer roc_ops.dealloc(args, alignment);
+    var context = SortWithContext{ .callable = callable, .args = @ptrCast(args), .second_offset = second_offset, .element_width = element_width, .inc_context = inc_context, .inc = inc, .elements_refcounted = elements_refcounted, .in_process = in_process, .test_context = test_context, .roc_ops = roc_ops, .invoke_context = undefined, .invoke = &invokeErasedCallable };
+    context.invoke_context = @ptrCast(&context);
+    sort.fluxsort(result.bytes.?, result.len(), &compareErasedCallable, @ptrCast(&context), false, null, @ptrCast(&utils.rcNone), element_width, alignment, &copy_fallback, roc_ops);
+    return result;
+}
+
+/// Stable Fluxsort with comparator invocation supplied by the boxy ABI.
+pub fn listSortWithInvoker(list: RocList, callable: [*]u8, alignment: u32, element_width: usize, elements_refcounted: bool, inc_context: ?*anyopaque, inc: Inc, dec_context: ?*anyopaque, dec: Dec, update_mode: UpdateMode, invoke_context: ?*anyopaque, invoke: *const fn (?*anyopaque, [*]u8, [*]u8) callconv(.c) u8, roc_ops: *RocOps) RocList {
+    if (list.len() < 2 or element_width == 0) return list;
+    var result = if (update_mode == .InPlace) list else list.makeUnique(alignment, element_width, elements_refcounted, inc_context, inc, dec_context, dec, roc_ops);
+    const second_offset = std.mem.alignForward(usize, element_width, alignment);
+    const args = roc_ops.alloc(alignment, second_offset + element_width);
+    defer roc_ops.dealloc(args, alignment);
+    var context = SortWithContext{ .callable = callable, .args = @ptrCast(args), .second_offset = second_offset, .element_width = element_width, .inc_context = inc_context, .inc = inc, .elements_refcounted = elements_refcounted, .in_process = false, .test_context = null, .roc_ops = roc_ops, .invoke_context = invoke_context, .invoke = invoke };
+    sort.fluxsort(result.bytes.?, result.len(), &compareErasedCallable, @ptrCast(&context), false, null, @ptrCast(&utils.rcNone), element_width, alignment, &copy_fallback, roc_ops);
+    return result;
 }
 
 /// List.concat - concatenates two lists into one.

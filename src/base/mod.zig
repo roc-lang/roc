@@ -11,15 +11,21 @@ pub const LowLevelBuiltins = @import("LowLevelBuiltins.zig");
 /// Structural rules for `LowLevel.rcEffect()` rows, enforced over the whole
 /// table by the comptime block below.
 pub const rc_effect_rules = @import("rc_effect_rules.zig");
+/// The source type, destination type, and mode of each numeric conversion
+/// low-level, parsed from its name.
+pub const numeric_conversion = @import("numeric_conversion.zig");
 
 comptime {
     rc_effect_rules.assertTableConforms();
+    numeric_conversion.assertTableConforms();
 }
 
 pub const RegionInfo = @import("RegionInfo.zig");
 pub const SourceLoc = @import("source_loc.zig").SourceLoc;
+pub const SourceFileEntry = @import("source_loc.zig").SourceFileEntry;
 pub const Scratch = @import("Scratch.zig").Scratch;
 pub const parallel = @import("parallel.zig");
+pub const post_check_task_executor = @import("post_check_task_executor.zig");
 pub const ConcurrentU64 = @import("ConcurrentU64.zig").ConcurrentU64;
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
 pub const SerialStringInterner = @import("SerialStringInterner.zig");
@@ -33,6 +39,7 @@ pub const SingleThreadArena = @import("collections").SingleThreadArena;
 pub const safe_memory = @import("safe_memory.zig");
 pub const process_memory = @import("process_memory.zig");
 pub const signal_handler = @import("signal_handler.zig");
+pub const stack_budget = @import("stack_budget.zig");
 pub const stack_overflow = @import("stack_overflow.zig");
 pub const elf_self_relocate = @import("elf_self_relocate.zig");
 

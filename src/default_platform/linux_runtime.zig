@@ -448,6 +448,11 @@ const Frame = extern struct {
     return_address: usize,
 };
 
+const BacktraceTable = struct {
+    entries: [*]const BacktraceEntry,
+    count: usize,
+};
+
 fn printBacktrace(first_ip: usize, first_frame_addr: usize) void {
     if (!hasMappedBacktraceFrame(first_ip, first_frame_addr)) return;
 
@@ -487,6 +492,10 @@ fn printSourceFrame(frame: SourceFrame) void {
 }
 
 fn printMappedBacktraceFrames(first_ip: usize, first_frame_addr: usize) void {
+    // Walking the frame chain reads whatever the frame pointers lead to, which
+    // is worth doing only when there is a table to name what it finds.
+    if (backtraceTable() == null) return;
+
     printMappedInstructionPointer(first_ip);
     var frame_addr = firstFrameFromAddress(first_frame_addr);
     var frames: usize = 0;
@@ -507,6 +516,7 @@ fn printMappedBacktraceFrames(first_ip: usize, first_frame_addr: usize) void {
 }
 
 fn hasMappedBacktraceFrame(first_ip: usize, first_frame_addr: usize) bool {
+    if (backtraceTable() == null) return false;
     if (lookupBacktraceEntry(first_ip) != null) return true;
     var frame_addr = firstFrameFromAddress(first_frame_addr);
     var frames: usize = 0;
@@ -555,11 +565,35 @@ fn printMappedInstructionPointer(ip: usize) void {
     }
 }
 
+/// Read a weak symbol's address, which is null when nothing defines it.
+///
+/// The address passes through an empty inline-asm block before it is tested,
+/// because the optimizer otherwise treats the address of a global as non-null,
+/// deletes the test, and leaves a load from address zero behind for every
+/// build whose backend defines no such symbol.
+inline fn weakSymbol(comptime Pointer: type, symbol: ?Pointer) ?Pointer {
+    var address: usize = if (symbol) |pointer| @intFromPtr(pointer) else 0;
+    asm volatile (""
+        : [address] "+r" (address),
+    );
+    if (address == 0) return null;
+    return @ptrFromInt(address);
+}
+
+/// The table naming the address ranges of the code a backend generated, or
+/// null when this build's backend emitted none. Only a backend that emits one
+/// defines these symbols; the dev backend emits none, and then no address can
+/// be named.
+fn backtraceTable() ?BacktraceTable {
+    const count_ptr = weakSymbol(*const usize, roc_default_backtrace_count) orelse return null;
+    const table_ptr = weakSymbol(*const [*]const BacktraceEntry, roc_default_backtrace_table) orelse return null;
+    return .{ .entries = table_ptr.*, .count = count_ptr.* };
+}
+
 fn lookupBacktraceEntry(ip: usize) ?BacktraceEntry {
-    const count_ptr = roc_default_backtrace_count orelse return null;
-    const table_ptr = roc_default_backtrace_table orelse return null;
-    const count = count_ptr.*;
-    const table = table_ptr.*;
+    const loaded = backtraceTable() orelse return null;
+    const count = loaded.count;
+    const table = loaded.entries;
 
     var best: ?BacktraceEntry = null;
     var i: usize = 0;

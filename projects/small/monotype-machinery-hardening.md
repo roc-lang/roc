@@ -226,7 +226,7 @@ All symbols verified in the current tree.
 
 ## Related projects
 
-- [store-generation-counters.md](./store-generation-counters.md)—the
+- `store-generation-counters` (landed; doc removed)—the
   landed guarded-store work whose release-zero-cost discipline H1 copies.
 - [pin-deferred-spec-requests.md](./pin-deferred-spec-requests.md)—the
   live correctness project in the same solver; land that first if both

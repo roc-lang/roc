@@ -28,6 +28,12 @@ pub const DeclaredTypeKind = enum(u8) {
     }
 };
 
+/// Public codec family that owns an otherwise unnameable builtin state type.
+pub const InternalBuiltinTypeKind = enum(u8) {
+    json,
+    http_header,
+};
+
 /// Different types of diagnostic errors
 pub const Diagnostic = union(enum) {
     not_implemented: struct {
@@ -178,7 +184,29 @@ pub const Diagnostic = union(enum) {
     unnamed_field_cannot_have_default: struct {
         region: Region,
     },
-    record_default_not_literal: struct {
+    /// A `??` default declared outside a nominal type declaration's backing
+    /// record: defaults are only legal on the direct fields of a nominal
+    /// (`:=`) backing record, never in structural record types (type
+    /// aliases, inline annotations, or nested records).
+    default_not_allowed_in_structural_record: struct {
+        region: Region,
+    },
+    /// A `??` default on a nominal (or opaque) type declaration inside a
+    /// block: a local declaration's default canonicalizes in function scope,
+    /// so it could capture locals that no other construction site can
+    /// supply, and the end-of-module default-cycle pass only sees top-level
+    /// declarations. Defaults are only legal on module top-level nominal
+    /// declarations; the default is dropped and the field degrades to
+    /// required.
+    default_not_allowed_on_local_type_decl: struct {
+        region: Region,
+    },
+    /// A `??` default whose materialization cycles back to itself through
+    /// name-resolvable edges: references to same-module top-level defs
+    /// and/or local nominal constructions that omit defaulted fields.
+    /// Detected by the end-of-module default-cycle pass; dispatch-mediated
+    /// cycles are the checker's residue (design.md "Defaulted Fields").
+    record_default_reference_cycle: struct {
         field_name: Ident.Idx,
         region: Region,
     },
@@ -251,6 +279,14 @@ pub const Diagnostic = union(enum) {
     nested_type_not_found: struct {
         parent_name: Ident.Idx,
         nested_name: Ident.Idx,
+        region: Region,
+    },
+    /// A nested builtin type that exists but is internal to the format module
+    /// that owns it, so Roc code has no way to name it.
+    internal_builtin_type: struct {
+        parent_name: Ident.Idx,
+        nested_name: Ident.Idx,
+        kind: InternalBuiltinTypeKind,
         region: Region,
     },
     nested_value_not_found: struct {
@@ -470,7 +506,9 @@ pub const Diagnostic = union(enum) {
             .unnamed_field_not_allowed_in_structural_record => |d| d.region,
             .optional_field_cannot_have_default => |d| d.region,
             .unnamed_field_cannot_have_default => |d| d.region,
-            .record_default_not_literal => |d| d.region,
+            .default_not_allowed_in_structural_record => |d| d.region,
+            .default_not_allowed_on_local_type_decl => |d| d.region,
+            .record_default_reference_cycle => |d| d.region,
             .var_across_function_boundary => |d| d.region,
             .shadowing_warning => |d| d.region,
             .type_redeclared => |d| d.redeclared_region,
@@ -487,6 +525,7 @@ pub const Diagnostic = union(enum) {
             .type_from_missing_module => |d| d.region,
             .module_not_imported => |d| d.region,
             .nested_type_not_found => |d| d.region,
+            .internal_builtin_type => |d| d.region,
             .nested_value_not_found => |d| d.region,
             .record_builder_map2_not_found => |d| d.region,
             .too_many_exports => |d| d.region,

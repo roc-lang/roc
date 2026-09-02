@@ -295,10 +295,17 @@ pub const Store = struct {
     types: StoreList(Content, "types"),
     type_digests: StoreList(?names.TypeDigest, "type_digests"),
     specialization_digests: StoreList(?names.TypeDigest, "specialization_digests"),
+    equality_digests: StoreList(?names.TypeDigest, "equality_digests"),
     /// Newly reserved recursive slots may be referenced while their content is
     /// being built, but they are not observable types until filled. Filled
     /// nodes are immutable, which makes their cached digests permanently valid.
     constructing: StoreList(bool, "constructing"),
+    unfinished_type_count: usize,
+    /// The sole owner allowed to truncate and rewrite the current speculative
+    /// suffix. Epochs make a completed transaction's idempotent abort harmless
+    /// without allowing a stale handle to abort a later owner.
+    active_transaction: ?u64,
+    transaction_epoch: u64,
     /// Cached immutable answer for whether a finished type contains an Iter or
     /// Stream interface at any structural depth.
     iterator_interface_cache: StoreList(?bool, "iterator_interface_cache"),
@@ -318,6 +325,14 @@ pub const Store = struct {
     /// separate digest calls. Keys and values are content-addressed, so
     /// entries stay valid across `restore` truncations and need no rollback.
     recursive_digest_unfoldings: std.AutoHashMap([32]u8, names.TypeDigest),
+    /// Full-content-identity buckets for store-level acyclic interning: full
+    /// digest bytes to every committed candidate that hashed to them,
+    /// resolved to exact equality with `typeEql`. Keys and stored ids are
+    /// content-addressed, so entries stay valid across `restore`
+    /// truncations and need no rollback. A transaction seal reserves the
+    /// entries it will index before it mutates anything, so a bucket
+    /// may exist while empty, which reads identically to an absent one.
+    full_digest_interned: std.AutoHashMap(DigestBucketKey, std.ArrayList(TypeId)),
     spans: StoreList(TypeId, "spans"),
     fields: StoreList(Field, "fields"),
     tags: StoreList(Tag, "tags"),
@@ -330,13 +345,18 @@ pub const Store = struct {
             .types = .empty,
             .type_digests = .empty,
             .specialization_digests = .empty,
+            .equality_digests = .empty,
             .constructing = .empty,
+            .unfinished_type_count = 0,
+            .active_transaction = null,
+            .transaction_epoch = 0,
             .iterator_interface_cache = .empty,
             .iterator_interface_pending = .empty,
             .iterator_interface_visited = .empty,
             .iterator_interface_visit_epochs = .empty,
             .iterator_interface_visit_epoch = 0,
             .recursive_digest_unfoldings = std.AutoHashMap([32]u8, names.TypeDigest).init(allocator),
+            .full_digest_interned = std.AutoHashMap(DigestBucketKey, std.ArrayList(TypeId)).init(allocator),
             .spans = .empty,
             .fields = .empty,
             .tags = .empty,
@@ -350,22 +370,32 @@ pub const Store = struct {
         self.tags.deinit(self.allocator);
         self.fields.deinit(self.allocator);
         self.spans.deinit(self.allocator);
+        var full_digest_buckets = self.full_digest_interned.valueIterator();
+        while (full_digest_buckets.next()) |bucket| bucket.deinit(self.allocator);
+        self.full_digest_interned.deinit();
         self.recursive_digest_unfoldings.deinit();
         self.iterator_interface_visit_epochs.deinit(self.allocator);
         self.iterator_interface_visited.deinit(self.allocator);
         self.iterator_interface_pending.deinit(self.allocator);
         self.iterator_interface_cache.deinit(self.allocator);
         self.constructing.deinit(self.allocator);
+        self.equality_digests.deinit(self.allocator);
         self.specialization_digests.deinit(self.allocator);
         self.type_digests.deinit(self.allocator);
         self.types.deinit(self.allocator);
     }
 
     pub fn freeze(self: *Store) void {
-        for (self.constructing.unsafeRawItemsForView()) |unfinished| {
-            if (unfinished) Common.invariant("cannot freeze Monotype types with an unfinished reserved slot");
+        if (self.hasSpeculativeConstruction()) {
+            Common.compilerBug("cannot freeze Monotype types with an unfinished construction owner");
         }
         self.frozen = true;
+    }
+
+    /// Whether new nodes belong to an owner that has not sealed its suffix yet.
+    /// Nested producers append unindexed nodes for that owner to rewrite.
+    pub fn hasSpeculativeConstruction(self: *const Store) bool {
+        return self.active_transaction != null or self.unfinished_type_count != 0;
     }
 
     pub fn isFrozen(self: *const Store) bool {
@@ -425,6 +455,8 @@ pub const Store = struct {
         errdefer _ = self.type_digests.pop();
         try self.specialization_digests.append(self.allocator, null);
         errdefer _ = self.specialization_digests.pop();
+        try self.equality_digests.append(self.allocator, null);
+        errdefer _ = self.equality_digests.pop();
         try self.constructing.append(self.allocator, false);
         errdefer _ = self.constructing.pop();
         try self.iterator_interface_cache.append(self.allocator, null);
@@ -453,6 +485,7 @@ pub const Store = struct {
     fn reserveSlot(self: *Store) std.mem.Allocator.Error!TypeId {
         const reserved = try self.add(.zst);
         self.constructing.set(@intFromEnum(reserved), true);
+        self.unfinished_type_count += 1;
         return reserved;
     }
 
@@ -464,6 +497,10 @@ pub const Store = struct {
         }
         self.types.set(index, content);
         self.constructing.set(index, false);
+        if (self.unfinished_type_count == 0) {
+            Common.compilerBug("filled a Monotype slot without an unfinished construction");
+        }
+        self.unfinished_type_count -= 1;
         self.iterator_interface_cache.set(index, null);
     }
 
@@ -545,7 +582,11 @@ pub const Store = struct {
                 .record => |fields| {
                     const record_fields = self.fieldSpan(fields);
                     for (0..GuardedList.borrowLen(record_fields)) |index| {
-                        try self.iterator_interface_pending.append(self.allocator, GuardedList.at(record_fields, index).ty);
+                        const field = GuardedList.at(record_fields, index);
+                        try self.iterator_interface_pending.append(self.allocator, field.ty);
+                        if (field.value_ty) |value_ty| {
+                            try self.iterator_interface_pending.append(self.allocator, value_ty);
+                        }
                     }
                 },
                 .named => |named| {
@@ -601,11 +642,273 @@ pub const Store = struct {
         return self.declared_fields.borrowSpan(span_.start, span_.len);
     }
 
+    /// Immutable append boundary for every durable type-store backing array.
+    ///
+    /// Construction flags, traversal caches, and interning indexes are excluded
+    /// because they are mutable acceleration state rather than durable type data.
+    pub const EpochBoundary = struct {
+        types: u32,
+        spans: u32,
+        fields: u32,
+        tags: u32,
+        declared_fields: u32,
+    };
+
+    pub fn epochBoundary(self: *const Store) EpochBoundary {
+        return .{
+            .types = @intCast(self.types.len()),
+            .spans = @intCast(self.spans.len()),
+            .fields = @intCast(self.fields.len()),
+            .tags = @intCast(self.tags.len()),
+            .declared_fields = @intCast(self.declared_fields.len()),
+        };
+    }
+
+    /// Result-owned type-store suffix preserving workspace-local dense ids.
+    pub const EpochDelta = struct {
+        allocator: std.mem.Allocator,
+        begin: EpochBoundary,
+        end: EpochBoundary,
+        types: []Content,
+        type_digests: []?names.TypeDigest,
+        specialization_digests: []?names.TypeDigest,
+        equality_digests: []?names.TypeDigest,
+        spans: []TypeId,
+        fields: []Field,
+        tags: []Tag,
+        declared_fields: []DeclaredField,
+
+        pub fn capture(
+            allocator: std.mem.Allocator,
+            source: *const Store,
+            begin: EpochBoundary,
+            end: EpochBoundary,
+        ) std.mem.Allocator.Error!EpochDelta {
+            requireEpochRange(source, begin, end);
+            const types = try allocator.dupe(
+                Content,
+                source.types.unsafeRawItemsForView()[begin.types..end.types],
+            );
+            errdefer allocator.free(types);
+            const type_digests = try allocator.dupe(
+                ?names.TypeDigest,
+                source.type_digests.unsafeRawItemsForView()[begin.types..end.types],
+            );
+            errdefer allocator.free(type_digests);
+            const specialization_digests = try allocator.dupe(
+                ?names.TypeDigest,
+                source.specialization_digests.unsafeRawItemsForView()[begin.types..end.types],
+            );
+            errdefer allocator.free(specialization_digests);
+            const equality_digests = try allocator.dupe(
+                ?names.TypeDigest,
+                source.equality_digests.unsafeRawItemsForView()[begin.types..end.types],
+            );
+            errdefer allocator.free(equality_digests);
+            const spans = try allocator.dupe(
+                TypeId,
+                source.spans.unsafeRawItemsForView()[begin.spans..end.spans],
+            );
+            errdefer allocator.free(spans);
+            const fields = try allocator.dupe(
+                Field,
+                source.fields.unsafeRawItemsForView()[begin.fields..end.fields],
+            );
+            errdefer allocator.free(fields);
+            const tags = try allocator.dupe(
+                Tag,
+                source.tags.unsafeRawItemsForView()[begin.tags..end.tags],
+            );
+            errdefer allocator.free(tags);
+            const declared_fields = try allocator.dupe(
+                DeclaredField,
+                source.declared_fields.unsafeRawItemsForView()[begin.declared_fields..end.declared_fields],
+            );
+            return .{
+                .allocator = allocator,
+                .begin = begin,
+                .end = end,
+                .types = types,
+                .type_digests = type_digests,
+                .specialization_digests = specialization_digests,
+                .equality_digests = equality_digests,
+                .spans = spans,
+                .fields = fields,
+                .tags = tags,
+                .declared_fields = declared_fields,
+            };
+        }
+
+        /// Reserve every allocation needed to append this exact suffix.
+        pub fn prepareAppend(
+            self: *const EpochDelta,
+            destination: *Store,
+        ) std.mem.Allocator.Error!void {
+            std.debug.assert(std.meta.eql(destination.epochBoundary(), self.begin));
+            try destination.spans.ensureTotalCapacity(destination.allocator, self.end.spans);
+            try destination.fields.ensureTotalCapacity(destination.allocator, self.end.fields);
+            try destination.tags.ensureTotalCapacity(destination.allocator, self.end.tags);
+            try destination.declared_fields.ensureTotalCapacity(
+                destination.allocator,
+                self.end.declared_fields,
+            );
+            try destination.types.ensureTotalCapacity(destination.allocator, self.end.types);
+            try destination.type_digests.ensureTotalCapacity(destination.allocator, self.end.types);
+            try destination.specialization_digests.ensureTotalCapacity(
+                destination.allocator,
+                self.end.types,
+            );
+            try destination.equality_digests.ensureTotalCapacity(destination.allocator, self.end.types);
+            try destination.constructing.ensureTotalCapacity(destination.allocator, self.end.types);
+            try destination.iterator_interface_cache.ensureTotalCapacity(
+                destination.allocator,
+                self.end.types,
+            );
+            try destination.iterator_interface_visit_epochs.ensureTotalCapacity(
+                destination.allocator,
+                self.end.types,
+            );
+        }
+
+        /// Append after `prepareAppend`; no durable or index mutation can fail.
+        ///
+        /// Full-digest buckets are intentionally omitted. Copied epoch
+        /// stores are immutable relocation sources, and the digest arrays carry
+        /// every durable cache needed while the destination program remains
+        /// the authoritative interning store.
+        pub fn appendPrepared(
+            self: *const EpochDelta,
+            destination: *Store,
+        ) void {
+            std.debug.assert(std.meta.eql(destination.epochBoundary(), self.begin));
+            destination.spans.appendSlice(destination.allocator, self.spans) catch unreachable;
+            destination.fields.appendSlice(destination.allocator, self.fields) catch unreachable;
+            destination.tags.appendSlice(destination.allocator, self.tags) catch unreachable;
+            destination.declared_fields.appendSlice(
+                destination.allocator,
+                self.declared_fields,
+            ) catch unreachable;
+            for (self.types, 0..) |content, offset| {
+                const expected: TypeId = @enumFromInt(self.begin.types + @as(u32, @intCast(offset)));
+                const added = destination.add(content) catch unreachable;
+                std.debug.assert(added == expected);
+                destination.type_digests.set(@intFromEnum(added), self.type_digests[offset]);
+                destination.specialization_digests.set(
+                    @intFromEnum(added),
+                    self.specialization_digests[offset],
+                );
+                destination.equality_digests.set(
+                    @intFromEnum(added),
+                    self.equality_digests[offset],
+                );
+            }
+            std.debug.assert(std.meta.eql(destination.epochBoundary(), self.end));
+        }
+
+        /// Append this suffix after an identical prefix, preserving local ids.
+        pub fn appendTo(
+            self: *const EpochDelta,
+            destination: *Store,
+        ) std.mem.Allocator.Error!void {
+            try self.prepareAppend(destination);
+            self.appendPrepared(destination);
+        }
+
+        pub fn deinit(self: *EpochDelta) void {
+            self.allocator.free(self.declared_fields);
+            self.allocator.free(self.tags);
+            self.allocator.free(self.fields);
+            self.allocator.free(self.spans);
+            self.allocator.free(self.equality_digests);
+            self.allocator.free(self.specialization_digests);
+            self.allocator.free(self.type_digests);
+            self.allocator.free(self.types);
+            self.* = undefined;
+        }
+    };
+
+    fn requireEpochRange(
+        self: *const Store,
+        begin: EpochBoundary,
+        end: EpochBoundary,
+    ) void {
+        if (self.hasSpeculativeConstruction()) {
+            Common.compilerBug("cannot capture a Monotype type epoch during speculative construction");
+        }
+        std.debug.assert(self.type_digests.len() == self.types.len());
+        std.debug.assert(self.specialization_digests.len() == self.types.len());
+        std.debug.assert(self.equality_digests.len() == self.types.len());
+        std.debug.assert(begin.types <= end.types and end.types <= self.types.len());
+        std.debug.assert(begin.spans <= end.spans and end.spans <= self.spans.len());
+        std.debug.assert(begin.fields <= end.fields and end.fields <= self.fields.len());
+        std.debug.assert(begin.tags <= end.tags and end.tags <= self.tags.len());
+        std.debug.assert(begin.declared_fields <= end.declared_fields and
+            end.declared_fields <= self.declared_fields.len());
+        requireEpochReferences(self, begin, end);
+    }
+
+    fn requireEpochReferences(
+        self: *const Store,
+        begin: EpochBoundary,
+        end: EpochBoundary,
+    ) void {
+        const type_limit = end.types;
+        const span_limit = end.spans;
+        const field_limit = end.fields;
+        const tag_limit = end.tags;
+        const declared_limit = end.declared_fields;
+        for (self.types.unsafeRawItemsForView()[begin.types..end.types]) |content| {
+            switch (content) {
+                .primitive, .erased, .zst => {},
+                .named => |named| {
+                    requireEpochSpan(named.args, span_limit);
+                    requireEpochSpan(named.declared_order, declared_limit);
+                    if (named.backing) |backing| requireEpochType(backing.ty, type_limit);
+                },
+                .record => |span_| requireEpochSpan(span_, field_limit),
+                .tuple => |span_| requireEpochSpan(span_, span_limit),
+                .tag_union => |span_| requireEpochSpan(span_, tag_limit),
+                .list, .box => |ty| requireEpochType(ty, type_limit),
+                .func => |func| {
+                    requireEpochSpan(func.args, span_limit);
+                    requireEpochType(func.ret, type_limit);
+                },
+            }
+        }
+        for (self.spans.unsafeRawItemsForView()[begin.spans..end.spans]) |ty| {
+            requireEpochType(ty, type_limit);
+        }
+        for (self.fields.unsafeRawItemsForView()[begin.fields..end.fields]) |field| {
+            requireEpochType(field.ty, type_limit);
+            if (field.value_ty) |value_ty| requireEpochType(value_ty, type_limit);
+        }
+        for (self.tags.unsafeRawItemsForView()[begin.tags..end.tags]) |tag| {
+            requireEpochSpan(tag.payloads, span_limit);
+        }
+        for (self.declared_fields.unsafeRawItemsForView()[begin.declared_fields..end.declared_fields]) |field| {
+            switch (field) {
+                .named => {},
+                .padding => |ty| requireEpochType(ty, type_limit),
+            }
+        }
+    }
+
+    fn requireEpochType(ty: TypeId, limit: u32) void {
+        std.debug.assert(@intFromEnum(ty) < limit);
+    }
+
+    fn requireEpochSpan(span_: Span, limit: u32) void {
+        std.debug.assert(span_.start <= limit);
+        std.debug.assert(span_.len <= limit - span_.start);
+    }
+
     const Mark = struct {
         types_len: usize,
         type_digests_len: usize,
         specialization_digests_len: usize,
+        equality_digests_len: usize,
         constructing_len: usize,
+        unfinished_type_count: usize,
         iterator_interface_cache_len: usize,
         iterator_interface_visit_epochs_len: usize,
         spans_len: usize,
@@ -619,7 +922,9 @@ pub const Store = struct {
             .types_len = self.types.len(),
             .type_digests_len = self.type_digests.len(),
             .specialization_digests_len = self.specialization_digests.len(),
+            .equality_digests_len = self.equality_digests.len(),
             .constructing_len = self.constructing.len(),
+            .unfinished_type_count = self.unfinished_type_count,
             .iterator_interface_cache_len = self.iterator_interface_cache.len(),
             .iterator_interface_visit_epochs_len = self.iterator_interface_visit_epochs.len(),
             .spans_len = self.spans.len(),
@@ -634,15 +939,27 @@ pub const Store = struct {
         self.types.restoreLen(mark_.types_len);
         self.type_digests.restoreLen(mark_.type_digests_len);
         self.specialization_digests.restoreLen(mark_.specialization_digests_len);
+        self.equality_digests.restoreLen(mark_.equality_digests_len);
         self.constructing.restoreLen(mark_.constructing_len);
+        self.unfinished_type_count = mark_.unfinished_type_count;
         self.iterator_interface_cache.restoreLen(mark_.iterator_interface_cache_len);
-        // A surviving reserved slot may have been filled after the mark with
-        // children that are now truncated and whose ids can be reused. Clear
-        // every retained containment answer so those new children are walked.
-        // Digest caches need no equivalent clearing only because no caller
-        // digests a mid-transaction fill before its rollback decision; the
-        // unfolding index is content-addressed and stays valid regardless.
-        @memset(self.iterator_interface_cache.unsafeRawItemsMutForStore(), null);
+        // A reserved slot that survives this restore may have been filled
+        // after the mark with children that are now truncated and whose ids
+        // can be reused, so clear every retained containment answer to force
+        // those new children to be walked. Only a mark taken during recursive
+        // construction can see that: when the mark recorded no unfinished
+        // slot, every surviving node was filled before the mark and reaches
+        // only surviving ids, so retained answers stay valid. Skipping the
+        // wipe then keeps interning hits and transaction seals -- the hot
+        // restore callers -- from discarding the whole cache.
+        // Digest caches need no equivalent clearing: a truncated id's cache
+        // row goes with it, sealing only ever digests ids inside the suffix,
+        // and the unfolding index is content-addressed. Only digesting a
+        // *surviving* slot's mid-transaction fill before the rollback decision
+        // would defeat that, and no caller does.
+        if (mark_.unfinished_type_count != 0) {
+            @memset(self.iterator_interface_cache.unsafeRawItemsMutForStore(), null);
+        }
         self.iterator_interface_visit_epochs.restoreLen(mark_.iterator_interface_visit_epochs_len);
         self.spans.restoreLen(mark_.spans_len);
         self.fields.restoreLen(mark_.fields_len);
@@ -650,9 +967,829 @@ pub const Store = struct {
         self.declared_fields.restoreLen(mark_.declared_fields_len);
     }
 
+    /// Speculative recursive construction boundary. Callers may reserve and
+    /// fill mutually recursive slots and append any side-pool data before
+    /// sealing the transaction.
+    ///
+    /// Ownership: the store owns the speculative suffix, the transaction owns
+    /// only the boundary it was opened at. Exactly one of `commitTransaction`
+    /// or `abort` ends a transaction, and both leave the store in a state a
+    /// later transaction may be opened on. Because commit is all-or-nothing
+    /// (it rolls the suffix back itself on failure), the intended construction
+    /// shape is `errdefer transaction.abort(store)` while building, disarmed
+    /// once commit returns successfully. A completed owner's abort is harmless;
+    /// an older handle cannot abort a later owner because epochs distinguish
+    /// them.
+    pub const Transaction = struct {
+        mark_: Mark,
+        epoch: u64,
+
+        fn requireOwner(self: Transaction, store: *const Store) void {
+            if (store.active_transaction != self.epoch) {
+                Common.compilerBug("Monotype transaction operation did not own the speculative suffix");
+            }
+        }
+
+        pub fn reserve(self: Transaction, store: *Store) std.mem.Allocator.Error!TypeId {
+            self.requireOwner(store);
+            return try store.reserveSlot();
+        }
+
+        pub fn fill(self: Transaction, store: *Store, ty: TypeId, content: Content) void {
+            self.requireOwner(store);
+            const index = @intFromEnum(ty);
+            if (index < self.mark_.types_len or index >= store.types.len()) {
+                Common.compilerBug("recursive transaction filled a type outside its suffix");
+            }
+            store.fillReservedSlot(ty, content);
+        }
+
+        /// Discard the speculative suffix, leaving the store as
+        /// `beginTransaction` found it. Idempotent, so it stays correct after
+        /// a failed `commitTransaction` (which has already rolled back).
+        pub fn abort(self: Transaction, store: *Store) void {
+            const active_epoch = store.active_transaction orelse return;
+            if (active_epoch != self.epoch) {
+                Common.compilerBug("stale Monotype transaction tried to abort a later owner");
+            }
+            store.restore(self.mark_);
+            store.active_transaction = null;
+        }
+    };
+
+    /// Interned ids produced by sealing a recursive transaction.
+    pub const TransactionResult = struct {
+        allocator: std.mem.Allocator,
+        root: TypeId,
+        /// First id the sealed transaction owned. Ids below it predate the
+        /// transaction and are already interned.
+        suffix_start: u32,
+        /// One interned id for each original suffix id, in original order.
+        remap: []TypeId,
+
+        /// Interned id for any id a caller held while building the sealed
+        /// transaction. Pre-transaction ids pass through unchanged and
+        /// speculative ids resolve through the remap, so callers translate
+        /// held ids without ever handling the store's private mark.
+        pub fn remapType(self: TransactionResult, ty: TypeId) TypeId {
+            const index = @intFromEnum(ty);
+            if (index < self.suffix_start) return ty;
+            const offset = index - self.suffix_start;
+            if (offset >= self.remap.len) {
+                Common.compilerBug("recursive transaction remap requested for an id outside its suffix");
+            }
+            return self.remap[offset];
+        }
+
+        pub fn deinit(self: *TransactionResult) void {
+            self.allocator.free(self.remap);
+            self.* = undefined;
+        }
+    };
+
+    /// A cumulative translation between two particular store/name-store pairs.
+    ///
+    /// Keeping this map across imports makes work proportional to the union of
+    /// reached source closures. The paged dense map also keeps later body
+    /// patching to one direct-index lookup per `TypeId`.
+    pub const TypeRelocation = struct {
+        source: *const Store,
+        source_names: *const names.NameStore,
+        destination: *const Store,
+        destination_names: *names.NameStore,
+        map: collections.DenseMap(TypeId, TypeId),
+        name_relocation: names.NameRelocation,
+
+        pub fn init(
+            allocator: std.mem.Allocator,
+            source: *const Store,
+            source_names: *const names.NameStore,
+            destination: *const Store,
+            destination_names: *names.NameStore,
+        ) TypeRelocation {
+            if (source == destination) {
+                Common.compilerBug("Monotype relocation source and destination stores must differ");
+            }
+            return .{
+                .source = source,
+                .source_names = source_names,
+                .destination = destination,
+                .destination_names = destination_names,
+                .map = collections.DenseMap(TypeId, TypeId).init(allocator),
+                .name_relocation = names.NameRelocation.init(allocator, source_names, destination_names),
+            };
+        }
+
+        pub fn deinit(self: *TypeRelocation) void {
+            self.name_relocation.deinit();
+            self.map.deinit();
+            self.* = undefined;
+        }
+
+        pub fn mappedCount(self: *const TypeRelocation) usize {
+            return self.map.count();
+        }
+
+        pub fn namesRelocation(self: *TypeRelocation) *names.NameRelocation {
+            return &self.name_relocation;
+        }
+
+        /// Return the destination id when this exact source id was imported.
+        /// Callers use this to avoid starting an import for roots whose closure
+        /// was already absorbed by a cumulative relocation.
+        pub fn get(self: *const TypeRelocation, source: *const Store, ty: TypeId) ?TypeId {
+            if (source != self.source) {
+                Common.compilerBug("Monotype relocation used with an unrelated source store");
+            }
+            return self.map.get(ty);
+        }
+
+        /// Translate an id owned by the relocation's exact source store.
+        pub fn remapType(self: *const TypeRelocation, source: *const Store, ty: TypeId) TypeId {
+            return self.get(source, ty) orelse
+                Common.compilerBug("Monotype relocation requested for an unreachable source id");
+        }
+
+        fn requireOwners(
+            self: *const TypeRelocation,
+            source: *const Store,
+            source_names: *const names.NameStore,
+            destination: *const Store,
+            destination_names: *const names.NameStore,
+        ) void {
+            if (self.source != source or
+                self.source_names != source_names or
+                self.destination != destination or
+                self.destination_names != destination_names)
+            {
+                Common.compilerBug("Monotype import used a relocation owned by different stores");
+            }
+        }
+    };
+
+    /// The ordered roots and newly mapped source ids from one cumulative import.
+    pub const ImportResult = struct {
+        allocator: std.mem.Allocator,
+        roots: []TypeId,
+        new_source_types: []TypeId,
+
+        pub fn deinit(self: *ImportResult) void {
+            self.allocator.free(self.new_source_types);
+            self.allocator.free(self.roots);
+            self.* = undefined;
+        }
+    };
+
+    /// Begin the sole recursive construction owner for the current store
+    /// suffix. Nested producers append into this owner instead of sealing an
+    /// unfinished prefix independently.
+    pub fn beginTransaction(self: *Store) Transaction {
+        self.assertMutable();
+        if (self.hasSpeculativeConstruction()) {
+            Common.compilerBug("nested Monotype type transaction must participate in the unfinished owner");
+        }
+        self.transaction_epoch +%= 1;
+        self.active_transaction = self.transaction_epoch;
+        return .{ .mark_ = self.mark(), .epoch = self.transaction_epoch };
+    }
+
+    /// Seal an arbitrarily recursive speculative suffix into durable interned
+    /// nodes. Equality, rather than digest coincidence, remains authoritative.
+    ///
+    /// Atomic in both directions. On success every surviving representative is
+    /// committed *and* indexed; on any allocator failure the store is left as
+    /// `beginTransaction` found it, with the speculative suffix discarded and
+    /// no id indexed in a digest bucket. That holds because the indexing step
+    /// consumes only capacity reserved before the first destructive step, so
+    /// no branch can return an error from a half-indexed state -- the state
+    /// that would strand ids in a bucket after the rollback truncated them.
+    pub fn commitTransaction(
+        self: *Store,
+        name_store: *const names.NameStore,
+        transaction: Transaction,
+        root: TypeId,
+    ) std.mem.Allocator.Error!TransactionResult {
+        if (self.active_transaction != transaction.epoch) {
+            Common.compilerBug("Monotype transaction commit did not own the speculative suffix");
+        }
+        const mark_ = transaction.mark_;
+        const suffix_len = self.types.len() - mark_.types_len;
+        const root_index = @intFromEnum(root);
+        if (root_index < mark_.types_len or root_index >= self.types.len()) {
+            Common.compilerBug("recursive transaction root is outside its suffix");
+        }
+        for (self.constructing.unsafeRawItemsForView()[mark_.constructing_len..]) |unfinished| {
+            if (unfinished) Common.compilerBug("recursive transaction contains an unfinished slot");
+        }
+
+        // Every failure below abandons the whole transaction, so a caller that
+        // gets an error never has to reason about which half of the seal ran.
+        errdefer {
+            self.restore(mark_);
+            self.active_transaction = null;
+        }
+
+        const interned_original = try self.allocator.alloc(TypeId, suffix_len);
+        defer self.allocator.free(interned_original);
+        const digests = try self.allocator.alloc(names.TypeDigest, suffix_len);
+        defer self.allocator.free(digests);
+        // Durable index of each speculative offset that survives as a
+        // representative, relative to the transaction's first id. Recording it
+        // during classification keeps remap construction linear.
+        const representative_of_offset = try self.allocator.alloc(u32, suffix_len);
+        defer self.allocator.free(representative_of_offset);
+        var representatives = std.ArrayList(TypeId).empty;
+        defer representatives.deinit(self.allocator);
+
+        // Speculative offsets grouped by digest. A candidate can only be equal
+        // to a digest-equal earlier candidate, so grouping replaces a scan of
+        // the whole suffix per node.
+        var suffix_by_digest = std.AutoHashMap(DigestBucketKey, std.ArrayList(u32)).init(self.allocator);
+        defer {
+            var groups = suffix_by_digest.valueIterator();
+            while (groups.next()) |group| group.deinit(self.allocator);
+            suffix_by_digest.deinit();
+        }
+
+        for (0..suffix_len) |offset| {
+            const candidate: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + offset)));
+            // Fallible rather than `typeDigestCached`: inside a transaction an
+            // exhausted allocator has a correct answer (roll the seal back),
+            // so it must not become the digest path's panic.
+            digests[offset] = try self.computeDigest(name_store, candidate, .full, null);
+            const key = DigestBucketKey.from(digests[offset]);
+            const group = try suffix_by_digest.getOrPut(key);
+            if (!group.found_existing) group.value_ptr.* = .empty;
+
+            var interned: ?TypeId = null;
+            if (self.full_digest_interned.get(key)) |bucket| {
+                for (bucket.items) |existing| {
+                    if (try self.bucketHit(name_store, key, existing, candidate)) {
+                        interned = existing;
+                        break;
+                    }
+                }
+            }
+            if (interned == null) {
+                for (group.value_ptr.items) |earlier| {
+                    const earlier_ty: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + earlier)));
+                    if (try self.typeEql(name_store, earlier_ty, candidate)) {
+                        interned = interned_original[earlier];
+                        break;
+                    }
+                }
+            }
+            if (interned) |found| {
+                interned_original[offset] = found;
+            } else {
+                interned_original[offset] = candidate;
+                representative_of_offset[offset] = @intCast(representatives.items.len);
+                try representatives.append(self.allocator, candidate);
+            }
+            // Re-fetched rather than reusing `group.value_ptr`: nothing above
+            // inserts into this map today, but a future one would move it.
+            // Every offset is grouped, not just representatives, so a later
+            // candidate compares against the same set the flat scan did.
+            try suffix_by_digest.getPtr(key).?.append(self.allocator, @intCast(offset));
+        }
+
+        // Owned copies of just the representatives' rows. Construction reads
+        // them after the speculative suffix is truncated, so the seal costs
+        // memory proportional to the surviving speculative nodes instead of to
+        // a duplicate of every durable pool.
+        var captured = try std.ArrayList(CapturedNode).initCapacity(self.allocator, representatives.items.len);
+        defer {
+            for (captured.items) |*node| node.deinit(self.allocator);
+            captured.deinit(self.allocator);
+        }
+        for (representatives.items) |original| {
+            captured.appendAssumeCapacity(try self.captureNode(original));
+        }
+
+        const result_remap = try self.allocator.alloc(TypeId, suffix_len);
+        errdefer self.allocator.free(result_remap);
+
+        // Durable ids are decided before anything is mutated: representative
+        // `i` takes the `i`th id at the transaction's mark.
+        for (interned_original, 0..) |interned, offset| {
+            const interned_index = @intFromEnum(interned);
+            if (interned_index < mark_.types_len) {
+                result_remap[offset] = interned;
+            } else {
+                const representative_index = representative_of_offset[interned_index - mark_.types_len];
+                result_remap[offset] = @enumFromInt(@as(u32, @intCast(mark_.types_len + representative_index)));
+            }
+        }
+
+        // Preflight the durable index. Reserving the map slot and the bucket
+        // room for every representative here -- while failing is still free --
+        // is what lets the indexing step below run without a fallible call.
+        try self.reserveInternedCapacity(mark_, interned_original, &suffix_by_digest, representatives.items.len);
+
+        self.restore(mark_);
+
+        for (representatives.items) |_| _ = try self.reserveSlot();
+
+        for (captured.items, 0..) |node, representative_index| {
+            const rebuilt = try self.rebuildTransactionContent(mark_, node, result_remap);
+            const durable: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + representative_index)));
+            self.fillReservedSlot(durable, rebuilt);
+        }
+
+        // Indexing into preflighted capacity is infallible, which keeps
+        // "committed" and "indexed" from ever disagreeing. Validate every
+        // reconstructed representative first so no digest bucket can observe a
+        // node whose rewritten graph denotes different content.
+        for (representatives.items, 0..) |original, representative_index| {
+            const durable: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + representative_index)));
+            const digest = digests[@intFromEnum(original) - mark_.types_len];
+            const rebuilt_digest = try self.computeDigest(name_store, durable, .full, null);
+            if (!std.mem.eql(u8, &rebuilt_digest.bytes, &digest.bytes)) {
+                Common.compilerBug("recursive transaction changed a representative's content while rewriting references");
+            }
+            _ = try self.computeDigest(name_store, durable, .identity_only, null);
+        }
+        for (representatives.items, 0..) |original, representative_index| {
+            const durable: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + representative_index)));
+            const digest = digests[@intFromEnum(original) - mark_.types_len];
+            const bucket = self.full_digest_interned.getPtr(DigestBucketKey.from(digest)) orelse
+                Common.compilerBug("recursive transaction indexed a digest with no preflighted bucket");
+            bucket.appendAssumeCapacity(durable);
+        }
+
+        self.active_transaction = null;
+        return .{
+            .allocator = self.allocator,
+            .root = result_remap[root_index - mark_.types_len],
+            .suffix_start = @intCast(mark_.types_len),
+            .remap = result_remap,
+        };
+    }
+
+    /// Extend a store-qualified relocation with the roots' reachable closure.
+    ///
+    /// Previously mapped nodes terminate discovery, so retaining one relocation
+    /// per worker avoids repeatedly importing shared global subgraphs. Ordered
+    /// roots and child spans determine the order assigned to new destination ids.
+    /// Mappings stay stable for this relocation's lifetime, but equivalent
+    /// workers with different import histories need not receive identical ids.
+    /// Name interning is intentionally monotonic: an OOM rolls back type and
+    /// relocation state but may retain names interned earlier.
+    ///
+    /// Neither store may contain speculative construction. An import owns its
+    /// destination transaction rather than participating in an existing one.
+    pub fn importTypes(
+        self: *Store,
+        destination_names: *names.NameStore,
+        source: *const Store,
+        source_names: *const names.NameStore,
+        relocation: *TypeRelocation,
+        source_roots: []const TypeId,
+    ) std.mem.Allocator.Error!ImportResult {
+        if (self == source) {
+            Common.compilerBug("Monotype import source and destination stores must differ");
+        }
+        if (source_roots.len == 0) {
+            Common.compilerBug("Monotype import requires at least one source root");
+        }
+        if (source.hasSpeculativeConstruction()) {
+            Common.compilerBug("Monotype import source contains unfinished construction");
+        }
+        if (self.hasSpeculativeConstruction()) {
+            Common.compilerBug("Monotype import destination contains unfinished construction");
+        }
+        relocation.requireOwners(source, source_names, self, destination_names);
+
+        var source_offsets = collections.DenseMap(TypeId, u32).init(self.allocator);
+        defer source_offsets.deinit();
+        var closure = std.ArrayList(TypeId).empty;
+        defer closure.deinit(self.allocator);
+        var pending = std.ArrayList(TypeId).empty;
+        defer pending.deinit(self.allocator);
+        for (source_roots) |source_root| {
+            try enqueueImportType(
+                source,
+                relocation,
+                &source_offsets,
+                &closure,
+                &pending,
+                self.allocator,
+                source_root,
+            );
+        }
+
+        var pending_head: usize = 0;
+        while (pending_head < pending.items.len) : (pending_head += 1) {
+            const ty = pending.items[pending_head];
+            try appendImportChildren(
+                source,
+                relocation,
+                &source_offsets,
+                &closure,
+                ty,
+                &pending,
+                self.allocator,
+            );
+        }
+
+        // The public result is fully allocated before commit. Once commit
+        // succeeds, populating it and translating roots cannot fail.
+        const imported_roots = try self.allocator.alloc(TypeId, source_roots.len);
+        errdefer self.allocator.free(imported_roots);
+        const new_source_types = try self.allocator.dupe(TypeId, closure.items);
+        errdefer self.allocator.free(new_source_types);
+
+        // Materialize sparse slots before the destination transaction commits.
+        // DenseMap capacity alone does not allocate its paged index, while every
+        // operation after commit must be infallible.
+        var inserted_count: usize = 0;
+        errdefer {
+            for (closure.items[0..inserted_count]) |source_ty| {
+                if (!relocation.map.remove(source_ty)) {
+                    Common.compilerBug("Monotype import failed to roll back a relocation placeholder");
+                }
+            }
+        }
+        try relocation.map.ensureUnusedCapacity(closure.items.len);
+        for (closure.items) |source_ty| {
+            const entry = try relocation.map.getOrPut(source_ty);
+            if (entry.found_existing) {
+                Common.compilerBug("Monotype import closure raced an existing relocation");
+            }
+            entry.value_ptr.* = undefined;
+            inserted_count += 1;
+        }
+
+        if (closure.items.len == 0) {
+            for (source_roots, imported_roots) |source_root, *destination_root| {
+                destination_root.* = relocation.remapType(source, source_root);
+            }
+            return .{
+                .allocator = self.allocator,
+                .roots = imported_roots,
+                .new_source_types = new_source_types,
+            };
+        }
+
+        const transaction = self.beginTransaction();
+        errdefer transaction.abort(self);
+        const reserved = try self.allocator.alloc(TypeId, closure.items.len);
+        defer self.allocator.free(reserved);
+        for (reserved) |*slot| slot.* = try transaction.reserve(self);
+        var scratch: ImportScratch = .{};
+        defer scratch.deinit(self.allocator);
+
+        for (closure.items, reserved) |source_ty, destination_ty| {
+            const imported = try self.importContent(
+                source,
+                source_names,
+                &source_offsets,
+                relocation,
+                reserved,
+                &scratch,
+                source_ty,
+            );
+            transaction.fill(self, destination_ty, imported);
+        }
+
+        var committed = try self.commitTransaction(destination_names, transaction, reserved[0]);
+        defer committed.deinit();
+        for (closure.items, reserved) |source_ty, speculative| {
+            relocation.map.getPtr(source_ty).?.* = committed.remapType(speculative);
+        }
+        for (source_roots, imported_roots) |source_root, *destination_root| {
+            destination_root.* = relocation.remapType(source, source_root);
+        }
+        return .{
+            .allocator = self.allocator,
+            .roots = imported_roots,
+            .new_source_types = new_source_types,
+        };
+    }
+
+    fn importType(
+        source_offsets: *const collections.DenseMap(TypeId, u32),
+        relocation: *const TypeRelocation,
+        reserved: []const TypeId,
+        source_ty: TypeId,
+    ) TypeId {
+        if (source_offsets.get(source_ty)) |offset| return reserved[offset];
+        return relocation.map.get(source_ty) orelse
+            Common.compilerBug("Monotype import found an edge outside its cumulative closure");
+    }
+
+    fn enqueueImportType(
+        source: *const Store,
+        relocation: *const TypeRelocation,
+        source_offsets: *collections.DenseMap(TypeId, u32),
+        closure: *std.ArrayList(TypeId),
+        pending: *std.ArrayList(TypeId),
+        allocator: std.mem.Allocator,
+        ty: TypeId,
+    ) std.mem.Allocator.Error!void {
+        const index = @intFromEnum(ty);
+        if (index >= source.types.len()) {
+            Common.compilerBug("Monotype import source id does not belong to the source store");
+        }
+        if (source.constructing.unsafeRawItemsForView()[index]) {
+            Common.compilerBug("Monotype import reached an unfinished source type");
+        }
+        if (relocation.map.contains(ty)) return;
+        const entry = try source_offsets.getOrPut(ty);
+        if (entry.found_existing) return;
+        entry.value_ptr.* = @intCast(closure.items.len);
+        try closure.append(allocator, ty);
+        try pending.append(allocator, ty);
+    }
+
+    fn appendImportChildren(
+        source: *const Store,
+        relocation: *const TypeRelocation,
+        source_offsets: *collections.DenseMap(TypeId, u32),
+        closure: *std.ArrayList(TypeId),
+        ty: TypeId,
+        pending: *std.ArrayList(TypeId),
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error!void {
+        switch (source.get(ty)) {
+            .primitive, .erased, .zst => {},
+            .list, .box => |child| try enqueueImportType(
+                source,
+                relocation,
+                source_offsets,
+                closure,
+                pending,
+                allocator,
+                child,
+            ),
+            .tuple => |span_| {
+                const children = source.span(span_);
+                for (0..GuardedList.borrowLen(children)) |index| {
+                    try enqueueImportType(
+                        source,
+                        relocation,
+                        source_offsets,
+                        closure,
+                        pending,
+                        allocator,
+                        GuardedList.at(children, index),
+                    );
+                }
+            },
+            .func => |func| {
+                const args = source.span(func.args);
+                for (0..GuardedList.borrowLen(args)) |index| {
+                    try enqueueImportType(
+                        source,
+                        relocation,
+                        source_offsets,
+                        closure,
+                        pending,
+                        allocator,
+                        GuardedList.at(args, index),
+                    );
+                }
+                try enqueueImportType(
+                    source,
+                    relocation,
+                    source_offsets,
+                    closure,
+                    pending,
+                    allocator,
+                    func.ret,
+                );
+            },
+            .record => |span_| {
+                const fields_ = source.fieldSpan(span_);
+                for (0..GuardedList.borrowLen(fields_)) |index| {
+                    const field = GuardedList.at(fields_, index);
+                    try enqueueImportType(
+                        source,
+                        relocation,
+                        source_offsets,
+                        closure,
+                        pending,
+                        allocator,
+                        field.ty,
+                    );
+                    if (field.value_ty) |value_ty| {
+                        try enqueueImportType(
+                            source,
+                            relocation,
+                            source_offsets,
+                            closure,
+                            pending,
+                            allocator,
+                            value_ty,
+                        );
+                    }
+                }
+            },
+            .tag_union => |span_| {
+                const tags_ = source.tagSpan(span_);
+                for (0..GuardedList.borrowLen(tags_)) |index| {
+                    const payloads = source.span(GuardedList.at(tags_, index).payloads);
+                    for (0..GuardedList.borrowLen(payloads)) |payload_index| {
+                        try enqueueImportType(
+                            source,
+                            relocation,
+                            source_offsets,
+                            closure,
+                            pending,
+                            allocator,
+                            GuardedList.at(payloads, payload_index),
+                        );
+                    }
+                }
+            },
+            .named => |named| {
+                const args = source.span(named.args);
+                for (0..GuardedList.borrowLen(args)) |index| {
+                    try enqueueImportType(
+                        source,
+                        relocation,
+                        source_offsets,
+                        closure,
+                        pending,
+                        allocator,
+                        GuardedList.at(args, index),
+                    );
+                }
+                if (named.backing) |backing| {
+                    try enqueueImportType(
+                        source,
+                        relocation,
+                        source_offsets,
+                        closure,
+                        pending,
+                        allocator,
+                        backing.ty,
+                    );
+                }
+                const declared = source.declaredFieldSpan(named.declared_order);
+                for (0..GuardedList.borrowLen(declared)) |index| {
+                    switch (GuardedList.at(declared, index)) {
+                        .named => {},
+                        .padding => |padding| try enqueueImportType(
+                            source,
+                            relocation,
+                            source_offsets,
+                            closure,
+                            pending,
+                            allocator,
+                            padding,
+                        ),
+                    }
+                }
+            },
+        }
+    }
+
+    const ImportScratch = struct {
+        types: std.ArrayList(TypeId) = .empty,
+        fields: std.ArrayList(Field) = .empty,
+        tags: std.ArrayList(Tag) = .empty,
+        declared_fields: std.ArrayList(DeclaredField) = .empty,
+
+        fn deinit(self: *ImportScratch, allocator: std.mem.Allocator) void {
+            self.types.deinit(allocator);
+            self.fields.deinit(allocator);
+            self.tags.deinit(allocator);
+            self.declared_fields.deinit(allocator);
+        }
+    };
+
+    fn importTypeSpan(
+        self: *Store,
+        source: *const Store,
+        source_offsets: *const collections.DenseMap(TypeId, u32),
+        relocation: *const TypeRelocation,
+        reserved: []const TypeId,
+        scratch: *ImportScratch,
+        span_: Span,
+    ) std.mem.Allocator.Error!Span {
+        if (span_.len == 0) return .empty();
+        try scratch.types.resize(self.allocator, span_.len);
+        const source_types = source.span(span_);
+        for (scratch.types.items, 0..) |*destination_ty, index| {
+            destination_ty.* = importType(source_offsets, relocation, reserved, GuardedList.at(source_types, index));
+        }
+        return try self.addSpan(scratch.types.items);
+    }
+
+    fn importContent(
+        self: *Store,
+        source: *const Store,
+        source_names: *const names.NameStore,
+        source_offsets: *const collections.DenseMap(TypeId, u32),
+        relocation: *TypeRelocation,
+        reserved: []const TypeId,
+        scratch: *ImportScratch,
+        source_ty: TypeId,
+    ) std.mem.Allocator.Error!Content {
+        return switch (source.get(source_ty)) {
+            .primitive => |value| .{ .primitive = value },
+            .erased => |value| .{ .erased = value },
+            .zst => .zst,
+            .list => |ty| .{ .list = importType(source_offsets, relocation, reserved, ty) },
+            .box => |ty| .{ .box = importType(source_offsets, relocation, reserved, ty) },
+            .tuple => |span_| .{ .tuple = try self.importTypeSpan(source, source_offsets, relocation, reserved, scratch, span_) },
+            .func => |func| .{ .func = .{
+                .args = try self.importTypeSpan(source, source_offsets, relocation, reserved, scratch, func.args),
+                .ret = importType(source_offsets, relocation, reserved, func.ret),
+            } },
+            .record => |span_| blk: {
+                const source_fields = source.fieldSpan(span_);
+                try scratch.fields.resize(self.allocator, span_.len);
+                for (scratch.fields.items, 0..) |*field, index| {
+                    field.* = GuardedList.at(source_fields, index);
+                    field.name = try relocation.name_relocation.relocateRecordFieldLabel(source_names, field.name);
+                    field.ty = importType(source_offsets, relocation, reserved, field.ty);
+                    if (field.value_ty) |value_ty| {
+                        field.value_ty = importType(source_offsets, relocation, reserved, value_ty);
+                    }
+                    if (field.default) |*default| {
+                        default.module = try relocation.name_relocation.relocateModuleIdentity(source_names, default.module);
+                    }
+                }
+                break :blk .{ .record = try self.addFields(scratch.fields.items) };
+            },
+            .tag_union => |span_| blk: {
+                const source_tags = source.tagSpan(span_);
+                try scratch.tags.resize(self.allocator, span_.len);
+                for (scratch.tags.items, 0..) |*tag, index| {
+                    tag.* = GuardedList.at(source_tags, index);
+                    tag.name = try relocation.name_relocation.relocateTagLabel(source_names, tag.name);
+                    tag.checked_name = try relocation.name_relocation.relocateTagLabel(source_names, tag.checked_name);
+                    tag.payloads = try self.importTypeSpan(source, source_offsets, relocation, reserved, scratch, tag.payloads);
+                }
+                break :blk .{ .tag_union = try self.addTags(scratch.tags.items) };
+            },
+            .named => |source_named| blk: {
+                var imported = source_named;
+                imported.named_type.module = source_named.named_type.module;
+                imported.def.module = try relocation.name_relocation.relocateModuleIdentity(source_names, source_named.def.module);
+                imported.def.type_name = try relocation.name_relocation.relocateTypeName(source_names, source_named.def.type_name);
+                if (imported.def.iterator_topology) |*topology| {
+                    topology.len_field = try relocation.name_relocation.relocateRecordFieldLabel(source_names, topology.len_field);
+                    topology.step_field = try relocation.name_relocation.relocateRecordFieldLabel(source_names, topology.step_field);
+                    topology.known_tag = try relocation.name_relocation.relocateTagLabel(source_names, topology.known_tag);
+                    topology.unknown_tag = try relocation.name_relocation.relocateTagLabel(source_names, topology.unknown_tag);
+                    topology.done_tag = try relocation.name_relocation.relocateTagLabel(source_names, topology.done_tag);
+                    topology.one_tag = try relocation.name_relocation.relocateTagLabel(source_names, topology.one_tag);
+                    topology.skip_tag = try relocation.name_relocation.relocateTagLabel(source_names, topology.skip_tag);
+                    topology.item_field = try relocation.name_relocation.relocateRecordFieldLabel(source_names, topology.item_field);
+                    topology.rest_field = try relocation.name_relocation.relocateRecordFieldLabel(source_names, topology.rest_field);
+                }
+                imported.args = try self.importTypeSpan(source, source_offsets, relocation, reserved, scratch, source_named.args);
+                if (imported.backing) |*backing| {
+                    backing.ty = importType(source_offsets, relocation, reserved, backing.ty);
+                }
+                const source_declared = source.declaredFieldSpan(source_named.declared_order);
+                try scratch.declared_fields.resize(self.allocator, source_named.declared_order.len);
+                for (scratch.declared_fields.items, 0..) |*field, index| {
+                    field.* = GuardedList.at(source_declared, index);
+                    switch (field.*) {
+                        .named => |name| field.* = .{ .named = try relocation.name_relocation.relocateRecordFieldLabel(source_names, name) },
+                        .padding => |ty| field.* = .{ .padding = importType(source_offsets, relocation, reserved, ty) },
+                    }
+                }
+                imported.declared_order = try self.addDeclaredFields(scratch.declared_fields.items);
+                break :blk .{ .named = imported };
+            },
+        };
+    }
+
+    /// Reserve every durable-index slot the indexing step of a commit needs.
+    ///
+    /// A bucket created here but never filled (because a later step failed) is
+    /// an empty entry, which is indistinguishable from an absent one to every
+    /// reader, so this preflight needs no rollback of its own.
+    fn reserveInternedCapacity(
+        self: *Store,
+        mark_: Mark,
+        interned_original: []const TypeId,
+        suffix_by_digest: *std.AutoHashMap(DigestBucketKey, std.ArrayList(u32)),
+        representative_count: usize,
+    ) std.mem.Allocator.Error!void {
+        try self.full_digest_interned.ensureUnusedCapacity(@intCast(representative_count));
+        var groups = suffix_by_digest.iterator();
+        while (groups.next()) |entry| {
+            var needed: usize = 0;
+            for (entry.value_ptr.items) |offset| {
+                const candidate: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + offset)));
+                if (interned_original[offset] == candidate) needed += 1;
+            }
+            if (needed == 0) continue;
+            const bucket = try self.full_digest_interned.getOrPut(entry.key_ptr.*);
+            if (!bucket.found_existing) bucket.value_ptr.* = .empty;
+            try bucket.value_ptr.ensureUnusedCapacity(self.allocator, needed);
+        }
+    }
+
     pub fn ownerHead(self: *const Store, ty: TypeId) OwnerHead {
         return switch (self.get(ty)) {
-            .primitive => |primitive| .{ .builtin = builtinOwner(primitive) },
+            .primitive => |primitive| .{ .builtin = checked.builtinOwnerForPrimitive(primitive) },
             .list => .{ .builtin = .list },
             .box => .{ .builtin = .box },
             .named => |named| if (named.builtin_owner) |owner|
@@ -692,6 +1829,13 @@ pub const Store = struct {
     /// type?".
     pub fn specializationDigest(self: *Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
         return self.specializationDigestCached(name_store, ty, null);
+    }
+
+    /// Digest of the exact equivalence relation implemented by `typeEql`.
+    /// Unlike the stored-identity digest, this unwraps aliases and omits
+    /// checked-node provenance that does not participate in type equality.
+    pub fn equalityDigest(self: *Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
+        return self.computeDigest(name_store, ty, .equality, null) catch digestOutOfMemory();
     }
 
     pub const DigestStats = struct {
@@ -886,6 +2030,9 @@ pub const Store = struct {
     }
 
     pub fn verify(self: *const Store, name_store: *const names.NameStore) ?VerifyError {
+        if (self.specialization_digests.len() != self.types.len() or self.equality_digests.len() != self.types.len()) {
+            return .type_digest_count_mismatch;
+        }
         return self.view().verify(name_store);
     }
 
@@ -945,11 +2092,397 @@ pub const Store = struct {
         return try self.view().typeMatches(self.allocator, name_store, lhs, rhs, mode);
     }
 
+    /// Whether `ty` is already a durable representative in the full-digest
+    /// index. Draft construction may append immutable-looking nodes whose
+    /// children are not durable yet; final sealing uses this distinction to
+    /// copy and intern them even when they contain no active graph snapshot.
+    pub fn isInterned(
+        self: *Store,
+        name_store: *const names.NameStore,
+        ty: TypeId,
+    ) std.mem.Allocator.Error!bool {
+        self.requireConstructed(ty);
+        const digest = try self.computeDigest(name_store, ty, .full, null);
+        const bucket = self.full_digest_interned.get(DigestBucketKey.from(digest)) orelse return false;
+        for (bucket.items) |existing| {
+            if (existing == ty) return true;
+        }
+        return false;
+    }
+
+    const DigestBucketKey = struct {
+        bytes: [32]u8,
+
+        fn from(digest: names.TypeDigest) DigestBucketKey {
+            return .{ .bytes = digest.bytes };
+        }
+    };
+
+    /// Store-level acyclic interning: child-first construction of immutable
+    /// Monotype nodes directly on `Store`. Outside a transaction, callers
+    /// provide already-interned child `TypeId`s and receive an immutable,
+    /// interned result. During a transaction these calls append unindexed nodes
+    /// to its suffix instead; the owner's `TransactionResult` then supplies
+    /// their durable ids. A recursive group has no child-first order and is
+    /// sealed as a whole by `beginTransaction` / `commitTransaction`, which
+    /// shares this same digest index.
+    pub fn internPrimitive(self: *Store, name_store: *const names.NameStore, primitive: Primitive) std.mem.Allocator.Error!TypeId {
+        const mark_ = self.mark();
+        const ty = try self.add(.{ .primitive = primitive });
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    pub fn internZst(self: *Store, name_store: *const names.NameStore) std.mem.Allocator.Error!TypeId {
+        const mark_ = self.mark();
+        const ty = try self.add(.zst);
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    pub fn internList(self: *Store, name_store: *const names.NameStore, elem: TypeId) std.mem.Allocator.Error!TypeId {
+        const mark_ = self.mark();
+        const ty = try self.add(.{ .list = elem });
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    pub fn internBox(self: *Store, name_store: *const names.NameStore, elem: TypeId) std.mem.Allocator.Error!TypeId {
+        const mark_ = self.mark();
+        const ty = try self.add(.{ .box = elem });
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    pub fn internTuple(self: *Store, name_store: *const names.NameStore, items: []const TypeId) std.mem.Allocator.Error!TypeId {
+        const mark_ = self.mark();
+        errdefer self.restore(mark_);
+        const span_ = try self.addSpan(items);
+        const ty = try self.add(.{ .tuple = span_ });
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    pub fn internFunc(self: *Store, name_store: *const names.NameStore, args: []const TypeId, ret: TypeId) std.mem.Allocator.Error!TypeId {
+        const mark_ = self.mark();
+        errdefer self.restore(mark_);
+        const span_ = try self.addSpan(args);
+        const ty = try self.add(.{ .func = .{ .args = span_, .ret = ret } });
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    pub fn internRecord(self: *Store, name_store: *const names.NameStore, raw_fields: []const Field) std.mem.Allocator.Error!TypeId {
+        const mark_ = self.mark();
+        errdefer self.restore(mark_);
+        const span_ = try self.addRecordFields(name_store, raw_fields);
+        const ty = try self.add(.{ .record = span_ });
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    pub const TagInput = struct {
+        name: names.TagNameId,
+        checked_name: names.TagNameId,
+        payloads: []const TypeId,
+    };
+
+    pub fn internTagUnion(self: *Store, name_store: *const names.NameStore, raw_tags: []const TagInput) std.mem.Allocator.Error!TypeId {
+        const mark_ = self.mark();
+        errdefer self.restore(mark_);
+
+        const lowered = try self.allocator.alloc(Tag, raw_tags.len);
+        defer self.allocator.free(lowered);
+        for (raw_tags, 0..) |tag, index| {
+            lowered[index] = .{
+                .name = tag.name,
+                .checked_name = tag.checked_name,
+                .payloads = try self.addSpan(tag.payloads),
+            };
+        }
+
+        const span_ = try self.addTagVariants(name_store, lowered);
+        const ty = try self.add(.{ .tag_union = span_ });
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    pub const NamedInput = struct {
+        named_type: NamedType,
+        def: TypeDef,
+        kind: NamedKind,
+        builtin_owner: ?static_dispatch.BuiltinOwner = null,
+        args: []const TypeId = &.{},
+        backing: ?NamedBacking = null,
+        declared_order: []const DeclaredField = &.{},
+    };
+
+    pub fn internNamed(self: *Store, name_store: *const names.NameStore, named: NamedInput) std.mem.Allocator.Error!TypeId {
+        const mark_ = self.mark();
+        errdefer self.restore(mark_);
+
+        const args = try self.addSpan(named.args);
+        const declared_order = try self.addDeclaredFields(named.declared_order);
+        const content: NamedContent = .{
+            .named_type = named.named_type,
+            .def = named.def,
+            .kind = named.kind,
+            .builtin_owner = named.builtin_owner,
+            .args = args,
+            .backing = named.backing,
+            .declared_order = declared_order,
+        };
+        const ty = try self.add(.{ .named = content });
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    pub fn internErased(self: *Store, name_store: *const names.NameStore, digest: names.TypeDigest) std.mem.Allocator.Error!TypeId {
+        const mark_ = self.mark();
+        const ty = try self.add(.{ .erased = digest });
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    /// Owned copy of one speculative node together with only the side-pool
+    /// rows it references, every span rebased onto those owned buffers.
+    ///
+    /// Sealing truncates the speculative suffix before constructing durable
+    /// nodes, so the old rows must outlive the truncation. Capturing them
+    /// per surviving representative bounds that cost by the speculative
+    /// suffix; copying the durable pools would bound it by store size.
+    const CapturedNode = struct {
+        content: Content,
+        /// Referenced type ids: tuple elements, function arguments, named
+        /// arguments, or every tag's payloads concatenated in tag order.
+        type_refs: []const TypeId,
+        fields: []const Field,
+        tags: []const Tag,
+        declared: []const DeclaredField,
+
+        fn deinit(self: *CapturedNode, allocator: std.mem.Allocator) void {
+            allocator.free(self.type_refs);
+            allocator.free(self.fields);
+            allocator.free(self.tags);
+            allocator.free(self.declared);
+            self.* = undefined;
+        }
+    };
+
+    fn captureNode(self: *const Store, ty: TypeId) std.mem.Allocator.Error!CapturedNode {
+        var captured: CapturedNode = .{
+            .content = .zst,
+            .type_refs = &.{},
+            .fields = &.{},
+            .tags = &.{},
+            .declared = &.{},
+        };
+        errdefer captured.deinit(self.allocator);
+
+        switch (self.get(ty)) {
+            .primitive, .erased, .zst, .list, .box => captured.content = self.get(ty),
+            .tuple => |span_| {
+                captured.type_refs = try self.spans.dupeSpan(self.allocator, span_.start, span_.len);
+                captured.content = .{ .tuple = .{ .start = 0, .len = span_.len } };
+            },
+            .func => |func| {
+                captured.type_refs = try self.spans.dupeSpan(self.allocator, func.args.start, func.args.len);
+                captured.content = .{ .func = .{
+                    .args = .{ .start = 0, .len = func.args.len },
+                    .ret = func.ret,
+                } };
+            },
+            .record => |span_| {
+                captured.fields = try self.fields.dupeSpan(self.allocator, span_.start, span_.len);
+                captured.content = .{ .record = .{ .start = 0, .len = span_.len } };
+            },
+            .tag_union => |span_| {
+                const tags_ = try self.tags.dupeSpan(self.allocator, span_.start, span_.len);
+                captured.tags = tags_;
+                var payload_len: usize = 0;
+                for (tags_) |tag| payload_len += tag.payloads.len;
+                const payloads = try self.allocator.alloc(TypeId, payload_len);
+                captured.type_refs = payloads;
+                const stored = self.spans.unsafeRawItemsForView();
+                var next: u32 = 0;
+                for (tags_) |*tag| {
+                    const len = tag.payloads.len;
+                    @memcpy(payloads[next..][0..len], stored[tag.payloads.start..][0..len]);
+                    tag.payloads = .{ .start = next, .len = len };
+                    next += len;
+                }
+                captured.content = .{ .tag_union = .{ .start = 0, .len = span_.len } };
+            },
+            .named => |named| {
+                captured.type_refs = try self.spans.dupeSpan(self.allocator, named.args.start, named.args.len);
+                captured.declared = try self.declared_fields.dupeSpan(
+                    self.allocator,
+                    named.declared_order.start,
+                    named.declared_order.len,
+                );
+                var rebuilt = named;
+                rebuilt.args = .{ .start = 0, .len = named.args.len };
+                rebuilt.declared_order = .{ .start = 0, .len = named.declared_order.len };
+                captured.content = .{ .named = rebuilt };
+            },
+        }
+        return captured;
+    }
+
+    fn transactionType(mark_: Mark, remap: []const TypeId, ty: TypeId) TypeId {
+        const index = @intFromEnum(ty);
+        if (index < mark_.types_len) return ty;
+        const offset = index - mark_.types_len;
+        // A reference past the remap means the node escaped the suffix the
+        // remap describes, which would silently rewrite it to garbage.
+        if (offset >= remap.len) {
+            Common.compilerBug("recursive transaction reference is outside its suffix");
+        }
+        return remap[offset];
+    }
+
+    fn rebuildTransactionTypeSpan(
+        self: *Store,
+        mark_: Mark,
+        old: Span,
+        snapshot: []const TypeId,
+        remap: []const TypeId,
+    ) std.mem.Allocator.Error!Span {
+        if (old.len == 0) return .empty();
+        const rewritten = try self.allocator.alloc(TypeId, old.len);
+        defer self.allocator.free(rewritten);
+        for (snapshot[old.start..][0..old.len], rewritten) |ty, *out| {
+            out.* = transactionType(mark_, remap, ty);
+        }
+        return try self.addSpan(rewritten);
+    }
+
+    fn rebuildTransactionContent(
+        self: *Store,
+        mark_: Mark,
+        captured: CapturedNode,
+        remap: []const TypeId,
+    ) std.mem.Allocator.Error!Content {
+        const snapshot_spans = captured.type_refs;
+        const snapshot_fields = captured.fields;
+        const snapshot_tags = captured.tags;
+        const snapshot_declared = captured.declared;
+        return switch (captured.content) {
+            .primitive => |value| .{ .primitive = value },
+            .erased => |value| .{ .erased = value },
+            .zst => .zst,
+            .list => |ty| .{ .list = transactionType(mark_, remap, ty) },
+            .box => |ty| .{ .box = transactionType(mark_, remap, ty) },
+            .tuple => |span_| .{ .tuple = try self.rebuildTransactionTypeSpan(mark_, span_, snapshot_spans, remap) },
+            .func => |func| .{ .func = .{
+                .args = try self.rebuildTransactionTypeSpan(mark_, func.args, snapshot_spans, remap),
+                .ret = transactionType(mark_, remap, func.ret),
+            } },
+            .record => |span_| blk: {
+                const old_fields = snapshot_fields[span_.start..][0..span_.len];
+                const fields_ = try self.allocator.dupe(Field, old_fields);
+                defer self.allocator.free(fields_);
+                for (fields_) |*field| {
+                    field.ty = transactionType(mark_, remap, field.ty);
+                    if (field.value_ty) |value_ty| {
+                        field.value_ty = transactionType(mark_, remap, value_ty);
+                    }
+                }
+                break :blk .{ .record = try self.addFields(fields_) };
+            },
+            .tag_union => |span_| blk: {
+                const old_tags = snapshot_tags[span_.start..][0..span_.len];
+                const tags_ = try self.allocator.dupe(Tag, old_tags);
+                defer self.allocator.free(tags_);
+                for (tags_) |*tag| {
+                    tag.payloads = try self.rebuildTransactionTypeSpan(mark_, tag.payloads, snapshot_spans, remap);
+                }
+                break :blk .{ .tag_union = try self.addTags(tags_) };
+            },
+            .named => |named| blk: {
+                var rebuilt = named;
+                rebuilt.args = try self.rebuildTransactionTypeSpan(mark_, named.args, snapshot_spans, remap);
+                if (rebuilt.backing) |*backing| {
+                    backing.ty = transactionType(mark_, remap, backing.ty);
+                }
+                if (named.declared_order.len != 0) {
+                    const declared = try self.allocator.dupe(
+                        DeclaredField,
+                        snapshot_declared[named.declared_order.start..][0..named.declared_order.len],
+                    );
+                    defer self.allocator.free(declared);
+                    for (declared) |*field| {
+                        switch (field.*) {
+                            .named => {},
+                            .padding => |ty| field.* = .{ .padding = transactionType(mark_, remap, ty) },
+                        }
+                    }
+                    rebuilt.declared_order = try self.addDeclaredFields(declared);
+                }
+                break :blk .{ .named = rebuilt };
+            },
+        };
+    }
+
+    fn indexInterned(self: *Store, digest: names.TypeDigest, candidate: TypeId) std.mem.Allocator.Error!void {
+        const key = DigestBucketKey.from(digest);
+        if (self.full_digest_interned.getPtr(key)) |bucket| {
+            try bucket.append(self.allocator, candidate);
+            return;
+        }
+        var bucket = std.ArrayList(TypeId).empty;
+        errdefer bucket.deinit(self.allocator);
+        try bucket.append(self.allocator, candidate);
+        try self.full_digest_interned.put(key, bucket);
+    }
+
+    /// Decide whether one digest-bucket entry really is `candidate`.
+    ///
+    /// A bucket only groups digest-equal candidates: `typeEql` stays the sole
+    /// authority for collapsing two ids, because a digest collision must never
+    /// alias distinct types. The debug assertions check the index's own
+    /// invariants around a hit -- the entry carries the bucket's digest, and
+    /// structural equality is symmetric on the pair about to be collapsed --
+    /// so a corrupted bucket or an asymmetric comparison surfaces here instead
+    /// of as a mysteriously shared type downstream.
+    fn bucketHit(
+        self: *Store,
+        name_store: *const names.NameStore,
+        key: DigestBucketKey,
+        existing: TypeId,
+        candidate: TypeId,
+    ) std.mem.Allocator.Error!bool {
+        if (!try self.typeEql(name_store, existing, candidate)) return false;
+        if (std.debug.runtime_safety) {
+            // Allocation failure inside these checks propagates like any
+            // other digest or equality allocation failure; the entry's digest
+            // is already cached from interning, so this does not allocate in
+            // practice.
+            const existing_digest = try self.computeDigest(name_store, existing, .full, null);
+            std.debug.assert(std.mem.eql(u8, &existing_digest.bytes, &key.bytes));
+            std.debug.assert(try self.typeEql(name_store, candidate, existing));
+        }
+        return true;
+    }
+
+    fn internCandidate(self: *Store, name_store: *const names.NameStore, mark_: Mark, candidate: TypeId) std.mem.Allocator.Error!TypeId {
+        errdefer self.restore(mark_);
+        if (self.hasSpeculativeConstruction()) return candidate;
+
+        const digest = try self.computeDigest(name_store, candidate, .full, null);
+        _ = try self.computeDigest(name_store, candidate, .identity_only, null);
+        const key = DigestBucketKey.from(digest);
+        if (self.full_digest_interned.getPtr(key)) |bucket| {
+            for (bucket.items) |existing| {
+                if (try self.bucketHit(name_store, key, existing, candidate)) {
+                    self.restore(mark_);
+                    return existing;
+                }
+            }
+            try bucket.append(self.allocator, candidate);
+            return candidate;
+        }
+
+        try self.indexInterned(digest, candidate);
+        return candidate;
+    }
+
     /// Which digest question is being answered. The two modes are separate
     /// versioned domains and must never produce byte-confusable answers.
     const NamedDigestMode = enum {
         full,
         identity_only,
+        equality,
     };
 
     /// Versioned digest-domain prefix written at the start of every node
@@ -960,6 +2493,7 @@ pub const Store = struct {
         return switch (mode) {
             .full => "roc.monotype.type.identity.v1",
             .identity_only => "roc.monotype.type.interface.v1",
+            .equality => "roc.monotype.type.equality.v1",
         };
     }
 
@@ -1045,10 +2579,11 @@ pub const Store = struct {
         return switch (mode) {
             .full => self.type_digests.unsafeRawItemsForView()[index],
             .identity_only => self.specialization_digests.unsafeRawItemsForView()[index],
+            .equality => self.equality_digests.unsafeRawItemsForView()[index],
         };
     }
 
-    /// Sole writer of both digest caches. Digests are content-addressed, so a
+    /// Sole writer of the digest caches. Digests are content-addressed, so a
     /// re-write must agree with the existing entry.
     fn setCachedDigest(self: *Store, ty: TypeId, mode: NamedDigestMode, digest: names.TypeDigest) void {
         if (self.cachedDigest(ty, mode)) |existing| {
@@ -1058,10 +2593,22 @@ pub const Store = struct {
         switch (mode) {
             .full => self.type_digests.set(index, digest),
             .identity_only => self.specialization_digests.set(index, digest),
+            .equality => self.equality_digests.set(index, digest),
         }
     }
 
-    /// One digest implementation for both modes: serve the request from the
+    fn digestType(self: *const Store, raw_ty: TypeId, mode: NamedDigestMode) TypeId {
+        if (mode != .equality) return raw_ty;
+        var ty = raw_ty;
+        while (true) {
+            const content = self.get(ty);
+            if (content != .named or content.named.kind != .alias) return ty;
+            const backing = content.named.backing orelse return ty;
+            ty = backing.ty;
+        }
+    }
+
+    /// One digest implementation for every mode: serve the request from the
     /// cache or reduce the uncached reachable subgraph and cache every digest
     /// it settles.
     fn computeDigest(
@@ -1114,10 +2661,12 @@ pub const Store = struct {
             .named => |named| {
                 try sink.writeBytes("named");
                 try sink.writeBytes(&named.named_type.module.bytes);
-                try sink.writeU32(@intFromEnum(named.named_type.ty));
+                if (mode != .equality) try sink.writeU32(@intFromEnum(named.named_type.ty));
                 try sink.writeBytes(name_store.moduleIdentityBytes(named.def.module));
                 try sinkOptionalU32(sink, named.def.source_decl);
-                try sink.writeBytes(name_store.typeNameText(named.def.type_name));
+                if (mode != .equality or named.def.source_decl == null) {
+                    try sink.writeBytes(name_store.typeNameText(named.def.type_name));
+                }
                 try sinkOptionalDigest(sink, named.def.generated);
                 try sink.writeBytes(@tagName(named.def.iterator_representation));
                 try sink.writeBytes(@tagName(named.def.iterator_kind));
@@ -1141,6 +2690,15 @@ pub const Store = struct {
                         try encodeNamedBacking(sink, named.backing);
                     } else {
                         try sink.writeBytes("specialization-named-identity");
+                    },
+                    .equality => if (specializationUsesBacking(named.backing)) {
+                        try sink.writeBytes("equality-generated-backing");
+                        const backing = named.backing orelse unreachable;
+                        try sink.writeBytes(@tagName(backing.use));
+                        try sink.writeBytes(@tagName(backing.authority));
+                        try sink.child(backing.ty, .equality);
+                    } else {
+                        try sink.writeBytes("equality-named-identity");
                     },
                 }
             },
@@ -1173,7 +2731,7 @@ pub const Store = struct {
                 for (0..tag_slice.len) |index| {
                     const tag = GuardedList.at(tag_slice, index);
                     try sink.writeBytes(name_store.tagLabelText(tag.name));
-                    try sink.writeBytes(name_store.tagLabelText(tag.checked_name));
+                    if (mode != .equality) try sink.writeBytes(name_store.tagLabelText(tag.checked_name));
                     try self.encodeTypeSpan(sink, tag.payloads, mode);
                 }
             },
@@ -1309,7 +2867,7 @@ pub const Store = struct {
         }
 
         fn run(self: *DigestEngine, ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!names.TypeDigest {
-            const root = try self.internNode(ty, mode);
+            const root = try self.internNode(self.store.digestType(ty, mode), mode);
             std.debug.assert(root == 0);
             var next: usize = 0;
             while (next < self.nodes.items.len) : (next += 1) {
@@ -1322,10 +2880,11 @@ pub const Store = struct {
         }
 
         fn nodeKey(ty: TypeId, mode: NamedDigestMode) u64 {
-            return (@as(u64, @intFromEnum(ty)) << 1) | @as(u64, @intFromEnum(mode));
+            return (@as(u64, @intFromEnum(ty)) << 2) | @as(u64, @intFromEnum(mode));
         }
 
-        fn internNode(self: *DigestEngine, ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!u32 {
+        fn internNode(self: *DigestEngine, raw_ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!u32 {
+            const ty = self.store.digestType(raw_ty, mode);
             const gop = try self.node_lookup.getOrPut(nodeKey(ty, mode));
             if (gop.found_existing) return gop.value_ptr.*;
             const index: u32 = @intCast(self.nodes.items.len);
@@ -1341,7 +2900,8 @@ pub const Store = struct {
         /// Classify one child reference during discovery: already-cached
         /// children participate as finalized digests, everything else becomes
         /// a node of the discovered graph.
-        fn childLink(self: *DigestEngine, ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!ChildLink {
+        fn childLink(self: *DigestEngine, raw_ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!ChildLink {
+            const ty = self.store.digestType(raw_ty, mode);
             self.store.requireConstructed(ty);
             if (self.store.cachedDigest(ty, mode)) |digest| return .{ .external = digest };
             return .{ .node = try self.internNode(ty, mode) };
@@ -1350,7 +2910,8 @@ pub const Store = struct {
         /// `childLink` for rendering passes after discovery: never grows the
         /// graph, and nodes this engine already finalized may resolve through
         /// the store cache with identical bytes.
-        fn resolvedChildLink(self: *DigestEngine, ty: TypeId, mode: NamedDigestMode) ChildLink {
+        fn resolvedChildLink(self: *DigestEngine, raw_ty: TypeId, mode: NamedDigestMode) ChildLink {
+            const ty = self.store.digestType(raw_ty, mode);
             if (self.store.cachedDigest(ty, mode)) |digest| return .{ .external = digest };
             return .{
                 .node = self.node_lookup.get(nodeKey(ty, mode)) orelse
@@ -2344,455 +3905,6 @@ fn directionalTypePair(lhs: TypeId, rhs: TypeId) u64 {
     return (@as(u64, @intFromEnum(lhs)) << 32) | @as(u64, @intFromEnum(rhs));
 }
 
-/// Mutable builder for immutable Monotype type nodes.
-///
-/// The interner is child-first for acyclic types: callers provide
-/// already-interned child `TypeId`s, and every successful call returns a
-/// `TypeId` whose content is not mutated by the interner afterwards. Recursive
-/// roots are sealed through `internRecursiveRoot`, which keeps the temporary
-/// back-reference slots private until the root has immutable content and a
-/// digest/equality bucket.
-const InternerState = struct {
-    allocator: std.mem.Allocator,
-    name_store: *const names.NameStore,
-    store: Store,
-    by_digest: std.AutoHashMap(InternerLookupDigest, std.ArrayList(TypeId)),
-};
-
-/// Opaque builder handle for interning immutable Monotype type ids.
-pub const Interner = opaque {
-    fn state(self: *Interner) *InternerState {
-        return @ptrCast(@alignCast(self));
-    }
-
-    fn constState(self: *const Interner) *const InternerState {
-        return @ptrCast(@alignCast(self));
-    }
-
-    fn store(self: *Interner) *Store {
-        return &self.state().store;
-    }
-
-    fn constStore(self: *const Interner) *const Store {
-        return &self.constState().store;
-    }
-
-    pub fn init(allocator: std.mem.Allocator, name_store: *const names.NameStore) std.mem.Allocator.Error!*Interner {
-        const state_ = try allocator.create(InternerState);
-        state_.* = .{
-            .allocator = allocator,
-            .name_store = name_store,
-            .store = Store.init(allocator),
-            .by_digest = std.AutoHashMap(InternerLookupDigest, std.ArrayList(TypeId)).init(allocator),
-        };
-        return @ptrCast(state_);
-    }
-
-    pub fn deinit(self: *Interner) void {
-        const state_ = self.state();
-        var lists = state_.by_digest.valueIterator();
-        while (lists.next()) |list| list.deinit(state_.allocator);
-        state_.by_digest.deinit();
-        state_.store.deinit();
-        const allocator = state_.allocator;
-        allocator.destroy(state_);
-    }
-
-    pub fn view(self: *const Interner) Store.View {
-        return self.constStore().view();
-    }
-
-    pub fn get(self: *const Interner, ty: TypeId) Content {
-        return self.constStore().get(ty);
-    }
-
-    pub fn span(self: *const Interner, span_: Span) StoreSpanBorrow(TypeId, "spans") {
-        return self.constStore().span(span_);
-    }
-
-    pub fn fieldSpan(self: *const Interner, span_: Span) StoreSpanBorrow(Field, "fields") {
-        return self.constStore().fieldSpan(span_);
-    }
-
-    pub fn tagSpan(self: *const Interner, span_: Span) StoreSpanBorrow(Tag, "tags") {
-        return self.constStore().tagSpan(span_);
-    }
-
-    pub fn typeDigest(self: *Interner, ty: TypeId) names.TypeDigest {
-        const state_ = self.state();
-        return state_.store.typeDigestCached(state_.name_store, ty, null);
-    }
-
-    pub fn typeEql(self: *const Interner, lhs: TypeId, rhs: TypeId) std.mem.Allocator.Error!bool {
-        const state_ = self.constState();
-        return try state_.store.typeEql(state_.name_store, lhs, rhs);
-    }
-
-    pub fn verify(self: *const Interner) ?Store.VerifyError {
-        const state_ = self.constState();
-        return state_.store.verify(state_.name_store);
-    }
-
-    pub fn internPrimitive(self: *Interner, primitive: Primitive) std.mem.Allocator.Error!TypeId {
-        const store_ = self.store();
-        const mark_ = store_.mark();
-        const ty = try store_.add(.{ .primitive = primitive });
-        return try self.internCandidate(mark_, ty);
-    }
-
-    pub fn internZst(self: *Interner) std.mem.Allocator.Error!TypeId {
-        const store_ = self.store();
-        const mark_ = store_.mark();
-        const ty = try store_.add(.zst);
-        return try self.internCandidate(mark_, ty);
-    }
-
-    pub fn internList(self: *Interner, elem: TypeId) std.mem.Allocator.Error!TypeId {
-        const store_ = self.store();
-        const mark_ = store_.mark();
-        const ty = try store_.add(.{ .list = elem });
-        return try self.internCandidate(mark_, ty);
-    }
-
-    pub fn internBox(self: *Interner, elem: TypeId) std.mem.Allocator.Error!TypeId {
-        const store_ = self.store();
-        const mark_ = store_.mark();
-        const ty = try store_.add(.{ .box = elem });
-        return try self.internCandidate(mark_, ty);
-    }
-
-    pub fn internTuple(self: *Interner, items: []const TypeId) std.mem.Allocator.Error!TypeId {
-        const store_ = self.store();
-        const mark_ = store_.mark();
-        const span_ = try store_.addSpan(items);
-        const ty = try store_.add(.{ .tuple = span_ });
-        return try self.internCandidate(mark_, ty);
-    }
-
-    pub fn internFunc(self: *Interner, args: []const TypeId, ret: TypeId) std.mem.Allocator.Error!TypeId {
-        const store_ = self.store();
-        const mark_ = store_.mark();
-        const span_ = try store_.addSpan(args);
-        const ty = try store_.add(.{ .func = .{ .args = span_, .ret = ret } });
-        return try self.internCandidate(mark_, ty);
-    }
-
-    pub fn internRecord(self: *Interner, raw_fields: []const Field) std.mem.Allocator.Error!TypeId {
-        const state_ = self.state();
-        const mark_ = state_.store.mark();
-        const span_ = try state_.store.addRecordFields(state_.name_store, raw_fields);
-        const ty = try state_.store.add(.{ .record = span_ });
-        return try self.internCandidate(mark_, ty);
-    }
-
-    pub const TagInput = struct {
-        name: names.TagNameId,
-        checked_name: names.TagNameId,
-        payloads: []const TypeId,
-    };
-
-    pub fn internTagUnion(self: *Interner, raw_tags: []const TagInput) std.mem.Allocator.Error!TypeId {
-        const state_ = self.state();
-        const mark_ = state_.store.mark();
-        errdefer state_.store.restore(mark_);
-
-        const lowered = try state_.allocator.alloc(Tag, raw_tags.len);
-        defer state_.allocator.free(lowered);
-        for (raw_tags, 0..) |tag, index| {
-            lowered[index] = .{
-                .name = tag.name,
-                .checked_name = tag.checked_name,
-                .payloads = try state_.store.addSpan(tag.payloads),
-            };
-        }
-
-        const span_ = try state_.store.addTagVariants(state_.name_store, lowered);
-        const ty = try state_.store.add(.{ .tag_union = span_ });
-        return try self.internCandidate(mark_, ty);
-    }
-
-    pub const NamedInput = struct {
-        named_type: NamedType,
-        def: TypeDef,
-        kind: NamedKind,
-        builtin_owner: ?static_dispatch.BuiltinOwner = null,
-        args: []const TypeId = &.{},
-        backing: ?NamedBacking = null,
-        declared_order: []const DeclaredField = &.{},
-    };
-
-    pub fn internNamed(self: *Interner, named: NamedInput) std.mem.Allocator.Error!TypeId {
-        const store_ = self.store();
-        const mark_ = store_.mark();
-        errdefer store_.restore(mark_);
-
-        const args = try store_.addSpan(named.args);
-        const declared_order = try store_.addDeclaredFields(named.declared_order);
-        const content: NamedContent = .{
-            .named_type = named.named_type,
-            .def = named.def,
-            .kind = named.kind,
-            .builtin_owner = named.builtin_owner,
-            .args = args,
-            .backing = named.backing,
-            .declared_order = declared_order,
-        };
-        const ty = try store_.add(.{ .named = content });
-        return try self.internCandidate(mark_, ty);
-    }
-
-    pub fn internErased(self: *Interner, digest: names.TypeDigest) std.mem.Allocator.Error!TypeId {
-        const store_ = self.store();
-        const mark_ = store_.mark();
-        const ty = try store_.add(.{ .erased = digest });
-        return try self.internCandidate(mark_, ty);
-    }
-
-    pub const RecursiveLink = union(enum(u8)) {
-        interned: TypeId,
-        node: RecursiveNodeId,
-        root,
-    };
-
-    pub const RecursiveNodeId = enum(u32) { _ };
-
-    pub fn recursiveNodeId(index: usize) RecursiveNodeId {
-        return @enumFromInt(@as(u32, @intCast(index)));
-    }
-
-    pub const RecursiveField = struct {
-        name: names.RecordFieldNameId,
-        ty: RecursiveLink,
-        value_ty: ?RecursiveLink = null,
-        kind_state: FieldKindState = .resolved,
-        default: ?FieldDefault,
-    };
-
-    pub const RecursiveTag = struct {
-        name: names.TagNameId,
-        checked_name: names.TagNameId,
-        payloads: []const RecursiveLink,
-    };
-
-    pub const RecursiveNamedBacking = struct {
-        ty: RecursiveLink,
-        use: BackingUse,
-        authority: BackingAuthority = .checked_public,
-    };
-
-    pub const RecursiveNamed = struct {
-        named_type: NamedType,
-        def: TypeDef,
-        kind: NamedKind,
-        builtin_owner: ?static_dispatch.BuiltinOwner = null,
-        args: []const RecursiveLink,
-        backing: ?RecursiveNamedBacking = null,
-        declared_order: Span = Span.empty(),
-    };
-
-    pub const RecursiveContent = union(enum(u8)) {
-        primitive: Primitive,
-        named: RecursiveNamed,
-        record: []const RecursiveField,
-        tuple: []const RecursiveLink,
-        tag_union: []const RecursiveTag,
-        list: RecursiveLink,
-        box: RecursiveLink,
-        func: struct {
-            args: []const RecursiveLink,
-            ret: RecursiveLink,
-        },
-        erased: names.TypeDigest,
-        zst,
-    };
-
-    /// Intern one recursive root without exposing the reserved root id before
-    /// its content has been sealed. The input may refer to the root with
-    /// `RecursiveLink.root`; every other child must already be an immutable
-    /// interned `TypeId`.
-    pub fn internRecursiveRoot(self: *Interner, content: RecursiveContent) std.mem.Allocator.Error!TypeId {
-        return try self.internRecursiveGroupRoot(&.{content}, recursiveNodeId(0));
-    }
-
-    /// Intern one public root from a private recursive group. Group nodes may
-    /// reference each other through `RecursiveLink.node`; only the selected root
-    /// is returned to the caller, and it is returned only after every private
-    /// node has been filled exactly once.
-    pub fn internRecursiveGroupRoot(
-        self: *Interner,
-        contents: []const RecursiveContent,
-        root_node: RecursiveNodeId,
-    ) std.mem.Allocator.Error!TypeId {
-        if (@intFromEnum(root_node) >= contents.len) {
-            Common.invariant("Monotype recursive type group root is outside the group");
-        }
-
-        const store_ = self.store();
-        const mark_ = store_.mark();
-        errdefer store_.restore(mark_);
-
-        const allocator = self.state().allocator;
-        const ids = try allocator.alloc(TypeId, contents.len);
-        defer allocator.free(ids);
-
-        for (ids) |*id| {
-            id.* = try store_.reserveSlot();
-        }
-        const root = ids[@intFromEnum(root_node)];
-        for (contents, 0..) |content, index| {
-            const lowered = try self.lowerRecursiveContent(ids, root, content);
-            store_.fillReservedSlot(ids[index], lowered);
-        }
-        return try self.internCandidate(mark_, root);
-    }
-
-    fn lowerRecursiveLink(_: *Interner, ids: []const TypeId, root: TypeId, link: RecursiveLink) TypeId {
-        return switch (link) {
-            .interned => |ty| ty,
-            .node => |node| blk: {
-                const raw = @intFromEnum(node);
-                if (raw >= ids.len) Common.invariant("Monotype recursive type reference is outside the group");
-                break :blk ids[raw];
-            },
-            .root => root,
-        };
-    }
-
-    fn lowerRecursiveLinkSpan(
-        self: *Interner,
-        ids: []const TypeId,
-        root: TypeId,
-        links: []const RecursiveLink,
-    ) std.mem.Allocator.Error!Span {
-        if (links.len == 0) return .empty();
-        const state_ = self.state();
-        const lowered = try state_.allocator.alloc(TypeId, links.len);
-        defer state_.allocator.free(lowered);
-        for (links, 0..) |link, index| {
-            lowered[index] = self.lowerRecursiveLink(ids, root, link);
-        }
-        return try state_.store.addSpan(lowered);
-    }
-
-    fn lowerRecursiveFields(
-        self: *Interner,
-        ids: []const TypeId,
-        root: TypeId,
-        fields: []const RecursiveField,
-    ) std.mem.Allocator.Error!Span {
-        if (fields.len == 0) return .empty();
-        const state_ = self.state();
-        const lowered = try state_.allocator.alloc(Field, fields.len);
-        defer state_.allocator.free(lowered);
-        for (fields, 0..) |field, index| {
-            lowered[index] = .{
-                .name = field.name,
-                .ty = self.lowerRecursiveLink(ids, root, field.ty),
-                .value_ty = if (field.value_ty) |value_ty| self.lowerRecursiveLink(ids, root, value_ty) else null,
-                .kind_state = field.kind_state,
-                .default = field.default,
-            };
-        }
-        return try state_.store.addRecordFields(state_.name_store, lowered);
-    }
-
-    fn lowerRecursiveTags(
-        self: *Interner,
-        ids: []const TypeId,
-        root: TypeId,
-        tags_: []const RecursiveTag,
-    ) std.mem.Allocator.Error!Span {
-        if (tags_.len == 0) return .empty();
-        const state_ = self.state();
-        const lowered = try state_.allocator.alloc(Tag, tags_.len);
-        defer state_.allocator.free(lowered);
-        for (tags_, 0..) |tag, index| {
-            lowered[index] = .{
-                .name = tag.name,
-                .checked_name = tag.checked_name,
-                .payloads = try self.lowerRecursiveLinkSpan(ids, root, tag.payloads),
-            };
-        }
-        return try state_.store.addTagVariants(state_.name_store, lowered);
-    }
-
-    fn lowerRecursiveNamed(
-        self: *Interner,
-        ids: []const TypeId,
-        root: TypeId,
-        named: RecursiveNamed,
-    ) std.mem.Allocator.Error!NamedContent {
-        return .{
-            .named_type = named.named_type,
-            .def = named.def,
-            .kind = named.kind,
-            .builtin_owner = named.builtin_owner,
-            .args = try self.lowerRecursiveLinkSpan(ids, root, named.args),
-            .backing = if (named.backing) |backing| .{
-                .ty = self.lowerRecursiveLink(ids, root, backing.ty),
-                .use = backing.use,
-                .authority = backing.authority,
-            } else null,
-            .declared_order = named.declared_order,
-        };
-    }
-
-    fn lowerRecursiveContent(
-        self: *Interner,
-        ids: []const TypeId,
-        root: TypeId,
-        content: RecursiveContent,
-    ) std.mem.Allocator.Error!Content {
-        return switch (content) {
-            .primitive => |primitive| .{ .primitive = primitive },
-            .named => |named| .{ .named = try self.lowerRecursiveNamed(ids, root, named) },
-            .record => |fields| .{ .record = try self.lowerRecursiveFields(ids, root, fields) },
-            .tuple => |items| .{ .tuple = try self.lowerRecursiveLinkSpan(ids, root, items) },
-            .tag_union => |tags_| .{ .tag_union = try self.lowerRecursiveTags(ids, root, tags_) },
-            .list => |elem| .{ .list = self.lowerRecursiveLink(ids, root, elem) },
-            .box => |elem| .{ .box = self.lowerRecursiveLink(ids, root, elem) },
-            .func => |function| .{ .func = .{
-                .args = try self.lowerRecursiveLinkSpan(ids, root, function.args),
-                .ret = self.lowerRecursiveLink(ids, root, function.ret),
-            } },
-            .erased => |digest| .{ .erased = digest },
-            .zst => .zst,
-        };
-    }
-
-    fn internCandidate(self: *Interner, mark_: Store.Mark, candidate: TypeId) std.mem.Allocator.Error!TypeId {
-        const state_ = self.state();
-        errdefer state_.store.restore(mark_);
-
-        const digest = state_.store.typeDigestCached(state_.name_store, candidate, null);
-        const key = InternerLookupDigest.from(digest);
-        if (state_.by_digest.getPtr(key)) |bucket| {
-            for (bucket.items) |existing| {
-                if (try state_.store.typeEql(state_.name_store, existing, candidate)) {
-                    state_.store.restore(mark_);
-                    return existing;
-                }
-            }
-            try bucket.append(state_.allocator, candidate);
-            return candidate;
-        }
-
-        var bucket = std.ArrayList(TypeId).empty;
-        errdefer bucket.deinit(state_.allocator);
-        try bucket.append(state_.allocator, candidate);
-        try state_.by_digest.put(key, bucket);
-        return candidate;
-    }
-};
-
-const InternerLookupDigest = struct {
-    bytes: [32]u8,
-
-    fn from(digest: names.TypeDigest) InternerLookupDigest {
-        return .{ .bytes = digest.bytes };
-    }
-};
-
 fn recordFieldLessThan(name_store: *const names.NameStore, lhs: Field, rhs: Field) bool {
     return name_store.recordFieldLabelTextLessThan(lhs.name, rhs.name);
 }
@@ -2933,54 +4045,954 @@ fn optionalDigestEql(lhs: ?names.TypeDigest, rhs: ?names.TypeDigest) bool {
     return rhs == null;
 }
 
-fn builtinOwner(primitive: Primitive) static_dispatch.BuiltinOwner {
-    return switch (primitive) {
-        .bool => .bool,
-        .str => .str,
-        .u8 => .u8,
-        .i8 => .i8,
-        .u16 => .u16,
-        .i16 => .i16,
-        .u32 => .u32,
-        .i32 => .i32,
-        .u64 => .u64,
-        .i64 => .i64,
-        .u128 => .u128,
-        .i128 => .i128,
-        .f32 => .f32,
-        .f64 => .f64,
-        .dec => .dec,
-        .u8x16 => .u8x16,
-        .i8x16 => .i8x16,
-        .u16x8 => .u16x8,
-        .i16x8 => .i16x8,
-        .u32x4 => .u32x4,
-        .i32x4 => .i32x4,
-        .u64x2 => .u64x2,
-        .i64x2 => .i64x2,
-    };
-}
-
 test "monotype type declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
-test "monotype type interner reuses child-first function nodes" {
+test "monotype type epoch deltas own consecutive suffixes" {
+    const gpa = std.testing.allocator;
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const field_name = try name_store.internRecordFieldLabel("value");
+    const tag_name = try name_store.internTagLabel("Value");
+    const module_bytes = [_]u8{21} ** 32;
+    const module = try name_store.internModuleIdentity(&module_bytes);
+    const type_name = try name_store.internTypeName("Model");
+
+    var source = Store.init(gpa);
+    const start = source.epochBoundary();
+    var empty = try Store.EpochDelta.capture(gpa, &source, start, start);
+    defer empty.deinit();
+    try std.testing.expectEqual(@as(usize, 0), empty.types.len);
+    try std.testing.expectEqual(@as(usize, 0), empty.spans.len);
+
+    const primitive = try source.internPrimitive(&name_store, .u64);
+    const unit = try source.internZst(&name_store);
+    const record = try source.internRecord(&name_store, &.{
+        .{
+            .name = field_name,
+            .ty = primitive,
+            .value_ty = unit,
+            .default = null,
+        },
+    });
+    const tag_union = try source.internTagUnion(&name_store, &.{
+        .{
+            .name = tag_name,
+            .checked_name = tag_name,
+            .payloads = &.{record},
+        },
+    });
+    const named = try source.internNamed(&name_store, .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(7) },
+        .def = .{ .module = module, .type_name = type_name },
+        .kind = .nominal,
+        .args = &.{tag_union},
+        .backing = .{ .ty = record, .use = .runtime_layout_only },
+        .declared_order = &.{ .{ .named = field_name }, .{ .padding = unit } },
+    });
+    const middle = source.epochBoundary();
+
+    const list = try source.internList(&name_store, named);
+    const tuple = try source.internTuple(&name_store, &.{ record, tag_union, list });
+    const func = try source.internFunc(&name_store, &.{ tuple, primitive }, named);
+    const expected_type_digest = source.typeDigest(&name_store, func);
+    const expected_specialization_digest = source.specializationDigest(&name_store, func);
+    const expected_equality_digest = source.equalityDigest(&name_store, func);
+    const end = source.epochBoundary();
+
+    var first = try Store.EpochDelta.capture(gpa, &source, start, middle);
+    defer first.deinit();
+    var second = try Store.EpochDelta.capture(gpa, &source, middle, end);
+    defer second.deinit();
+
+    // Force every mutable source backing array to grow after capture. The
+    // segments must continue to own both their main nodes and side pools.
+    var iteration: u32 = 0;
+    while (iteration < 512) : (iteration += 1) {
+        var digest_bytes = [_]u8{0} ** 32;
+        digest_bytes[0] = @truncate(iteration);
+        digest_bytes[1] = @truncate(iteration >> 8);
+        _ = try source.internErased(&name_store, .{ .bytes = digest_bytes });
+        _ = try source.addSpan(&.{primitive});
+        _ = try source.addRecordFields(&name_store, &.{
+            .{ .name = field_name, .ty = primitive, .default = null },
+        });
+        const payloads = try source.addSpan(&.{unit});
+        _ = try source.addTagVariants(&name_store, &.{
+            .{ .name = tag_name, .checked_name = tag_name, .payloads = payloads },
+        });
+        _ = try source.addDeclaredFields(&.{.{ .padding = primitive }});
+    }
+    source.deinit();
+
+    var destination = Store.init(gpa);
+    defer destination.deinit();
+    try empty.appendTo(&destination);
+    try first.appendTo(&destination);
+    try second.appendTo(&destination);
+
+    try std.testing.expect(std.meta.eql(destination.epochBoundary(), end));
+    try std.testing.expect(destination.verify(&name_store) == null);
+    try std.testing.expectEqual(.u64, destination.get(primitive).primitive);
+
+    const destination_fields = destination.fieldSpan(destination.get(record).record);
+    const destination_field = GuardedList.at(destination_fields, 0);
+    try std.testing.expectEqual(field_name, destination_field.name);
+    try std.testing.expectEqual(primitive, destination_field.ty);
+    try std.testing.expectEqual(unit, destination_field.value_ty.?);
+
+    const destination_tags = destination.tagSpan(destination.get(tag_union).tag_union);
+    const destination_tag = GuardedList.at(destination_tags, 0);
+    try std.testing.expectEqual(tag_name, destination_tag.name);
+    try std.testing.expectEqual(record, GuardedList.at(destination.span(destination_tag.payloads), 0));
+
+    const destination_named = destination.get(named).named;
+    try std.testing.expectEqual(module, destination_named.def.module);
+    try std.testing.expectEqual(type_name, destination_named.def.type_name);
+    try std.testing.expectEqual(record, destination_named.backing.?.ty);
+    const declared = destination.declaredFieldSpan(destination_named.declared_order);
+    try std.testing.expectEqual(field_name, GuardedList.at(declared, 0).named);
+    try std.testing.expectEqual(unit, GuardedList.at(declared, 1).padding);
+
+    const destination_func = destination.get(func).func;
+    try std.testing.expectEqual(tuple, GuardedList.at(destination.span(destination_func.args), 0));
+    try std.testing.expectEqual(primitive, GuardedList.at(destination.span(destination_func.args), 1));
+    try std.testing.expectEqual(named, destination_func.ret);
+    try std.testing.expectEqual(expected_type_digest, destination.typeDigest(&name_store, func));
+    try std.testing.expectEqual(
+        expected_specialization_digest,
+        destination.specializationDigest(&name_store, func),
+    );
+    try std.testing.expectEqual(expected_equality_digest, destination.equalityDigest(&name_store, func));
+}
+
+test "monotype cross-store import relocates names, side pools, sharing, and recursive members" {
+    var source_names = names.NameStore.init(std.testing.allocator);
+    defer source_names.deinit();
+    var destination_names = names.NameStore.init(std.testing.allocator);
+    defer destination_names.deinit();
+    // Force equal text to have unrelated dense ids in the two stores.
+    _ = try destination_names.internRecordFieldLabel("unrelated");
+    _ = try destination_names.internTagLabel("Unrelated");
+    _ = try destination_names.internTypeName("Unrelated");
+    _ = try destination_names.internModuleIdentity(&([_]u8{99} ** 32));
+
+    const module_bytes = [_]u8{7} ** 32;
+    const source_module = try source_names.internModuleIdentity(&module_bytes);
+    const field_name = try source_names.internRecordFieldLabel("value");
+    const tag_name = try source_names.internTagLabel("Node");
+    const checked_tag_name = try source_names.internTagLabel("CheckedNode");
+    const type_name = try source_names.internTypeName("Tree");
+
+    var source = Store.init(std.testing.allocator);
+    defer source.deinit();
+    const transaction = source.beginTransaction();
+    const recursive = try transaction.reserve(&source);
+    const leaf = try transaction.reserve(&source);
+    transaction.fill(&source, leaf, .zst);
+    const fields = try source.addFields(&.{.{
+        .name = field_name,
+        .ty = recursive,
+        .value_ty = leaf,
+        .default = .{ .module = source_module, .expr_node = 19 },
+    }});
+    const record = try transaction.reserve(&source);
+    transaction.fill(&source, record, .{ .record = fields });
+    const payloads = try source.addSpan(&.{ record, leaf, leaf });
+    const tags_ = try source.addTags(&.{.{ .name = tag_name, .checked_name = checked_tag_name, .payloads = payloads }});
+    transaction.fill(&source, recursive, .{ .tag_union = tags_ });
+    var source_result = try source.commitTransaction(&source_names, transaction, recursive);
+    defer source_result.deinit();
+
+    var destination = Store.init(std.testing.allocator);
+    defer destination.deinit();
+    const preexisting_leaf = try destination.internZst(&destination_names);
+    var relocation = Store.TypeRelocation.init(
+        std.testing.allocator,
+        &source,
+        &source_names,
+        &destination,
+        &destination_names,
+    );
+    defer relocation.deinit();
+    var imported = try destination.importTypes(
+        &destination_names,
+        &source,
+        &source_names,
+        &relocation,
+        &.{ source_result.root, source_result.remapType(record) },
+    );
+    defer imported.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), relocation.mappedCount());
+    try std.testing.expectEqual(preexisting_leaf, relocation.remapType(&source, source_result.remapType(leaf)));
+    const imported_root = imported.roots[0];
+    const imported_tags = destination.tagSpan(destination.get(imported_root).tag_union);
+    const imported_tag = GuardedList.at(imported_tags, 0);
+    try std.testing.expectEqualStrings("Node", destination_names.tagLabelText(imported_tag.name));
+    try std.testing.expectEqualStrings("CheckedNode", destination_names.tagLabelText(imported_tag.checked_name));
+    const imported_payloads = destination.span(imported_tag.payloads);
+    try std.testing.expectEqual(
+        GuardedList.at(imported_payloads, 1),
+        GuardedList.at(imported_payloads, 2),
+    );
+    const imported_record = GuardedList.at(imported_payloads, 0);
+    const imported_fields = destination.fieldSpan(destination.get(imported_record).record);
+    const imported_field = GuardedList.at(imported_fields, 0);
+    try std.testing.expectEqual(imported_root, imported_field.ty);
+    try std.testing.expectEqual(preexisting_leaf, imported_field.value_ty.?);
+    try std.testing.expectEqual(@as(u32, 19), imported_field.default.?.expr_node);
+    try std.testing.expectEqualSlices(
+        u8,
+        &module_bytes,
+        destination_names.moduleIdentityBytes(imported_field.default.?.module),
+    );
+    try std.testing.expectEqualStrings("value", destination_names.recordFieldLabelText(imported_field.name));
+    try std.testing.expectEqual(@as(usize, 4), relocation.namesRelocation().mappedCount());
+    try std.testing.expectEqual(
+        imported_field.name,
+        try relocation.namesRelocation().relocateRecordFieldLabel(&source_names, field_name),
+    );
+    try std.testing.expectEqual(@as(usize, 4), relocation.namesRelocation().mappedCount());
+    try std.testing.expect(destination.verify(&destination_names) == null);
+
+    // Keep the otherwise deliberately interned nominal metadata live in this
+    // focused test; the named-form test below exercises its import.
+    try std.testing.expectEqualStrings("Tree", source_names.typeNameText(type_name));
+}
+
+test "monotype cross-store import preserves named metadata and deduplicates repeated imports" {
+    var source_names = names.NameStore.init(std.testing.allocator);
+    defer source_names.deinit();
+    var destination_names = names.NameStore.init(std.testing.allocator);
+    defer destination_names.deinit();
+    const module_bytes = [_]u8{11} ** 32;
+    const module = try source_names.internModuleIdentity(&module_bytes);
+    const type_name = try source_names.internTypeName("Iterator");
+    const len_field = try source_names.internRecordFieldLabel("len");
+    const step_field = try source_names.internRecordFieldLabel("step");
+    const item_field = try source_names.internRecordFieldLabel("item");
+    const rest_field = try source_names.internRecordFieldLabel("rest");
+    const declared_field = try source_names.internRecordFieldLabel("declared");
+    const known_tag = try source_names.internTagLabel("Known");
+    const unknown_tag = try source_names.internTagLabel("Unknown");
+    const done_tag = try source_names.internTagLabel("Done");
+    const one_tag = try source_names.internTagLabel("One");
+    const skip_tag = try source_names.internTagLabel("Skip");
+    _ = try destination_names.internRecordFieldLabel("unrelated");
+    _ = try destination_names.internTagLabel("Unrelated");
+    _ = try destination_names.internTypeName("Unrelated");
+    _ = try destination_names.internModuleIdentity(&([_]u8{98} ** 32));
+
+    var source = Store.init(std.testing.allocator);
+    defer source.deinit();
+    const unit = try source.internZst(&source_names);
+    const named = try source.internNamed(&source_names, .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{
+            .module = module,
+            .type_name = type_name,
+            .iterator_representation = .minted,
+            .iterator_topology = .{
+                .len_field = len_field,
+                .step_field = step_field,
+                .known_tag = known_tag,
+                .unknown_tag = unknown_tag,
+                .done_tag = done_tag,
+                .one_tag = one_tag,
+                .skip_tag = skip_tag,
+                .item_field = item_field,
+                .rest_field = rest_field,
+            },
+        },
+        .kind = .nominal,
+        .args = &.{unit},
+        .backing = .{ .ty = unit, .use = .runtime_layout_only, .authority = .generated_private },
+        .declared_order = &.{ .{ .named = declared_field }, .{ .padding = unit } },
+    });
+
+    var destination = Store.init(std.testing.allocator);
+    defer destination.deinit();
+    var relocation = Store.TypeRelocation.init(
+        std.testing.allocator,
+        &source,
+        &source_names,
+        &destination,
+        &destination_names,
+    );
+    defer relocation.deinit();
+    var first = try destination.importTypes(&destination_names, &source, &source_names, &relocation, &.{named});
+    defer first.deinit();
+    const types_len = destination.types.len();
+    var second = try destination.importTypes(&destination_names, &source, &source_names, &relocation, &.{named});
+    defer second.deinit();
+    try std.testing.expectEqual(first.roots[0], second.roots[0]);
+    try std.testing.expectEqual(types_len, destination.types.len());
+    try std.testing.expectEqual(@as(usize, 0), second.new_source_types.len);
+
+    const imported = destination.get(first.roots[0]).named;
+    try std.testing.expectEqualStrings("Iterator", destination_names.typeNameText(imported.def.type_name));
+    try std.testing.expectEqualSlices(
+        u8,
+        &module_bytes,
+        destination_names.moduleIdentityBytes(imported.def.module),
+    );
+    try std.testing.expectEqual(.generated_private, imported.backing.?.authority);
+    try std.testing.expectEqual(.runtime_layout_only, imported.backing.?.use);
+    const topology = imported.def.iterator_topology.?;
+    try std.testing.expectEqualStrings("len", destination_names.recordFieldLabelText(topology.len_field));
+    try std.testing.expectEqualStrings("step", destination_names.recordFieldLabelText(topology.step_field));
+    try std.testing.expectEqualStrings("Known", destination_names.tagLabelText(topology.known_tag));
+    try std.testing.expectEqualStrings("Unknown", destination_names.tagLabelText(topology.unknown_tag));
+    try std.testing.expectEqualStrings("Done", destination_names.tagLabelText(topology.done_tag));
+    try std.testing.expectEqualStrings("One", destination_names.tagLabelText(topology.one_tag));
+    try std.testing.expectEqualStrings("Skip", destination_names.tagLabelText(topology.skip_tag));
+    try std.testing.expectEqualStrings("item", destination_names.recordFieldLabelText(topology.item_field));
+    try std.testing.expectEqualStrings("rest", destination_names.recordFieldLabelText(topology.rest_field));
+    const imported_declared = destination.declaredFieldSpan(imported.declared_order);
+    try std.testing.expectEqualStrings(
+        "declared",
+        destination_names.recordFieldLabelText(GuardedList.at(imported_declared, 0).named),
+    );
+    try std.testing.expectEqual(relocation.remapType(&source, unit), GuardedList.at(imported_declared, 1).padding);
+}
+
+test "monotype cross-store import preserves every acyclic content form" {
+    var source_names = names.NameStore.init(std.testing.allocator);
+    defer source_names.deinit();
+    var destination_names = names.NameStore.init(std.testing.allocator);
+    defer destination_names.deinit();
+    var source = Store.init(std.testing.allocator);
+    defer source.deinit();
+    var destination = Store.init(std.testing.allocator);
+    defer destination.deinit();
+
+    const primitive = try source.internPrimitive(&source_names, .u64);
+    const erased_digest = names.TypeDigest{ .bytes = [_]u8{42} ** 32 };
+    const erased = try source.internErased(&source_names, erased_digest);
+    const unit = try source.internZst(&source_names);
+    const list = try source.internList(&source_names, primitive);
+    const box = try source.internBox(&source_names, erased);
+    const tuple = try source.internTuple(&source_names, &.{ list, box, unit });
+    const func = try source.internFunc(&source_names, &.{ primitive, tuple }, box);
+
+    var relocation = Store.TypeRelocation.init(
+        std.testing.allocator,
+        &source,
+        &source_names,
+        &destination,
+        &destination_names,
+    );
+    defer relocation.deinit();
+    var imported = try destination.importTypes(
+        &destination_names,
+        &source,
+        &source_names,
+        &relocation,
+        &.{ func, tuple },
+    );
+    defer imported.deinit();
+
+    try std.testing.expectEqual(
+        .u64,
+        destination.get(relocation.remapType(&source, primitive)).primitive,
+    );
+    try std.testing.expectEqual(erased_digest, destination.get(relocation.remapType(&source, erased)).erased);
+    try std.testing.expectEqual(
+        std.meta.activeTag(@as(Content, .zst)),
+        std.meta.activeTag(destination.get(relocation.remapType(&source, unit))),
+    );
+    try std.testing.expectEqual(
+        relocation.remapType(&source, primitive),
+        destination.get(relocation.remapType(&source, list)).list,
+    );
+    try std.testing.expectEqual(
+        relocation.remapType(&source, erased),
+        destination.get(relocation.remapType(&source, box)).box,
+    );
+    const imported_tuple = destination.span(destination.get(imported.roots[1]).tuple);
+    try std.testing.expectEqual(relocation.remapType(&source, list), GuardedList.at(imported_tuple, 0));
+    try std.testing.expectEqual(relocation.remapType(&source, box), GuardedList.at(imported_tuple, 1));
+    try std.testing.expectEqual(relocation.remapType(&source, unit), GuardedList.at(imported_tuple, 2));
+    const imported_func = destination.get(imported.roots[0]).func;
+    const imported_args = destination.span(imported_func.args);
+    try std.testing.expectEqual(relocation.remapType(&source, primitive), GuardedList.at(imported_args, 0));
+    try std.testing.expectEqual(relocation.remapType(&source, tuple), GuardedList.at(imported_args, 1));
+    try std.testing.expectEqual(relocation.remapType(&source, box), imported_func.ret);
+}
+
+test "monotype cross-store import reuses every member of a preexisting recursive group" {
+    var source_names = names.NameStore.init(std.testing.allocator);
+    defer source_names.deinit();
+    var destination_names = names.NameStore.init(std.testing.allocator);
+    defer destination_names.deinit();
+    var source = Store.init(std.testing.allocator);
+    defer source.deinit();
+    var destination = Store.init(std.testing.allocator);
+    defer destination.deinit();
+
+    const source_leaf = try source.internZst(&source_names);
+    const source_transaction = source.beginTransaction();
+    const source_a = try source_transaction.reserve(&source);
+    const source_b = try source_transaction.reserve(&source);
+    const source_c = try source_transaction.reserve(&source);
+    const source_root = try source_transaction.reserve(&source);
+    source_transaction.fill(&source, source_a, .{ .list = source_b });
+    source_transaction.fill(&source, source_b, .{ .box = source_c });
+    source_transaction.fill(&source, source_c, .{ .tuple = try source.addSpan(&.{ source_a, source_leaf }) });
+    source_transaction.fill(&source, source_root, .{ .tuple = try source.addSpan(&.{ source_c, source_a, source_a }) });
+    var source_committed = try source.commitTransaction(&source_names, source_transaction, source_root);
+    defer source_committed.deinit();
+
+    const destination_leaf = try destination.internZst(&destination_names);
+    const destination_transaction = destination.beginTransaction();
+    // Deliberately reserve in a different semantic order.
+    const destination_b = try destination_transaction.reserve(&destination);
+    const destination_c = try destination_transaction.reserve(&destination);
+    const destination_a = try destination_transaction.reserve(&destination);
+    const destination_root = try destination_transaction.reserve(&destination);
+    destination_transaction.fill(&destination, destination_b, .{ .box = destination_c });
+    destination_transaction.fill(&destination, destination_c, .{ .tuple = try destination.addSpan(&.{ destination_a, destination_leaf }) });
+    destination_transaction.fill(&destination, destination_a, .{ .list = destination_b });
+    destination_transaction.fill(&destination, destination_root, .{ .tuple = try destination.addSpan(&.{ destination_c, destination_a, destination_a }) });
+    var destination_committed = try destination.commitTransaction(
+        &destination_names,
+        destination_transaction,
+        destination_root,
+    );
+    defer destination_committed.deinit();
+
+    const source_a_final = source_committed.remapType(source_a);
+    const source_b_final = source_committed.remapType(source_b);
+    const source_c_final = source_committed.remapType(source_c);
+    const destination_a_final = destination_committed.remapType(destination_a);
+    const destination_b_final = destination_committed.remapType(destination_b);
+    const destination_c_final = destination_committed.remapType(destination_c);
+    const initial_types = destination.types.len();
+    const initial_spans = destination.spans.len();
+
+    var relocation = Store.TypeRelocation.init(
+        std.testing.allocator,
+        &source,
+        &source_names,
+        &destination,
+        &destination_names,
+    );
+    defer relocation.deinit();
+    var imported = try destination.importTypes(
+        &destination_names,
+        &source,
+        &source_names,
+        &relocation,
+        &.{ source_c_final, source_committed.root, source_a_final },
+    );
+    defer imported.deinit();
+
+    try std.testing.expectEqual(destination_c_final, imported.roots[0]);
+    try std.testing.expectEqual(destination_committed.root, imported.roots[1]);
+    try std.testing.expectEqual(destination_a_final, imported.roots[2]);
+    try std.testing.expectEqual(destination_a_final, relocation.remapType(&source, source_a_final));
+    try std.testing.expectEqual(destination_b_final, relocation.remapType(&source, source_b_final));
+    try std.testing.expectEqual(destination_c_final, relocation.remapType(&source, source_c_final));
+    try std.testing.expectEqual(destination_leaf, relocation.remapType(&source, source_leaf));
+    try std.testing.expectEqual(initial_types, destination.types.len());
+    try std.testing.expectEqual(initial_spans, destination.spans.len());
+}
+
+test "monotype cross-store import is atomic under allocation failure" {
+    var source_names = names.NameStore.init(std.testing.allocator);
+    defer source_names.deinit();
+    var source = Store.init(std.testing.allocator);
+    defer source.deinit();
+    const module = try source_names.internModuleIdentity(&([_]u8{17} ** 32));
+    const field_name = try source_names.internRecordFieldLabel("field");
+    const declared_name = try source_names.internRecordFieldLabel("declared");
+    const tag_name = try source_names.internTagLabel("Node");
+    const type_name = try source_names.internTypeName("Named");
+    const unit = try source.internZst(&source_names);
+    const recursive_transaction = source.beginTransaction();
+    const recursive = try recursive_transaction.reserve(&source);
+    const record = try recursive_transaction.reserve(&source);
+    recursive_transaction.fill(&source, record, .{ .record = try source.addFields(&.{.{
+        .name = field_name,
+        .ty = recursive,
+        .value_ty = unit,
+        .default = .{ .module = module, .expr_node = 3 },
+    }}) });
+    recursive_transaction.fill(&source, recursive, .{ .tag_union = try source.addTags(&.{.{
+        .name = tag_name,
+        .checked_name = tag_name,
+        .payloads = try source.addSpan(&.{ record, unit }),
+    }}) });
+    const named = try source.internNamed(&source_names, .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module, .type_name = type_name },
+        .kind = .nominal,
+        .args = &.{recursive},
+        .backing = .{ .ty = record, .use = .runtime_layout_only },
+        .declared_order = &.{ .{ .named = declared_name }, .{ .padding = recursive } },
+    });
+    const source_root = try recursive_transaction.reserve(&source);
+    recursive_transaction.fill(&source, source_root, .{ .func = .{
+        .args = try source.addSpan(&.{ named, record }),
+        .ret = recursive,
+    } });
+    var recursive_result = try source.commitTransaction(&source_names, recursive_transaction, source_root);
+    defer recursive_result.deinit();
+
+    const Helper = struct {
+        const Lengths = struct {
+            types: usize,
+            type_digests: usize,
+            specialization_digests: usize,
+            equality_digests: usize,
+            constructing: usize,
+            iterator_interface_cache: usize,
+            iterator_interface_visit_epochs: usize,
+            spans: usize,
+            fields: usize,
+            tags: usize,
+            declared_fields: usize,
+
+            fn capture(store: *const Store) Lengths {
+                return .{
+                    .types = store.types.len(),
+                    .type_digests = store.type_digests.len(),
+                    .specialization_digests = store.specialization_digests.len(),
+                    .equality_digests = store.equality_digests.len(),
+                    .constructing = store.constructing.len(),
+                    .iterator_interface_cache = store.iterator_interface_cache.len(),
+                    .iterator_interface_visit_epochs = store.iterator_interface_visit_epochs.len(),
+                    .spans = store.spans.len(),
+                    .fields = store.fields.len(),
+                    .tags = store.tags.len(),
+                    .declared_fields = store.declared_fields.len(),
+                };
+            }
+        };
+
+        fn run(
+            allocator: std.mem.Allocator,
+            source_store: *const Store,
+            source_name_store: *const names.NameStore,
+            shared: TypeId,
+            root: TypeId,
+        ) std.mem.Allocator.Error!void {
+            var destination_names = names.NameStore.init(allocator);
+            defer destination_names.deinit();
+            var destination = Store.init(allocator);
+            defer destination.deinit();
+            var relocation = Store.TypeRelocation.init(
+                allocator,
+                source_store,
+                source_name_store,
+                &destination,
+                &destination_names,
+            );
+            defer relocation.deinit();
+            var shared_import = try destination.importTypes(
+                &destination_names,
+                source_store,
+                source_name_store,
+                &relocation,
+                &.{shared},
+            );
+            defer shared_import.deinit();
+            const stable = shared_import.roots[0];
+            const initial = Lengths.capture(&destination);
+            const initial_mappings = relocation.mappedCount();
+
+            var imported = destination.importTypes(
+                &destination_names,
+                source_store,
+                source_name_store,
+                &relocation,
+                &.{root},
+            ) catch |err| {
+                std.debug.assert(std.meta.eql(initial, Lengths.capture(&destination)));
+                std.debug.assert(!destination.hasSpeculativeConstruction());
+                std.debug.assert(relocation.mappedCount() == initial_mappings);
+                std.debug.assert(stable == relocation.remapType(source_store, shared));
+                std.debug.assert(destination.verify(&destination_names) == null);
+                return err;
+            };
+            defer imported.deinit();
+            std.debug.assert(destination.verify(&destination_names) == null);
+            std.debug.assert(stable == relocation.remapType(source_store, shared));
+        }
+    };
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        Helper.run,
+        .{ &source, &source_names, unit, recursive_result.root },
+    );
+}
+
+test "monotype type store acyclic interning reuses child-first function nodes" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
-    const interner = try Interner.init(std.testing.allocator, &name_store);
-    defer interner.deinit();
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
 
-    const unit = try interner.internZst();
-    const first = try interner.internFunc(&.{unit}, unit);
-    const second = try interner.internFunc(&.{unit}, unit);
+    const unit = try store.internZst(&name_store);
+    const first = try store.internFunc(&name_store, &.{unit}, unit);
+    const second = try store.internFunc(&name_store, &.{unit}, unit);
 
     try std.testing.expectEqual(first, second);
-    try std.testing.expectEqual(@as(usize, 2), interner.view().types.len);
+    try std.testing.expectEqual(@as(usize, 2), store.view().types.len);
+    try std.testing.expect(store.view().type_digests[@intFromEnum(first)] != null);
+    try std.testing.expect(store.specializationDigestsView()[@intFromEnum(first)] != null);
 }
 
-test "monotype type interner normalizes record and tag rows" {
+test "monotype type store recursive transaction interns equal SCC positions" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const transaction = store.beginTransaction();
+    const first = try transaction.reserve(&store);
+    const second = try transaction.reserve(&store);
+    transaction.fill(&store, first, .{ .list = second });
+    transaction.fill(&store, second, .{ .list = first });
+
+    var result = try store.commitTransaction(&name_store, transaction, first);
+    defer result.deinit();
+    try std.testing.expectEqual(result.remap[0], result.remap[1]);
+    try std.testing.expectEqual(result.root, result.remap[0]);
+    try std.testing.expectEqual(@as(usize, 1), store.view().types.len);
+    try std.testing.expect(store.view().type_digests[@intFromEnum(result.root)] != null);
+    try std.testing.expect(store.specializationDigestsView()[@intFromEnum(result.root)] != null);
+}
+
+test "monotype type store recursive transaction indexes every representative" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const transaction = store.beginTransaction();
+    const root = try transaction.reserve(&store);
+    const child = try transaction.reserve(&store);
+    transaction.fill(&store, root, .{ .box = child });
+    transaction.fill(&store, child, .{ .list = root });
+    var result = try store.commitTransaction(&name_store, transaction, root);
+    defer result.deinit();
+
+    const reinterned_child = try store.internList(&name_store, result.root);
+    try std.testing.expectEqual(result.remap[1], reinterned_child);
+}
+
+test "monotype type store recursive transaction all-hit restores every suffix pool" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const first_transaction = store.beginTransaction();
+    const first = try first_transaction.reserve(&store);
+    const second = try first_transaction.reserve(&store);
+    first_transaction.fill(&store, first, .{ .tuple = try store.addSpan(&.{second}) });
+    first_transaction.fill(&store, second, .{ .tuple = try store.addSpan(&.{first}) });
+    var first_result = try store.commitTransaction(&name_store, first_transaction, first);
+    defer first_result.deinit();
+    const types_len = store.types.len();
+    const spans_len = store.spans.len();
+
+    const hit_transaction = store.beginTransaction();
+    const hit_first = try hit_transaction.reserve(&store);
+    const hit_second = try hit_transaction.reserve(&store);
+    hit_transaction.fill(&store, hit_first, .{ .tuple = try store.addSpan(&.{hit_second}) });
+    hit_transaction.fill(&store, hit_second, .{ .tuple = try store.addSpan(&.{hit_first}) });
+    var hit_result = try store.commitTransaction(&name_store, hit_transaction, hit_first);
+    defer hit_result.deinit();
+
+    try std.testing.expectEqual(first_result.root, hit_result.root);
+    try std.testing.expectEqual(types_len, store.types.len());
+    try std.testing.expectEqual(spans_len, store.spans.len());
+}
+
+test "monotype type store recursive transaction partial hit rewrites references" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const committed = try store.internZst(&name_store);
+    const transaction = store.beginTransaction();
+    const duplicate = try transaction.reserve(&store);
+    const root = try transaction.reserve(&store);
+    transaction.fill(&store, duplicate, .zst);
+    transaction.fill(&store, root, .{ .tuple = try store.addSpan(&.{duplicate}) });
+    var result = try store.commitTransaction(&name_store, transaction, root);
+    defer result.deinit();
+
+    try std.testing.expectEqual(committed, result.remap[0]);
+    const children = store.span(store.get(result.root).tuple);
+    try std.testing.expectEqual(committed, GuardedList.at(children, 0));
+    try std.testing.expect(store.verify(&name_store) == null);
+}
+
+test "monotype type store defers acyclic interning to the active transaction" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const committed_unit = try store.internZst(&name_store);
+    const transaction = store.beginTransaction();
+    const duplicate_unit = try transaction.reserve(&store);
+    transaction.fill(&store, duplicate_unit, .zst);
+
+    // This candidate's original id shifts when the duplicate before it
+    // collapses. Indexing it before the transaction seals would leave its
+    // digest bucket pointing at the truncated id.
+    const speculative_list = try store.internList(&name_store, duplicate_unit);
+    var result = try store.commitTransaction(&name_store, transaction, speculative_list);
+    defer result.deinit();
+    const committed_list = result.remapType(speculative_list);
+    try std.testing.expect(committed_list != speculative_list);
+
+    const types_len = store.types.len();
+    const reinterned_list = try store.internList(&name_store, committed_unit);
+    try std.testing.expectEqual(committed_list, reinterned_list);
+    try std.testing.expectEqual(types_len, store.types.len());
+    try std.testing.expect(store.verify(&name_store) == null);
+}
+
+test "monotype type store recursive transaction seals atomically under allocation failure" {
+    // Sealing either indexes the whole suffix or leaves the store exactly as
+    // it found it. The dangerous middle state is a committed-but-unindexed (or
+    // truncated-but-indexed) suffix, so every failure point is swept and the
+    // store is inspected for surviving ids, side-pool rows, and bucket entries.
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    const Scenario = struct {
+        const Built = struct { transaction: Store.Transaction, root: TypeId };
+
+        /// A cycle, a speculative duplicate of a durable node, and side-pool
+        /// rows: enough to exercise classification, capture, construction, and
+        /// indexing in one seal.
+        fn build(store: *Store, unit: TypeId) std.mem.Allocator.Error!Built {
+            const transaction = store.beginTransaction();
+            errdefer transaction.abort(store);
+
+            const first = try transaction.reserve(store);
+            const second = try transaction.reserve(store);
+            const duplicate = try transaction.reserve(store);
+            transaction.fill(store, duplicate, .zst);
+            transaction.fill(store, first, .{ .tuple = try store.addSpan(&.{ second, duplicate, unit }) });
+            transaction.fill(store, second, .{ .box = first });
+            return .{ .transaction = transaction, .root = first };
+        }
+    };
+
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    var store = Store.init(failing.allocator());
+    defer store.deinit();
+
+    const unit = try store.internZst(&name_store);
+    const baseline_types = store.types.len();
+    const baseline_spans = store.spans.len();
+    const baseline_fields = store.fields.len();
+    const baseline_tags = store.tags.len();
+    const baseline_declared = store.declared_fields.len();
+
+    var budget: usize = 0;
+    var sealed: ?Store.TransactionResult = null;
+    while (sealed == null) : (budget += 1) {
+        try std.testing.expect(budget < 1024);
+        const built = try Scenario.build(&store, unit);
+        failing.fail_index = failing.alloc_index + budget;
+        sealed = store.commitTransaction(&name_store, built.transaction, built.root) catch |err| blk: {
+            failing.fail_index = std.math.maxInt(usize);
+            failing.has_induced_failure = false;
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expectEqual(baseline_types, store.types.len());
+            try std.testing.expectEqual(baseline_spans, store.spans.len());
+            try std.testing.expectEqual(baseline_fields, store.fields.len());
+            try std.testing.expectEqual(baseline_tags, store.tags.len());
+            try std.testing.expectEqual(baseline_declared, store.declared_fields.len());
+            var buckets = store.full_digest_interned.valueIterator();
+            while (buckets.next()) |bucket| {
+                for (bucket.items) |indexed| {
+                    try std.testing.expect(@intFromEnum(indexed) < baseline_types);
+                }
+            }
+            try std.testing.expect(store.verify(&name_store) == null);
+            break :blk null;
+        };
+        failing.fail_index = std.math.maxInt(usize);
+    }
+
+    // The seal that finally ran to completion must be fully indexed, not just
+    // committed: re-interning an equal type has to find the representative.
+    var result = sealed.?;
+    defer result.deinit();
+    try std.testing.expect(store.verify(&name_store) == null);
+    try std.testing.expectEqual(unit, result.remapType(unit));
+    try std.testing.expectEqual(unit, result.remapType(@enumFromInt(baseline_types + 2)));
+
+    const committed_types = store.types.len();
+    const reinterned = try store.internBox(&name_store, result.root);
+    try std.testing.expectEqual(result.remapType(@enumFromInt(baseline_types + 1)), reinterned);
+    try std.testing.expectEqual(committed_types, store.types.len());
+}
+
+test "monotype type store recursive transaction preserves captured side-pool rows" {
+    // Sealing constructs representatives from a capture taken before the suffix
+    // is truncated, so every side pool a node can reach -- fields, tags, tag
+    // payloads, named arguments -- has to come back with its rows intact and
+    // its references rewritten to durable ids.
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x5A} ** 32));
+    const type_name = try name_store.internTypeName("Tree");
+    const next_field = try name_store.internRecordFieldLabel("next");
+    const more_tag = try name_store.internTagLabel("More");
+
+    const unit = try store.internZst(&name_store);
+
+    const transaction = store.beginTransaction();
+    const record = try transaction.reserve(&store);
+    const variants = try transaction.reserve(&store);
+    const named = try transaction.reserve(&store);
+    transaction.fill(&store, record, .{ .record = try store.addRecordFields(&name_store, &.{
+        .{ .name = next_field, .ty = variants, .default = null },
+    }) });
+    transaction.fill(&store, variants, .{ .tag_union = try store.addTagVariants(&name_store, &.{
+        .{ .name = more_tag, .checked_name = more_tag, .payloads = try store.addSpan(&.{ named, unit }) },
+    }) });
+    transaction.fill(&store, named, .{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .nominal,
+        .args = try store.addSpan(&.{unit}),
+        .backing = .{ .ty = record, .use = .inspectable },
+        .declared_order = Span.empty(),
+    } });
+
+    var result = try store.commitTransaction(&name_store, transaction, record);
+    defer result.deinit();
+    try std.testing.expect(store.verify(&name_store) == null);
+
+    const fields = store.fieldSpan(store.get(result.root).record);
+    try std.testing.expectEqual(@as(usize, 1), GuardedList.borrowLen(fields));
+    try std.testing.expectEqual(next_field, GuardedList.at(fields, 0).name);
+    const union_ty = GuardedList.at(fields, 0).ty;
+    try std.testing.expectEqual(result.remapType(variants), union_ty);
+
+    const tags_ = store.tagSpan(store.get(union_ty).tag_union);
+    try std.testing.expectEqual(more_tag, GuardedList.at(tags_, 0).name);
+    const payloads = store.span(GuardedList.at(tags_, 0).payloads);
+    try std.testing.expectEqual(@as(usize, 2), GuardedList.borrowLen(payloads));
+    const named_ty = GuardedList.at(payloads, 0);
+    try std.testing.expectEqual(result.remapType(named), named_ty);
+    try std.testing.expectEqual(unit, GuardedList.at(payloads, 1));
+
+    const stored_named = store.get(named_ty).named;
+    try std.testing.expectEqual(result.root, stored_named.backing.?.ty);
+    const args = store.span(stored_named.args);
+    try std.testing.expectEqual(unit, GuardedList.at(args, 0));
+
+    // Sealing an equal knot again must land on the same interned nodes.
+    const committed_types_len = store.types.len();
+    const committed_spans_len = store.spans.len();
+    const committed_fields_len = store.fields.len();
+    const committed_tags_len = store.tags.len();
+    const committed_declared_len = store.declared_fields.len();
+    const second = store.beginTransaction();
+    const second_record = try second.reserve(&store);
+    const second_variants = try second.reserve(&store);
+    const second_named = try second.reserve(&store);
+    second.fill(&store, second_record, .{ .record = try store.addRecordFields(&name_store, &.{
+        .{ .name = next_field, .ty = second_variants, .default = null },
+    }) });
+    second.fill(&store, second_variants, .{ .tag_union = try store.addTagVariants(&name_store, &.{
+        .{ .name = more_tag, .checked_name = more_tag, .payloads = try store.addSpan(&.{ second_named, unit }) },
+    }) });
+    second.fill(&store, second_named, .{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .nominal,
+        .args = try store.addSpan(&.{unit}),
+        .backing = .{ .ty = second_record, .use = .inspectable },
+        .declared_order = Span.empty(),
+    } });
+
+    var second_result = try store.commitTransaction(&name_store, second, second_record);
+    defer second_result.deinit();
+    try std.testing.expectEqual(result.root, second_result.root);
+    try std.testing.expectEqual(committed_types_len, store.types.len());
+    try std.testing.expectEqual(committed_spans_len, store.spans.len());
+    try std.testing.expectEqual(committed_fields_len, store.fields.len());
+    try std.testing.expectEqual(committed_tags_len, store.tags.len());
+    try std.testing.expectEqual(committed_declared_len, store.declared_fields.len());
+}
+
+test "monotype type store aborted transaction leaves no speculative state" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const unit = try store.internZst(&name_store);
+    const types_len = store.types.len();
+    const spans_len = store.spans.len();
+
+    const transaction = store.beginTransaction();
+    const reserved = try transaction.reserve(&store);
+    transaction.fill(&store, reserved, .{ .tuple = try store.addSpan(&.{unit}) });
+    transaction.abort(&store);
+
+    try std.testing.expectEqual(types_len, store.types.len());
+    try std.testing.expectEqual(spans_len, store.spans.len());
+    // Aborting twice is the shape `errdefer transaction.abort(store)` produces
+    // when a failed commit already rolled back.
+    transaction.abort(&store);
+    try std.testing.expectEqual(types_len, store.types.len());
+    try std.testing.expect(store.verify(&name_store) == null);
+}
+
+test "monotype type store restores keep durable iterator containment answers" {
+    // `restore` only wipes retained containment answers when the mark saw an
+    // unfinished slot; interning hits and transaction seals restore to marks
+    // with none, so answers cached for durable types must survive both.
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const unit = try store.internZst(&name_store);
+    const unit_index = @intFromEnum(unit);
+    try std.testing.expect(!(try store.containsIteratorInterface(unit)));
+    try std.testing.expectEqual(@as(?bool, false), store.iterator_interface_cache.unsafeRawItemsForView()[unit_index]);
+
+    // An interning hit restores the store to its pre-candidate mark.
+    _ = try store.internZst(&name_store);
+    try std.testing.expectEqual(@as(?bool, false), store.iterator_interface_cache.unsafeRawItemsForView()[unit_index]);
+
+    const transaction = store.beginTransaction();
+    const recursive = try transaction.reserve(&store);
+    transaction.fill(&store, recursive, .{ .list = recursive });
+    var result = try store.commitTransaction(&name_store, transaction, recursive);
+    defer result.deinit();
+    try std.testing.expectEqual(@as(?bool, false), store.iterator_interface_cache.unsafeRawItemsForView()[unit_index]);
+
+    const aborted = store.beginTransaction();
+    _ = try aborted.reserve(&store);
+    aborted.abort(&store);
+    try std.testing.expectEqual(@as(?bool, false), store.iterator_interface_cache.unsafeRawItemsForView()[unit_index]);
+}
+
+test "monotype type store acyclic interning normalizes record and tag rows" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
@@ -2989,192 +5001,98 @@ test "monotype type interner normalizes record and tag rows" {
     const a_tag = try name_store.internTagLabel("A");
     const b_tag = try name_store.internTagLabel("B");
 
-    const interner = try Interner.init(std.testing.allocator, &name_store);
-    defer interner.deinit();
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
 
-    const unit = try interner.internZst();
-    const first_record = try interner.internRecord(&.{
+    const unit = try store.internZst(&name_store);
+    const first_record = try store.internRecord(&name_store, &.{
         .{ .name = b_field, .ty = unit, .default = null },
         .{ .name = a_field, .ty = unit, .default = null },
     });
-    const second_record = try interner.internRecord(&.{
+    const second_record = try store.internRecord(&name_store, &.{
         .{ .name = a_field, .ty = unit, .default = null },
         .{ .name = b_field, .ty = unit, .default = null },
     });
     try std.testing.expectEqual(first_record, second_record);
 
-    const first_tags = try interner.internTagUnion(&.{
+    const first_tags = try store.internTagUnion(&name_store, &.{
         .{ .name = b_tag, .checked_name = b_tag, .payloads = &.{unit} },
         .{ .name = a_tag, .checked_name = a_tag, .payloads = &.{unit} },
     });
-    const second_tags = try interner.internTagUnion(&.{
+    const second_tags = try store.internTagUnion(&name_store, &.{
         .{ .name = a_tag, .checked_name = a_tag, .payloads = &.{unit} },
         .{ .name = b_tag, .checked_name = b_tag, .payloads = &.{unit} },
     });
     try std.testing.expectEqual(first_tags, second_tags);
 
-    const record_fields = interner.fieldSpan(interner.get(first_record).record);
+    const record_fields = store.fieldSpan(store.get(first_record).record);
     try std.testing.expectEqual(a_field, GuardedList.at(record_fields, 0).name);
     try std.testing.expectEqual(b_field, GuardedList.at(record_fields, 1).name);
-    const tag_fields = interner.tagSpan(interner.get(first_tags).tag_union);
+    const tag_fields = store.tagSpan(store.get(first_tags).tag_union);
     try std.testing.expectEqual(a_tag, GuardedList.at(tag_fields, 0).name);
     try std.testing.expectEqual(b_tag, GuardedList.at(tag_fields, 1).name);
 }
 
-test "monotype type interner preserves tag payload order" {
+test "monotype type store acyclic interning preserves tag payload order" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
     const tag_name = try name_store.internTagLabel("Pair");
 
-    const interner = try Interner.init(std.testing.allocator, &name_store);
-    defer interner.deinit();
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
 
-    const first = try interner.internPrimitive(.i64);
-    const second = try interner.internPrimitive(.str);
-    const tag_ty = try interner.internTagUnion(&.{
+    const first = try store.internPrimitive(&name_store, .i64);
+    const second = try store.internPrimitive(&name_store, .str);
+    const tag_ty = try store.internTagUnion(&name_store, &.{
         .{ .name = tag_name, .checked_name = tag_name, .payloads = &.{ first, second } },
     });
 
-    const tags_ = interner.tagSpan(interner.get(tag_ty).tag_union);
-    const stored_payloads = interner.span(GuardedList.at(tags_, 0).payloads);
+    const tags_ = store.tagSpan(store.get(tag_ty).tag_union);
+    const stored_payloads = store.span(GuardedList.at(tags_, 0).payloads);
     try std.testing.expectEqual(first, GuardedList.at(stored_payloads, 0));
     try std.testing.expectEqual(second, GuardedList.at(stored_payloads, 1));
 }
 
-test "monotype backing-less aliases digest by their own identity" {
-    // Backing-less aliases used to be the one theoretical digest collision:
-    // every one of them digested as "alias-without-backing". Aliases are now
-    // opaque named nodes, so differently named backing-less aliases carry
-    // distinct digests and stay distinct interner entries.
+test "monotype type store acyclic interning keeps distinct backing-less aliases" {
+    // Mirrors the standalone interner's equivalent coverage: backing-less
+    // aliases are opaque named nodes, so differently named backing-less
+    // aliases carry distinct digests and stay distinct store-level entries.
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xCD} ** 32));
     const first_name = try name_store.internTypeName("First");
     const second_name = try name_store.internTypeName("Second");
 
-    const interner = try Interner.init(std.testing.allocator, &name_store);
-    defer interner.deinit();
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
 
-    const first = try interner.internNamed(.{
+    const first = try store.internNamed(&name_store, .{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
         .def = .{ .module = module_identity, .type_name = first_name },
         .kind = .alias,
         .backing = null,
     });
-    const second = try interner.internNamed(.{
+    const second = try store.internNamed(&name_store, .{
         .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
         .def = .{ .module = module_identity, .type_name = second_name },
         .kind = .alias,
         .backing = null,
     });
+    const repeat_first = try store.internNamed(&name_store, .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module_identity, .type_name = first_name },
+        .kind = .alias,
+        .backing = null,
+    });
 
-    const first_digest = interner.typeDigest(first);
-    const second_digest = interner.typeDigest(second);
+    const first_digest = store.typeDigest(&name_store, first);
+    const second_digest = store.typeDigest(&name_store, second);
     try std.testing.expect(!std.mem.eql(u8, first_digest.bytes[0..], second_digest.bytes[0..]));
     try std.testing.expect(first != second);
-}
-
-test "monotype type interner seals recursive root before exposing type id" {
-    var name_store = names.NameStore.init(std.testing.allocator);
-    defer name_store.deinit();
-
-    const field_name = try name_store.internRecordFieldLabel("next");
-
-    const interner = try Interner.init(std.testing.allocator, &name_store);
-    defer interner.deinit();
-
-    const root = try interner.internRecursiveRoot(.{ .record = &.{
-        .{ .name = field_name, .ty = .root, .default = null },
-    } });
-
-    const fields = interner.fieldSpan(interner.get(root).record);
-    try std.testing.expectEqual(@as(usize, 1), fields.len);
-    try std.testing.expectEqual(root, GuardedList.at(fields, 0).ty);
-    try std.testing.expectEqual(@as(?Store.VerifyError, null), interner.verify());
-}
-
-test "monotype type interner reuses equivalent recursive roots" {
-    var name_store = names.NameStore.init(std.testing.allocator);
-    defer name_store.deinit();
-
-    const field_name = try name_store.internRecordFieldLabel("next");
-
-    const interner = try Interner.init(std.testing.allocator, &name_store);
-    defer interner.deinit();
-
-    const first = try interner.internRecursiveRoot(.{ .record = &.{
-        .{ .name = field_name, .ty = .root, .default = null },
-    } });
-    const second = try interner.internRecursiveRoot(.{ .record = &.{
-        .{ .name = field_name, .ty = .root, .default = null },
-    } });
-
-    try std.testing.expectEqual(first, second);
-    try std.testing.expectEqual(@as(usize, 1), interner.view().types.len);
-}
-
-test "monotype type interner seals multi-node recursive group privately" {
-    var name_store = names.NameStore.init(std.testing.allocator);
-    defer name_store.deinit();
-
-    const field_name = try name_store.internRecordFieldLabel("step");
-
-    const interner = try Interner.init(std.testing.allocator, &name_store);
-    defer interner.deinit();
-
-    const record_node = Interner.recursiveNodeId(0);
-    const func_node = Interner.recursiveNodeId(1);
-    const first = try interner.internRecursiveGroupRoot(&.{
-        .{ .record = &.{
-            .{ .name = field_name, .ty = .{ .node = func_node }, .default = null },
-        } },
-        .{ .func = .{
-            .args = &.{},
-            .ret = .{ .node = record_node },
-        } },
-    }, record_node);
-    const second = try interner.internRecursiveGroupRoot(&.{
-        .{ .record = &.{
-            .{ .name = field_name, .ty = .{ .node = func_node }, .default = null },
-        } },
-        .{ .func = .{
-            .args = &.{},
-            .ret = .{ .node = record_node },
-        } },
-    }, record_node);
-
-    try std.testing.expectEqual(first, second);
-    try std.testing.expectEqual(@as(usize, 2), interner.view().types.len);
-
-    const fields = interner.fieldSpan(interner.get(first).record);
-    const step_ty = GuardedList.at(fields, 0).ty;
-    const step_fn = interner.get(step_ty).func;
-    try std.testing.expectEqual(first, step_fn.ret);
-}
-
-test "monotype type interner keeps distinct recursive roots with different children" {
-    var name_store = names.NameStore.init(std.testing.allocator);
-    defer name_store.deinit();
-
-    const next_name = try name_store.internRecordFieldLabel("next");
-    const done_name = try name_store.internRecordFieldLabel("done");
-
-    const interner = try Interner.init(std.testing.allocator, &name_store);
-    defer interner.deinit();
-
-    const bool_ty = try interner.internPrimitive(.bool);
-    const recursive_only = try interner.internRecursiveRoot(.{ .record = &.{
-        .{ .name = next_name, .ty = .root, .default = null },
-    } });
-    const recursive_with_bool = try interner.internRecursiveRoot(.{ .record = &.{
-        .{ .name = next_name, .ty = .root, .default = null },
-        .{ .name = done_name, .ty = .{ .interned = bool_ty }, .default = null },
-    } });
-
-    try std.testing.expect(recursive_only != recursive_with_bool);
-    try std.testing.expect(!try interner.typeEql(recursive_only, recursive_with_bool));
+    try std.testing.expectEqual(first, repeat_first);
+    try std.testing.expectEqual(@as(usize, 2), store.view().types.len);
 }
 
 test "monotype named type digest includes generic arguments" {
@@ -3209,6 +5127,47 @@ test "monotype named type digest includes generic arguments" {
     const i64_digest = store.typeDigest(&name_store, named_i64);
     const str_digest = store.typeDigest(&name_store, named_str);
     try std.testing.expect(!std.mem.eql(u8, i64_digest.bytes[0..], str_digest.bytes[0..]));
+}
+
+test "monotype cached digest visits nested parameterized nominals once" {
+    // Regression test for https://github.com/roc-lang/roc/issues/10843.
+    // Cache hits must return before doing any structural digest work.
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const type_name = try name_store.internTypeName("W");
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const depth = 64;
+    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    var nested = try store.add(.{ .primitive = .u64 });
+    var ladder: [depth]TypeId = undefined;
+    for (&ladder) |*ty| {
+        const args = try store.addSpan(&.{nested});
+        nested = try store.add(.{ .named = .{
+            .named_type = .{ .module = .{}, .ty = checked_ty },
+            .def = .{ .module = module_identity, .type_name = type_name },
+            .kind = .nominal,
+            .args = args,
+        } });
+        ty.* = nested;
+    }
+
+    var cold_stats: Store.DigestStats = .{};
+    _ = store.typeDigestCached(&name_store, nested, &cold_stats);
+    try std.testing.expectEqual(@as(u64, depth + 1), cold_stats.cache_misses);
+    try std.testing.expectEqual(@as(u64, depth + 1), cold_stats.nodes_visited);
+
+    var warm_stats: Store.DigestStats = .{};
+    for (ladder) |ty| {
+        _ = store.typeDigestCached(&name_store, ty, &warm_stats);
+    }
+    try std.testing.expectEqual(@as(u64, depth), warm_stats.cache_hits);
+    try std.testing.expectEqual(@as(u64, 0), warm_stats.cache_misses);
+    try std.testing.expectEqual(@as(u64, 0), warm_stats.nodes_visited);
 }
 
 test "monotype recursive nominal digest ignores how deep the knot is tied" {
@@ -3681,6 +5640,8 @@ test "monotype type equality treats aliases as their backing" {
 
     try std.testing.expect(try store.typeEql(&name_store, str, aliased));
     try std.testing.expect(!try store.typeEql(&name_store, str, nominal));
+    try std.testing.expectEqual(store.equalityDigest(&name_store, str), store.equalityDigest(&name_store, aliased));
+    try std.testing.expect(!std.meta.eql(store.equalityDigest(&name_store, str), store.equalityDigest(&name_store, nominal)));
 }
 
 test "monotype type equality compares exact types across stores" {

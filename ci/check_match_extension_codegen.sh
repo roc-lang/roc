@@ -9,7 +9,7 @@
 # accident while changing something that looks unrelated, and nothing else in
 # the test suite would notice.
 #
-# So this counts the instructions in the generated Roc procedures and fails if
+# So this counts the instructions in the generated Roc entrypoint and fails if
 # the number moves in either direction. A drop is as interesting as a rise: it
 # usually means the fixture stopped measuring what it was written to measure.
 #
@@ -21,11 +21,6 @@ set -euo pipefail
 
 if ! command -v objdump >/dev/null 2>&1; then
     echo "objdump is required for the match extension codegen check" >&2
-    exit 1
-fi
-host_os="$(uname -s)"
-if [ "$host_os" != "Darwin" ] && ! command -v readelf >/dev/null 2>&1; then
-    echo "readelf is required for the match extension codegen check" >&2
     exit 1
 fi
 
@@ -52,8 +47,18 @@ cd "$repo_root"
 # inlines into the procedure instead of staying behind calls. The pinned
 # eight-byte compare loop is unchanged - load, load, compare, advance, with
 # the from_le_bytes bounds test still doubling as the loop's termination.
+# Evaluating the later position first makes its bounds check govern both reads.
+# This keeps the fast loop to one bound branch per eight bytes when proven
+# no-wrap arithmetic gives LLVM stronger induction-variable facts.
+# Exact single-use inlining before ARC adds the release of the owned root
+# argument list after its length is read. Restoring internal linkage to
+# procedures not named by static-data relocations then lets LLVM optimize that
+# body together with its exported roc_main wrapper. These transformations
+# interact rather than adding their separate instruction-count changes: the
+# resulting entrypoint totals are 106 on x64musl and 92 on arm64musl. The
+# pinned compare loop itself is unchanged.
 expectations=(
-    "x64musl:124"
+    "x64musl:106"
     "arm64musl:92"
 )
 
@@ -61,11 +66,41 @@ failed=0
 
 count_objdump_instructions() {
     objdump -d --no-show-raw-insn "$1" | awk '
-        /^[0-9a-f]+ <_?roc__proc/ { in_proc = 1; next }
+        /^[0-9a-f]+ <_?roc_main>/ { in_proc = 1; found = 1; next }
         /^[0-9a-f]+ </           { in_proc = 0 }
         in_proc && /^[[:space:]]+[0-9a-f]+:/ { count++ }
-        END { print count + 0 }
+        END {
+            if (!found) exit 1
+            print count + 0
+        }
     '
+}
+
+count_aarch64_instructions() {
+    local size_hex
+    local size_bytes
+
+    size_hex="$(objdump -t "$1" | awk '
+        $NF ~ /^_?roc_main$/ {
+            matches++
+            size = $(NF - 1)
+        }
+        END {
+            if (matches != 1) exit 1
+            print size
+        }
+    ')"
+    size_hex="${size_hex#0x}"
+    if [[ ! "$size_hex" =~ ^[0-9a-fA-F]+$ ]]; then
+        return 1
+    fi
+
+    size_bytes=$((16#$size_hex))
+    if ((size_bytes % 4 != 0)); then
+        return 1
+    fi
+
+    printf '%d\n' "$((size_bytes / 4))"
 }
 
 for entry in "${expectations[@]}"; do
@@ -77,23 +112,10 @@ for entry in "${expectations[@]}"; do
 
     case "$target" in
         arm64musl)
-            if [ "$host_os" = "Darwin" ]; then
-                # Apple's objdump supports every architecture emitted by this
-                # check, including AArch64 ELF targets.
-                actual="$(count_objdump_instructions "$tmp_dir/match-$target")"
-            else
-                # GNU objdump is commonly configured for only the host
-                # architecture. Every AArch64 instruction is four bytes, so
-                # exact procedure symbol sizes provide the target-independent
-                # count on these hosts.
-                actual="$(readelf -sW "$tmp_dir/match-$target" | awk '
-                    $8 ~ /^_?roc__proc/ { bytes += $3 }
-                    END {
-                        if (bytes % 4 != 0) exit 1
-                        print bytes / 4
-                    }
-                ')"
-            fi
+            # Every AArch64 instruction is four bytes. Counting the exact
+            # entrypoint symbol size keeps this measurement independent of
+            # host-specific disassembly formatting.
+            actual="$(count_aarch64_instructions "$tmp_dir/match-$target")"
             ;;
         x64musl)
             actual="$(count_objdump_instructions "$tmp_dir/match-$target")"
@@ -118,14 +140,14 @@ if [ "$failed" -ne 0 ]; then
 Code generation for the match-extension loop changed. This is not automatically
 a bug, but it is worth understanding before updating the numbers above.
 
-To see what changed, build the fixture and disassemble the roc__proc symbols:
+To see what changed, build the fixture and disassemble the roc_main symbol:
 
     roc build --opt=speed --no-cache --target=<target> \
         --output=/tmp/match test/cli/match_extension_codegen.roc
     objdump -d --no-show-raw-insn /tmp/match
 
-For arm64musl on non-macOS hosts, `readelf -sW /tmp/match` reports procedure
-byte sizes; AArch64 instructions are four bytes each.
+For arm64musl, `objdump -t /tmp/match` reports the entrypoint byte size;
+AArch64 instructions are four bytes each.
 
 For why a given instruction is there, set `dump_llvm_artifacts` to true in
 src/cli/builder.zig to also get the optimized LLVM IR: that distinguishes a

@@ -113,10 +113,7 @@ const OwnedEvidence = struct {
 };
 
 fn evidenceEql(left: EvidenceView, right: EvidenceView) bool {
-    if (left.head != right.head or left.nodes.len != right.nodes.len or left.frames.len != right.frames.len) return false;
-    for (left.nodes, right.nodes) |a, b| if (!std.meta.eql(a, b)) return false;
-    for (left.frames, right.frames) |a, b| if (!std.meta.eql(a, b)) return false;
-    return true;
+    return Ast.fnEvidenceEql(left.nodes, left.frames, left.head, right.nodes, right.frames, right.head);
 }
 
 fn evidenceDigestMatches(identity: Ast.SpecIdentity, evidence: EvidenceView) bool {
@@ -163,6 +160,11 @@ const SpecLookupAddress = struct {
     index_b: u32,
     index_c: u32,
     owner_fn_digest: [32]u8,
+    /// Explicitly tagged default-root qualifier: `default_root` distinguishes
+    /// a default-root nested site (whose declaring module content identity
+    /// fills `default_root_module`) from a template-owned one (zeros).
+    default_root: bool,
+    default_root_module: [32]u8,
     source_digest: [32]u8,
     evidence_digest: [32]u8,
     type_digest: [32]u8,
@@ -182,6 +184,8 @@ const SpecLookupAddress = struct {
             .index_b = 0,
             .index_c = 0,
             .owner_fn_digest = @splat(0),
+            .default_root = false,
+            .default_root_module = @splat(0),
             .source_digest = source_digest.bytes,
             .evidence_digest = evidence_digest.bytes,
             .type_digest = type_digest.bytes,
@@ -198,6 +202,10 @@ const SpecLookupAddress = struct {
                 key.index_b = site.owner_template;
                 key.index_c = site.site;
                 key.owner_fn_digest = site.owner_fn_digest.bytes;
+                if (site.default_root_module) |identity| {
+                    key.default_root = true;
+                    key.default_root_module = identity.bytes;
+                }
             },
             .hosted => |hosted| {
                 key.index_a = @intFromEnum(hosted);
@@ -506,6 +514,14 @@ pub const SpecBuilder = struct {
             }
             try self.appendAliasEntry(record.identity.callable, record.identity.method_scope, record.identity.source_fn_ty_digest, record.identity.evidence_digest, request_fn_ty_digest, spec);
         }
+    }
+
+    /// Current lifecycle status of a record. The scheduler consults this at
+    /// dispatch to skip queued bodies an immediate caller already completed.
+    pub fn recordStatus(self: *const SpecBuilder, spec: Ast.SpecId) Ast.SpecStatus {
+        const index = @intFromEnum(spec);
+        if (index >= self.records.len()) invariant("Monotype spec builder referenced a missing record");
+        return self.records.get(index).status;
     }
 
     pub fn markLowering(self: *SpecBuilder, spec: Ast.SpecId) void {

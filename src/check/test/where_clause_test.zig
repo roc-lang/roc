@@ -576,6 +576,26 @@ test "where alias - imported under a module qualifier" {
     try test_env_b.assertLastDefType("a -> Str where [a.to_str : a -> Str]");
 }
 
+test "where alias - phantom alias argument appears nowhere else in the signature" {
+    // The alias argument `b` is pinned by neither the referencing signature's
+    // arguments nor its return type, so the where clause's `b` node is the
+    // rigid var's primary occurrence. The annotation pre-pass must reset that
+    // node along with the rest of the annotation, or the body pass finds a
+    // stale rigid and reports `b` is not `b` (#10884-style phantom alias arg).
+    const source =
+        \\a.Conv(b) : where [a.conv : a -> b]
+        \\
+        \\phantom : a -> {} where [a.Conv(b)]
+        \\phantom = |x| {
+        \\    _ = x.conv()
+        \\    {}
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertLastDefType("a -> {} where [a.conv : a -> b]");
+}
+
 test "where alias - parameterized alias substitutes its argument" {
     const source =
         \\a.Encodable(fmt) : where [a.encode : a, fmt -> fmt]

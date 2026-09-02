@@ -17,6 +17,12 @@ const types = @import("types");
 const Common = @import("../common.zig");
 const Layouts = @import("layouts.zig");
 const Plan = @import("plan.zig");
+const test_fixtures = @import("test_fixtures.zig");
+
+/// Shared Boxy stage-test fixtures, aliased so every stage builds the same
+/// synthetic checked payloads from one definition.
+const fixtureTableIndex = test_fixtures.tableIndex;
+const builtinNominal = test_fixtures.builtinNominal;
 const solved_lir_lower = @import("../solved_lir_lower.zig");
 
 const Allocator = std.mem.Allocator;
@@ -139,6 +145,76 @@ const ResolvedWorkerBody = union(enum) {
     generated_field_iterator: Plan.GeneratedFieldIteratorSource,
     generated_interpolation_step: Plan.GeneratedInterpolationStepSource,
 };
+
+fn resolvedWorkerIsListMapCanReuseWrapper(resolved: ResolvedWorker) bool {
+    const body = switch (resolved.body) {
+        .checked_expr => |checked_body| checked_body.root_expr,
+        .intrinsic,
+        .hosted,
+        .unimplemented,
+        .generated_codec,
+        .generated_field_iterator,
+        .generated_interpolation_step,
+        => return false,
+    };
+    return checkedExprIsListMapCanReuseWrapper(resolved.module, body);
+}
+
+fn checkedExprIsListMapCanReuseWrapper(
+    module: ProcedureModuleView,
+    expr_id: checked.CheckedExprId,
+) bool {
+    return switch (module.checked_bodies.expr(expr_id).data) {
+        .run_low_level => |low_level| low_level.op == .list_map_can_reuse,
+        .lambda => |lambda| checkedExprIsListMapCanReuseWrapper(module, lambda.body),
+        .block => |block| block.statements.len == 0 and
+            checkedExprIsListMapCanReuseWrapper(module, block.final_expr),
+        .pending,
+        .numeral,
+        .str_from_quote,
+        .str_segment,
+        .str,
+        .bytes_literal,
+        .lookup_local,
+        .lookup_external,
+        .lookup_required,
+        .list,
+        .empty_list,
+        .tuple,
+        .match_,
+        .if_,
+        .call,
+        .record,
+        .empty_record,
+        .tag,
+        .nominal,
+        .zero_argument_tag,
+        .closure,
+        .binop,
+        .unary_minus,
+        .unary_not,
+        .field_access,
+        .dispatch_call,
+        .interpolation,
+        .structural_eq,
+        .structural_hash,
+        .method_eq,
+        .type_dispatch_call,
+        .tuple_access,
+        .runtime_error,
+        .crash,
+        .dbg,
+        .expect_err,
+        .expect,
+        .ellipsis,
+        .anno_only,
+        .break_,
+        .return_,
+        .for_,
+        .hosted_lambda,
+        => false,
+    };
+}
 
 const ResolvedWorkers = struct {
     allocator: Allocator,
@@ -458,6 +534,26 @@ fn resolveNestedConstFn(
     worker: Plan.WorkerPlanId,
     nested: anytype,
 ) ResolvedWorker {
+    // A default-root-qualified stored function's site lives in the declaring
+    // module (resolved by content identity) and belongs to no checked
+    // procedure template, so its worker resolves without a template identity
+    //—exactly like `resolveNestedExprWorker`'s default-root branch
+    // (design.md "Defaulted Fields").
+    if (nested.default_root) |identity| {
+        const module = procedureModuleByIdentity(modules, &identity.bytes);
+        const expr_id = checkedLambdaExprForNestedFn(module, nested);
+        return .{
+            .worker = worker,
+            .module_key = module.key,
+            .module = module,
+            .template_ref = null,
+            .template = null,
+            .body = .{ .checked_expr = .{
+                .body_id = null,
+                .root_expr = expr_id,
+            } },
+        };
+    }
     const module = procedureModuleByKey(modules, .{ .bytes = names.procTemplateModuleDigest(nested.owner).bytes });
     const expr_id = checkedLambdaExprForNestedFn(module, nested);
     const template = module.checked_procedure_templates.get(nested.owner.template);
@@ -474,6 +570,20 @@ fn resolveNestedConstFn(
     };
 }
 
+fn procedureModuleByIdentity(modules: Common.CheckedModules, identity: *const [32]u8) ProcedureModuleView {
+    const root = rootProcedureModule(modules);
+    if (procedureModuleIdentityMatches(root, identity)) return root;
+    for (modules.imports) |imported| {
+        const view = procedureModuleFromImport(imported);
+        if (procedureModuleIdentityMatches(view, identity)) return view;
+    }
+    for (modules.root.relation_modules) |relation| {
+        const view = procedureModuleFromImport(relation);
+        if (procedureModuleIdentityMatches(view, identity)) return view;
+    }
+    boxyLowerInvariant("stored default-root function's declaring module was absent from boxy lowering");
+}
+
 fn resolveNestedExprWorker(
     modules: Common.CheckedModules,
     worker: Plan.WorkerPlanId,
@@ -483,7 +593,6 @@ fn resolveNestedExprWorker(
     const site = nestedProcSiteForExpr(module, expr_ref.expr) orelse {
         boxyLowerInvariant("nested callable worker source had no nested procedure site");
     };
-    const template = module.checked_procedure_templates.get(site.owner_template.template);
     const expr = module.checked_bodies.expr(expr_ref.expr);
     const root_expr = if (expr.data == .lambda)
         expr_ref.expr
@@ -491,12 +600,20 @@ fn resolveNestedExprWorker(
         expr.data.closure.lambda
     else
         boxyLowerInvariant("nested callable worker source did not point at a lambda or closure");
+    // A default-root site (a lambda inside a defaulted-field expression,
+    // design.md "Defaulted Fields") belongs to no checked procedure template;
+    // its worker resolves with no template identity, exactly like the
+    // template-optional consumers expect.
+    const template_ref: ?names.ProcedureTemplateRef = switch (site.owner) {
+        .template => |template| template,
+        .default_root => null,
+    };
     return .{
         .worker = worker,
         .module_key = module.key,
         .module = module,
-        .template_ref = site.owner_template,
-        .template = template,
+        .template_ref = template_ref,
+        .template = if (template_ref) |ref| module.checked_procedure_templates.get(ref.template) else null,
         .body = .{ .checked_expr = .{
             .body_id = null,
             .root_expr = root_expr,
@@ -517,7 +634,15 @@ fn checkedLambdaExprForNestedFn(
 ) checked.CheckedExprId {
     for (module.nested_proc_sites.sites) |site| {
         if (site.site != nested.site) continue;
-        if (!names.procedureTemplateRefEql(site.owner_template, nested.owner)) continue;
+        switch (site.owner) {
+            .template => |site_owner| {
+                if (nested.default_root != null) continue;
+                if (!names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
+            },
+            // A default-root-qualified stored function matches the declaring
+            // module's default-root site (design.md "Defaulted Fields").
+            .default_root => if (nested.default_root == null) continue,
+        }
         const expr_id = site.checked_expr orelse
             boxyLowerInvariant("stored nested function had no checked expression site");
         const expr = module.checked_bodies.expr(expr_id);
@@ -614,6 +739,12 @@ fn procedureModuleFromImport(import: checked.ImportedModuleView) ProcedureModule
 
 fn procedureModuleByCheckedModuleId(modules: Common.CheckedModules, checked_module: names.ArtifactRef) ProcedureModuleView {
     return procedureModuleByKey(modules, .{ .bytes = checked_module.bytes });
+}
+
+/// The label-comparison view of a lowering module view, for the shared plan
+/// queries in `Plan`.
+fn viewNames(view: ProcedureModuleView) Plan.ModuleNames {
+    return .{ .key = view.key, .canonical_names = view.canonical_names };
 }
 
 fn procedureModuleById(modules: Common.CheckedModules, module_id: checked.ModuleId) ProcedureModuleView {
@@ -1011,6 +1142,22 @@ const ProcedureBuilder = struct {
     descriptor_read_steps: std.ArrayList(DescriptorReadStep),
     hosted_catalog: []HostedCatalogEntry = &.{},
     symbols: Common.SymbolGen = .{},
+
+    /// The module data the shared label-comparing plan queries need.
+    pub fn moduleNames(self: *ProcedureBuilder, module_id: checked.ModuleId) Plan.ModuleNames {
+        const view = procedureModuleById(self.modules, module_id);
+        return .{ .key = view.key, .canonical_names = view.canonical_names };
+    }
+
+    /// Shared read-only queries over the representation plan.
+    fn repQuery(self: *const ProcedureBuilder) Plan.RepQuery {
+        return .{ .plan = self.plan, .allocator = self.allocator };
+    }
+
+    /// Shared label-comparing queries over the representation plan.
+    fn namedQuery(self: *ProcedureBuilder) Plan.NamedRepQuery(*ProcedureBuilder) {
+        return .{ .query = self.repQuery(), .modules = self };
+    }
 
     fn init(
         allocator: Allocator,
@@ -2086,7 +2233,7 @@ const ProcedureBuilder = struct {
 
         const rep = self.plan.representations.items[@intFromEnum(rep_id)];
         if (rep.descriptor) |desc| {
-            const identity_rep = self.descriptorArgumentIdentityRep(rep_id);
+            const identity_rep = self.repQuery().descriptorArgumentIdentityRep(rep_id);
             const identity_desc = self.plan.representations.items[@intFromEnum(identity_rep)].descriptor orelse desc;
             const desc_entry = try seen_descs.getOrPut(identity_desc);
             if (!desc_entry.found_existing) {
@@ -2177,7 +2324,7 @@ const ProcedureBuilder = struct {
         if (worker_rep.descriptor) |worker_desc| {
             const static_source = descriptor_sources.get(worker_desc);
             const source_needs_runtime_instantiation = if (static_source) |source_rep|
-                try self.repSubtreeHasDescriptor(source_rep)
+                try self.repQuery().repSubtreeHasDescriptor(source_rep)
             else
                 true;
             if (hiddenDescriptorParamContains(params, worker_desc) and source_needs_runtime_instantiation) {
@@ -2198,7 +2345,7 @@ const ProcedureBuilder = struct {
         if (worker_rep.kind == .empty_tag_union and requirement_rep.children.len != 0) {
             for (self.plan.childSlice(requirement_rep.children)) |requirement_child| {
                 if (!Plan.childCarriesRuntimeDescriptor(requirement_child.role)) continue;
-                if (!try self.repSubtreeHasDescriptor(requirement_child.rep)) continue;
+                if (!try self.repQuery().repSubtreeHasDescriptor(requirement_child.rep)) continue;
                 try self.collectStaticMethodCallDescSourcesForRep(
                     worker_rep_id,
                     requirement_child.rep,
@@ -2238,22 +2385,22 @@ const ProcedureBuilder = struct {
         for (worker_children) |worker_child| {
             if (!Plan.childCarriesRuntimeDescriptor(worker_child.role)) continue;
             const has_call_supplied_desc = try self.repSubtreeHasCallSuppliedDescriptor(worker_child.rep, params, descriptor_sources);
-            if (self.findMatchingChildByRole(requirement_children, worker_child)) |requirement_child| {
+            if (self.namedQuery().findMatchingChildByRole(requirement_children, worker_child)) |requirement_child| {
                 try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                 continue;
             }
-            if (self.structuralWrapperBackingRep(requirement_rep_id)) |requirement_backing| {
+            if (self.repQuery().structuralWrapperBackingRep(requirement_rep_id)) |requirement_backing| {
                 const backing_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(requirement_backing)].children);
-                if (self.findMatchingChildByRole(backing_children, worker_child)) |requirement_child| {
+                if (self.namedQuery().findMatchingChildByRole(backing_children, worker_child)) |requirement_child| {
                     try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                     continue;
                 }
             }
-            if (try self.findMatchingTagPayloadInRowExtension(requirement_children, worker_child)) |requirement_child| {
+            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(requirement_children, worker_child)) |requirement_child| {
                 try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                 continue;
             }
-            if (try self.findMatchingChildBySourceType(requirement_children, worker_child)) |requirement_child| {
+            if (try self.repQuery().findMatchingChildBySourceType(requirement_children, worker_child)) |requirement_child| {
                 try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                 continue;
             }
@@ -2272,22 +2419,22 @@ const ProcedureBuilder = struct {
         for (requirement_children) |requirement_child| {
             if (!Plan.childCarriesRuntimeDescriptor(requirement_child.role)) continue;
             if (!try self.repSubtreeHasUnmappedCallDesc(requirement_child.rep, call_desc_indexes, call_desc_reps)) continue;
-            if (self.findMatchingChildByRole(worker_children, requirement_child)) |worker_child| {
+            if (self.namedQuery().findMatchingChildByRole(worker_children, requirement_child)) |worker_child| {
                 try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                 continue;
             }
-            if (self.structuralWrapperBackingRep(worker_rep_id)) |worker_backing| {
+            if (self.repQuery().structuralWrapperBackingRep(worker_rep_id)) |worker_backing| {
                 const backing_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(worker_backing)].children);
-                if (self.findMatchingChildByRole(backing_children, requirement_child)) |worker_child| {
+                if (self.namedQuery().findMatchingChildByRole(backing_children, requirement_child)) |worker_child| {
                     try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                     continue;
                 }
             }
-            if (try self.findMatchingTagPayloadInRowExtension(worker_children, requirement_child)) |worker_child| {
+            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(worker_children, requirement_child)) |worker_child| {
                 try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                 continue;
             }
-            if (try self.findMatchingChildBySourceType(worker_children, requirement_child)) |worker_child| {
+            if (try self.repQuery().findMatchingChildBySourceType(worker_children, requirement_child)) |worker_child| {
                 try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                 continue;
             }
@@ -2433,15 +2580,15 @@ const ProcedureBuilder = struct {
         sources: *StaticDescriptorSourceMap,
         seen: *std.AutoHashMap(u64, void),
     ) Allocator.Error!void {
-        const identity_requirement = self.descriptorArgumentIdentityRep(requirement_rep_id);
-        const identity_owner = self.descriptorArgumentIdentityRep(owner_requirement_rep_id);
+        const identity_requirement = self.repQuery().descriptorArgumentIdentityRep(requirement_rep_id);
+        const identity_owner = self.repQuery().descriptorArgumentIdentityRep(owner_requirement_rep_id);
         if (identity_requirement == identity_owner) {
             var source_seen = std.AutoHashMap(u64, void).init(self.allocator);
             defer source_seen.deinit();
             try self.collectStaticDescriptorSourcesForWorkerSource(worker_rep_id, source_rep_id, params, binding_scope, sources, &source_seen);
             return;
         }
-        if (binding_scope == .all_worker_descriptors and !try self.repSubtreeHasDescriptor(requirement_rep_id)) {
+        if (binding_scope == .all_worker_descriptors and !try self.repQuery().repSubtreeHasDescriptor(requirement_rep_id)) {
             var source_seen = std.AutoHashMap(u64, void).init(self.allocator);
             defer source_seen.deinit();
             try self.collectStaticDescriptorSourcesForWorkerSource(worker_rep_id, requirement_rep_id, params, binding_scope, sources, &source_seen);
@@ -2458,7 +2605,7 @@ const ProcedureBuilder = struct {
         const requirement_rep = self.plan.representations.items[@intFromEnum(requirement_rep_id)];
         if (requirement_rep.kind == .empty_tag_union) {
             for (self.plan.childSlice(worker_rep.children)) |worker_child| {
-                if (!try self.repSubtreeHasDescriptor(worker_child.rep)) continue;
+                if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
                 try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(
                     worker_child.rep,
                     requirement_rep_id,
@@ -2476,23 +2623,23 @@ const ProcedureBuilder = struct {
         const worker_children = self.plan.childSlice(worker_rep.children);
         const requirement_children = self.plan.childSlice(requirement_rep.children);
         for (worker_children) |worker_child| {
-            if (!try self.repSubtreeHasDescriptor(worker_child.rep)) continue;
-            if (self.findMatchingChildByRole(requirement_children, worker_child)) |requirement_child| {
+            if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
+            if (self.namedQuery().findMatchingChildByRole(requirement_children, worker_child)) |requirement_child| {
                 try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(worker_child.rep, requirement_child.rep, owner_requirement_rep_id, source_rep_id, params, binding_scope, sources, seen);
                 continue;
             }
-            if (self.structuralWrapperBackingRep(requirement_rep_id)) |requirement_backing| {
+            if (self.repQuery().structuralWrapperBackingRep(requirement_rep_id)) |requirement_backing| {
                 const backing_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(requirement_backing)].children);
-                if (self.findMatchingChildByRole(backing_children, worker_child)) |requirement_child| {
+                if (self.namedQuery().findMatchingChildByRole(backing_children, worker_child)) |requirement_child| {
                     try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(worker_child.rep, requirement_child.rep, owner_requirement_rep_id, source_rep_id, params, binding_scope, sources, seen);
                     continue;
                 }
             }
-            if (try self.findMatchingTagPayloadInRowExtension(requirement_children, worker_child)) |requirement_child| {
+            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(requirement_children, worker_child)) |requirement_child| {
                 try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(worker_child.rep, requirement_child.rep, owner_requirement_rep_id, source_rep_id, params, binding_scope, sources, seen);
                 continue;
             }
-            if (try self.findMatchingChildBySourceType(requirement_children, worker_child)) |requirement_child| {
+            if (try self.repQuery().findMatchingChildBySourceType(requirement_children, worker_child)) |requirement_child| {
                 try self.collectStaticDictionaryDescriptorSourcesForAlignedRep(worker_child.rep, requirement_child.rep, owner_requirement_rep_id, source_rep_id, params, binding_scope, sources, seen);
                 continue;
             }
@@ -2517,7 +2664,7 @@ const ProcedureBuilder = struct {
         seen: *std.AutoHashMap(u64, void),
     ) Allocator.Error!void {
         const identity_worker = self.descriptorStorageRep(worker_rep_id);
-        const identity_source = self.descriptorArgumentIdentityRep(source_rep_id);
+        const identity_source = self.repQuery().descriptorArgumentIdentityRep(source_rep_id);
         const seen_key = (@as(u64, @intFromEnum(identity_worker)) << 32) | @as(u64, @intFromEnum(identity_source));
         const entry = try seen.getOrPut(seen_key);
         if (entry.found_existing) return;
@@ -2535,7 +2682,7 @@ const ProcedureBuilder = struct {
 
         if (source_rep.kind == .empty_tag_union) {
             for (self.plan.childSlice(worker_rep.children)) |worker_child| {
-                if (!try self.repSubtreeHasDescriptor(worker_child.rep)) continue;
+                if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
                 try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, identity_source, params, binding_scope, sources, seen);
             }
             return;
@@ -2544,23 +2691,23 @@ const ProcedureBuilder = struct {
         const worker_children = self.plan.childSlice(worker_rep.children);
         const source_children = self.plan.childSlice(source_rep.children);
         for (worker_children) |worker_child| {
-            if (!try self.repSubtreeHasDescriptor(worker_child.rep)) continue;
-            if (self.findMatchingChildByRole(source_children, worker_child)) |source_child| {
+            if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
+            if (self.namedQuery().findMatchingChildByRole(source_children, worker_child)) |source_child| {
                 try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, source_child.rep, params, binding_scope, sources, seen);
                 continue;
             }
-            if (self.structuralWrapperBackingRep(identity_source)) |source_backing| {
+            if (self.repQuery().structuralWrapperBackingRep(identity_source)) |source_backing| {
                 const backing_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(source_backing)].children);
-                if (self.findMatchingChildByRole(backing_children, worker_child)) |source_child| {
+                if (self.namedQuery().findMatchingChildByRole(backing_children, worker_child)) |source_child| {
                     try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, source_child.rep, params, binding_scope, sources, seen);
                     continue;
                 }
             }
-            if (try self.findMatchingTagPayloadInRowExtension(source_children, worker_child)) |source_child| {
+            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(source_children, worker_child)) |source_child| {
                 try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, source_child.rep, params, binding_scope, sources, seen);
                 continue;
             }
-            if (try self.findMatchingChildBySourceType(source_children, worker_child)) |source_child| {
+            if (try self.repQuery().findMatchingChildBySourceType(source_children, worker_child)) |source_child| {
                 try self.collectStaticDescriptorSourcesForWorkerSource(worker_child.rep, source_child.rep, params, binding_scope, sources, seen);
                 continue;
             }
@@ -2765,7 +2912,7 @@ const ProcedureBuilder = struct {
                 } else if (child.role == .tuple_elem)
                     self.recordPayloadFieldLayout(worker_payload_layout, child.role.tuple_elem)
                 else if (child.role == .box_payload)
-                    self.boxPayloadLayout(worker_payload_layout)
+                    self.descriptorPayloadLayoutForRep(child.rep)
                 else if (child.role == .list_elem)
                     self.listElementLayout(worker_payload_layout)
                 else
@@ -3043,9 +3190,9 @@ const ProcedureBuilder = struct {
         worker_child: Plan.RepChild,
     ) Allocator.Error!?Plan.TypeRepId {
         if (source_children.len == 0) return null;
-        if (self.findMatchingChildByRole(source_children, worker_child)) |source_child| return source_child.rep;
-        if (try self.findMatchingTagPayloadInRowExtension(source_children, worker_child)) |source_child| return source_child.rep;
-        if (try self.findMatchingChildBySourceType(source_children, worker_child)) |source_child| return source_child.rep;
+        if (self.namedQuery().findMatchingChildByRole(source_children, worker_child)) |source_child| return source_child.rep;
+        if (try self.namedQuery().findMatchingTagPayloadInRowExtension(source_children, worker_child)) |source_child| return source_child.rep;
+        if (try self.repQuery().findMatchingChildBySourceType(source_children, worker_child)) |source_child| return source_child.rep;
         return null;
     }
 
@@ -3096,7 +3243,7 @@ const ProcedureBuilder = struct {
                 return source_child.rep;
             }
 
-            current = self.structuralWrapperBackingRep(current) orelse return null;
+            current = self.repQuery().structuralWrapperBackingRep(current) orelse return null;
         }
     }
 
@@ -3123,7 +3270,7 @@ const ProcedureBuilder = struct {
         var found: ?Plan.RepChild = null;
         for (children) |child| {
             if (!planTypeRefEql(child.source_type, worker_field.source_type)) continue;
-            if (!try self.repSubtreeHasDescriptor(child.rep)) continue;
+            if (!try self.repQuery().repSubtreeHasDescriptor(child.rep)) continue;
             if (found != null) boxyLowerInvariant("declared-field descriptor source mapping found ambiguous checked-type children");
             found = child;
         }
@@ -3501,7 +3648,7 @@ const ProcedureBuilder = struct {
                 } else if (child.role == .tuple_elem)
                     self.recordPayloadFieldLayout(payload_layout, child.role.tuple_elem)
                 else if (child.role == .box_payload)
-                    self.boxPayloadLayout(payload_layout)
+                    self.descriptorPayloadLayoutForRep(child.rep)
                 else if (child.role == .list_elem)
                     self.listElementLayout(payload_layout)
                 else
@@ -3769,19 +3916,20 @@ const ProcedureBuilder = struct {
 
     fn layoutIsBoxStorage(self: *const ProcedureBuilder, layout_idx: layout.Idx) bool {
         const tag = self.result.layouts.getLayout(layout_idx).tag;
-        return tag == .box or tag == .box_of_zst;
+        return tag == .box or tag == .box_of_zst or tag == .erased_box;
     }
 
     fn layoutNeedsNestedBoxyDesc(self: *const ProcedureBuilder, layout_idx: layout.Idx) bool {
         return switch (self.result.layouts.getLayout(layout_idx).tag) {
             .box,
-            .box_of_zst,
+            .erased_box,
             .list,
             .list_of_zst,
             .struct_,
             .tag_union,
             => true,
             .scalar,
+            .box_of_zst,
             .closure,
             .erased_callable,
             .zst,
@@ -3852,16 +4000,6 @@ const ProcedureBuilder = struct {
         }
         if (payload_layout_value.tag == .zst) return .zst;
         boxyLowerInvariant("record descriptor had non-struct payload layout");
-    }
-
-    fn boxPayloadLayout(self: *const ProcedureBuilder, payload_layout: layout.Idx) layout.Idx {
-        const payload_layout_value = self.result.layouts.getLayout(payload_layout);
-        if (payload_layout_value.tag == .box) return payload_layout_value.getIdx();
-        if (payload_layout_value.tag == .box_of_zst) return .zst;
-        // Box(fn) is the erased callable allocation itself, so the Box
-        // payload occupies that same committed layout.
-        if (payload_layout_value.tag == .erased_callable) return payload_layout;
-        boxyLowerInvariant("box descriptor had non-box payload layout");
     }
 
     fn listElementLayout(self: *const ProcedureBuilder, payload_layout: layout.Idx) layout.Idx {
@@ -3990,204 +4128,13 @@ const ProcedureBuilder = struct {
         return found;
     }
 
-    fn repSubtreeHasDescriptor(self: *ProcedureBuilder, rep_id: Plan.TypeRepId) Allocator.Error!bool {
-        var seen = collections.DenseMap(Plan.TypeRepId, void).init(self.allocator);
-        defer seen.deinit();
-        return try self.repSubtreeHasDescriptorInner(rep_id, &seen);
-    }
-
-    fn repSubtreeHasDescriptorInner(
-        self: *ProcedureBuilder,
-        rep_id: Plan.TypeRepId,
-        seen: *collections.DenseMap(Plan.TypeRepId, void),
-    ) Allocator.Error!bool {
-        const entry = try seen.getOrPut(rep_id);
-        if (entry.found_existing) return false;
-        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        if (rep.descriptor != null) return true;
-        for (self.plan.childSlice(rep.children)) |child| {
-            if (try self.repSubtreeHasDescriptorInner(child.rep, seen)) return true;
-        }
-        return false;
-    }
-
-    fn findMatchingChildByRole(
-        self: *ProcedureBuilder,
-        children: []const Plan.RepChild,
-        target: Plan.RepChild,
-    ) ?Plan.RepChild {
-        for (children) |child| {
-            if (self.childRolesMatch(target, child)) return child;
-        }
-        return null;
-    }
-
-    fn findMatchingChildBySourceType(
-        self: *ProcedureBuilder,
-        children: []const Plan.RepChild,
-        target: Plan.RepChild,
-    ) Allocator.Error!?Plan.RepChild {
-        var found: ?Plan.RepChild = null;
-        for (children) |child| {
-            if (!planTypeRefEql(child.source_type, target.source_type)) continue;
-            if (!try self.repSubtreeHasDescriptor(child.rep)) continue;
-            if (found != null) boxyLowerInvariant("static dictionary descriptor mapping found ambiguous checked-type children");
-            found = child;
-        }
-        return found;
-    }
-
-    fn findMatchingTagPayloadInRowExtension(
-        self: *ProcedureBuilder,
-        children: []const Plan.RepChild,
-        target: Plan.RepChild,
-    ) Allocator.Error!?Plan.RepChild {
-        if (target.role != .tag_payload) return null;
-        var seen = collections.DenseMap(Plan.TypeRepId, void).init(self.allocator);
-        defer seen.deinit();
-        return try self.findMatchingTagPayloadInRowExtensionInner(children, target, &seen);
-    }
-
-    fn findMatchingTagPayloadInRowExtensionInner(
-        self: *ProcedureBuilder,
-        children: []const Plan.RepChild,
-        target: Plan.RepChild,
-        seen: *collections.DenseMap(Plan.TypeRepId, void),
-    ) Allocator.Error!?Plan.RepChild {
-        for (children) |child| {
-            if (child.role != .tag_ext) continue;
-            if (try self.findMatchingTagPayloadInRep(child.rep, target, seen)) |match| return match;
-        }
-        return null;
-    }
-
-    fn findMatchingTagPayloadInRep(
-        self: *ProcedureBuilder,
-        rep_id: Plan.TypeRepId,
-        target: Plan.RepChild,
-        seen: *collections.DenseMap(Plan.TypeRepId, void),
-    ) Allocator.Error!?Plan.RepChild {
-        const entry = try seen.getOrPut(rep_id);
-        if (entry.found_existing) return null;
-        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        const children = self.plan.childSlice(rep.children);
-        if (self.findMatchingChildByRole(children, target)) |match| return match;
-        if (self.structuralWrapperBackingRep(rep_id)) |backing_rep| {
-            const backing = self.plan.representations.items[@intFromEnum(backing_rep)];
-            const backing_children = self.plan.childSlice(backing.children);
-            if (self.findMatchingChildByRole(backing_children, target)) |match| return match;
-            if (try self.findMatchingTagPayloadInRowExtensionInner(backing_children, target, seen)) |match| return match;
-        }
-        return try self.findMatchingTagPayloadInRowExtensionInner(children, target, seen);
-    }
-
-    fn childRolesMatch(
-        self: *ProcedureBuilder,
-        target: Plan.RepChild,
-        candidate: Plan.RepChild,
-    ) bool {
-        if (target.role == .record_field) {
-            if (candidate.role != .record_field) return false;
-            return self.recordFieldNameMatches(
-                procedureModuleById(self.modules, target.source_type.module),
-                target.role.record_field,
-                procedureModuleById(self.modules, candidate.source_type.module),
-                candidate.role.record_field,
-            );
-        }
-        if (target.role == .tag_payload) {
-            if (candidate.role != .tag_payload) return false;
-            const target_payload = target.role.tag_payload;
-            const candidate_payload = candidate.role.tag_payload;
-            return target_payload.index == candidate_payload.index and
-                self.tagLabelNameMatches(
-                    target.source_type.module,
-                    target_payload.tag,
-                    candidate.source_type.module,
-                    candidate_payload.tag,
-                );
-        }
-        return std.meta.eql(target.role, candidate.role);
-    }
-
-    fn recordFieldNameMatches(
-        _: *const ProcedureBuilder,
-        source_view: ProcedureModuleView,
-        source_name: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
-        target_view: ProcedureModuleView,
-        target_name: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
-    ) bool {
-        if (checked_moduleKeyEqual(source_view.key, target_view.key)) return source_name == target_name;
-        return std.mem.eql(
-            u8,
-            source_view.canonical_names.recordFieldLabelText(source_name),
-            target_view.canonical_names.recordFieldLabelText(target_name),
-        );
-    }
-
-    fn tagLabelNameMatches(
-        self: *const ProcedureBuilder,
-        source_module: checked.ModuleId,
-        source_name: names.TagNameId,
-        target_module: checked.ModuleId,
-        target_name: names.TagNameId,
-    ) bool {
-        const source_view = procedureModuleById(self.modules, source_module);
-        const target_view = procedureModuleById(self.modules, target_module);
-        return std.mem.eql(
-            u8,
-            source_view.canonical_names.tagLabelText(source_name),
-            target_view.canonical_names.tagLabelText(target_name),
-        );
-    }
-
-    fn structuralWrapperBackingRep(self: *ProcedureBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
-        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        if (rep.kind == .alias) return self.singleChildRepForDesc(rep_id, .alias_backing);
-        if (rep.kind == .nominal) {
-            return switch (rep.kind.nominal) {
-                .transparent => if (rep.declared_fields.len == 0)
-                    self.singleChildRepForDesc(rep_id, .nominal_backing)
-                else
-                    null,
-                .opaque_nominal, .builtin_other => null,
-            };
-        }
-        return null;
-    }
-
-    fn descriptorArgumentIdentityRep(self: *ProcedureBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
-        var current = rep_id;
-        var depth: u16 = 0;
-        while (true) {
-            if (depth == 1024) boxyLowerInvariant("descriptor argument wrapper chain exceeded boxy procedure builder limit");
-            depth += 1;
-            if (self.plan.inspectMethodForRep(current) != null) return current;
-            if (self.plan.representations.items[@intFromEnum(current)].nominal_backing_arg_substitutions.len != 0) return current;
-            current = self.structuralWrapperBackingRep(current) orelse return current;
-        }
-    }
-
     fn workerChildCanMatchUnwrappedSourceRep(
         self: *ProcedureBuilder,
         worker_rep_id: Plan.TypeRepId,
         worker_child: Plan.RepChild,
     ) Allocator.Error!bool {
-        const worker_backing = self.structuralWrapperBackingRep(worker_rep_id) orelse return false;
-        return worker_child.rep == worker_backing and !try self.repSubtreeHasDescriptorInOtherChildren(worker_rep_id, worker_child);
-    }
-
-    fn repSubtreeHasDescriptorInOtherChildren(
-        self: *ProcedureBuilder,
-        rep_id: Plan.TypeRepId,
-        selected_child: Plan.RepChild,
-    ) Allocator.Error!bool {
-        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        for (self.plan.childSlice(rep.children)) |child| {
-            if (child.rep == selected_child.rep and std.meta.eql(child.role, selected_child.role)) continue;
-            if (try self.repSubtreeHasDescriptor(child.rep)) return true;
-        }
-        return false;
+        const worker_backing = self.repQuery().structuralWrapperBackingRep(worker_rep_id) orelse return false;
+        return worker_child.rep == worker_backing and !try self.repQuery().repSubtreeHasDescriptorInOtherChildren(worker_rep_id, worker_child);
     }
 
     fn findMatchingTagVariant(
@@ -5660,7 +5607,7 @@ const ProcedureBuilder = struct {
             .next = continuation,
         } });
         continuation = try proc.assignBinaryLowLevel(source_field, .list_get_unsafe, source_items, index, continuation);
-        continuation = try proc.assignBinaryLowLevel(next_index, .num_plus, index, one, continuation);
+        continuation = try proc.assignBinaryLowLevel(next_index, .num_int_add_crash_on_overflow, index, one, continuation);
         return try proc.assignIntLiteral(one, 1, continuation);
     }
 
@@ -6127,10 +6074,10 @@ const ProcedureBuilder = struct {
         const items = try proc.addFrameLocal(self.layout_plan.generated_evidence.field_list);
         dispatch = try proc.assignBinaryLowLevel(item, .list_get_unsafe, items, captures[1], dispatch);
         if (source.mode == .all) {
-            dispatch = try proc.assignBinaryLowLevel(remaining, .num_minus, captures[2], next_index, dispatch);
+            dispatch = try proc.assignBinaryLowLevel(remaining, .num_int_sub_crash_on_overflow, captures[2], next_index, dispatch);
         }
         const one_literal = try proc.addFrameLocal(.u64);
-        dispatch = try proc.assignBinaryLowLevel(next_index, .num_plus, captures[1], one_literal, dispatch);
+        dispatch = try proc.assignBinaryLowLevel(next_index, .num_int_add_crash_on_overflow, captures[1], one_literal, dispatch);
         dispatch = try proc.assignIntLiteral(one_literal, 1, dispatch);
         dispatch = try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = items,
@@ -6372,7 +6319,7 @@ const ProcedureBuilder = struct {
         const schema_view = procedureModuleById(self.modules, schema_type.module);
         if (checkedBuiltinNominalForType(schema_view, schema_type.ty)) |builtin| {
             if (builtin == .box) {
-                const payload = proc.requiredSingleChild(shape_rep, .box_payload);
+                const payload = proc.repQuery().requiredSingleChild(shape_rep, .box_payload);
                 const payload_value = try proc.addFrameLocalForRep(payload.rep);
                 var continuation = try self.lowerGeneratedEncoderSchemaInto(
                     proc,
@@ -6426,7 +6373,7 @@ const ProcedureBuilder = struct {
         const shape_plan = self.plan.representations.items[@intFromEnum(shape_rep)];
         if (shape_plan.kind == .alias or shape_plan.kind == .nominal) {
             const role: Plan.ChildRole = if (shape_plan.kind == .alias) .alias_backing else .nominal_backing;
-            const backing = proc.requiredSingleChild(shape_rep, role);
+            const backing = proc.repQuery().requiredSingleChild(shape_rep, role);
             return try self.lowerGeneratedEncoderSchemaInto(
                 proc,
                 source,
@@ -6667,7 +6614,7 @@ const ProcedureBuilder = struct {
         const one = try proc.addFrameLocal(.u64);
         const decremented = try proc.addFrameLocal(.u64);
         var missing_body = try proc.setLocalReplace(count, decremented, continuation);
-        missing_body = try proc.assignBinaryLowLevel(decremented, .num_minus, count, one, missing_body);
+        missing_body = try proc.assignBinaryLowLevel(decremented, .num_int_sub_crash_on_overflow, count, one, missing_body);
         missing_body = try proc.assignIntLiteral(one, 1, missing_body);
 
         const error_dispatch = if (field.optional_null) blk: {
@@ -7003,9 +6950,9 @@ const ProcedureBuilder = struct {
                     depth += 1;
                     const extension_rep = self.plan.representations.items[@intFromEnum(extension)];
                     if (extension_rep.kind == .alias) {
-                        extension = proc.requiredSingleChild(extension, .alias_backing).rep;
+                        extension = proc.repQuery().requiredSingleChild(extension, .alias_backing).rep;
                     } else if (extension_rep.kind == .nominal) {
-                        extension = proc.requiredSingleChild(extension, .nominal_backing).rep;
+                        extension = proc.repQuery().requiredSingleChild(extension, .nominal_backing).rep;
                     } else if (extension_rep.kind == .empty_tag_union) {
                         break;
                     } else {
@@ -7121,7 +7068,7 @@ const ProcedureBuilder = struct {
                 }
                 const capture_view = procedureModuleById(self.modules, capture.field_module);
                 if (planTypeRefEql(capture.record_type, shape_type) and
-                    proc.recordFieldNameMatches(record_view, label, capture_view, capture.field_name))
+                    Plan.recordFieldNameMatches(viewNames(record_view), label, viewNames(capture_view), capture.field_name))
                 {
                     if (renamed != null) boxyLowerInvariant("generated encoder record field had duplicate renamed captures");
                     renamed = name_captures[capture_index];
@@ -7607,7 +7554,7 @@ const ProcedureBuilder = struct {
         target: LIR.LocalId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const elem = proc.requiredSingleChild(list_rep, .list_elem);
+        const elem = proc.repQuery().requiredSingleChild(list_rep, .list_elem);
         const len = try proc.addFrameLocal(.u64);
         const index = try proc.addFrameLocal(.u64);
         const state = try proc.addFrameLocal(self.result.store.getLocal(initial_state).layout_idx);
@@ -7749,7 +7696,7 @@ const ProcedureBuilder = struct {
         capture_values[1] = elem_value;
         @memcpy(capture_values[2..], name_captures);
         continuation = try self.packGeneratedCodecCallable(proc, thunk, thunk_rep, thunk_worker, capture_values, continuation);
-        continuation = try proc.assignBinaryLowLevel(next_index, .num_plus, index, one, continuation);
+        continuation = try proc.assignBinaryLowLevel(next_index, .num_int_add_crash_on_overflow, index, one, continuation);
         continuation = try proc.assignIntLiteral(one, 1, continuation);
         if (!proc.isZstLocal(elem_value)) {
             continuation = try proc.assignBinaryLowLevel(elem_value, .list_get_unsafe, list_value, index, continuation);
@@ -7774,7 +7721,7 @@ const ProcedureBuilder = struct {
         const args = children[function.args_start..][0..function.arg_count];
         const list_rep = proc.listRepForBoundary(proc.repForTypeRef(source.shape)) orelse
             boxyLowerInvariant("generated Dict field callback capture was not a List");
-        const entry = proc.requiredSingleChild(list_rep, .list_elem);
+        const entry = proc.repQuery().requiredSingleChild(list_rep, .list_elem);
         const entry_items = try self.generatedParserTupleItems(proc, entry.rep);
         defer self.allocator.free(entry_items);
         if (entry_items.len != 2) boxyLowerInvariant("generated Dict entry did not have key and value elements");
@@ -7935,7 +7882,7 @@ const ProcedureBuilder = struct {
         capture_values[1] = item_value;
         @memcpy(capture_values[2..], name_captures);
         write_field = try self.packGeneratedCodecCallable(proc, thunk, thunk_rep, thunk_worker, capture_values, write_field);
-        write_field = try proc.assignBinaryLowLevel(next_index, .num_plus, index, one, write_field);
+        write_field = try proc.assignBinaryLowLevel(next_index, .num_int_add_crash_on_overflow, index, one, write_field);
         write_field = try proc.assignIntLiteral(one, 1, write_field);
 
         var encode_key = try self.lowerGeneratedDictKeyInto(
@@ -8589,7 +8536,7 @@ const ProcedureBuilder = struct {
         try proc.ensureGeneratedParserOutputDescriptorForRep(rest, context.state_rep);
         const shape_module = procedureModuleById(self.modules, shape_type.module);
         if (checkedBuiltinNominalForType(shape_module, shape_type.ty) == .box) {
-            const payload = proc.requiredSingleChild(shape_rep, .box_payload);
+            const payload = proc.repQuery().requiredSingleChild(shape_rep, .box_payload);
             const payload_value = try proc.addGeneratedParserOutputLocalForRep(payload.rep);
             const construct = try proc.assignBoxBoundary(
                 value,
@@ -9403,7 +9350,7 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const list_rep = proc.listRepForBoundary(shape_rep) orelse
             boxyLowerInvariant("generated list parser shape had no list representation");
-        const elem = explicit_elem orelse proc.requiredSingleChild(list_rep, .list_elem);
+        const elem = explicit_elem orelse proc.repQuery().requiredSingleChild(list_rep, .list_elem);
         const elem_layout = proc.workerRuntimeLayoutForRep(elem.rep).layoutIdx();
         if (elem_layout != proc.localListElemLayout(value)) {
             boxyLowerInvariant("generated list parser element worker and storage layouts disagreed");
@@ -9497,7 +9444,7 @@ const ProcedureBuilder = struct {
         if (nominal.builtin != .set or nominal.args.len != 1) {
             boxyLowerInvariant("generated Set parser shape did not have one public element type");
         }
-        var public_elem = proc.requiredSingleChild(proc.listRepForBoundary(list_rep).?, .list_elem);
+        var public_elem = proc.repQuery().requiredSingleChild(proc.listRepForBoundary(list_rep).?, .list_elem);
         public_elem.source_type = .{ .module = shape_type.module, .ty = nominal.args[0] };
         public_elem.rep = proc.repForTypeRef(public_elem.source_type);
         return try self.lowerGeneratedListFromState(
@@ -10349,7 +10296,7 @@ const ProcedureBuilder = struct {
                 if (capture.worker != worker) continue;
                 const capture_view = procedureModuleById(self.modules, capture.field_module);
                 if (planTypeRefEql(capture.record_type, record_type) and
-                    proc.recordFieldNameMatches(record_view, label, capture_view, capture.field_name))
+                    Plan.recordFieldNameMatches(viewNames(record_view), label, viewNames(capture_view), capture.field_name))
                 {
                     if (renamed != null) boxyLowerInvariant("generated parser record field had duplicate renamed captures");
                     renamed = switch (field_names_source) {
@@ -11728,6 +11675,7 @@ const ProcBodyBuilder = struct {
     descriptor_locals: []?LIR.LocalId,
     descriptor_local_reps: []?Plan.TypeRepId,
     descriptor_bound: []bool,
+    descriptor_evidence_bound: []bool,
     descriptor_slots: []?LIR.LocalId,
     descriptor_slot_reps: []?Plan.TypeRepId,
     descriptor_rep_bindings: std.ArrayList(DescriptorRepBinding),
@@ -11865,6 +11813,17 @@ const ProcBodyBuilder = struct {
         rep: Plan.TypeRepId,
         local: LIR.LocalId,
         bound: bool,
+        /// True only when the boundness was established by binding the
+        /// requirement to evidence (`markDescriptorRequirementBoundForRep`):
+        /// an entry hidden descriptor argument/capture, a prologue-rebuilt
+        /// argument root, or a snapshot-scoped call/pattern-boundary bind
+        /// whose initializer is prepended above every observer. A local
+        /// marked bound by a mid-body descriptor write
+        /// (`markDescriptorLocalBound`) does NOT set this: lowering visits
+        /// statements in reverse execution order, so such a mark can be
+        /// visible while lowering an earlier-executing statement even though
+        /// the write has not happened yet at that point at runtime.
+        evidence_bound: bool,
     };
 
     const LocalDescriptorEnvironmentBinding = struct {
@@ -11948,6 +11907,7 @@ const ProcBodyBuilder = struct {
         locals: []?LIR.LocalId,
         local_reps: []?Plan.TypeRepId,
         bound: []bool,
+        evidence_bound: []bool,
         slots: []?LIR.LocalId,
         slot_reps: []?Plan.TypeRepId,
         rep_bindings: []DescriptorRepBinding,
@@ -11957,6 +11917,7 @@ const ProcBodyBuilder = struct {
             allocator.free(self.locals);
             allocator.free(self.local_reps);
             allocator.free(self.bound);
+            allocator.free(self.evidence_bound);
             allocator.free(self.slots);
             allocator.free(self.slot_reps);
             allocator.free(self.rep_bindings);
@@ -12015,6 +11976,22 @@ const ProcBodyBuilder = struct {
         desc_local: ?LIR.LocalId = null,
     };
 
+    /// The module data the shared label-comparing plan queries need.
+    pub fn moduleNames(self: *ProcBodyBuilder, module_id: checked.ModuleId) Plan.ModuleNames {
+        const view = procedureModuleById(self.parent.modules, module_id);
+        return .{ .key = view.key, .canonical_names = view.canonical_names };
+    }
+
+    /// Shared read-only queries over the representation plan.
+    fn repQuery(self: *const ProcBodyBuilder) Plan.RepQuery {
+        return .{ .plan = self.parent.plan, .allocator = self.parent.allocator };
+    }
+
+    /// Shared label-comparing queries over the representation plan.
+    fn namedQuery(self: *ProcBodyBuilder) Plan.NamedRepQuery(*ProcBodyBuilder) {
+        return .{ .query = self.repQuery(), .modules = self };
+    }
+
     fn init(parent: *ProcedureBuilder, module: ProcedureModuleView, worker_layout: Layouts.WorkerLayouts) ProcBodyBuilder {
         return .{
             .parent = parent,
@@ -12033,6 +12010,7 @@ const ProcBodyBuilder = struct {
             .descriptor_locals = &.{},
             .descriptor_local_reps = &.{},
             .descriptor_bound = &.{},
+            .descriptor_evidence_bound = &.{},
             .descriptor_slots = &.{},
             .descriptor_slot_reps = &.{},
             .descriptor_rep_bindings = .empty,
@@ -12078,6 +12056,7 @@ const ProcBodyBuilder = struct {
         self.parent.allocator.free(self.dictionary_locals);
         self.parent.allocator.free(self.descriptor_slot_reps);
         self.parent.allocator.free(self.descriptor_slots);
+        self.parent.allocator.free(self.descriptor_evidence_bound);
         self.parent.allocator.free(self.descriptor_bound);
         self.parent.allocator.free(self.descriptor_local_reps);
         self.parent.allocator.free(self.descriptor_locals);
@@ -13716,7 +13695,7 @@ const ProcBodyBuilder = struct {
         const target_layout = self.parent.result.store.getLocal(target).layout_idx;
         const source_layout = self.parent.result.store.getLocal(source).layout_idx;
         if (target_layout == source_layout and self.descriptorStorageRep(target_rep) == self.descriptorStorageRep(source_rep)) {
-            if (self.parent.result.store.getLocal(source).boxy_desc == null and try self.layoutContainsBoxOfZst(source_layout)) {
+            if (self.parent.result.store.getLocal(source).boxy_desc == null and self.repContainsDynamicStorage(source_rep)) {
                 const desc = try self.descriptorRefForSourceLocalRep(source, source_rep);
                 self.parent.result.store.setLocalBoxyDesc(source, desc);
             }
@@ -14768,7 +14747,7 @@ const ProcBodyBuilder = struct {
                 };
                 const backing_type = (named.backing orelse
                     boxyLowerInvariant("stored alias type had no backing")).ty;
-                const backing_rep = self.requiredSingleChild(rep_id, .alias_backing).rep;
+                const backing_rep = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep;
                 return try self.restoreStoredConstNodeInto(target, store_module, node, backing_type, backing_rep, next);
             },
             .nominal => |kind| switch (kind) {
@@ -14779,7 +14758,7 @@ const ProcBodyBuilder = struct {
                     };
                     const backing_type = (named.backing orelse
                         boxyLowerInvariant("stored nominal type had no backing")).ty;
-                    const backing_rep = self.requiredSingleChild(rep_id, .nominal_backing).rep;
+                    const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
                     const backing_node = switch (store_module.const_store.get(node)) {
                         .nominal => |nominal| nominal.backing,
                         .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .fn_value => node,
@@ -14868,7 +14847,7 @@ const ProcBodyBuilder = struct {
             .list => |elem| elem,
             .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => boxyLowerInvariant("stored list node had a non-list stored type"),
         };
-        const elem_rep = self.requiredSingleChild(rep_id, .list_elem).rep;
+        const elem_rep = self.repQuery().requiredSingleChild(rep_id, .list_elem).rep;
         const elem_layout = self.localListElemLayout(target);
         const list_len: usize = switch (list) {
             .nodes => |items| items.len,
@@ -14921,7 +14900,7 @@ const ProcBodyBuilder = struct {
             .box => |elem| elem,
             .primitive, .named, .record, .tuple, .tag_union, .list, .func, .erased, .zst => boxyLowerInvariant("stored box node had a non-box stored type"),
         };
-        const payload_rep = self.requiredSingleChild(rep_id, .box_payload).rep;
+        const payload_rep = self.repQuery().requiredSingleChild(rep_id, .box_payload).rep;
         const payload_local = try self.addFrameLocalForRep(payload_rep);
         const boxed = try self.assignBoxBoundary(target, payload_local, rep_id, .box_box, next);
         return try self.restoreStoredConstNodeInto(
@@ -15163,7 +15142,7 @@ const ProcBodyBuilder = struct {
         try self.bindConstructedTargetDescriptor(target, list_rep);
 
         const elem_ty = constListElemType(type_module, checked_ty);
-        const target_elem_rep = self.requiredSingleChild(list_rep, .list_elem).rep;
+        const target_elem_rep = self.repQuery().requiredSingleChild(list_rep, .list_elem).rep;
         const source_elem_rep = self.repForModuleType(type_module, elem_ty);
         _ = try self.reserveDescriptorLocalForRep(target_elem_rep);
         const elem_layout = self.localListElemLayout(target);
@@ -15437,11 +15416,11 @@ const ProcBodyBuilder = struct {
 
             const wrapper = self.parent.plan.representations.items[@intFromEnum(rep_id)];
             switch (wrapper.kind) {
-                .alias => rep_id = self.requiredSingleChild(rep_id, .alias_backing).rep,
+                .alias => rep_id = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep,
                 .nominal => |kind| switch (kind) {
                     .transparent,
                     .builtin_other,
-                    => rep_id = self.requiredSingleChild(rep_id, .nominal_backing).rep,
+                    => rep_id = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep,
                     .opaque_nominal => break,
                 },
                 .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => break,
@@ -15679,10 +15658,10 @@ const ProcBodyBuilder = struct {
         const nominal_rep_info = self.parent.plan.representations.items[@intFromEnum(nominal_rep)];
         const backing_child = switch (nominal_rep_info.kind) {
             .nominal => |kind| switch (kind) {
-                .transparent, .builtin_other => self.requiredSingleChild(nominal_rep, .nominal_backing),
+                .transparent, .builtin_other => self.repQuery().requiredSingleChild(nominal_rep, .nominal_backing),
                 .opaque_nominal => boxyLowerInvariant("opaque ConstStore nominal had no restorable backing representation"),
             },
-            .alias => self.requiredSingleChild(nominal_rep, .alias_backing),
+            .alias => self.repQuery().requiredSingleChild(nominal_rep, .alias_backing),
             .generated_field,
             .generated_field_names,
             .generated_tag_union_spec,
@@ -16709,7 +16688,7 @@ const ProcBodyBuilder = struct {
         const layout_value = self.parent.result.layouts.getLayout(capture_layout);
         try self.parent.result.boxy_type_descs.append(self.parent.allocator, .{
             .payload_layout = capture_layout,
-            .contains_refcounted = self.parent.result.layouts.layoutContainsRcErasedBox(layout_value),
+            .contains_refcounted = self.parent.result.layouts.layoutContainsRefcounted(layout_value),
             .nested_descs = .{ .start = nested_start, .len = @intCast(refs.items.len) },
         });
 
@@ -16791,7 +16770,7 @@ const ProcBodyBuilder = struct {
                     });
                 }
             },
-            .scalar, .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .tag_union, .ptr => boxyLowerInvariant("boxy erased capture descriptor field expected struct capture layout"),
+            .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .tag_union, .ptr => boxyLowerInvariant("boxy erased capture descriptor field expected struct capture layout"),
         }
 
         try fields.append(self.parent.allocator, .{
@@ -16808,7 +16787,7 @@ const ProcBodyBuilder = struct {
     fn erasedCallableOnDrop(self: *ProcBodyBuilder, maybe_capture_layout: ?layout.Idx) LIR.ErasedCallableOnDrop {
         const capture_layout = maybe_capture_layout orelse return .none;
         const helper_key = layout.RcHelper{ .op = .decref, .layout_idx = capture_layout };
-        return if (self.parent.result.layouts.rcHelperPlanErasedBox(helper_key) == .noop)
+        return if (self.parent.result.layouts.rcHelperPlan(helper_key) == .noop)
             .none
         else
             .{ .rc_helper = helper_key };
@@ -17129,16 +17108,28 @@ const ProcBodyBuilder = struct {
             .imported_hosted,
             => |template| .{ .procedure_template = template },
             .nested => |nested| blk: {
-                const module = procedureModuleByKey(self.parent.modules, .{
-                    .bytes = names.procTemplateModuleDigest(nested.owner).bytes,
-                });
+                // A default-root-qualified stored function resolves its site
+                // in the declaring module (by content identity) against the
+                // `.default_root` owner (design.md "Defaulted Fields").
+                const module = if (nested.default_root) |identity|
+                    procedureModuleByIdentity(self.parent.modules, &identity.bytes)
+                else
+                    procedureModuleByKey(self.parent.modules, .{
+                        .bytes = names.procTemplateModuleDigest(nested.owner).bytes,
+                    });
                 var site_expr: ?checked.CheckedExprId = null;
                 for (module.nested_proc_sites.sites) |site| {
-                    if (site.site == nested.site and names.procedureTemplateRefEql(site.owner_template, nested.owner)) {
-                        site_expr = site.checked_expr orelse
-                            boxyLowerInvariant("stored nested function had no checked expression site");
-                        break;
+                    if (site.site != nested.site) continue;
+                    switch (site.owner) {
+                        .template => |site_owner| {
+                            if (nested.default_root != null) continue;
+                            if (!names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
+                        },
+                        .default_root => if (nested.default_root == null) continue,
                     }
+                    site_expr = site.checked_expr orelse
+                        boxyLowerInvariant("stored nested function had no checked expression site");
+                    break;
                 }
                 break :blk .{ .nested_expr = .{
                     .module = module.key,
@@ -18942,7 +18933,7 @@ const ProcBodyBuilder = struct {
                             target_payloads.len,
                         );
                         const target_payload_tag = self.parent.result.layouts.getLayout(target_payload_layout).tag;
-                        const target_payload_is_box = target_payload_tag == .box or target_payload_tag == .box_of_zst;
+                        const target_payload_is_box = target_payload_tag == .box or target_payload_tag == .box_of_zst or target_payload_tag == .erased_box;
                         const target_standalone_layout = self.workerRuntimeLayoutForRep(target_payloads[payload_index].rep).layoutIdx();
                         const adapted_payload_desc_info = if (self.representationBoundaryIsDirect(
                             target_payloads[payload_index].rep,
@@ -19600,8 +19591,8 @@ const ProcBodyBuilder = struct {
         const source_layout = self.workerRuntimeLayoutForRep(source_rep).layoutIdx();
         const target_tag = self.parent.result.layouts.getLayout(target_layout).tag;
         const source_tag = self.parent.result.layouts.getLayout(source_layout).tag;
-        const target_is_box = target_tag == .box or target_tag == .box_of_zst;
-        const source_is_box = source_tag == .box or source_tag == .box_of_zst;
+        const target_is_box = target_tag == .box or target_tag == .box_of_zst or target_tag == .erased_box;
+        const source_is_box = source_tag == .box or source_tag == .box_of_zst or source_tag == .erased_box;
 
         // A bare dynamic box has no target shape beyond the concrete source
         // allocation, so its descriptor must remain the exact source
@@ -19613,7 +19604,7 @@ const ProcBodyBuilder = struct {
             result.preserves_source_desc = true;
             return result;
         }
-        if (target_is_bare_dynamic and target_is_box and source_is_box and target_layout == source_layout and target_tag == .box_of_zst) {
+        if (target_is_bare_dynamic and target_is_box and source_is_box and target_layout == source_layout and target_tag == .erased_box) {
             var result = source_desc_info;
             result.preserves_source_desc = true;
             return result;
@@ -19675,11 +19666,11 @@ const ProcBodyBuilder = struct {
 
         const target_list_rep = self.listRepForBoundary(target_rep) orelse
             boxyLowerInvariant("planned list adapter target representation was not list-shaped");
-        const target_elem_rep = self.requiredSingleChild(target_list_rep, .list_elem).rep;
+        const target_elem_rep = self.repQuery().requiredSingleChild(target_list_rep, .list_elem).rep;
         const source_elem_rep = if (source_is_list) blk: {
             const source_list_rep = self.listRepForBoundary(source_rep) orelse
                 boxyLowerInvariant("planned list adapter source representation was not list-shaped");
-            break :blk self.requiredSingleChild(source_list_rep, .list_elem).rep;
+            break :blk self.repQuery().requiredSingleChild(source_list_rep, .list_elem).rep;
         } else null;
 
         // The incoming descriptor describes the exact boxed allocation, but a
@@ -19870,6 +19861,7 @@ const ProcBodyBuilder = struct {
         branches: []const checked.CheckedMatchBranch,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        if (try self.foldListMapCanReuseMatch(target, match_ty, cond, branches, next)) |folded| return folded;
         const cond_expr = self.module.checked_bodies.expr(cond);
         const cond_rep = self.matchConditionRep(cond, self.repForType(cond_expr.ty));
         try self.reserveMatchBranchRepresentativeBindings(branches, cond_rep);
@@ -19904,6 +19896,140 @@ const ProcBodyBuilder = struct {
         } });
         self.restoreDescriptorBindings(outer_descriptors);
         return match_stmt;
+    }
+
+    const ListMapCanReuseMatch = struct {
+        args: []const checked.CheckedExprId,
+        zero_branch_body: checked.CheckedExprId,
+    };
+
+    /// When the explicit target configuration or committed representations
+    /// make list-buffer reuse impossible, lower only the arm selected by the
+    /// primitive's constant-zero result. This is the Boxy counterpart of
+    /// direct lowering's `foldListMapCanReuseMatch`: both consume the checked
+    /// low-level operation and the same exact layout-eligibility decision.
+    fn foldListMapCanReuseMatch(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        result_ty: checked.CheckedTypeId,
+        cond: checked.CheckedExprId,
+        branches: []const checked.CheckedMatchBranch,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!?LIR.CFStmtId {
+        const match = self.listMapCanReuseMatch(cond, branches) orelse return null;
+        const interchangeable = self.listMapLayoutsInterchangeable(match.args);
+        if (interchangeable.get(.u32) or interchangeable.get(.u64)) return null;
+        return try self.lowerExprExpectedInto(target, result_ty, match.zero_branch_body, next);
+    }
+
+    fn listMapCanReuseMatch(
+        self: *ProcBodyBuilder,
+        cond: checked.CheckedExprId,
+        branches: []const checked.CheckedMatchBranch,
+    ) ?ListMapCanReuseMatch {
+        const args = self.listMapCanReuseArgs(cond) orelse return null;
+
+        for (branches) |branch| {
+            if (branch.guard != null) return null;
+            const patterns = branch.patternsSlice(self.module.checked_bodies);
+            if (patterns.len != 1 or patterns[0].degenerate) return null;
+            if (patterns[0].binderRemapsSlice(self.module.checked_bodies).len != 0) return null;
+
+            const pattern = self.module.checked_bodies.pattern(patterns[0].pattern);
+            switch (pattern.data) {
+                .numeral_literal => |literal| {
+                    if (literal.conversion != null) return null;
+                    const magnitude = exact_numeral.intMagnitude(
+                        self.module.module_env.exactNumeral(literal.literal),
+                    ) orelse return null;
+                    if (magnitude == 0) {
+                        return .{ .args = args, .zero_branch_body = branch.value };
+                    }
+                },
+                .underscore => return .{ .args = args, .zero_branch_body = branch.value },
+                .pending,
+                .assign,
+                .as,
+                .applied_tag,
+                .nominal,
+                .record_destructure,
+                .list,
+                .tuple,
+                .str_literal,
+                .str_interpolation,
+                .runtime_error,
+                => return null,
+            }
+        }
+        return null;
+    }
+
+    fn listMapCanReuseArgs(
+        self: *ProcBodyBuilder,
+        cond: checked.CheckedExprId,
+    ) ?[]const checked.CheckedExprId {
+        const expr = self.module.checked_bodies.expr(cond);
+        return switch (expr.data) {
+            .run_low_level => |low_level| if (low_level.op == .list_map_can_reuse) low_level.args else null,
+            .block => |block| if (block.statements.len == 0)
+                self.listMapCanReuseArgs(block.final_expr)
+            else
+                null,
+            .call => |call| blk: {
+                if (call.direct_target == null) break :blk null;
+                const direct = self.parent.plan.directCallPlanForCall(
+                    .{ .module = self.module.key, .expr = cond },
+                    self.worker_layout.worker,
+                ) orelse break :blk null;
+                const resolved = self.parent.resolved_workers.items[@intFromEnum(direct.worker)];
+                if (!resolvedWorkerIsListMapCanReuseWrapper(resolved)) break :blk null;
+                break :blk call.args;
+            },
+            .pending,
+            .numeral,
+            .str_from_quote,
+            .str_segment,
+            .str,
+            .bytes_literal,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .list,
+            .empty_list,
+            .tuple,
+            .match_,
+            .if_,
+            .record,
+            .empty_record,
+            .tag,
+            .nominal,
+            .zero_argument_tag,
+            .closure,
+            .lambda,
+            .binop,
+            .unary_minus,
+            .unary_not,
+            .field_access,
+            .dispatch_call,
+            .interpolation,
+            .structural_eq,
+            .structural_hash,
+            .method_eq,
+            .type_dispatch_call,
+            .tuple_access,
+            .runtime_error,
+            .crash,
+            .dbg,
+            .expect_err,
+            .expect,
+            .ellipsis,
+            .anno_only,
+            .break_,
+            .return_,
+            .for_,
+            .hosted_lambda,
+            => null,
+        };
     }
 
     fn matchConditionRep(
@@ -20089,7 +20215,7 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("list expression contextual representation was not list-shaped");
 
         const elem_ty = constListElemType(self.module, list_ty);
-        const target_elem_rep = self.requiredSingleChild(list_rep, .list_elem).rep;
+        const target_elem_rep = self.repQuery().requiredSingleChild(list_rep, .list_elem).rep;
         const source_elem_rep = self.repForType(elem_ty);
         const target_elem_desc_local = try self.reserveDescriptorLocalForRep(target_elem_rep);
         if (target_elem_desc_local) |elem_desc_local| {
@@ -20141,11 +20267,11 @@ const ProcBodyBuilder = struct {
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
         return switch (rep.kind) {
             .tuple => try self.lowerExprsAsStructIntoWithReps(target, rep_id, items, self.parent.plan.childSlice(rep.children), next),
-            .alias => try self.lowerTupleRepInto(target, self.requiredSingleChild(rep_id, .alias_backing).rep, items, next),
+            .alias => try self.lowerTupleRepInto(target, self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep, items, next),
             .nominal => |kind| switch (kind) {
                 .transparent,
                 .builtin_other,
-                => try self.lowerTupleRepInto(target, self.requiredSingleChild(rep_id, .nominal_backing).rep, items, next),
+                => try self.lowerTupleRepInto(target, self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep, items, next),
                 .opaque_nominal => boxyLowerInvariant("opaque nominal tuple expression reached boxy lowering"),
             },
             .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("tuple expression checked type did not have a boxy tuple representation"),
@@ -20162,11 +20288,11 @@ const ProcBodyBuilder = struct {
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
         return switch (rep.kind) {
             .tuple => try self.lowerExprsAsStructIntoWithReps(target, rep_id, items, self.parent.plan.childSlice(rep.children), next),
-            .alias => try self.lowerTupleRepInto(target, self.requiredSingleChild(rep_id, .alias_backing).rep, items, next),
+            .alias => try self.lowerTupleRepInto(target, self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep, items, next),
             .nominal => |kind| switch (kind) {
                 .transparent,
                 .builtin_other,
-                => try self.lowerTupleRepInto(target, self.requiredSingleChild(rep_id, .nominal_backing).rep, items, next),
+                => try self.lowerTupleRepInto(target, self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep, items, next),
                 .opaque_nominal => boxyLowerInvariant("opaque nominal tuple expression reached boxy lowering"),
             },
             .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("tuple expression checked type did not have a boxy tuple representation"),
@@ -20336,7 +20462,7 @@ const ProcBodyBuilder = struct {
             .alias => try self.lowerTagRepInto(
                 target,
                 tag_ty,
-                self.requiredSingleChild(rep_id, .alias_backing).rep,
+                self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep,
                 name,
                 args,
                 next,
@@ -20344,7 +20470,7 @@ const ProcBodyBuilder = struct {
             .nominal => |kind| switch (kind) {
                 .transparent, .builtin_other => {
                     const backing_ty = resolvedNominalBacking(self.module, tag_ty);
-                    const backing_rep = self.requiredSingleChild(rep_id, .nominal_backing).rep;
+                    const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
                     const backing = try self.addFrameLocalForRepWithFreshDescriptor(backing_rep);
                     const assign = try self.assignPlannedCallBoundary(target, backing, rep_id, backing_rep, next);
                     const lowered = try self.lowerTagRepInto(backing, backing_ty, backing_rep, name, args, assign);
@@ -20432,7 +20558,7 @@ const ProcBodyBuilder = struct {
             }
             if (self.isZstLocal(target)) return try self.assignZst(target, next);
             const target_layout = self.parent.result.layouts.getLayout(self.parent.result.store.getLocal(target).layout_idx);
-            const assign_tag = if (target_layout.tag == .box_of_zst) blk: {
+            const assign_tag = if (target_layout.tag == .erased_box) blk: {
                 const target_desc = target_desc_ref orelse
                     boxyLowerInvariant("descriptor-erased tag construction had no target descriptor");
                 break :blk try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
@@ -21069,7 +21195,7 @@ const ProcBodyBuilder = struct {
 
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
-                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
+                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
                 .nominal => {
                     for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
                         if (substitution.formal_rep == backing_rep) return substitution.actual_rep;
@@ -21345,10 +21471,11 @@ const ProcBodyBuilder = struct {
         record_expr: checked.CheckedExprId,
         record_ty: checked.CheckedTypeId,
         expr_fields: []const checked.CheckedRecordExprField,
+        unset_fields: []const check.CanonicalNames.RecordFieldLabelId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const rep_id = self.repForType(record_ty);
-        return try self.lowerRecordRepInto(target, record_expr, rep_id, expr_fields, null, next);
+        return try self.lowerRecordRepInto(target, record_expr, rep_id, expr_fields, unset_fields, null, next);
     }
 
     fn lowerEmptyRecordInto(
@@ -21362,7 +21489,7 @@ const ProcBodyBuilder = struct {
         if (self.parent.plan.representations.items[@intFromEnum(rep_id)].kind == .empty_record) {
             return try self.assignZst(target, next);
         }
-        return try self.lowerRecordRepInto(target, record_expr, rep_id, &.{}, null, next);
+        return try self.lowerRecordRepInto(target, record_expr, rep_id, &.{}, &.{}, null, next);
     }
 
     const RecordExtension = struct {
@@ -21376,6 +21503,7 @@ const ProcBodyBuilder = struct {
         record_expr: checked.CheckedExprId,
         rep_id: Plan.TypeRepId,
         expr_fields: []const checked.CheckedRecordExprField,
+        unset_fields: []const check.CanonicalNames.RecordFieldLabelId,
         extension: ?RecordExtension,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
@@ -21383,18 +21511,18 @@ const ProcBodyBuilder = struct {
         switch (rep.kind) {
             .record,
             .record_unbound,
-            => return try self.lowerRecordPayloadInto(target, record_expr, rep_id, rep, expr_fields, extension, next),
-            .dynamic => return try self.lowerDynamicRecordInto(target, record_expr, rep_id, rep, expr_fields, extension, next),
-            .alias => return try self.lowerRecordRepInto(target, record_expr, self.requiredSingleChild(rep_id, .alias_backing).rep, expr_fields, extension, next),
+            => return try self.lowerRecordPayloadInto(target, record_expr, rep_id, rep, expr_fields, unset_fields, extension, next),
+            .dynamic => return try self.lowerDynamicRecordInto(target, record_expr, rep_id, rep, expr_fields, unset_fields, extension, next),
+            .alias => return try self.lowerRecordRepInto(target, record_expr, self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep, expr_fields, unset_fields, extension, next),
             .nominal => |kind| switch (kind) {
                 .transparent,
                 .opaque_nominal,
                 .builtin_other,
                 => {
-                    const backing = self.requiredSingleChild(rep_id, .nominal_backing);
+                    const backing = self.repQuery().requiredSingleChild(rep_id, .nominal_backing);
                     const backing_local = try self.addFrameLocalForRep(backing.rep);
                     const assign = try self.assignRepresentationBoundary(target, backing_local, rep_id, backing.rep, next);
-                    return try self.lowerRecordRepInto(backing_local, record_expr, backing.rep, expr_fields, extension, assign);
+                    return try self.lowerRecordRepInto(backing_local, record_expr, backing.rep, expr_fields, unset_fields, extension, assign);
                 },
             },
             .in_progress, .primitive, .bool_tag_union, .erased_callable, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("record expression checked type did not have a boxy record representation"),
@@ -21408,6 +21536,7 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
         rep: Plan.TypeRepresentation,
         expr_fields: []const checked.CheckedRecordExprField,
+        unset_fields: []const check.CanonicalNames.RecordFieldLabelId,
         extension: ?RecordExtension,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
@@ -21438,6 +21567,9 @@ const ProcBodyBuilder = struct {
         defer self.parent.allocator.free(source_field_kinds);
         const field_sources = try self.parent.allocator.alloc(RecordPayloadFieldSource, field_count);
         defer self.parent.allocator.free(field_sources);
+        const unset_matched = try self.parent.allocator.alloc(bool, unset_fields.len);
+        defer self.parent.allocator.free(unset_matched);
+        @memset(unset_matched, false);
 
         var layout_index: usize = 0;
         const rep_field_view = procedureModuleById(self.parent.modules, rep.source_type.module);
@@ -21467,6 +21599,23 @@ const ProcBodyBuilder = struct {
                         source_field_target_reps[source_index] = child.rep;
                         source_field_kinds[source_index] = child.record_field_kind.tag;
                         field_sources[layout_index] = .expr;
+                    } else if (self.recordUnsetFieldIndex(unset_fields, rep_field_view, label)) |unset_index| {
+                        // An UNSET field (`label: _`) constructs the slot's
+                        // Missing tag even under an update—never copied from
+                        // the extension (design.md "In Progress: Unsetting an
+                        // Optional Field").
+                        if (child.record_field_kind.tag != .optional) {
+                            boxyLowerInvariant("record expression unset field was not optional after checking");
+                        }
+                        const local = try self.addFrameLocal(field_layout);
+                        field_locals[layout_index] = local;
+                        descriptor_fields[layout_index] = .{
+                            .local = local,
+                            .target_rep = child.rep,
+                            .source_rep = child.rep,
+                        };
+                        field_sources[layout_index] = .{ .missing_optional = child.rep };
+                        unset_matched[unset_index] = true;
                     } else if (extension) |ext| {
                         const local = try self.addFrameLocal(field_layout);
                         field_locals[layout_index] = local;
@@ -21523,6 +21672,11 @@ const ProcBodyBuilder = struct {
         for (source_field_locals) |maybe_local| {
             if (maybe_local == null) {
                 boxyLowerInvariant("record expression had a field outside its checked type representation");
+            }
+        }
+        for (unset_matched) |matched| {
+            if (!matched) {
+                boxyLowerInvariant("record expression had an unset field outside its checked type representation");
             }
         }
 
@@ -21614,7 +21768,7 @@ const ProcBodyBuilder = struct {
     ) ?checked.CheckedFieldDefault {
         for (self.module.checked_bodies.record_omitted_defaults) |entry| {
             if (entry.expr != record_expr) continue;
-            if (self.recordFieldNameMatches(self.module, entry.field_name, field_view, field_name)) {
+            if (Plan.recordFieldNameMatches(viewNames(self.module), entry.field_name, viewNames(field_view), field_name)) {
                 return entry.default;
             }
         }
@@ -21673,6 +21827,9 @@ const ProcBodyBuilder = struct {
         field_type: Plan.CheckedTypeIdentity,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        // Per-specialization materialization (design.md "Defaulted Fields"):
+        // lower the declaring module's archived checked default expression
+        // into the omitted field's slot—no archived constant, no root.
         const origin = default.origin() orelse
             boxyLowerInvariant("defaulted record field carried no declaring module identity");
         const origin_hash = self.module.canonical_names.moduleIdentityBytes(origin);
@@ -21680,15 +21837,64 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("defaulted record field's declaring module was absent from boxy lowering");
         const default_expr = declaring_module.checked_bodies.defaultExpr(default.expr_node) orelse
             boxyLowerInvariant("defaulted record field's expression was not archived");
-        const root = declaring_module.compile_time_roots.lookupFieldDefaultRootByExpr(default_expr) orelse
-            boxyLowerInvariant("defaulted record field's expression had no compile-time root");
-        const node = switch (root.payload) {
-            .const_node => |node| node,
-            .pending => boxyLowerInvariant("pending field-default root reached runtime boxy lowering"),
-            .fn_value, .discarded, .expect => boxyLowerInvariant("field-default root did not contain constant data"),
-        };
-        const type_module = procedureModuleById(self.parent.modules, field_type.module);
-        return try self.restoreConstNodeInto(target, declaring_module, type_module, node, field_type.ty, next);
+        const default_ty = declaring_module.checked_bodies.expr(default_expr).ty;
+        const expr_rep = self.repForModuleType(declaring_module, default_ty);
+        const field_rep = self.repForTypeRef(field_type);
+        const value_local = try self.addFrameLocalForRep(expr_rep);
+        const assign = try self.assignRepresentationBoundaryConsumingSource(target, value_local, field_rep, expr_rep, next);
+        return try self.lowerModuleExprInto(declaring_module, value_local, default_expr, assign);
+    }
+
+    /// Lower a closed checked expression that belongs to `expr_module` into
+    /// a local of this procedure: a scoped module-context swap, the boxy
+    /// mirror of monotype lowering's view swap. The per-lambda contextual
+    /// rep mapping is neutralized for the duration—its pattern ids are
+    /// meaningless against the swapped module's stores, and a closed
+    /// expression has no lambda context.
+    ///
+    /// Binder state is swapped to fresh empty arrays for the duration
+    /// (`ensureBinderLocals` re-sizes them lazily against the swapped
+    /// module), mirroring `lowerRuntimeCallableEvalExprInto`. This is
+    /// required even when `expr_module` is the current module: the caller's
+    /// binder arrays index the caller's pattern binders, and boxy binder
+    /// slots are write-once, so a second materialization of the same closed
+    /// expression in one procedure body must not see the first's bindings.
+    /// Saving to stack locals lets nested materializations (a default whose
+    /// expression constructs another defaulted nominal) stack naturally.
+    fn lowerModuleExprInto(
+        self: *ProcBodyBuilder,
+        expr_module: ProcedureModuleView,
+        target: LIR.LocalId,
+        expr_id: checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const previous_module = self.module;
+        const previous_binder_locals = self.binder_locals;
+        const previous_binder_reps = self.binder_reps;
+        const previous_lambda_arg_patterns = self.lambda_arg_patterns;
+        const previous_lambda_arg_binding_locals = self.lambda_arg_binding_locals;
+        const previous_lambda_arg_worker_reps = self.lambda_arg_worker_reps;
+        const previous_current_lambda = self.current_lambda;
+
+        self.module = expr_module;
+        self.binder_locals = &.{};
+        self.binder_reps = &.{};
+        self.lambda_arg_patterns = &.{};
+        self.lambda_arg_binding_locals = &.{};
+        self.lambda_arg_worker_reps = &.{};
+        self.current_lambda = null;
+        defer {
+            self.parent.allocator.free(self.binder_reps);
+            self.parent.allocator.free(self.binder_locals);
+            self.module = previous_module;
+            self.binder_locals = previous_binder_locals;
+            self.binder_reps = previous_binder_reps;
+            self.lambda_arg_patterns = previous_lambda_arg_patterns;
+            self.lambda_arg_binding_locals = previous_lambda_arg_binding_locals;
+            self.lambda_arg_worker_reps = previous_lambda_arg_worker_reps;
+            self.current_lambda = previous_current_lambda;
+        }
+        return try self.lowerExprInto(target, expr_id, next);
     }
 
     fn moduleForIdentityHash(
@@ -21715,6 +21921,7 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
         rep: Plan.TypeRepresentation,
         expr_fields: []const checked.CheckedRecordExprField,
+        unset_fields: []const check.CanonicalNames.RecordFieldLabelId,
         extension: ?RecordExtension,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
@@ -21738,6 +21945,7 @@ const ProcBodyBuilder = struct {
             rep_id,
             rep,
             expr_fields,
+            unset_fields,
             extension,
             try self.prependOptionalDescriptorMaterialization(payload_desc_info.materialize, assign_box),
         );
@@ -21755,13 +21963,13 @@ const ProcBodyBuilder = struct {
             const ext_expr = self.module.checked_bodies.expr(ext);
             const ext_rep = self.repForType(ext_expr.ty);
             const ext_local = try self.addFrameLocalForRep(ext_rep);
-            const continuation = try self.lowerRecordRepInto(target, record_expr, self.repForType(record_ty), record.fields, .{
+            const continuation = try self.lowerRecordRepInto(target, record_expr, self.repForType(record_ty), record.fields, record.unsets, .{
                 .local = ext_local,
                 .rep = ext_rep,
             }, next);
             return try self.lowerExprInto(ext_local, ext, continuation);
         }
-        return try self.lowerRecordInto(target, record_expr, record_ty, record.fields, next);
+        return try self.lowerRecordInto(target, record_expr, record_ty, record.fields, record.unsets, next);
     }
 
     fn reserveBlockBindings(self: *ProcBodyBuilder, statements: []const checked.CheckedStatementId) Allocator.Error!void {
@@ -22189,11 +22397,11 @@ const ProcBodyBuilder = struct {
                 const source_desc = try self.descriptorRefForSourceLocalRep(source, source_rep);
                 const target_desc_info = try self.storageDescriptorForRepIfNeeded(record_rep);
                 // A `.dynamic`-rep record reports no static storage descriptor, but
-                // when its unboxed payload carries an erased `box_of_zst` the value
+                // when its unboxed payload carries an `erased_box` the value
                 // must be reference-counted through a descriptor. The unboxed payload
                 // has the box's payload shape, so reuse the source box's descriptor.
                 const payload_desc: ?LIR.BoxyDescRef = target_desc_info.desc orelse
-                    if (try self.layoutContainsBoxOfZst(payload_layout)) source_desc else null;
+                    if (self.repContainsDynamicStorage(record_rep)) source_desc else null;
                 if (payload_desc) |desc| {
                     self.parent.result.store.setLocalBoxyDesc(payload, desc);
                 }
@@ -22615,7 +22823,7 @@ const ProcBodyBuilder = struct {
             },
             .alias => return try self.lowerAppliedTagPatternRepThen(
                 tag_ty,
-                self.requiredSingleChild(rep_id, .alias_backing).rep,
+                self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep,
                 name,
                 args,
                 source,
@@ -22626,7 +22834,7 @@ const ProcBodyBuilder = struct {
             .nominal => |kind| switch (kind) {
                 .transparent, .builtin_other => {
                     const backing_ty = resolvedNominalBacking(self.module, tag_ty);
-                    const backing_rep = self.requiredSingleChild(rep_id, .nominal_backing).rep;
+                    const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
                     return try self.lowerAppliedTagPatternRepThen(backing_ty, backing_rep, name, args, source, on_match, miss, remaps);
                 },
                 .opaque_nominal => boxyLowerInvariant("opaque nominal tag match pattern reached boxy lowering"),
@@ -23090,7 +23298,7 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const operand = try self.addFrameLocal(.u64);
-        const subtract = try self.assignBinaryLowLevel(target, .num_minus, len_local, operand, next);
+        const subtract = try self.assignBinaryLowLevel(target, .num_int_sub_crash_on_overflow, len_local, operand, next);
         return try self.assignU64Literal(operand, value, subtract);
     }
 
@@ -24398,14 +24606,14 @@ const ProcBodyBuilder = struct {
             => return try self.lowerBoxBoundaryLowLevelInto(target, result_ty, op, args, next),
             .box_unbox_borrowed => boxyLowerInvariant("ARC-only Box.unbox variant reached boxy lowering"),
             .list_map_can_reuse => return try self.lowerListMapCanReuseInto(target, args, next),
-            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_plus_wrap, .num_plus_checked, .num_minus, .num_minus_wrap, .num_minus_checked, .num_times, .num_times_wrap, .num_times_checked, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
+            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_release_excess_capacity, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
         }
         try self.markLocalDescriptorForType(target, result_ty);
 
         const lowered = try self.lowerExprsToTemps(args);
         defer self.parent.allocator.free(lowered);
         const lowered_op = if (lowered.len > 0)
-            CheckedArithmetic.checkedOp(op, self.parent.result.store.getLocal(lowered[0]).layout_idx) orelse op
+            CheckedArithmetic.lowerOp(op, self.parent.result.store.getLocal(lowered[0]).layout_idx)
         else
             op;
         const result_next = if (op == .list_sublist and lowered.len != 0)
@@ -24417,7 +24625,7 @@ const ProcBodyBuilder = struct {
         // A generalized worker can represent that result with erased payload
         // storage, so compute the builtin into its concrete ABI and cross the
         // explicit descriptor-guided representation boundary afterwards.
-        if (op.numericParseSpec()) |parse_spec| {
+        if (base.numeric_conversion.getNumericParseSpec(op)) |parse_spec| {
             const result_rep = self.repForType(result_ty);
             const number_layout = numericParsePayloadLayout(parse_spec);
             const concrete_layout = try self.parent.result.layouts.putTagUnion(&.{ .zst, number_layout });
@@ -24548,7 +24756,7 @@ const ProcBodyBuilder = struct {
         return continuation;
     }
 
-    fn numericParsePayloadLayout(spec: base.LowLevel.NumericParseSpec) layout.Idx {
+    fn numericParsePayloadLayout(spec: base.numeric_conversion.NumericParseSpec) layout.Idx {
         return switch (spec) {
             .int => |int| switch (int.width_bytes) {
                 1 => if (int.signed) .i8 else .u8,
@@ -24680,7 +24888,7 @@ const ProcBodyBuilder = struct {
                         return assign;
                     },
                     .box_unbox_borrowed => boxyLowerInvariant("ARC-only Box.unbox variant reached boxy lowering"),
-                    .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_plus_wrap, .num_plus_checked, .num_minus, .num_minus_wrap, .num_minus_checked, .num_times, .num_times_wrap, .num_times_checked, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
+                    .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_release_excess_capacity, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
                 }
             }
             return try self.assignLocal(target, source, next);
@@ -24710,7 +24918,7 @@ const ProcBodyBuilder = struct {
                     return try self.assignUnaryLowLevel(target, .box_unbox, source, next);
                 }
             },
-            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_plus_wrap, .num_plus_checked, .num_minus, .num_minus_wrap, .num_minus_checked, .num_times, .num_times_wrap, .num_times_checked, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
+            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_release_excess_capacity, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
         }
 
         boxyLowerInvariant("Box boundary low-level operation required descriptor-backed box adaptation lowering");
@@ -24760,7 +24968,7 @@ const ProcBodyBuilder = struct {
         const list_expr = self.module.checked_bodies.expr(args[0]);
         const list_rep = self.listRepForBoundary(self.repForType(list_expr.ty)) orelse
             boxyLowerInvariant("list_map_can_reuse input did not have a list representation");
-        const in_elem_rep = self.requiredSingleChild(list_rep, .list_elem).rep;
+        const in_elem_rep = self.repQuery().requiredSingleChild(list_rep, .list_elem).rep;
         const list_layout_idx = self.workerRuntimeLayoutForType(list_expr.ty).layoutIdx();
         const list_layout = self.parent.result.layouts.getLayout(list_layout_idx);
         if (list_layout.tag != .list) return none;
@@ -24985,7 +25193,7 @@ const ProcBodyBuilder = struct {
         if (dispatcher_arg_index) |raw_index| {
             const index: usize = @intCast(raw_index);
             const dispatcher_arg_rep = operand_arg_reps[index];
-            const descriptor_rep = self.descriptorArgumentIdentityRep(dispatcher_arg_rep);
+            const descriptor_rep = self.repQuery().descriptorArgumentIdentityRep(dispatcher_arg_rep);
             const descriptor_source_type = self.parent.plan.representations.items[@intFromEnum(descriptor_rep)].source_type;
             for (pending.items) |*arg| {
                 if (owner_descriptor_sources.get(arg.worker_desc) == null) continue;
@@ -25046,7 +25254,7 @@ const ProcBodyBuilder = struct {
 
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
         if (rep.descriptor) |desc| {
-            const identity_rep = self.descriptorArgumentIdentityRep(rep_id);
+            const identity_rep = self.repQuery().descriptorArgumentIdentityRep(rep_id);
             const identity_desc = self.parent.plan.representations.items[@intFromEnum(identity_rep)].descriptor orelse desc;
             const desc_entry = try seen_descs.getOrPut(identity_desc);
             if (!desc_entry.found_existing) {
@@ -25077,7 +25285,7 @@ const ProcBodyBuilder = struct {
 
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
         if (rep.descriptor) |desc| {
-            const identity_rep = self.descriptorArgumentIdentityRep(rep_id);
+            const identity_rep = self.repQuery().descriptorArgumentIdentityRep(rep_id);
             const identity_desc = self.parent.plan.representations.items[@intFromEnum(identity_rep)].descriptor orelse desc;
             const desc_entry = try seen_descs.getOrPut(identity_desc);
             if (!desc_entry.found_existing) {
@@ -25125,14 +25333,14 @@ const ProcBodyBuilder = struct {
         const call_rep = self.parent.plan.representations.items[@intFromEnum(call_rep_id)];
 
         if (worker_rep.descriptor) |worker_desc| {
-            const worker_identity = self.descriptorArgumentIdentityRep(worker_rep_id);
+            const worker_identity = self.repQuery().descriptorArgumentIdentityRep(worker_rep_id);
             const identity_entry = try seen_descriptor_reps.getOrPut(worker_identity);
             if (!identity_entry.found_existing) {
                 if (next_param.* >= params.len or params[next_param.*].desc != worker_desc) {
                     boxyLowerInvariant("boxy dictionary call hidden descriptor order disagreed with method descriptor params");
                 }
                 next_param.* += 1;
-                const desc_arg_rep_id = self.descriptorArgumentIdentityRep(call_rep_id);
+                const desc_arg_rep_id = self.repQuery().descriptorArgumentIdentityRep(call_rep_id);
                 const desc_arg_rep = self.parent.plan.representations.items[@intFromEnum(desc_arg_rep_id)];
                 try pending.append(self.parent.allocator, .{
                     .worker_desc = worker_desc,
@@ -25152,7 +25360,7 @@ const ProcBodyBuilder = struct {
         if (call_rep.kind == .empty_tag_union) {
             for (self.parent.plan.childSlice(worker_rep.children)) |worker_child| {
                 if (!Plan.childCarriesRuntimeDescriptor(worker_child.role)) continue;
-                if (!try self.repSubtreeHasDescriptor(worker_child.rep)) continue;
+                if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
                 try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, call_rep_id, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
             }
             return;
@@ -25162,27 +25370,27 @@ const ProcBodyBuilder = struct {
         const call_children = self.parent.plan.childSlice(call_rep.children);
         for (worker_children) |worker_child| {
             if (!Plan.childCarriesRuntimeDescriptor(worker_child.role)) continue;
-            if (!try self.repSubtreeHasDescriptor(worker_child.rep)) continue;
-            if (self.findMatchingChildByRole(call_children, worker_child)) |call_child| {
+            if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
+            if (self.namedQuery().findMatchingChildByRole(call_children, worker_child)) |call_child| {
                 try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
                 continue;
             }
-            if (self.structuralWrapperBackingRep(call_rep_id)) |call_backing| {
+            if (self.repQuery().structuralWrapperBackingRep(call_rep_id)) |call_backing| {
                 const backing_children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(call_backing)].children);
-                if (self.findMatchingChildByRole(backing_children, worker_child)) |call_child| {
+                if (self.namedQuery().findMatchingChildByRole(backing_children, worker_child)) |call_child| {
                     try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
                     continue;
                 }
             }
-            if (try self.findMatchingTagPayloadInRowExtension(call_children, worker_child)) |call_child| {
+            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(call_children, worker_child)) |call_child| {
                 try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
                 continue;
             }
-            if (try self.findMatchingChildBySourceType(call_children, worker_child)) |call_child| {
+            if (try self.repQuery().findMatchingChildBySourceType(call_children, worker_child)) |call_child| {
                 try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
                 continue;
             }
-            if (try self.workerChildCanMatchUnwrappedCallRep(worker_rep_id, worker_child)) {
+            if (try self.repQuery().workerChildCanMatchUnwrappedCallRep(worker_rep_id, worker_child)) {
                 try self.collectDictionaryCallHiddenDescriptorArgs(worker_child.rep, call_rep_id, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps);
                 continue;
             }
@@ -25494,7 +25702,7 @@ const ProcBodyBuilder = struct {
                 .tag_union => descriptor_layout_value,
                 .box => self.parent.result.layouts.getLayout(descriptor_layout_value.getIdx()),
                 .zst => null,
-                .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("boxy descriptor read_path tag had a non-tag payload layout"),
+                .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("boxy descriptor read_path tag had a non-tag payload layout"),
             };
 
             if (tag_layout) |layout_value| {
@@ -25568,7 +25776,7 @@ const ProcBodyBuilder = struct {
                     break :blk layout_idx;
                 },
                 .tuple_elem => |index| self.parent.recordPayloadFieldLayout(payload_layout, index),
-                .box_payload => self.parent.boxPayloadLayout(payload_layout),
+                .box_payload => self.parent.descriptorPayloadLayoutForRep(child.rep),
                 .list_elem => self.parent.listElementLayout(payload_layout),
                 .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
             };
@@ -25646,7 +25854,7 @@ const ProcBodyBuilder = struct {
                     break :blk field_layout;
                 },
                 .tuple_elem => |index| self.parent.recordPayloadFieldLayout(payload_layout, index),
-                .box_payload => self.parent.boxPayloadLayout(payload_layout),
+                .box_payload => self.parent.descriptorPayloadLayoutForRep(child.rep),
                 .list_elem => self.parent.listElementLayout(payload_layout),
                 .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
             };
@@ -26087,8 +26295,8 @@ const ProcBodyBuilder = struct {
 
         const source_layout_value = self.parent.result.layouts.getLayout(source_layout);
         const target_layout_value = self.parent.result.layouts.getLayout(target_layout);
-        const source_is_box = source_layout_value.tag == .box or source_layout_value.tag == .box_of_zst;
-        const target_is_box = target_layout_value.tag == .box or target_layout_value.tag == .box_of_zst;
+        const source_is_box = source_layout_value.tag == .box or source_layout_value.tag == .box_of_zst or source_layout_value.tag == .erased_box;
+        const target_is_box = target_layout_value.tag == .box or target_layout_value.tag == .box_of_zst or target_layout_value.tag == .erased_box;
 
         if (source_is_box and !target_is_box) {
             const source_desc = try self.descriptorRefForSourceLocalRep(source, rep_id);
@@ -26168,7 +26376,7 @@ const ProcBodyBuilder = struct {
                 try self.bindDescriptorIdentityLocalForRep(local_rep, hidden.local, false);
             }
             if (self.directCallHiddenDescriptorUsesCallShape(arg) and self.descriptorStorageRep(arg.worker_rep) != self.descriptorStorageRep(local_rep)) {
-                if (!bind_worker_reps and try self.repSubtreeContainsRep(local_rep, arg.worker_rep)) continue;
+                if (!bind_worker_reps and try self.repQuery().repSubtreeContainsRep(local_rep, arg.worker_rep)) continue;
                 try self.bindDescriptorRequirementLocalForRep(arg.worker_desc, arg.worker_rep, hidden.local, false);
                 if (self.repOwnsDescriptor(arg.worker_rep, arg.worker_desc)) {
                     try self.bindDescriptorIdentityLocalForRep(arg.worker_rep, hidden.local, false);
@@ -26743,7 +26951,7 @@ const ProcBodyBuilder = struct {
                         break :blk field_layout;
                     },
                     .tuple_elem => |index| self.parent.recordPayloadFieldLayout(payload_layout, index),
-                    .box_payload => self.parent.boxPayloadLayout(payload_layout),
+                    .box_payload => self.parent.descriptorPayloadLayoutForRep(child.rep),
                     .list_elem => self.parent.listElementLayout(payload_layout),
                     .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
                 };
@@ -26757,7 +26965,7 @@ const ProcBodyBuilder = struct {
         const tag_layout = switch (layout_value.tag) {
             .tag_union => layout_value,
             .box => self.parent.result.layouts.getLayout(layout_value.getIdx()),
-            .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return false,
+            .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return false,
         };
         if (tag_layout.tag != .tag_union) return false;
 
@@ -27053,7 +27261,7 @@ const ProcBodyBuilder = struct {
                         break :blk field_layout;
                     },
                     .tuple_elem => |index| self.parent.recordPayloadFieldLayout(payload_layout, index),
-                    .box_payload => self.parent.boxPayloadLayout(payload_layout),
+                    .box_payload => self.parent.descriptorTemplatePayloadLayoutForRep(child.rep),
                     .list_elem => self.parent.listElementLayout(payload_layout),
                     .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
                 };
@@ -27094,7 +27302,7 @@ const ProcBodyBuilder = struct {
         const tag_layout = switch (layout_value.tag) {
             .tag_union => layout_value,
             .box => self.parent.result.layouts.getLayout(layout_value.getIdx()),
-            .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return .{},
+            .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return .{},
         };
         if (tag_layout.tag != .tag_union) return .{};
 
@@ -27750,19 +27958,19 @@ const ProcBodyBuilder = struct {
             .empty_tag_union => try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.parent.result.store.insertString("uninhabited value reached Str.inspect") },
             } }),
-            .alias => try self.lowerInspectRepLocalInto(target, source, self.requiredSingleChild(rep_id, .alias_backing).rep, next),
+            .alias => try self.lowerInspectRepLocalInto(target, source, self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep, next),
             .nominal => |kind| switch (kind) {
                 .transparent => if (try self.lowerToInspectMethodInto(target, source, rep_id, next)) |method_call|
                     method_call
                 else if (rep.declared_fields.len != 0)
                     try self.lowerNominalBackingInspectLocalsInto(target, source, rep_id, next)
                 else
-                    try self.lowerInspectRepLocalInto(target, source, self.requiredSingleChild(rep_id, .nominal_backing).rep, next),
+                    try self.lowerInspectRepLocalInto(target, source, self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep, next),
                 .opaque_nominal => if (try self.lowerToInspectMethodInto(target, source, rep_id, next)) |method_call|
                     method_call
                 else
                     try self.assignStringBytesLiteral(target, "<opaque>", next),
-                .builtin_other => try self.lowerInspectRepLocalInto(target, source, self.requiredSingleChild(rep_id, .nominal_backing).rep, next),
+                .builtin_other => try self.lowerInspectRepLocalInto(target, source, self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep, next),
             },
             .record,
             .record_unbound,
@@ -27844,7 +28052,7 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const backing_rep = self.requiredSingleChild(rep_id, .nominal_backing).rep;
+        const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
         const backing = try self.addFrameLocalForRep(backing_rep);
         const inspect = try self.lowerInspectRepLocalInto(target, backing, backing_rep, next);
         return try self.assignRepresentationBoundary(backing, source, backing_rep, rep_id, inspect);
@@ -27860,7 +28068,7 @@ const ProcBodyBuilder = struct {
         if (primitive == .bool) {
             return try self.lowerBoolInspectLocalsInto(target, source, next);
         }
-        const op = primitiveInspectLowLevelOp(primitive);
+        const op = Common.primitiveInspectLowLevelOp(primitive);
         return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = op,
@@ -28070,7 +28278,7 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const payload_rep = self.requiredSingleChild(rep_id, .box_payload).rep;
+        const payload_rep = self.repQuery().requiredSingleChild(rep_id, .box_payload).rep;
         const payload = try self.addFrameLocalForRep(payload_rep);
         const prefix = try self.addFrameLocal(.str);
         const rendered = try self.addFrameLocal(.str);
@@ -28098,7 +28306,7 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const elem_rep = self.requiredSingleChild(rep_id, .list_elem).rep;
+        const elem_rep = self.repQuery().requiredSingleChild(rep_id, .list_elem).rep;
         const len = try self.addFrameLocal(.u64);
         const index = try self.addFrameLocal(.u64);
         const out = try self.addFrameLocal(.str);
@@ -28172,7 +28380,7 @@ const ProcBodyBuilder = struct {
         var continuation = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
         continuation = try self.setLocalInitializeJoinParam(out, next_out, continuation);
         continuation = try self.setLocalInitializeJoinParam(index, next_index, continuation);
-        continuation = try self.assignBinaryLowLevel(next_index, .num_plus, index, one, continuation);
+        continuation = try self.assignBinaryLowLevel(next_index, .num_int_add_crash_on_overflow, index, one, continuation);
         continuation = try self.assignIntLiteral(one, 1, continuation);
         continuation = try self.assignStrConcat(next_out, with_sep, elem_str, continuation);
         continuation = try self.lowerInspectRepLocalInto(elem_str, elem, elem_rep, continuation);
@@ -28500,14 +28708,14 @@ const ProcBodyBuilder = struct {
             .empty_record,
             .empty_tag_union,
             => try self.assignBoolLiteral(target, !negated, next),
-            .alias => try self.lowerEqRepLocalsInto(target, lhs, rhs, self.requiredSingleChild(rep_id, .alias_backing).rep, negated, next),
+            .alias => try self.lowerEqRepLocalsInto(target, lhs, rhs, self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep, negated, next),
             .nominal => |kind| switch (kind) {
                 .transparent => if (rep.declared_fields.len != 0)
                     try self.lowerNominalBackingEqLocalsInto(target, lhs, rhs, rep_id, negated, next)
                 else
-                    try self.lowerEqRepLocalsInto(target, lhs, rhs, self.requiredSingleChild(rep_id, .nominal_backing).rep, negated, next),
+                    try self.lowerEqRepLocalsInto(target, lhs, rhs, self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep, negated, next),
                 .opaque_nominal => try self.lowerBoxyEqRepLocalsInto(target, lhs, rhs, rep_id, negated, next),
-                .builtin_other => try self.lowerEqRepLocalsInto(target, lhs, rhs, self.requiredSingleChild(rep_id, .nominal_backing).rep, negated, next),
+                .builtin_other => try self.lowerEqRepLocalsInto(target, lhs, rhs, self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep, negated, next),
             },
             .record,
             .record_unbound,
@@ -28602,7 +28810,7 @@ const ProcBodyBuilder = struct {
         negated: bool,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const backing_rep = self.requiredSingleChild(rep_id, .nominal_backing).rep;
+        const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
         const backing_layout = self.workerRuntimeLayoutForRep(backing_rep).layoutIdx();
         const lhs_backing = try self.addFrameLocal(backing_layout);
         const rhs_backing = try self.addFrameLocal(backing_layout);
@@ -28998,14 +29206,14 @@ const ProcBodyBuilder = struct {
             .empty_record,
             .empty_tag_union,
             => try self.assignLocal(target, hasher, next),
-            .alias => try self.lowerHashRepLocalsInto(target, value, hasher, self.requiredSingleChild(rep_id, .alias_backing).rep, next),
+            .alias => try self.lowerHashRepLocalsInto(target, value, hasher, self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep, next),
             .nominal => |kind| switch (kind) {
                 .transparent => if (rep.declared_fields.len != 0)
                     try self.lowerNominalBackingHashLocalsInto(target, value, hasher, rep_id, next)
                 else
-                    try self.lowerHashRepLocalsInto(target, value, hasher, self.requiredSingleChild(rep_id, .nominal_backing).rep, next),
+                    try self.lowerHashRepLocalsInto(target, value, hasher, self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep, next),
                 .opaque_nominal => boxyLowerInvariant("opaque nominal structural hash reached boxy lowering before descriptor hash support"),
-                .builtin_other => try self.lowerHashRepLocalsInto(target, value, hasher, self.requiredSingleChild(rep_id, .nominal_backing).rep, next),
+                .builtin_other => try self.lowerHashRepLocalsInto(target, value, hasher, self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep, next),
             },
             .record,
             .record_unbound,
@@ -29023,7 +29231,7 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const backing_rep = self.requiredSingleChild(rep_id, .nominal_backing).rep;
+        const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
         const backing = try self.addFrameLocalForRep(backing_rep);
         const hash = try self.lowerHashRepLocalsInto(target, backing, hasher, backing_rep, next);
         return try self.assignRepresentationBoundary(backing, value, backing_rep, rep_id, hash);
@@ -29037,7 +29245,7 @@ const ProcBodyBuilder = struct {
         primitive: checked.CheckedPrimitive,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const op = hasherWriteOp(primitive);
+        const op = Common.hasherWriteOp(primitive);
         return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = op,
@@ -29678,7 +29886,7 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const list_rep = self.listRepForBoundary(target_rep) orelse
             boxyLowerInvariant("Numeral digit field was not a list representation");
-        const elem_rep = self.requiredSingleChild(list_rep, .list_elem).rep;
+        const elem_rep = self.repQuery().requiredSingleChild(list_rep, .list_elem).rep;
         if (self.workerRuntimeLayoutForRep(elem_rep).layoutIdx() != .u8 or self.localListElemLayout(target) != .u8) {
             boxyLowerInvariant("Numeral digit field was not a List(U8)");
         }
@@ -30055,8 +30263,8 @@ const ProcBodyBuilder = struct {
         // boxed, not reinterpreted; the descriptor records the payload layout.
         const target_layout_value = self.parent.result.layouts.getLayout(target_layout);
         const source_layout_value = self.parent.result.layouts.getLayout(source_layout);
-        const target_is_box = target_layout_value.tag == .box or target_layout_value.tag == .box_of_zst;
-        const source_is_box = source_layout_value.tag == .box or source_layout_value.tag == .box_of_zst;
+        const target_is_box = target_layout_value.tag == .box or target_layout_value.tag == .box_of_zst or target_layout_value.tag == .erased_box;
+        const source_is_box = source_layout_value.tag == .box or source_layout_value.tag == .box_of_zst or source_layout_value.tag == .erased_box;
         const source_is_list = source_layout_value.tag == .list or source_layout_value.tag == .list_of_zst;
         if (target_is_box and !source_is_box and !source_is_list) {
             const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
@@ -30307,11 +30515,11 @@ const ProcBodyBuilder = struct {
         const target_layout = self.workerRuntimeLayoutForRep(target_rep).layoutIdx();
         const source_layout = self.workerRuntimeLayoutForRep(source_rep).layoutIdx();
         const target_is_box = switch (self.parent.result.layouts.getLayout(target_layout).tag) {
-            .box, .box_of_zst => true,
+            .box, .box_of_zst, .erased_box => true,
             .scalar, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => false,
         };
         return target_is_box and switch (self.parent.result.layouts.getLayout(source_layout).tag) {
-            .box, .box_of_zst => true,
+            .box, .box_of_zst, .erased_box => true,
             .scalar, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => false,
         };
     }
@@ -30769,7 +30977,7 @@ const ProcBodyBuilder = struct {
 
         for (params.items) |param| {
             const materialize_source = mapped.get(param.desc) orelse blk: {
-                const identity_param_rep = self.descriptorArgumentIdentityRep(param.rep);
+                const identity_param_rep = self.repQuery().descriptorArgumentIdentityRep(param.rep);
                 if (identity_param_rep != param.rep) {
                     const identity_rep = self.parent.plan.representations.items[@intFromEnum(identity_param_rep)];
                     if (identity_rep.descriptor) |identity_desc| {
@@ -30845,8 +31053,8 @@ const ProcBodyBuilder = struct {
         );
         effective_materialize_rep_id = substitutions.get(function_rep_id) orelse effective_materialize_rep_id;
 
-        const identity_function_rep = self.descriptorArgumentIdentityRep(function_rep_id);
-        const identity_materialize_rep = self.descriptorArgumentIdentityRep(effective_materialize_rep_id);
+        const identity_function_rep = self.repQuery().descriptorArgumentIdentityRep(function_rep_id);
+        const identity_materialize_rep = self.repQuery().descriptorArgumentIdentityRep(effective_materialize_rep_id);
         if (identity_function_rep != function_rep_id or identity_materialize_rep != effective_materialize_rep_id) {
             return try self.collectCallableAdapterDescriptorCaptureSources(
                 identity_function_rep,
@@ -30880,7 +31088,7 @@ const ProcBodyBuilder = struct {
 
         if (materialize_rep.kind == .empty_tag_union) {
             for (self.parent.plan.childSlice(function_rep.children)) |function_child| {
-                if (!try self.repSubtreeHasDescriptor(function_child.rep)) continue;
+                if (!try self.repQuery().repSubtreeHasDescriptor(function_child.rep)) continue;
                 if (!try self.collectCallableAdapterDescriptorCaptureSources(function_child.rep, effective_materialize_rep_id, params, mapped, seen_rep_pairs, substitutions, allow_missing_tag_payloads)) return false;
             }
             return true;
@@ -30905,27 +31113,27 @@ const ProcBodyBuilder = struct {
         const function_children = self.parent.plan.childSlice(function_rep.children);
         const materialize_children = self.parent.plan.childSlice(materialize_rep.children);
         for (function_children) |function_child| {
-            if (!try self.repSubtreeHasDescriptor(function_child.rep)) continue;
-            if (self.findMatchingChildByRole(materialize_children, function_child)) |materialize_child| {
+            if (!try self.repQuery().repSubtreeHasDescriptor(function_child.rep)) continue;
+            if (self.namedQuery().findMatchingChildByRole(materialize_children, function_child)) |materialize_child| {
                 if (!try self.collectCallableAdapterDescriptorCaptureSources(function_child.rep, materialize_child.rep, params, mapped, seen_rep_pairs, substitutions, allow_missing_tag_payloads)) return false;
                 continue;
             }
-            if (self.structuralWrapperBackingRep(effective_materialize_rep_id)) |materialize_backing| {
+            if (self.repQuery().structuralWrapperBackingRep(effective_materialize_rep_id)) |materialize_backing| {
                 const backing_children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(materialize_backing)].children);
-                if (self.findMatchingChildByRole(backing_children, function_child)) |materialize_child| {
+                if (self.namedQuery().findMatchingChildByRole(backing_children, function_child)) |materialize_child| {
                     if (!try self.collectCallableAdapterDescriptorCaptureSources(function_child.rep, materialize_child.rep, params, mapped, seen_rep_pairs, substitutions, allow_missing_tag_payloads)) return false;
                     continue;
                 }
             }
-            if (try self.findMatchingTagPayloadInRowExtension(materialize_children, function_child)) |materialize_child| {
+            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(materialize_children, function_child)) |materialize_child| {
                 if (!try self.collectCallableAdapterDescriptorCaptureSources(function_child.rep, materialize_child.rep, params, mapped, seen_rep_pairs, substitutions, allow_missing_tag_payloads)) return false;
                 continue;
             }
-            if (try self.findMatchingChildBySourceType(materialize_children, function_child)) |materialize_child| {
+            if (try self.repQuery().findMatchingChildBySourceType(materialize_children, function_child)) |materialize_child| {
                 if (!try self.collectCallableAdapterDescriptorCaptureSources(function_child.rep, materialize_child.rep, params, mapped, seen_rep_pairs, substitutions, allow_missing_tag_payloads)) return false;
                 continue;
             }
-            if (try self.workerChildCanMatchUnwrappedCallRep(function_rep_id, function_child)) {
+            if (try self.repQuery().workerChildCanMatchUnwrappedCallRep(function_rep_id, function_child)) {
                 if (!try self.collectCallableAdapterDescriptorCaptureSources(function_child.rep, effective_materialize_rep_id, params, mapped, seen_rep_pairs, substitutions, allow_missing_tag_payloads)) return false;
                 continue;
             }
@@ -30955,11 +31163,11 @@ const ProcBodyBuilder = struct {
         function_rep_id: Plan.TypeRepId,
         materialize_rep_id: Plan.TypeRepId,
     ) Allocator.Error!Plan.TypeRepId {
-        const identity_materialize_rep = self.descriptorArgumentIdentityRep(materialize_rep_id);
+        const identity_materialize_rep = self.repQuery().descriptorArgumentIdentityRep(materialize_rep_id);
         if (try self.descriptorCaptureCanUseMaterializeRep(function_rep_id, identity_materialize_rep)) {
             return identity_materialize_rep;
         }
-        const identity_function_rep = self.descriptorArgumentIdentityRep(function_rep_id);
+        const identity_function_rep = self.repQuery().descriptorArgumentIdentityRep(function_rep_id);
         return if (self.repIsFullyConcrete(identity_function_rep))
             identity_function_rep
         else
@@ -30997,7 +31205,7 @@ const ProcBodyBuilder = struct {
         seen_reps: *collections.DenseMap(Plan.TypeRepId, void),
         substitutions: *collections.DenseMap(Plan.TypeRepId, Plan.TypeRepId),
     ) Allocator.Error!void {
-        const identity_rep = self.descriptorArgumentIdentityRep(rep_id);
+        const identity_rep = self.repQuery().descriptorArgumentIdentityRep(rep_id);
         const entry = try seen_reps.getOrPut(identity_rep);
         if (entry.found_existing) return;
 
@@ -31056,7 +31264,7 @@ const ProcBodyBuilder = struct {
                 .tag_union => descriptor_layout_value,
                 .box => self.parent.result.layouts.getLayout(descriptor_layout_value.getIdx()),
                 .zst => null,
-                .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("boxy callable descriptor read_path tag had a non-tag payload layout"),
+                .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("boxy callable descriptor read_path tag had a non-tag payload layout"),
             };
             if (tag_layout) |layout_value| {
                 if (layout_value.tag != .tag_union) {
@@ -31151,7 +31359,7 @@ const ProcBodyBuilder = struct {
                     break :blk field_layout;
                 },
                 .tuple_elem => |index| self.parent.recordPayloadFieldLayout(payload_layout, index),
-                .box_payload => self.parent.boxPayloadLayout(payload_layout),
+                .box_payload => self.parent.descriptorPayloadLayoutForRep(child.rep),
                 .list_elem => self.parent.listElementLayout(payload_layout),
                 .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
             };
@@ -31233,11 +31441,11 @@ const ProcBodyBuilder = struct {
         desc: Plan.DescriptorRequirementId,
     ) ?Plan.HiddenDescriptorParam {
         const requirement = self.parent.plan.descriptors.items[@intFromEnum(desc)];
-        const identity_rep = self.descriptorArgumentIdentityRep(requirement.rep);
+        const identity_rep = self.repQuery().descriptorArgumentIdentityRep(requirement.rep);
         var identity_match: ?Plan.HiddenDescriptorParam = null;
         for (params) |param| {
             if (param.desc == desc) return param;
-            if (self.descriptorArgumentIdentityRep(param.rep) != identity_rep) continue;
+            if (self.repQuery().descriptorArgumentIdentityRep(param.rep) != identity_rep) continue;
             if (identity_match != null) {
                 boxyLowerInvariant("boxy hidden descriptor ABI contained duplicate parameters for one identity");
             }
@@ -31726,7 +31934,7 @@ const ProcBodyBuilder = struct {
                     break :blk field_layout;
                 },
                 .tuple_elem => |index| self.parent.recordPayloadFieldLayout(payload_layout, index),
-                .box_payload => self.parent.boxPayloadLayout(payload_layout),
+                .box_payload => self.parent.descriptorPayloadLayoutForRep(child.rep),
                 .list_elem => self.parent.listElementLayout(payload_layout),
                 .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext => continue,
             };
@@ -31819,12 +32027,14 @@ const ProcBodyBuilder = struct {
             self.descriptor_local_reps[desc_index] == null or
             self.descriptor_local_reps[desc_index].? == identity_rep)
         {
-            const preserves_bound = self.descriptor_locals[desc_index] == local and
-                self.descriptor_local_reps[desc_index] == identity_rep and
-                self.descriptor_bound[desc_index];
+            const preserves = self.descriptor_locals[desc_index] == local and
+                self.descriptor_local_reps[desc_index] == identity_rep;
+            const preserves_bound = preserves and self.descriptor_bound[desc_index];
+            const preserves_evidence = preserves and self.descriptor_evidence_bound[desc_index];
             self.descriptor_locals[desc_index] = local;
             self.descriptor_local_reps[desc_index] = identity_rep;
             self.descriptor_bound[desc_index] = preserves_bound;
+            self.descriptor_evidence_bound[desc_index] = preserves_evidence;
             return;
         }
 
@@ -31835,6 +32045,7 @@ const ProcBodyBuilder = struct {
                 .rep = identity_rep,
                 .local = local,
                 .bound = existing.local == local and existing.bound,
+                .evidence_bound = existing.local == local and existing.evidence_bound,
             };
             return;
         }
@@ -31843,6 +32054,7 @@ const ProcBodyBuilder = struct {
             .rep = identity_rep,
             .local = local,
             .bound = false,
+            .evidence_bound = false,
         });
     }
 
@@ -31855,10 +32067,12 @@ const ProcBodyBuilder = struct {
         const desc_index = @intFromEnum(desc);
         if (desc_index < self.descriptor_local_reps.len and self.descriptor_local_reps[desc_index] == identity_rep) {
             self.descriptor_bound[desc_index] = true;
+            self.descriptor_evidence_bound[desc_index] = true;
             return;
         }
         if (self.descriptorRepBindingIndex(desc, identity_rep)) |index| {
             self.descriptor_rep_bindings.items[index].bound = true;
+            self.descriptor_rep_bindings.items[index].evidence_bound = true;
             return;
         }
         boxyLowerInvariant("boxy descriptor bound marker had no representation-local binding");
@@ -31970,6 +32184,7 @@ const ProcBodyBuilder = struct {
         switch (a_layout.tag) {
             .scalar => return std.meta.eql(a_layout.getScalar(), b_layout.getScalar()),
             .zst => return true,
+            .erased_box => return true,
             .box, .box_of_zst => {
                 return try self.boundaryLayoutsInterchangeableInner(
                     layouts.getBoxInfo(a_layout).elem_layout_idx,
@@ -32222,12 +32437,12 @@ const ProcBodyBuilder = struct {
                     const target_desc_info = try self.storageDescriptorForRepIfNeeded(identity_target_rep);
                     // A `.dynamic`-rep target reports no static storage descriptor,
                     // but when its unboxed storage layout carries an erased
-                    // `box_of_zst` the value must still be reference-counted through
+                    // `erased_box` the value must still be reference-counted through
                     // a descriptor (a layout-driven concrete RC walk cannot align
                     // the box's allocation). The unboxed storage has the same shape
                     // as the box payload, so reuse the source box's descriptor.
                     var selected_target_desc = target_desc_info;
-                    if (selected_target_desc.desc == null and try self.layoutContainsBoxOfZst(target_layout)) {
+                    if (selected_target_desc.desc == null and self.repContainsDynamicStorage(identity_target_rep)) {
                         selected_target_desc.desc = source_desc;
                     }
                     const resolved_target_desc = self.resultDescriptorForCallTarget(target, selected_target_desc);
@@ -32308,11 +32523,10 @@ const ProcBodyBuilder = struct {
         source_mode: LIR.BoxyTransferMode,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const target_layout = self.parent.result.store.getLocal(target).layout_idx;
         const source_desc = try self.descriptorRefForSourceLocalRep(source, source_rep);
         const target_desc_info = try self.storageDescriptorForRepIfNeeded(target_rep);
         var selected_target_desc = target_desc_info;
-        if (selected_target_desc.desc == null and try self.layoutContainsBoxOfZst(target_layout)) {
+        if (selected_target_desc.desc == null and self.repContainsDynamicStorage(target_rep)) {
             if (self.parent.result.store.getLocal(target).boxy_desc == null) {
                 selected_target_desc.desc = source_desc;
             }
@@ -32439,10 +32653,10 @@ const ProcBodyBuilder = struct {
 
         const source_payload = try self.addFrameLocal(source_payload_layout);
         // The unboxed source payload lives past the field conversions and is then
-        // dropped. When it carries an erased `box_of_zst` it must be
+        // dropped. When it carries an `erased_box` it must be
         // reference-counted through a descriptor, so tag it with the source box's
         // descriptor (which describes exactly this payload shape).
-        const source_payload_desc: ?LIR.BoxyDescRef = if (try self.layoutContainsBoxOfZst(source_payload_layout))
+        const source_payload_desc: ?LIR.BoxyDescRef = if (self.repContainsDynamicStorage(source_record_rep))
             try self.descriptorRefForSourceLocalRep(source, source_rep)
         else
             null;
@@ -32588,7 +32802,7 @@ const ProcBodyBuilder = struct {
         const boxed_source_layout = self.workerRuntimeLayoutForRep(source_record_rep).layoutIdx();
         const boxed_source_layout_value = self.parent.result.layouts.getLayout(boxed_source_layout);
         const source_backing_is_box = switch (boxed_source_layout_value.tag) {
-            .box, .box_of_zst => true,
+            .box, .box_of_zst, .erased_box => true,
             .scalar, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => false,
         };
         // A plan-dynamic record whose backing is concrete at this site (fully
@@ -32732,8 +32946,8 @@ const ProcBodyBuilder = struct {
         const source_layout_value = self.parent.result.layouts.getLayout(source_layout);
         if (!layoutIsList(target_layout_value) or !layoutIsList(source_layout_value)) return null;
 
-        const target_elem = self.requiredSingleChild(target_list_rep, .list_elem);
-        const source_elem = self.requiredSingleChild(source_list_rep, .list_elem);
+        const target_elem = self.repQuery().requiredSingleChild(target_list_rep, .list_elem);
+        const source_elem = self.repQuery().requiredSingleChild(source_list_rep, .list_elem);
         var target_elem_desc_local = try self.reserveDescriptorLocalForRep(target_elem.rep);
         if (target_elem_desc_local == null and
             self.parent.layoutNeedsNestedBoxyDesc(self.parent.listElementLayout(target_layout)))
@@ -32908,7 +33122,7 @@ const ProcBodyBuilder = struct {
         }
         continuation = try self.assignBinaryLowLevel(source_elem, .list_get_unsafe, source, index, continuation);
         continuation = try self.prependOptionalDescriptorMaterialization(source_elem_desc_info.materialize, continuation);
-        continuation = try self.assignBinaryLowLevel(next_index, .num_plus, index, one, continuation);
+        continuation = try self.assignBinaryLowLevel(next_index, .num_int_add_crash_on_overflow, index, one, continuation);
         return try self.assignU64Literal(one, 1, continuation);
     }
 
@@ -33133,7 +33347,7 @@ const ProcBodyBuilder = struct {
                     if (!self.parent.result.layouts.isZeroSized(self.parent.result.layouts.getLayout(payload_layout))) return null;
                 }
             },
-            .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return null,
+            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return null,
         }
 
         const source_tag_count = self.checkedTagUnionCountForBoundary(source_rep) orelse return null;
@@ -33186,9 +33400,9 @@ const ProcBodyBuilder = struct {
 
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
-                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
+                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
                 .nominal => |kind| switch (kind) {
-                    .transparent, .builtin_other => current = self.requiredSingleChild(current, .nominal_backing).rep,
+                    .transparent, .builtin_other => current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep,
                     .opaque_nominal => return null,
                 },
                 .tag_union => {
@@ -33515,7 +33729,7 @@ const ProcBodyBuilder = struct {
                 // under the target rep's identity, so it is only sound when the
                 // source and target agree on how each payload field is stored.
                 // A worker can return a tag whose payload fields are erased
-                // (`box_of_zst`) while the dynamic target realizes them inline
+                // (`erased_box`) while the dynamic target realizes them inline
                 // (a fully-concrete instantiation, e.g. `Ok(val, input)` at a
                 // call site where both are `Str`). Reusing the erased source
                 // descriptor there would leave the boxed fields where the
@@ -33576,8 +33790,8 @@ const ProcBodyBuilder = struct {
             },
             .list => switch (target.kind) {
                 .list => {
-                    const source_elem = self.requiredSingleChild(identity_source, .list_elem).rep;
-                    const target_elem = self.requiredSingleChild(identity_target, .list_elem).rep;
+                    const source_elem = self.repQuery().requiredSingleChild(identity_source, .list_elem).rep;
+                    const target_elem = self.repQuery().requiredSingleChild(identity_target, .list_elem).rep;
                     return try self.repsCanReuseSourceDescriptorInner(source_elem, target_elem, seen);
                 },
                 .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .record_unbound, .tuple, .nominal, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return false,
@@ -33788,9 +34002,9 @@ const ProcBodyBuilder = struct {
 
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
-                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
+                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
                 .nominal => |kind| switch (kind) {
-                    .transparent, .builtin_other => current = self.requiredSingleChild(current, .nominal_backing).rep,
+                    .transparent, .builtin_other => current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep,
                     .opaque_nominal => return null,
                 },
                 .tag_union, .dynamic => return current,
@@ -34246,7 +34460,7 @@ const ProcBodyBuilder = struct {
             desc = .{ .local = try self.addFrameLocal(.opaque_ptr) };
         } else {
             desc = try self.frameDescriptorRefForRep(rep_id);
-            if (desc == null and try self.layoutContainsBoxOfZst(layout_idx)) {
+            if (desc == null and self.repContainsDynamicStorage(rep_id)) {
                 desc = try self.parent.staticDescRefForRep(identity_rep);
             }
         }
@@ -34292,7 +34506,7 @@ const ProcBodyBuilder = struct {
         {
             const desc_local = try self.addFrameLocal(.opaque_ptr);
             self.parent.result.store.setLocalBoxyDesc(local, .{ .local = desc_local });
-        } else if (try self.layoutContainsBoxOfZst(layout_idx)) {
+        } else if (self.repContainsDynamicStorage(rep_id)) {
             self.parent.result.store.setLocalBoxyDesc(local, try self.parent.staticDescRefForRep(identity_rep));
         } else if (try self.descriptorRefForRepIfNeeded(rep_id)) |desc| {
             switch (desc) {
@@ -34356,7 +34570,7 @@ const ProcBodyBuilder = struct {
             ((exact.contains_dynamic or identity.contains_dynamic) and
                 self.parent.layoutNeedsNestedBoxyDesc(runtime.layoutIdx())))
             .{ .local = try self.addFrameLocal(.opaque_ptr) }
-        else if (try self.layoutContainsBoxOfZst(runtime.layoutIdx()))
+        else if (self.repContainsDynamicStorage(rep_id))
             try self.parent.staticDescRefForRep(identity_rep)
         else
             null;
@@ -34366,11 +34580,48 @@ const ProcBodyBuilder = struct {
             if (desc_ref.localOrNull()) |desc_local| {
                 try self.recordDescriptorLocalTemplate(
                     desc_local,
-                    try self.descriptorMaterializationForExactRep(rep_id),
+                    try self.boundaryDescriptorLocalTemplate(rep_id, desc_local),
                 );
             }
         }
         return local;
+    }
+
+    /// The initializer template for a fresh call-boundary descriptor local.
+    /// When this worker already holds the representation's descriptor
+    /// requirement in an evidence-bound local—a hidden descriptor argument
+    /// (or prologue-rebuilt argument root) carrying the checker's dispatch
+    /// evidence for the value's type—that explicit descriptor is the value's
+    /// runtime type and seeds the boundary local. Only a representation whose
+    /// requirement holds no evidence in this worker falls back to its exact
+    /// static template. Without this precedence a value produced *into* the
+    /// boundary local (a numeric literal in a generic worker) would be
+    /// described by an erased static template even though the caller passed
+    /// the concrete descriptor.
+    ///
+    /// The evidence-bound query (not plain boundness) is load-bearing: a
+    /// binding whose local was merely marked bound by a mid-body descriptor
+    /// write (a call output or set-local transfer in a LATER-executing
+    /// statement, still visible here because lowering runs in reverse
+    /// execution order) must not seed this template—the copy it would emit
+    /// executes before that write and would read an uninitialized descriptor.
+    fn boundaryDescriptorLocalTemplate(
+        self: *ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        desc_local: LIR.LocalId,
+    ) Allocator.Error!DescriptorMaterialization {
+        const identity_rep = self.parent.descriptorIdentityRep(rep_id);
+        const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
+        if (rep.descriptor) |requirement| {
+            if (self.descriptorBindingIsEvidenceBoundForRep(identity_rep)) {
+                if (self.descriptorLocalForRequirementAndRepOrNull(requirement, identity_rep)) |bound| {
+                    if (bound != desc_local) {
+                        return .{ .desc = .{ .local = bound } };
+                    }
+                }
+            }
+        }
+        return try self.descriptorMaterializationForExactRep(rep_id);
     }
 
     fn addFrameLocalForRuntimeRep(
@@ -34475,12 +34726,15 @@ const ProcBodyBuilder = struct {
         errdefer self.parent.allocator.free(self.descriptor_local_reps);
         self.descriptor_bound = try self.parent.allocator.alloc(bool, self.parent.plan.descriptors.items.len);
         errdefer self.parent.allocator.free(self.descriptor_bound);
+        self.descriptor_evidence_bound = try self.parent.allocator.alloc(bool, self.parent.plan.descriptors.items.len);
+        errdefer self.parent.allocator.free(self.descriptor_evidence_bound);
         self.descriptor_slots = try self.parent.allocator.alloc(?LIR.LocalId, self.parent.plan.descriptors.items.len);
         errdefer self.parent.allocator.free(self.descriptor_slots);
         self.descriptor_slot_reps = try self.parent.allocator.alloc(?Plan.TypeRepId, self.parent.plan.descriptors.items.len);
         @memset(self.descriptor_locals, null);
         @memset(self.descriptor_local_reps, null);
         @memset(self.descriptor_bound, false);
+        @memset(self.descriptor_evidence_bound, false);
         @memset(self.descriptor_slots, null);
         @memset(self.descriptor_slot_reps, null);
     }
@@ -34557,6 +34811,32 @@ const ProcBodyBuilder = struct {
         return false;
     }
 
+    /// Like `descriptorBindingIsBoundForRep`, but true only when the binding
+    /// was bound as *evidence* (`markDescriptorRequirementBoundForRep`) rather
+    /// than by a mid-body descriptor write (`markDescriptorLocalBound`).
+    /// Evidence binds are either established in the worker prologue or inside
+    /// a descriptor-binding snapshot window whose initializer is prepended
+    /// above everything lowered while the bind is visible, so an evidence
+    /// binding's local is always initialized at runtime before any code that
+    /// observed the bind executes. Write marks carry no such ordering
+    /// guarantee: lowering visits statements in reverse execution order, so a
+    /// write mark from a later-executing statement stays visible while
+    /// earlier-executing statements are lowered.
+    fn descriptorBindingIsEvidenceBoundForRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) bool {
+        const identity_rep = self.descriptorStorageRep(rep_id);
+        const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
+        const desc = rep.descriptor orelse return true;
+        const desc_index = @intFromEnum(desc);
+        if (desc_index < self.descriptor_evidence_bound.len and self.descriptor_evidence_bound[desc_index]) {
+            if (desc_index >= self.descriptor_local_reps.len) return false;
+            if (self.descriptor_local_reps[desc_index] == identity_rep) return true;
+        }
+        for (self.descriptor_rep_bindings.items) |binding| {
+            if (binding.desc == desc and binding.rep == identity_rep) return binding.evidence_bound;
+        }
+        return false;
+    }
+
     fn dictionaryLocalForRequirementOrNull(
         self: *const ProcBodyBuilder,
         dict: Plan.DictionaryRequirementId,
@@ -34580,6 +34860,8 @@ const ProcBodyBuilder = struct {
         errdefer self.parent.allocator.free(local_reps);
         const bound = try self.parent.allocator.dupe(bool, self.descriptor_bound);
         errdefer self.parent.allocator.free(bound);
+        const evidence_bound = try self.parent.allocator.dupe(bool, self.descriptor_evidence_bound);
+        errdefer self.parent.allocator.free(evidence_bound);
         const slots = try self.parent.allocator.dupe(?LIR.LocalId, self.descriptor_slots);
         errdefer self.parent.allocator.free(slots);
         const slot_reps = try self.parent.allocator.dupe(?Plan.TypeRepId, self.descriptor_slot_reps);
@@ -34589,6 +34871,7 @@ const ProcBodyBuilder = struct {
             .locals = locals,
             .local_reps = local_reps,
             .bound = bound,
+            .evidence_bound = evidence_bound,
             .slots = slots,
             .slot_reps = slot_reps,
             .rep_bindings = rep_bindings,
@@ -34600,6 +34883,7 @@ const ProcBodyBuilder = struct {
         if (snapshot.locals.len != self.descriptor_locals.len or
             snapshot.local_reps.len != self.descriptor_local_reps.len or
             snapshot.bound.len != self.descriptor_bound.len or
+            snapshot.evidence_bound.len != self.descriptor_evidence_bound.len or
             snapshot.slots.len != self.descriptor_slots.len or
             snapshot.slot_reps.len != self.descriptor_slot_reps.len)
         {
@@ -34608,6 +34892,7 @@ const ProcBodyBuilder = struct {
         @memcpy(self.descriptor_locals, snapshot.locals);
         @memcpy(self.descriptor_local_reps, snapshot.local_reps);
         @memcpy(self.descriptor_bound, snapshot.bound);
+        @memcpy(self.descriptor_evidence_bound, snapshot.evidence_bound);
         @memcpy(self.descriptor_slots, snapshot.slots);
         @memcpy(self.descriptor_slot_reps, snapshot.slot_reps);
         self.descriptor_rep_bindings.items.len = snapshot.rep_bindings.len;
@@ -34941,9 +35226,9 @@ const ProcBodyBuilder = struct {
         while (true) {
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
-                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
+                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
                 .nominal => |kind| switch (kind) {
-                    .transparent => current = self.requiredSingleChild(current, .nominal_backing).rep,
+                    .transparent => current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep,
                     .opaque_nominal, .builtin_other => boxyLowerInvariant("irrefutable tag pattern had an opaque nominal representation"),
                 },
                 .tag_union => {
@@ -35205,7 +35490,7 @@ const ProcBodyBuilder = struct {
             },
             .alias => return try self.appliedTagPatternRepCanMiss(
                 tag_ty,
-                self.requiredSingleChild(rep_id, .alias_backing).rep,
+                self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep,
                 name,
                 args,
                 payload_can_miss,
@@ -35213,7 +35498,7 @@ const ProcBodyBuilder = struct {
             .nominal => |kind| switch (kind) {
                 .transparent, .builtin_other => {
                     const backing_ty = resolvedNominalBacking(self.module, tag_ty);
-                    const backing_rep = self.requiredSingleChild(rep_id, .nominal_backing).rep;
+                    const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
                     return try self.appliedTagPatternRepCanMiss(backing_ty, backing_rep, name, args, payload_can_miss);
                 },
                 .opaque_nominal => boxyLowerInvariant("opaque nominal tag match pattern reached boxy miss analysis"),
@@ -35456,7 +35741,7 @@ const ProcBodyBuilder = struct {
                 @intCast(field_index),
             ),
             .zst => .zst,
-            .scalar, .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .tag_union, .ptr => boxyLowerInvariant("aggregate field layout requested for non-struct layout"),
+            .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .tag_union, .ptr => boxyLowerInvariant("aggregate field layout requested for non-struct layout"),
         };
     }
 
@@ -35473,23 +35758,30 @@ const ProcBodyBuilder = struct {
 
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
-                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
+                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
                 .nominal => |kind| switch (kind) {
                     .transparent => {
                         if (rep.declared_fields.len != 0 or
                             rep.nominal_backing_arg_substitutions.len != 0) return current;
-                        current = self.requiredSingleChild(current, .nominal_backing).rep;
+                        current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep;
                     },
                     .opaque_nominal, .builtin_other => return current,
                 },
                 .box => {
-                    const child = self.requiredSingleChild(current, .box_payload).rep;
+                    const child = self.repQuery().requiredSingleChild(current, .box_payload).rep;
                     if (self.workerRuntimeLayoutForRep(current).layoutIdx() != self.workerRuntimeLayoutForRep(child).layoutIdx()) return current;
                     current = child;
                 },
                 .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .tuple, .list, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return current,
             }
         }
+    }
+
+    fn repContainsDynamicStorage(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) bool {
+        const identity_rep = self.descriptorStorageRep(rep_id);
+        const exact = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        const identity = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
+        return exact.contains_dynamic or identity.contains_dynamic;
     }
 
     fn dictionaryIdentityRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
@@ -35504,7 +35796,7 @@ const ProcBodyBuilder = struct {
 
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             if (rep.kind != .alias) return current;
-            current = self.requiredSingleChild(current, .alias_backing).rep;
+            current = self.repQuery().requiredSingleChild(current, .alias_backing).rep;
         }
     }
 
@@ -35517,9 +35809,9 @@ const ProcBodyBuilder = struct {
 
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
-                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
+                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
                 .nominal => |kind| switch (kind) {
-                    .transparent, .builtin_other => current = self.requiredSingleChild(current, .nominal_backing).rep,
+                    .transparent, .builtin_other => current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep,
                     .opaque_nominal => return null,
                 },
                 .tag_union, .dynamic => {
@@ -35540,9 +35832,9 @@ const ProcBodyBuilder = struct {
 
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
-                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
+                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
                 .nominal => |kind| switch (kind) {
-                    .transparent, .builtin_other => current = self.requiredSingleChild(current, .nominal_backing).rep,
+                    .transparent, .builtin_other => current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep,
                     .opaque_nominal => return null,
                 },
                 .list => return current,
@@ -35560,9 +35852,9 @@ const ProcBodyBuilder = struct {
 
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
-                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
+                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
                 .nominal => |kind| switch (kind) {
-                    .transparent, .builtin_other => current = self.requiredSingleChild(current, .nominal_backing).rep,
+                    .transparent, .builtin_other => current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep,
                     .opaque_nominal => return null,
                 },
                 .tuple => return current,
@@ -35591,9 +35883,9 @@ const ProcBodyBuilder = struct {
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             if (rep.declared_fields.len != 0) return current;
             switch (rep.kind) {
-                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
+                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
                 .nominal => |kind| switch (kind) {
-                    .transparent, .builtin_other => current = self.requiredSingleChild(current, .nominal_backing).rep,
+                    .transparent, .builtin_other => current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep,
                     .opaque_nominal => return null,
                 },
                 .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
@@ -35621,9 +35913,9 @@ const ProcBodyBuilder = struct {
 
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
-                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
+                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
                 .nominal => |kind| switch (kind) {
-                    .transparent => current = self.requiredSingleChild(current, .nominal_backing).rep,
+                    .transparent => current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep,
                     .opaque_nominal, .builtin_other => return null,
                 },
                 .erased_callable => {
@@ -35801,7 +36093,7 @@ const ProcBodyBuilder = struct {
 
         if (call_rep.kind == .empty_tag_union) {
             for (self.parent.plan.childSlice(worker_rep.children)) |worker_child| {
-                if (!try self.repSubtreeHasDescriptor(worker_child.rep)) continue;
+                if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
                 if (!try self.collectErasedCaptureDescriptorReps(worker_child.rep, effective_call_rep_id, params, mapped, seen_rep_pairs, substitutions)) return false;
             }
             return true;
@@ -35810,27 +36102,27 @@ const ProcBodyBuilder = struct {
         const worker_children = self.parent.plan.childSlice(worker_rep.children);
         const call_children = self.parent.plan.childSlice(call_rep.children);
         for (worker_children) |worker_child| {
-            if (!try self.repSubtreeHasDescriptor(worker_child.rep)) continue;
-            if (self.findMatchingChildByRole(call_children, worker_child)) |call_child| {
+            if (!try self.repQuery().repSubtreeHasDescriptor(worker_child.rep)) continue;
+            if (self.namedQuery().findMatchingChildByRole(call_children, worker_child)) |call_child| {
                 if (!try self.collectErasedCaptureDescriptorReps(worker_child.rep, call_child.rep, params, mapped, seen_rep_pairs, substitutions)) return false;
                 continue;
             }
-            if (self.structuralWrapperBackingRep(effective_call_rep_id)) |call_backing| {
+            if (self.repQuery().structuralWrapperBackingRep(effective_call_rep_id)) |call_backing| {
                 const backing_children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(call_backing)].children);
-                if (self.findMatchingChildByRole(backing_children, worker_child)) |call_child| {
+                if (self.namedQuery().findMatchingChildByRole(backing_children, worker_child)) |call_child| {
                     if (!try self.collectErasedCaptureDescriptorReps(worker_child.rep, call_child.rep, params, mapped, seen_rep_pairs, substitutions)) return false;
                     continue;
                 }
             }
-            if (try self.findMatchingTagPayloadInRowExtension(call_children, worker_child)) |call_child| {
+            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(call_children, worker_child)) |call_child| {
                 if (!try self.collectErasedCaptureDescriptorReps(worker_child.rep, call_child.rep, params, mapped, seen_rep_pairs, substitutions)) return false;
                 continue;
             }
-            if (try self.findMatchingChildBySourceType(call_children, worker_child)) |call_child| {
+            if (try self.repQuery().findMatchingChildBySourceType(call_children, worker_child)) |call_child| {
                 if (!try self.collectErasedCaptureDescriptorReps(worker_child.rep, call_child.rep, params, mapped, seen_rep_pairs, substitutions)) return false;
                 continue;
             }
-            if (try self.workerChildCanMatchUnwrappedCallRep(worker_rep_id, worker_child)) {
+            if (try self.repQuery().workerChildCanMatchUnwrappedCallRep(worker_rep_id, worker_child)) {
                 if (!try self.collectErasedCaptureDescriptorReps(worker_child.rep, effective_call_rep_id, params, mapped, seen_rep_pairs, substitutions)) return false;
                 continue;
             }
@@ -35943,7 +36235,7 @@ const ProcBodyBuilder = struct {
         try self.recordNominalBackingRepSubstitutions(worker_rep_id, effective_value_rep_id, substitutions);
 
         if (worker_rep.dictionaries.len != 0) {
-            const mapped_rep = self.dictionaryArgumentIdentityRep(effective_value_rep_id);
+            const mapped_rep = self.repQuery().dictionaryArgumentIdentityRep(effective_value_rep_id);
             const put = try mapped.getOrPut(worker_rep_id);
             if (put.found_existing and put.value_ptr.* != mapped_rep) {
                 boxyLowerInvariant("boxy erased callable dictionary mapping assigned one worker rep to two reps");
@@ -35955,7 +36247,7 @@ const ProcBodyBuilder = struct {
 
         if (value_rep.kind == .empty_tag_union) {
             for (self.parent.plan.childSlice(worker_rep.children)) |worker_child| {
-                if (!try self.repSubtreeHasDictionary(worker_child.rep)) continue;
+                if (!try self.repQuery().repSubtreeHasDictionary(worker_child.rep)) continue;
                 try self.collectErasedCaptureDictionaryReps(worker_child.rep, effective_value_rep_id, mapped, seen_rep_pairs, substitutions);
             }
             return;
@@ -35964,27 +36256,27 @@ const ProcBodyBuilder = struct {
         const worker_children = self.parent.plan.childSlice(worker_rep.children);
         const value_children = self.parent.plan.childSlice(value_rep.children);
         for (worker_children) |worker_child| {
-            if (!try self.repSubtreeHasDictionary(worker_child.rep)) continue;
-            if (self.findMatchingChildByRole(value_children, worker_child)) |value_child| {
+            if (!try self.repQuery().repSubtreeHasDictionary(worker_child.rep)) continue;
+            if (self.namedQuery().findMatchingChildByRole(value_children, worker_child)) |value_child| {
                 try self.collectErasedCaptureDictionaryReps(worker_child.rep, value_child.rep, mapped, seen_rep_pairs, substitutions);
                 continue;
             }
-            if (self.structuralWrapperBackingRep(effective_value_rep_id)) |value_backing| {
+            if (self.repQuery().structuralWrapperBackingRep(effective_value_rep_id)) |value_backing| {
                 const backing_children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(value_backing)].children);
-                if (self.findMatchingChildByRole(backing_children, worker_child)) |value_child| {
+                if (self.namedQuery().findMatchingChildByRole(backing_children, worker_child)) |value_child| {
                     try self.collectErasedCaptureDictionaryReps(worker_child.rep, value_child.rep, mapped, seen_rep_pairs, substitutions);
                     continue;
                 }
             }
-            if (try self.findMatchingTagPayloadInRowExtension(value_children, worker_child)) |value_child| {
+            if (try self.namedQuery().findMatchingTagPayloadInRowExtension(value_children, worker_child)) |value_child| {
                 try self.collectErasedCaptureDictionaryReps(worker_child.rep, value_child.rep, mapped, seen_rep_pairs, substitutions);
                 continue;
             }
-            if (try self.findMatchingDictionaryChildBySourceType(value_children, worker_child)) |value_child| {
+            if (try self.repQuery().findMatchingDictionaryChildBySourceType(value_children, worker_child)) |value_child| {
                 try self.collectErasedCaptureDictionaryReps(worker_child.rep, value_child.rep, mapped, seen_rep_pairs, substitutions);
                 continue;
             }
-            if (try self.workerChildCanMatchUnwrappedCallRepForDictionaries(worker_rep_id, worker_child)) {
+            if (try self.repQuery().workerChildCanMatchUnwrappedCallRepForDictionaries(worker_rep_id, worker_child)) {
                 try self.collectErasedCaptureDictionaryReps(worker_child.rep, effective_value_rep_id, mapped, seen_rep_pairs, substitutions);
                 continue;
             }
@@ -35996,296 +36288,6 @@ const ProcBodyBuilder = struct {
         }
     }
 
-    fn repSubtreeHasDescriptor(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!bool {
-        var seen = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
-        defer seen.deinit();
-        return try self.repSubtreeHasDescriptorInner(rep_id, &seen);
-    }
-
-    fn repSubtreeContainsRep(
-        self: *ProcBodyBuilder,
-        root: Plan.TypeRepId,
-        target: Plan.TypeRepId,
-    ) Allocator.Error!bool {
-        var seen = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
-        defer seen.deinit();
-        return try self.repSubtreeContainsRepInner(root, target, &seen);
-    }
-
-    fn repSubtreeContainsRepInner(
-        self: *ProcBodyBuilder,
-        root: Plan.TypeRepId,
-        target: Plan.TypeRepId,
-        seen: *collections.DenseMap(Plan.TypeRepId, void),
-    ) Allocator.Error!bool {
-        if (root == target) return true;
-        const entry = try seen.getOrPut(root);
-        if (entry.found_existing) return false;
-        const rep = self.parent.plan.representations.items[@intFromEnum(root)];
-        for (self.parent.plan.childSlice(rep.children)) |child| {
-            if (try self.repSubtreeContainsRepInner(child.rep, target, seen)) return true;
-        }
-        return false;
-    }
-
-    fn repSubtreeHasDescriptorInner(
-        self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
-        seen: *collections.DenseMap(Plan.TypeRepId, void),
-    ) Allocator.Error!bool {
-        const entry = try seen.getOrPut(rep_id);
-        if (entry.found_existing) return false;
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        if (rep.descriptor != null) return true;
-        for (self.parent.plan.childSlice(rep.children)) |child| {
-            if (try self.repSubtreeHasDescriptorInner(child.rep, seen)) return true;
-        }
-        return false;
-    }
-
-    fn repSubtreeHasDictionary(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!bool {
-        var seen = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
-        defer seen.deinit();
-        return try self.repSubtreeHasDictionaryInner(rep_id, &seen);
-    }
-
-    fn repSubtreeHasDictionaryInner(
-        self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
-        seen: *collections.DenseMap(Plan.TypeRepId, void),
-    ) Allocator.Error!bool {
-        const entry = try seen.getOrPut(rep_id);
-        if (entry.found_existing) return false;
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        if (rep.dictionaries.len != 0) return true;
-        for (self.parent.plan.childSlice(rep.children)) |child| {
-            if (try self.repSubtreeHasDictionaryInner(child.rep, seen)) return true;
-        }
-        return false;
-    }
-
-    fn findMatchingChildByRole(
-        self: *ProcBodyBuilder,
-        children: []const Plan.RepChild,
-        target: Plan.RepChild,
-    ) ?Plan.RepChild {
-        for (children) |child| {
-            if (self.childRolesMatch(target, child)) return child;
-        }
-        return null;
-    }
-
-    fn findMatchingChildBySourceType(
-        self: *ProcBodyBuilder,
-        children: []const Plan.RepChild,
-        target: Plan.RepChild,
-    ) Allocator.Error!?Plan.RepChild {
-        var found: ?Plan.RepChild = null;
-        for (children) |child| {
-            if (!planTypeRefEql(child.source_type, target.source_type)) continue;
-            if (!try self.repSubtreeHasDescriptor(child.rep)) continue;
-            if (found != null) boxyLowerInvariant("boxy erased callable descriptor mapping found ambiguous checked-type children");
-            found = child;
-        }
-        return found;
-    }
-
-    fn findMatchingDictionaryChildBySourceType(
-        self: *ProcBodyBuilder,
-        children: []const Plan.RepChild,
-        target: Plan.RepChild,
-    ) Allocator.Error!?Plan.RepChild {
-        var found: ?Plan.RepChild = null;
-        for (children) |child| {
-            if (!planTypeRefEql(child.source_type, target.source_type)) continue;
-            if (!try self.repSubtreeHasDictionary(child.rep)) continue;
-            if (found != null) boxyLowerInvariant("boxy dictionary call mapping found ambiguous checked-type children");
-            found = child;
-        }
-        return found;
-    }
-
-    fn findMatchingTagPayloadInRowExtension(
-        self: *ProcBodyBuilder,
-        children: []const Plan.RepChild,
-        target: Plan.RepChild,
-    ) Allocator.Error!?Plan.RepChild {
-        switch (target.role) {
-            .tag_payload => {},
-            .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => return null,
-        }
-        var seen = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
-        defer seen.deinit();
-        return try self.findMatchingTagPayloadInRowExtensionInner(children, target, &seen);
-    }
-
-    fn findMatchingTagPayloadInRowExtensionInner(
-        self: *ProcBodyBuilder,
-        children: []const Plan.RepChild,
-        target: Plan.RepChild,
-        seen: *collections.DenseMap(Plan.TypeRepId, void),
-    ) Allocator.Error!?Plan.RepChild {
-        for (children) |child| {
-            switch (child.role) {
-                .tag_ext => {},
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_payload, .list_elem, .box_payload => continue,
-            }
-            if (try self.findMatchingTagPayloadInRep(child.rep, target, seen)) |match| return match;
-        }
-        return null;
-    }
-
-    fn findMatchingTagPayloadInRep(
-        self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
-        target: Plan.RepChild,
-        seen: *collections.DenseMap(Plan.TypeRepId, void),
-    ) Allocator.Error!?Plan.RepChild {
-        const entry = try seen.getOrPut(rep_id);
-        if (entry.found_existing) return null;
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        const children = self.parent.plan.childSlice(rep.children);
-        if (self.findMatchingChildByRole(children, target)) |match| return match;
-        if (self.structuralWrapperBackingRep(rep_id)) |backing_rep| {
-            const backing = self.parent.plan.representations.items[@intFromEnum(backing_rep)];
-            const backing_children = self.parent.plan.childSlice(backing.children);
-            if (self.findMatchingChildByRole(backing_children, target)) |match| return match;
-            if (try self.findMatchingTagPayloadInRowExtensionInner(backing_children, target, seen)) |match| return match;
-        }
-        return try self.findMatchingTagPayloadInRowExtensionInner(children, target, seen);
-    }
-
-    fn childRolesMatch(
-        self: *ProcBodyBuilder,
-        target: Plan.RepChild,
-        candidate: Plan.RepChild,
-    ) bool {
-        return switch (target.role) {
-            .record_field => |target_name| switch (candidate.role) {
-                .record_field => |candidate_name| self.recordFieldNameMatches(
-                    procedureModuleById(self.parent.modules, target.source_type.module),
-                    target_name,
-                    procedureModuleById(self.parent.modules, candidate.source_type.module),
-                    candidate_name,
-                ),
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => false,
-            },
-            .tag_payload => |target_payload| switch (candidate.role) {
-                .tag_payload => |candidate_payload| target_payload.index == candidate_payload.index and
-                    self.tagLabelNameMatches(
-                        target.source_type.module,
-                        target_payload.tag,
-                        candidate.source_type.module,
-                        candidate_payload.tag,
-                    ),
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => false,
-            },
-            .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => std.meta.eql(target.role, candidate.role),
-        };
-    }
-
-    fn tagLabelNameMatches(
-        self: *const ProcBodyBuilder,
-        source_module: checked.ModuleId,
-        source_name: names.TagNameId,
-        target_module: checked.ModuleId,
-        target_name: names.TagNameId,
-    ) bool {
-        const source_view = procedureModuleById(self.parent.modules, source_module);
-        const target_view = procedureModuleById(self.parent.modules, target_module);
-        return std.mem.eql(
-            u8,
-            source_view.canonical_names.tagLabelText(source_name),
-            target_view.canonical_names.tagLabelText(target_name),
-        );
-    }
-
-    fn structuralWrapperBackingRep(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        return switch (rep.kind) {
-            .alias => self.requiredSingleChild(rep_id, .alias_backing).rep,
-            .nominal => |kind| switch (kind) {
-                .transparent => if (rep.declared_fields.len == 0)
-                    self.requiredSingleChild(rep_id, .nominal_backing).rep
-                else
-                    null,
-                .opaque_nominal, .builtin_other => null,
-            },
-            .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .record_unbound, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => null,
-        };
-    }
-
-    fn descriptorArgumentIdentityRep(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
-        var current = rep_id;
-        var depth: u16 = 0;
-        while (true) {
-            if (depth == 1024) boxyLowerInvariant("descriptor argument wrapper chain exceeded boxy lowerer limit");
-            depth += 1;
-            if (self.parent.plan.inspectMethodForRep(current) != null) return current;
-            if (self.parent.plan.representations.items[@intFromEnum(current)].nominal_backing_arg_substitutions.len != 0) return current;
-            current = self.structuralWrapperBackingRep(current) orelse return current;
-        }
-    }
-
-    fn dictionaryArgumentIdentityRep(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
-        // A transparent nominal owns the method namespace its dictionary slots
-        // dispatch through, so only aliases are unwrapped; the nominal identity
-        // is preserved for method resolution.
-        var current = rep_id;
-        var depth: u16 = 0;
-        while (true) {
-            if (depth == 1024) boxyLowerInvariant("dictionary argument wrapper chain exceeded boxy lowerer limit");
-            depth += 1;
-            const rep = self.parent.plan.representations.items[@intFromEnum(current)];
-            if (rep.kind != .alias) return current;
-            current = self.requiredSingleChild(current, .alias_backing).rep;
-        }
-    }
-
-    fn workerChildCanMatchUnwrappedCallRep(
-        self: *ProcBodyBuilder,
-        worker_rep_id: Plan.TypeRepId,
-        worker_child: Plan.RepChild,
-    ) Allocator.Error!bool {
-        const worker_backing = self.structuralWrapperBackingRep(worker_rep_id) orelse return false;
-        return worker_child.rep == worker_backing and !try self.repSubtreeHasDescriptorInOtherChildren(worker_rep_id, worker_child);
-    }
-
-    fn workerChildCanMatchUnwrappedCallRepForDictionaries(
-        self: *ProcBodyBuilder,
-        worker_rep_id: Plan.TypeRepId,
-        worker_child: Plan.RepChild,
-    ) Allocator.Error!bool {
-        const worker_backing = self.structuralWrapperBackingRep(worker_rep_id) orelse return false;
-        return worker_child.rep == worker_backing and !try self.repSubtreeHasDictionaryInOtherChildren(worker_rep_id, worker_child);
-    }
-
-    fn repSubtreeHasDescriptorInOtherChildren(
-        self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
-        selected_child: Plan.RepChild,
-    ) Allocator.Error!bool {
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        for (self.parent.plan.childSlice(rep.children)) |child| {
-            if (child.rep == selected_child.rep and std.meta.eql(child.role, selected_child.role)) continue;
-            if (try self.repSubtreeHasDescriptor(child.rep)) return true;
-        }
-        return false;
-    }
-
-    fn repSubtreeHasDictionaryInOtherChildren(
-        self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
-        selected_child: Plan.RepChild,
-    ) Allocator.Error!bool {
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        for (self.parent.plan.childSlice(rep.children)) |child| {
-            if (child.rep == selected_child.rep and std.meta.eql(child.role, selected_child.role)) continue;
-            if (try self.repSubtreeHasDictionary(child.rep)) return true;
-        }
-        return false;
-    }
-
     fn functionReturnRepForRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
         var current = rep_id;
         var depth: u16 = 0;
@@ -36295,9 +36297,9 @@ const ProcBodyBuilder = struct {
 
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
-                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
+                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
                 .nominal => |kind| switch (kind) {
-                    .transparent => current = self.requiredSingleChild(current, .nominal_backing).rep,
+                    .transparent => current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep,
                     .opaque_nominal, .builtin_other => boxyLowerInvariant("opaque or unsupported nominal reached function return layout lowering"),
                 },
                 .erased_callable => {
@@ -36312,18 +36314,6 @@ const ProcBodyBuilder = struct {
                 .in_progress, .dynamic, .primitive, .bool_tag_union, .record, .record_unbound, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("list_map_can_reuse transform argument is not a function"),
             }
         }
-    }
-
-    fn requiredSingleChild(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId, role: Plan.ChildRole) Plan.RepChild {
-        var found: ?Plan.RepChild = null;
-        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
-        for (self.parent.plan.childSlice(rep.children)) |child| {
-            if (sameChildRole(child.role, role)) {
-                if (found != null) boxyLowerInvariant("representation had duplicate required child role");
-                found = child;
-            }
-        }
-        return found orelse boxyLowerInvariant("representation was missing required child role");
     }
 
     fn requireEmptyRecordExtension(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) void {
@@ -36341,9 +36331,26 @@ const ProcBodyBuilder = struct {
     ) ?usize {
         var found: ?usize = null;
         for (fields, 0..) |field, index| {
-            if (!self.recordFieldNameMatches(self.module, field.label, label_view, label)) continue;
+            if (!Plan.recordFieldNameMatches(viewNames(self.module), field.label, viewNames(label_view), label)) continue;
             if (found != null) {
                 boxyLowerInvariant("record expression contained the same field label more than once");
+            }
+            found = index;
+        }
+        return found;
+    }
+
+    fn recordUnsetFieldIndex(
+        self: *const ProcBodyBuilder,
+        unset_fields: []const check.CanonicalNames.RecordFieldLabelId,
+        label_view: ProcedureModuleView,
+        label: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
+    ) ?usize {
+        var found: ?usize = null;
+        for (unset_fields, 0..) |unset_label, index| {
+            if (!Plan.recordFieldNameMatches(viewNames(self.module), unset_label, viewNames(label_view), label)) continue;
+            if (found != null) {
+                boxyLowerInvariant("record expression contained the same unset field label more than once");
             }
             found = index;
         }
@@ -36363,64 +36370,6 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("record equality field count exceeded LIR field index range");
         }
         return @intCast(count);
-    }
-
-    fn hasherWriteOp(primitive: checked.CheckedPrimitive) LIR.LowLevel {
-        return switch (primitive) {
-            .bool => .hasher_write_bool,
-            .str => .hasher_write_str,
-            .u8 => .hasher_write_u8,
-            .i8 => .hasher_write_i8,
-            .u16 => .hasher_write_u16,
-            .i16 => .hasher_write_i16,
-            .u32 => .hasher_write_u32,
-            .i32 => .hasher_write_i32,
-            .u64 => .hasher_write_u64,
-            .i64 => .hasher_write_i64,
-            .u128 => .hasher_write_u128,
-            .i128 => .hasher_write_i128,
-            .f32 => .hasher_write_f32,
-            .f64 => .hasher_write_f64,
-            .dec => .hasher_write_dec,
-            .u8x16,
-            .i8x16,
-            .u16x8,
-            .i16x8,
-            .u32x4,
-            .i32x4,
-            .u64x2,
-            .i64x2,
-            => .hasher_write_u128,
-        };
-    }
-
-    fn primitiveInspectLowLevelOp(primitive: checked.CheckedPrimitive) LIR.LowLevel {
-        return switch (primitive) {
-            .bool => boxyLowerInvariant("Bool inspect must lower through tag-union inspect"),
-            .str => .str_inspect,
-            .u8 => .u8_to_str,
-            .i8 => .i8_to_str,
-            .u16 => .u16_to_str,
-            .i16 => .i16_to_str,
-            .u32 => .u32_to_str,
-            .i32 => .i32_to_str,
-            .u64 => .u64_to_str,
-            .i64 => .i64_to_str,
-            .u128 => .u128_to_str,
-            .i128 => .i128_to_str,
-            .f32 => .f32_to_str,
-            .f64 => .f64_to_str,
-            .dec => .dec_to_str,
-            .u8x16,
-            .i8x16,
-            .u16x8,
-            .i16x8,
-            .u32x4,
-            .i32x4,
-            .u64x2,
-            .i64x2,
-            => boxyLowerInvariant("SIMD inspect must lower through its explicit Builtin body"),
-        };
     }
 
     const RecordFieldAccessInfo = struct {
@@ -36448,11 +36397,11 @@ const ProcBodyBuilder = struct {
                 .record_unbound,
                 => return current,
                 .dynamic => return if (self.repHasRecordFieldChildrenForBoundary(rep)) current else null,
-                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
+                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
                 .nominal => |kind| switch (kind) {
                     .transparent,
                     .builtin_other,
-                    => current = self.requiredSingleChild(current, .nominal_backing).rep,
+                    => current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep,
                     .opaque_nominal => return null,
                 },
                 .in_progress, .primitive, .bool_tag_union, .erased_callable, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return null,
@@ -36484,7 +36433,7 @@ const ProcBodyBuilder = struct {
         for (self.parent.plan.childSlice(rep.children)) |child| {
             switch (child.role) {
                 .record_field => |source_label| {
-                    if (self.recordFieldNameMatches(source_view, source_label, target_view, target_label)) {
+                    if (Plan.recordFieldNameMatches(viewNames(source_view), source_label, viewNames(target_view), target_label)) {
                         return .{
                             .index = index,
                             .rep = child.rep,
@@ -36533,11 +36482,11 @@ const ProcBodyBuilder = struct {
                     boxyLowerInvariant("record field access receiver did not have known boxy record fields");
                 }
             },
-            .alias => return self.recordFieldAccessInfo(self.requiredSingleChild(record_rep_id, .alias_backing).rep, access_view, field_name),
+            .alias => return self.recordFieldAccessInfo(self.repQuery().requiredSingleChild(record_rep_id, .alias_backing).rep, access_view, field_name),
             .nominal => |kind| switch (kind) {
                 .transparent,
                 .builtin_other,
-                => return self.recordFieldAccessInfo(self.requiredSingleChild(record_rep_id, .nominal_backing).rep, access_view, field_name),
+                => return self.recordFieldAccessInfo(self.repQuery().requiredSingleChild(record_rep_id, .nominal_backing).rep, access_view, field_name),
                 .opaque_nominal => boxyLowerInvariant("opaque nominal record field access reached boxy lowering"),
             },
             .in_progress, .primitive, .bool_tag_union, .erased_callable, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {
@@ -36550,7 +36499,7 @@ const ProcBodyBuilder = struct {
         for (self.parent.plan.childSlice(rep.children)) |child| {
             switch (child.role) {
                 .record_field => |label| {
-                    if (self.recordFieldNameMatches(source_view, label, access_view, field_name)) {
+                    if (Plan.recordFieldNameMatches(viewNames(source_view), label, viewNames(access_view), field_name)) {
                         return .{
                             .record_rep = record_rep_id,
                             .field_idx = index,
@@ -36644,21 +36593,6 @@ const ProcBodyBuilder = struct {
         return false;
     }
 
-    fn recordFieldNameMatches(
-        _: *const ProcBodyBuilder,
-        source_view: ProcedureModuleView,
-        source_name: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
-        target_view: ProcedureModuleView,
-        target_name: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
-    ) bool {
-        if (checked_moduleKeyEqual(source_view.key, target_view.key)) return source_name == target_name;
-        return std.mem.eql(
-            u8,
-            source_view.canonical_names.recordFieldLabelText(source_name),
-            target_view.canonical_names.recordFieldLabelText(target_name),
-        );
-    }
-
     const TagVariantLookup = struct {
         index: u16,
         name: names.TagNameId,
@@ -36680,9 +36614,9 @@ const ProcBodyBuilder = struct {
 
             const rep = self.parent.plan.representations.items[@intFromEnum(current)];
             switch (rep.kind) {
-                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
+                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
                 .nominal => |kind| switch (kind) {
-                    .transparent => current = self.requiredSingleChild(current, .nominal_backing).rep,
+                    .transparent => current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep,
                     .opaque_nominal, .builtin_other => boxyLowerInvariant("opaque or builtin nominal reached iterator tag-variant lookup"),
                 },
                 .tag_union,
@@ -36792,7 +36726,7 @@ const ProcBodyBuilder = struct {
                 break :blk variants.get(@intCast(variant_index)).payload_layout;
             },
             .zst, .scalar => .zst,
-            .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("tag payload operation expected tag-union layout"),
+            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("tag payload operation expected tag-union layout"),
         };
     }
 
@@ -36802,56 +36736,12 @@ const ProcBodyBuilder = struct {
         return switch (list_layout.tag) {
             .list => list_layout.getIdx(),
             .list_of_zst => .zst,
-            .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => boxyLowerInvariant("list expression target was not a list layout"),
+            .scalar, .box, .box_of_zst, .erased_box, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => boxyLowerInvariant("list expression target was not a list layout"),
         };
     }
 
     fn layoutIsBoxyDynamicStorage(self: *const ProcBodyBuilder, layout_idx: layout.Idx) bool {
-        return self.parent.result.layouts.getLayout(layout_idx).tag == .box_of_zst;
-    }
-
-    /// Whether a layout transitively contains an erased `box_of_zst`. Such a box
-    /// carries no static payload shape (its `box_of_zst` alignment is 1), so a
-    /// layout-driven concrete RC walk would decref its allocation with the wrong
-    /// alignment; a value holding one must be reference-counted through its
-    /// runtime descriptor instead.
-    fn layoutContainsBoxOfZst(self: *const ProcBodyBuilder, layout_idx: layout.Idx) Allocator.Error!bool {
-        var seen = std.AutoHashMap(layout.Idx, void).init(self.parent.allocator);
-        defer seen.deinit();
-        return try self.layoutContainsBoxOfZstInner(layout_idx, &seen);
-    }
-
-    fn layoutContainsBoxOfZstInner(
-        self: *const ProcBodyBuilder,
-        layout_idx: layout.Idx,
-        seen: *std.AutoHashMap(layout.Idx, void),
-    ) Allocator.Error!bool {
-        if ((try seen.getOrPut(layout_idx)).found_existing) return false;
-        const layouts = self.parent.result.layouts;
-        const value = layouts.getLayout(layout_idx);
-        return switch (value.tag) {
-            .box_of_zst => true,
-            .box, .list => try self.layoutContainsBoxOfZstInner(value.getIdx(), seen),
-            .list_of_zst => false,
-            .struct_ => blk: {
-                const struct_idx = value.getStruct().idx;
-                const fields = layouts.struct_fields.sliceRange(layouts.getStructData(struct_idx).getFields());
-                var i: u32 = 0;
-                while (i < fields.len) : (i += 1) {
-                    if (try self.layoutContainsBoxOfZstInner(fields.get(i).layout, seen)) break :blk true;
-                }
-                break :blk false;
-            },
-            .tag_union => blk: {
-                const info = layouts.getTagUnionInfo(value);
-                var i: u32 = 0;
-                while (i < info.variants.len) : (i += 1) {
-                    if (try self.layoutContainsBoxOfZstInner(info.variants.get(i).payload_layout, seen)) break :blk true;
-                }
-                break :blk false;
-            },
-            .scalar, .closure, .erased_callable, .zst, .ptr => false,
-        };
+        return self.parent.result.layouts.getLayout(layout_idx).tag == .erased_box;
     }
 
     fn isZstLocal(self: *const ProcBodyBuilder, local: LIR.LocalId) bool {
@@ -37285,6 +37175,11 @@ const ConstPlanBuilder = struct {
     result: *LirProgram.Result,
     by_rep: []?LirProgram.ConstPlanId,
 
+    /// Shared read-only queries over the representation plan.
+    fn repQuery(self: *const ConstPlanBuilder) Plan.RepQuery {
+        return .{ .plan = self.plan, .allocator = self.allocator };
+    }
+
     fn init(
         allocator: Allocator,
         modules: Common.CheckedModules,
@@ -37511,7 +37406,7 @@ const ConstPlanBuilder = struct {
     }
 
     fn constPlanForChild(self: *ConstPlanBuilder, rep_id: Plan.TypeRepId, role: Plan.ChildRole) Allocator.Error!LirProgram.ConstPlanId {
-        return try self.constPlanForRep(self.requiredSingleChild(rep_id, role).rep);
+        return try self.constPlanForRep(self.repQuery().requiredSingleChild(rep_id, role).rep);
     }
 
     const StructPlanKind = enum {
@@ -37598,31 +37493,7 @@ const ConstPlanBuilder = struct {
             .payloads = payloads,
         };
     }
-
-    fn requiredSingleChild(self: *ConstPlanBuilder, rep_id: Plan.TypeRepId, role: Plan.ChildRole) Plan.RepChild {
-        var found: ?Plan.RepChild = null;
-        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
-        for (self.plan.childSlice(rep.children)) |child| {
-            if (sameChildRole(child.role, role)) {
-                if (found != null) boxyLowerInvariant("representation had duplicate required child role");
-                found = child;
-            }
-        }
-        return found orelse boxyLowerInvariant("representation was missing required child role");
-    }
 };
-
-fn sameChildRole(a: Plan.ChildRole, b: Plan.ChildRole) bool {
-    return switch (a) {
-        .alias_backing => b == .alias_backing,
-        .nominal_backing => b == .nominal_backing,
-        .record_ext => b == .record_ext,
-        .tag_ext => b == .tag_ext,
-        .list_elem => b == .list_elem,
-        .box_payload => b == .box_payload,
-        .alias_arg, .nominal_arg, .nominal_padding_field, .record_field, .tuple_elem, .function_arg, .function_ret, .tag_payload => false,
-    };
-}
 
 fn planTypeRefEql(a: Plan.CheckedTypeIdentity, b: Plan.CheckedTypeIdentity) bool {
     return a.ty == b.ty and checked_moduleKeyEqual(a.module, b.module);
@@ -37720,7 +37591,7 @@ fn requiredPlanChild(
 ) Plan.RepChild {
     const rep = plan.representations.items[@intFromEnum(rep_id)];
     for (plan.childSlice(rep.children)) |child| {
-        if (sameChildRole(child.role, role)) return child;
+        if (Plan.sameChildRoleKind(child.role, role)) return child;
     }
     boxyLowerInvariant("generated codec representation was missing a required child");
 }
@@ -37831,11 +37702,6 @@ test "descriptor materialization captures close over recursive template graphs" 
     const captures = result.store.getLocalSpan(assign.captures);
     try std.testing.expectEqual(@as(usize, 1), GuardedList.borrowLen(captures));
     try std.testing.expectEqual(captured, GuardedList.at(captures, 0));
-}
-
-/// Convert an intentional fixture-table position while preserving enum inference.
-fn fixtureTableIndex(comptime index: u32) u32 {
-    return index;
 }
 
 test "boxy lowerer returns an empty LIR program for an empty plan" {
@@ -38017,7 +37883,7 @@ test "boxy lowerer resolves callable eval bindings to finalized const function e
     var nested_sites = [_]checked.NestedProcSite{
         .{
             .site = @enumFromInt(fixtureTableIndex(0)),
-            .owner_template = template_ref,
+            .owner = .{ .template = template_ref },
             .lexical_scope = .root,
             .evidence_source = .inherited,
             .evidence = .{},
@@ -43324,6 +43190,7 @@ test "boxy lowerer materializes record rest declaration patterns" {
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
             .fields = .{ .start = 0, .len = 2 },
+            .unsets = .{ .start = 0, .len = 0 },
             .ext = null,
         } },
     });
@@ -43855,6 +43722,7 @@ test "boxy lowerer emits record construction in layout order after source-order 
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
             .fields = .{ .start = 0, .len = 2 },
+            .unsets = .{ .start = 0, .len = 0 },
             .ext = null,
         } },
     });
@@ -43973,6 +43841,7 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
             .fields = .{ .start = 0, .len = 1 },
+            .unsets = .{ .start = 0, .len = 0 },
             .ext = @enumFromInt(2),
         } },
     });
@@ -44120,6 +43989,7 @@ test "boxy lowerer emits record field access using layout field index" {
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
             .fields = .{ .start = 0, .len = 2 },
+            .unsets = .{ .start = 0, .len = 0 },
             .ext = null,
         } },
     });
@@ -44487,6 +44357,7 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
             .fields = .{ .start = 0, .len = 2 },
+            .unsets = .{ .start = 0, .len = 0 },
             .ext = null,
         } },
     });
@@ -44675,6 +44546,7 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
             .fields = .{ .start = 0, .len = 2 },
+            .unsets = .{ .start = 0, .len = 0 },
             .ext = null,
         } },
     });
@@ -44875,6 +44747,7 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
             .fields = .{ .start = 0, .len = 2 },
+            .unsets = .{ .start = 0, .len = 0 },
             .ext = null,
         } },
     });
@@ -45767,8 +45640,8 @@ test "boxy lowerer emits checked low-level calls after source-order argument low
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
     }
     const add = out.lir_result.store.getCFStmt(second.next).assign_low_level;
-    try std.testing.expectEqual(@as(LIR.LowLevel, .num_plus_checked), add.op);
-    try std.testing.expectEqual(LIR.LowLevel.num_plus_checked.rcEffect(), add.rc_effect);
+    try std.testing.expectEqual(@as(LIR.LowLevel, .num_int_add_crash_on_overflow), add.op);
+    try std.testing.expectEqual(LIR.LowLevel.num_int_add_crash_on_overflow.rcEffect(), add.rc_effect);
     const args = out.lir_result.store.getLocalSpan(add.args);
     try std.testing.expectEqual(@as(usize, 2), args.len);
     try std.testing.expectEqual(first.target, GuardedList.at(args, 0));
@@ -46757,22 +46630,6 @@ fn testModuleIdentity() checked.ModuleIdentity {
         .display_module_name = @enumFromInt(fixtureTableIndex(0)),
         .qualified_module_name = @enumFromInt(fixtureTableIndex(0)),
         .kind = .module,
-    };
-}
-
-fn builtinNominal(
-    builtin: checked.CheckedBuiltinNominal,
-    _: checked.CheckedTypeId,
-    args: checked.CheckedTypeRange,
-) checked.StoredNominal {
-    return .{
-        .name = @enumFromInt(fixtureTableIndex(0)),
-        .origin_module = @enumFromInt(fixtureTableIndex(0)),
-        .owner_module = .{},
-        .builtin = builtin,
-        .is_opaque = false,
-        .representation = .{ .builtin = builtin },
-        .args = args,
     };
 }
 

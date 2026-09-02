@@ -139,5 +139,5 @@ parity on the snapshot corpus.
 
 ## Related projects
 
-- [../small/audit-solver-mutating-rewrites.md](../small/audit-solver-mutating-rewrites.md)—
+- `audit-solver-mutating-rewrites` (landed; doc removed)—
   the same audit-and-codify method applied to solver mutations.

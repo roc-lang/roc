@@ -420,6 +420,7 @@ pub fn recordFieldCompletionInSubModule() integration_spec.SpecError!void {
         \\  rec = {{ foo: "hello", bar: 42 }}
         \\}}
         \\
+        \\main = "ok"
         \\
     );
     defer h.allocator.free(clean);

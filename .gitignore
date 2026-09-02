@@ -64,6 +64,65 @@ zig-pkg
 !test/fx/platform/targets/arm64musl/crt1.o
 !test/fx/platform/targets/arm64musl/libc.a
 
+# Force-include the MinGW C runtime files that are checked into the repo
+# (see ci/vendor_mingw_runtime.py). A `*mingw` target links only
+# what the platform declares, so every mingw target dir needs these next to
+# host.lib; build.zig copies them from test/fx into the other test platforms.
+
+!test/fx/platform/targets/x64mingw/advapi32.lib
+!test/fx/platform/targets/x64mingw/api-ms-win-crt-conio-l1-1-0.lib
+!test/fx/platform/targets/x64mingw/api-ms-win-crt-convert-l1-1-0.lib
+!test/fx/platform/targets/x64mingw/api-ms-win-crt-environment-l1-1-0.lib
+!test/fx/platform/targets/x64mingw/api-ms-win-crt-filesystem-l1-1-0.lib
+!test/fx/platform/targets/x64mingw/api-ms-win-crt-heap-l1-1-0.lib
+!test/fx/platform/targets/x64mingw/api-ms-win-crt-locale-l1-1-0.lib
+!test/fx/platform/targets/x64mingw/api-ms-win-crt-math-l1-1-0.lib
+!test/fx/platform/targets/x64mingw/api-ms-win-crt-multibyte-l1-1-0.lib
+!test/fx/platform/targets/x64mingw/api-ms-win-crt-private-l1-1-0.lib
+!test/fx/platform/targets/x64mingw/api-ms-win-crt-process-l1-1-0.lib
+!test/fx/platform/targets/x64mingw/api-ms-win-crt-runtime-l1-1-0.lib
+!test/fx/platform/targets/x64mingw/api-ms-win-crt-stdio-l1-1-0.lib
+!test/fx/platform/targets/x64mingw/api-ms-win-crt-string-l1-1-0.lib
+!test/fx/platform/targets/x64mingw/api-ms-win-crt-time-l1-1-0.lib
+!test/fx/platform/targets/x64mingw/api-ms-win-crt-utility-l1-1-0.lib
+!test/fx/platform/targets/x64mingw/compiler_rt.lib
+!test/fx/platform/targets/x64mingw/crt2.obj
+!test/fx/platform/targets/x64mingw/dllcrt2.obj
+!test/fx/platform/targets/x64mingw/kernel32.lib
+!test/fx/platform/targets/x64mingw/libmingw32.lib
+!test/fx/platform/targets/x64mingw/ntdll.lib
+!test/fx/platform/targets/x64mingw/shell32.lib
+!test/fx/platform/targets/x64mingw/user32.lib
+!test/fx/platform/targets/x64mingw/ws2_32.lib
+!test/fx/platform/targets/x64mingw/zigc.lib
+
+!test/fx/platform/targets/arm64mingw/advapi32.lib
+!test/fx/platform/targets/arm64mingw/api-ms-win-crt-conio-l1-1-0.lib
+!test/fx/platform/targets/arm64mingw/api-ms-win-crt-convert-l1-1-0.lib
+!test/fx/platform/targets/arm64mingw/api-ms-win-crt-environment-l1-1-0.lib
+!test/fx/platform/targets/arm64mingw/api-ms-win-crt-filesystem-l1-1-0.lib
+!test/fx/platform/targets/arm64mingw/api-ms-win-crt-heap-l1-1-0.lib
+!test/fx/platform/targets/arm64mingw/api-ms-win-crt-locale-l1-1-0.lib
+!test/fx/platform/targets/arm64mingw/api-ms-win-crt-math-l1-1-0.lib
+!test/fx/platform/targets/arm64mingw/api-ms-win-crt-multibyte-l1-1-0.lib
+!test/fx/platform/targets/arm64mingw/api-ms-win-crt-private-l1-1-0.lib
+!test/fx/platform/targets/arm64mingw/api-ms-win-crt-process-l1-1-0.lib
+!test/fx/platform/targets/arm64mingw/api-ms-win-crt-runtime-l1-1-0.lib
+!test/fx/platform/targets/arm64mingw/api-ms-win-crt-stdio-l1-1-0.lib
+!test/fx/platform/targets/arm64mingw/api-ms-win-crt-string-l1-1-0.lib
+!test/fx/platform/targets/arm64mingw/api-ms-win-crt-time-l1-1-0.lib
+!test/fx/platform/targets/arm64mingw/api-ms-win-crt-utility-l1-1-0.lib
+!test/fx/platform/targets/arm64mingw/compiler_rt.lib
+!test/fx/platform/targets/arm64mingw/crt2.obj
+!test/fx/platform/targets/arm64mingw/dllcrt2.obj
+!test/fx/platform/targets/arm64mingw/kernel32.lib
+!test/fx/platform/targets/arm64mingw/libmingw32.lib
+!test/fx/platform/targets/arm64mingw/ntdll.lib
+!test/fx/platform/targets/arm64mingw/shell32.lib
+!test/fx/platform/targets/arm64mingw/user32.lib
+!test/fx/platform/targets/arm64mingw/ws2_32.lib
+!test/fx/platform/targets/arm64mingw/zigc.lib
+
 # valgrind
 vgcore.*
 

@@ -1668,6 +1668,291 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "0" },
     },
     .{
+        .name = "low_level - List.capacity reports reserved capacity",
+        .source =
+        \\{
+        \\x : List(U64)
+        \\x = List.with_capacity(10)
+        \\List.capacity(x) >= 10
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - List.capacity of zero-sized items stays zero on every backend",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\(List.len(x), List.capacity(x))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(3, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list concat reports zero capacity",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\r = List.concat(x, [{}, {}])
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(5, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list rev reports zero capacity",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\r = List.rev(x)
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(3, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list sublist reports zero capacity",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\r = List.sublist(x, { start: 1, len: 2 })
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(2, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list drop_at reports zero capacity",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\r = List.drop_at(x, 0)
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(2, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list drop_swap reports zero capacity",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\r = List.drop_swap(x, 0)
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(2, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list prepend reports zero capacity",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\r = List.prepend(x, {})
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(4, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list append reports zero capacity",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\r = List.append(x, {})
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(4, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list insert reports zero capacity",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\r = List.insert(x, 1, {}).ok_or([])
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(4, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list set reports zero capacity",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\r = List.set(x, 1, {}).ok_or([])
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(3, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list swap reports zero capacity",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\r = List.swap(x, 0, 2).ok_or([])
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(3, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list take_first reports zero capacity",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\r = List.take_first(x, 2)
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(2, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list take_last reports zero capacity",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\r = List.take_last(x, 2)
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(2, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list drop_first reports zero capacity",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\r = List.drop_first(x, 1)
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(2, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list drop_last reports zero capacity",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\r = List.drop_last(x, 1)
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(2, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list clear reports zero capacity",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\r = List.clear(x)
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(0, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list release_excess_capacity reports zero capacity",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\r = List.release_excess_capacity(x)
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(3, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list reserve reports zero capacity",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\r = List.reserve(x, 4)
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(3, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list repeat reports zero capacity",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\r = List.repeat({}, 3)
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(3, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list split_at reports zero capacity",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\r = List.split_at(x, 1).others
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(2, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list join reports zero capacity",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\r = List.join([x, x])
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(6, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list map reports zero capacity",
+        .source =
+        \\{
+        \\x : List({})
+        \\x = [{}, {}, {}]
+        \\r = List.map(x, |e| e)
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(3, 0)" },
+    },
+    .{
+        .name = "low_level - zero-sized list with_capacity reports zero capacity",
+        .source =
+        \\{
+        \\r : List({})
+        \\r = List.with_capacity(5)
+        \\(List.len(r), List.capacity(r))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(0, 0)" },
+    },
+    .{
         .name = "low_level - List.append on non-empty list",
         .source =
         \\{
@@ -4719,7 +5004,7 @@ pub const tests = [_]TestCase{
         .name = "low_level - List.sort_with basic ascending sort",
         .source =
         \\{
-        \\x = List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sort_with([3, 1, 2], |a, b| if a < b Before else if a > b After else Same)
         \\first = List.first(x)
         \\first
         \\}
@@ -4730,7 +5015,7 @@ pub const tests = [_]TestCase{
         .name = "low_level - List.sort_with preserves length",
         .source =
         \\{
-        \\x = List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b Before else if a > b After else Same)
         \\len = List.len(x)
         \\len
         \\}
@@ -4741,7 +5026,7 @@ pub const tests = [_]TestCase{
         .name = "low_level - List.sort_with nested in len defaults literal item type",
         .source =
         \\{
-        \\List.len(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))
+        \\List.len(List.sort_with([3, 1, 2], |a, b| if a < b Before else if a > b After else Same))
         \\}
         ,
         .expected = .{ .inspect_str = "3" },
@@ -4750,7 +5035,7 @@ pub const tests = [_]TestCase{
         .name = "low_level - List.sort_with with larger list",
         .source =
         \\{
-        \\x = List.sort_with([5, 2, 8, 1, 9, 3, 7, 4, 6], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sort_with([5, 2, 8, 1, 9, 3, 7, 4, 6], |a, b| if a < b Before else if a > b After else Same)
         \\first = List.first(x)
         \\first
         \\}
@@ -4761,7 +5046,7 @@ pub const tests = [_]TestCase{
         .name = "low_level - List.sort_with with two elements",
         .source =
         \\{
-        \\x = List.sort_with([2, 1], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sort_with([2, 1], |a, b| if a < b Before else if a > b After else Same)
         \\first = List.first(x)
         \\first
         \\}
@@ -4772,7 +5057,7 @@ pub const tests = [_]TestCase{
         .name = "low_level - List.sort_with descending order",
         .source =
         \\{
-        \\x = List.sort_with([1, 3, 2], |a, b| if a > b LT else if a < b GT else EQ)
+        \\x = List.sort_with([1, 3, 2], |a, b| if a > b Before else if a < b After else Same)
         \\first = List.first(x)
         \\first
         \\}
@@ -4784,7 +5069,7 @@ pub const tests = [_]TestCase{
         .source =
         \\{
         \\x : List(U64)
-        \\x = List.sort_with([], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sort_with([], |a, b| if a < b Before else if a > b After else Same)
         \\len = List.len(x)
         \\len
         \\}
@@ -4795,7 +5080,7 @@ pub const tests = [_]TestCase{
         .name = "low_level - List.sort_with single element",
         .source =
         \\{
-        \\x = List.sort_with([42], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sort_with([42], |a, b| if a < b Before else if a > b After else Same)
         \\first = List.first(x)
         \\first
         \\}
@@ -4806,7 +5091,7 @@ pub const tests = [_]TestCase{
         .name = "low_level - List.sort_with already sorted",
         .source =
         \\{
-        \\x = List.sort_with([1, 2, 3, 4, 5], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sort_with([1, 2, 3, 4, 5], |a, b| if a < b Before else if a > b After else Same)
         \\first = List.first(x)
         \\first
         \\}
@@ -4817,12 +5102,129 @@ pub const tests = [_]TestCase{
         .name = "low_level - List.sort_with reverse sorted",
         .source =
         \\{
-        \\x = List.sort_with([5, 4, 3, 2, 1], |a, b| if a < b LT else if a > b GT else EQ)
+        \\x = List.sort_with([5, 4, 3, 2, 1], |a, b| if a < b Before else if a > b After else Same)
         \\first = List.first(x)
         \\first
         \\}
         ,
         .expected = .{ .inspect_str = "Ok(1.0)" },
+    },
+    .{
+        .name = "low_level - List.sort uses the item comparison method",
+        .source =
+        \\List.sort([3, 1, 2])
+        ,
+        .expected = .{ .inspect_str = "[1.0, 2.0, 3.0]" },
+    },
+    .{
+        .name = "low_level - List.sort_reversed reverses only the ordering",
+        .source =
+        \\List.sort_reversed([3, 1, 2])
+        ,
+        .expected = .{ .inspect_str = "[3.0, 2.0, 1.0]" },
+    },
+    .{
+        .name = "low_level - List.sort_by is stable",
+        .source =
+        \\{
+        \\items = [
+        \\    { key: 2.U64, input_index: 0.U64 },
+        \\    { key: 1, input_index: 1 },
+        \\    { key: 2, input_index: 2 },
+        \\    { key: 1, input_index: 3 },
+        \\]
+        \\List.map(List.sort_by(items, |item| item.key), |item| item.input_index)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 3, 0, 2]" },
+    },
+    .{
+        .name = "low_level - List.sort_by_reversed is stable",
+        .source =
+        \\{
+        \\items = [
+        \\    { key: 2.U64, input_index: 0.U64 },
+        \\    { key: 1, input_index: 1 },
+        \\    { key: 2, input_index: 2 },
+        \\    { key: 1, input_index: 3 },
+        \\]
+        \\List.map(List.sort_by_reversed(items, |item| item.key), |item| item.input_index)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[0, 2, 1, 3]" },
+    },
+    .{
+        .name = "low_level - List.sort_with_reversed reverses a custom comparator",
+        .source =
+        \\List.sort_with_reversed([3, 1, 2], |a, b| a.order_relative_to(b))
+        ,
+        .expected = .{ .inspect_str = "[3.0, 2.0, 1.0]" },
+    },
+    .{
+        .name = "low_level - List.sort_with comparator captures",
+        .source =
+        \\{
+        \\descending = True
+        \\cmp = |a, b| if descending { if a > b Before else if a < b After else Same } else { a.order_relative_to(b) }
+        \\List.sort_with([1, 3, 2], cmp)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[3.0, 2.0, 1.0]" },
+    },
+    .{
+        .name = "low_level - List.sort_with preserves refcounted elements",
+        .source =
+        \\{
+        \\items = ["pear", "apple", "banana", "apple"]
+        \\List.sort_with(items, |a, b| a.count_utf8_bytes().order_relative_to(b.count_utf8_bytes()))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[\"pear\", \"apple\", \"apple\", \"banana\"]" },
+    },
+    .{
+        .name = "low_level - List.sort_with indirect wide elements is stable",
+        .source =
+        \\{
+        \\items = [
+        \\    { key: 2.U64, index: 0.U64, a: "a", b: "b", c: "c", d: "d", e: "e", f: "f", g: "g" },
+        \\    { key: 1.U64, index: 1.U64, a: "a", b: "b", c: "c", d: "d", e: "e", f: "f", g: "g" },
+        \\    { key: 2.U64, index: 2.U64, a: "a", b: "b", c: "c", d: "d", e: "e", f: "f", g: "g" },
+        \\]
+        \\sorted = List.sort_with(items, |a, b| a.key.order_relative_to(b.key))
+        \\List.map(sorted, |item| item.index)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 0, 2]" },
+    },
+    .{
+        .name = "low_level - List.sort_with exercises Fluxsort partition path",
+        .source =
+        \\{
+        \\items = List.repeat(1.U64, 140)
+        \\List.len(List.sort_with(items, |a, b| a.order_relative_to(b)))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "140" },
+    },
+    .{
+        .name = "low_level - List.sort_with crosses a generic module boundary",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Sorter",
+            .source =
+            \\Sorter := [].{
+            \\    sort : List(a), (a, a -> [Before, Same, After]) -> List(a)
+            \\    sort = |items, cmp| List.sort_with(items, cmp)
+            \\}
+            \\
+            ,
+        }},
+        .source =
+        \\import Sorter
+        \\
+        \\main = Sorter.sort(["pear", "a", "banana"], |a, b| a.count_utf8_bytes().order_relative_to(b.count_utf8_bytes()))
+        ,
+        .expected = .{ .inspect_str = "[\"a\", \"pear\", \"banana\"]" },
     },
     .{
         .name = "low_level - U8.mod_by basic",

@@ -295,6 +295,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
         try low_level_map.put(list_len_ident, .list_len);
     }
+    if (env.common.findIdent("Builtin.List.capacity")) |list_cap_ident| {
+        try low_level_map.put(list_cap_ident, .list_capacity);
+    }
     if (env.common.findIdent("u8_list_len")) |ident| {
         try low_level_map.put(ident, .list_len);
     }
@@ -339,6 +342,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     }
     if (env.common.findIdent("list_release_excess_capacity")) |list_release_excess_capacity_ident| {
         try low_level_map.put(list_release_excess_capacity_ident, .list_release_excess_capacity);
+    }
+    if (env.common.findIdent("list_sort_with")) |ident| {
+        try low_level_map.put(ident, .list_sort_with);
     }
     if (env.common.findIdent("Builtin.List.drop_at")) |list_drop_at_ident| {
         try low_level_map.put(list_drop_at_ident, .list_drop_at);
@@ -537,9 +543,12 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     const integer_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128" };
     for (integer_types) |num_type| {
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.mod_by", .{num_type}, .num_mod_by);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.plus_wrap", .{num_type}, .num_plus_wrap);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.minus_wrap", .{num_type}, .num_minus_wrap);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times_wrap", .{num_type}, .num_times_wrap);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.plus_wrap", .{num_type}, .num_int_add_wrap);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.minus_wrap", .{num_type}, .num_int_sub_wrap);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times_wrap", .{num_type}, .num_int_mul_wrap);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.plus_overflows", .{num_type}, .num_int_add_overflows);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.minus_overflows", .{num_type}, .num_int_sub_overflows);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times_overflows", .{num_type}, .num_int_mul_overflows);
     }
 
     const simd_types = [_][]const u8{ "U8x16", "I8x16", "U16x8", "I16x8", "U32x4", "I32x4", "U64x2", "I64x2" };

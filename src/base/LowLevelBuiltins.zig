@@ -56,12 +56,12 @@ pub fn floatRounding(op: LowLevel, is_f32: bool) BuiltinFn {
     });
 }
 
-/// Binary Dec arithmetic. `num_times` maps to `dec_mul`, which crashes on
+/// Binary Dec arithmetic. `dec_mul` crashes on
 /// overflow like the interpreter's Dec multiply; the saturating
 /// `dec_mul_saturated` wrapper is not the lowering of any current op.
 pub fn decBinaryArith(op: LowLevel) BuiltinFn {
     return lookup(op, .{
-        .{ LowLevel.num_times, BuiltinFn.dec_mul },
+        .{ LowLevel.dec_mul, BuiltinFn.dec_mul },
         .{ LowLevel.num_div_by, BuiltinFn.dec_div },
         .{ LowLevel.num_div_trunc_by, BuiltinFn.dec_div_trunc },
         .{ LowLevel.num_pow, BuiltinFn.dec_pow },
@@ -232,6 +232,7 @@ pub fn listOp(op: LowLevel) BuiltinFn {
         .{ LowLevel.list_reserve, BuiltinFn.list_reserve },
         .{ LowLevel.list_release_excess_capacity, BuiltinFn.list_release_excess_capacity },
         .{ LowLevel.list_reverse, BuiltinFn.list_reverse },
+        .{ LowLevel.list_sort_with, BuiltinFn.list_sort_with },
         .{ LowLevel.list_map_can_reuse, BuiltinFn.list_map_can_reuse },
     });
 }

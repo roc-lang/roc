@@ -39,7 +39,7 @@ const default_threshold_ns: u64 = std.time.ns_per_s;
 
 /// Minimum width of the phase-name column. A separator is always emitted after
 /// the padded name so a future longer label cannot run into its duration.
-const name_width: usize = 28;
+const name_width: usize = 37;
 
 /// Maximum number of top-level phases a single operation reports.
 const max_phases: usize = 16;
@@ -49,6 +49,10 @@ const max_subphases: usize = 24;
 // dropped merely because their recording order changes.
 const max_counter_groups: usize = 8;
 const max_counters_per_group: usize = 24;
+
+/// Wide enough for at least seven digits, their grouping underscores, and the ms suffix.
+/// This accommodates durations up to tens of minutes (5_999_000ms is just under 100 minutes).
+const min_completed_duration_width: usize = "5_999_000ms".len;
 
 const spinner_frames = [_][]const u8{
     "\u{280B}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283C}",
@@ -137,6 +141,9 @@ pub const Reporter = struct {
     spin: usize = 0,
     thread: ?ThreadHandle = null,
     stop: bool = false,
+    /// Signaled when the reporter is done, so the background thread's timed
+    /// wait returns at once instead of running its tick out.
+    stop_event: std.Io.Event = .unset,
     finished: bool = false,
 
     /// Initialize a reporter and begin the wall clock. Call `deinit` when done.
@@ -330,21 +337,45 @@ pub const Reporter = struct {
 
     fn stopThread(self: *Reporter) void {
         if (comptime !supports_threads) return;
+        const thread = self.thread orelse return;
         self.mutex.lockUncancelable(self.std_io);
         self.stop = true;
         self.mutex.unlock(self.std_io);
-        if (self.thread) |t| {
-            t.join();
-            self.thread = null;
-        }
+        // Waking the thread is what bounds this join: the flag alone is
+        // invisible to a thread that is partway through a wait interval.
+        self.stop_event.set(self.std_io);
+        thread.join();
+        self.thread = null;
+    }
+
+    /// Wait up to `ns` for the reporter to finish. Returns true when the wait
+    /// ended because the reporter is finishing rather than because the
+    /// interval elapsed.
+    fn waitForStop(self: *Reporter, ns: u64) bool {
+        self.stop_event.waitTimeout(self.std_io, .{ .duration = .{
+            .raw = .fromNanoseconds(ns),
+            .clock = .awake,
+        } }) catch |err| switch (err) {
+            // A spurious wakeup lands here too; the loop below re-checks the
+            // stop flag and the draw threshold, so an early tick is harmless.
+            error.Timeout => return false,
+            error.Canceled => return true,
+        };
+        return true;
     }
 
     fn bgLoop(self: *Reporter) void {
-        const sleep_ns = if (self.always) mem_tick_ns else tick_ns;
+        const interval_ns = if (self.always) mem_tick_ns else tick_ns;
         const draws_every: u64 = if (self.always) tick_ns / mem_tick_ns else 1;
+        // An animation-only reporter draws nothing until the operation crosses
+        // the breakdown threshold, so the first wait runs all the way to it and
+        // only then does the redraw cadence start. `--timings` samples memory
+        // from the outset and keeps its cadence throughout.
+        var wait_ns: u64 = if (self.always) interval_ns else @max(self.threshold_ns, interval_ns);
         var wakeups: u64 = 0;
         while (true) {
-            self.std_io.sleep(std.Io.Duration.fromNanoseconds(sleep_ns), .awake) catch {};
+            if (self.waitForStop(wait_ns)) break;
+            wait_ns = interval_ns;
             self.mutex.lockUncancelable(self.std_io);
             if (self.stop) {
                 self.mutex.unlock(self.std_io);
@@ -484,12 +515,12 @@ pub const Reporter = struct {
             if (show_parent) {
                 var parent_buf: [32]u8 = undefined;
                 const total = (p.end_ns orelse self.elapsedNs()) - p.start_ns;
-                const parent_dur = formatDuration(&parent_buf, total, .final);
+                const parent_dur = formatCompletedRowDuration(&parent_buf, total);
                 self.writer.print("  {s} {f} {s}{s}\n", .{ check, padName(p.name), parent_dur, mem }) catch {};
             }
             for (p.sub[0..p.sub_len], 0..) |s, sub_index| {
                 var buf: [32]u8 = undefined;
-                const dur = formatDuration(&buf, s.ns, .final);
+                const dur = formatCompletedRowDuration(&buf, s.ns);
                 var sub_mem_buf: [48]u8 = undefined;
                 const sub_range = p.sub_mem[sub_index];
                 const sub_mem = formatMemRange(&sub_mem_buf, sub_range.min, sub_range.max);
@@ -503,7 +534,7 @@ pub const Reporter = struct {
         }
         const total = (p.end_ns orelse self.elapsedNs()) - p.start_ns;
         var buf: [32]u8 = undefined;
-        const dur = formatDuration(&buf, total, .final);
+        const dur = formatCompletedRowDuration(&buf, total);
         self.writer.print("  {s} {f} {s}{s}\n", .{ check, padName(p.name), dur, mem }) catch {};
     }
 
@@ -562,10 +593,11 @@ pub fn writeDuration(writer: *std.Io.Writer, ns: u64) std.Io.Writer.Error!void {
 const DurationStyle = enum {
     /// Whole-second granularity, for the live ticking counter.
     live,
-    /// Sub-second precision, for finished phases.
+    /// Human-friendly formatting with sub-second precision, for finished phases.
     final,
 };
 
+/// Format a duration in human-readable units.
 /// Format a nanosecond duration into `buf`, returning the written slice.
 fn formatDuration(buf: []u8, ns: u64, style: DurationStyle) []const u8 {
     const total_secs = ns / std.time.ns_per_s;
@@ -596,6 +628,51 @@ fn formatDuration(buf: []u8, ns: u64, style: DurationStyle) []const u8 {
             return std.fmt.bufPrint(buf, "{d:.1}s", .{secs_f}) catch buf[0..0];
         },
     }
+}
+
+/// Format a duration as rounded, right-aligned, grouped milliseconds.
+/// Format a nanosecond duration into `buf`, returning the written slice.
+fn formatCompletedRowDuration(buf: []u8, ns: u64) []const u8 {
+    var total_ms = ns / std.time.ns_per_ms;
+    if (ns % std.time.ns_per_ms >= std.time.ns_per_ms / 2) total_ms += 1;
+
+    const digit_count = countDigits(total_ms);
+    const number_length = digit_count + (digit_count - 1) / 3;
+    const content_length = number_length + "ms".len;
+    const output_length = @max(min_completed_duration_width, content_length);
+    if (output_length > buf.len) return buf[0..0];
+
+    const padding_length = output_length - content_length;
+    @memset(buf[0..padding_length], ' ');
+
+    const number_end = padding_length + number_length;
+    var cursor = number_end;
+    var remaining = total_ms;
+    var digits_written: usize = 0;
+    while (digits_written < digit_count) {
+        cursor -= 1;
+        buf[cursor] = '0' + @as(u8, @intCast(remaining % 10));
+        remaining /= 10;
+        digits_written += 1;
+        if (digits_written % 3 == 0 and digits_written < digit_count) {
+            cursor -= 1;
+            buf[cursor] = '_';
+        }
+    }
+
+    @memcpy(buf[number_end .. number_end + "ms".len], "ms");
+
+    return buf[0..output_length];
+}
+
+fn countDigits(value: u64) usize {
+    var remaining = value;
+    var result: usize = 1;
+    while (remaining >= 10) {
+        remaining /= 10;
+        result += 1;
+    }
+    return result;
 }
 
 /// Format `, RSS 123MB - 456MB` for a sampled range, or an empty string when
@@ -665,18 +742,31 @@ test "formatDuration final: ms and seconds" {
     try testing.expectEqualStrings("1m 5s", formatDuration(&buf, 65 * std.time.ns_per_s, .final));
 }
 
+test "formatCompletedRowDuration pads and groups milliseconds" {
+    var buf: [32]u8 = undefined;
+    try testing.expectEqualStrings("        0ms", formatCompletedRowDuration(&buf, 100_000));
+    try testing.expectEqualStrings("       12ms", formatCompletedRowDuration(&buf, 12 * std.time.ns_per_ms));
+    try testing.expectEqualStrings("      999ms", formatCompletedRowDuration(&buf, 999_499_999));
+    try testing.expectEqualStrings("    1_000ms", formatCompletedRowDuration(&buf, 999_500_000));
+    try testing.expectEqualStrings("    1_200ms", formatCompletedRowDuration(&buf, 1200 * std.time.ns_per_ms));
+    try testing.expectEqualStrings("   65_000ms", formatCompletedRowDuration(&buf, 65 * std.time.ns_per_s));
+    try testing.expectEqualStrings("  100_500ms", formatCompletedRowDuration(&buf, 100 * std.time.ns_per_s + 500 * std.time.ns_per_ms));
+    try testing.expectEqualStrings("6_000_000ms", formatCompletedRowDuration(&buf, 100 * std.time.ns_per_min));
+    try testing.expectEqualStrings("60_000_000ms", formatCompletedRowDuration(&buf, 1000 * std.time.ns_per_min));
+}
+
 test "padName pads short names and leaves long names" {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     try aw.writer.print("[{f}]", .{padName("Parsing")});
-    try testing.expectEqualStrings("[Parsing                     ]", aw.written());
+    try testing.expectEqualStrings("[Parsing                              ]", aw.written());
 }
 
 test "full-width phase name remains separated from its duration" {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     try aw.writer.print("{f} {s}", .{ padName("arm64 Instruction Generation"), "4ms" });
-    try testing.expectEqualStrings("arm64 Instruction Generation 4ms", aw.written());
+    try testing.expectEqualStrings("arm64 Instruction Generation          4ms", aw.written());
 }
 
 fn collectStatic(buf: *std.Io.Writer.Allocating, timings_flag: bool) void {
@@ -734,7 +824,7 @@ test "static breakdown lists every phase with the timings flag" {
     try testing.expect(std.mem.find(u8, out, "Type Inference") != null);
     try testing.expect(std.mem.find(u8, out, "Compile-Time Evaluation") != null);
     try testing.expect(std.mem.find(u8, out, "Monotype Lowering") != null);
-    try testing.expect(std.mem.find(u8, out, "40ms") != null);
+    try testing.expect(std.mem.find(u8, out, "       40ms") != null);
     try testing.expect(std.mem.find(u8, out, "LIR Passes") != null);
     try testing.expect(std.mem.find(u8, out, "ARC") != null);
     try testing.expect(std.mem.find(u8, out, "Store Results") != null);
@@ -783,4 +873,35 @@ test "slow non-terminal run without the timings flag prints nothing" {
     reporter.end();
     reporter.finish();
     try testing.expectEqualStrings("", buf.written());
+}
+
+test "stopping the animation thread does not wait out its interval" {
+    if (comptime !supports_threads) return;
+
+    var io_impl: std.Io.Threaded = .init(testing.allocator, .{});
+    defer io_impl.deinit();
+    const io = io_impl.io();
+
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+
+    var reporter = Reporter.init(.{
+        .std_io = io,
+        .writer = &buf.writer,
+        .op_label = "roc build",
+        .timings_flag = false,
+        // A terminal is what spawns the animation thread.
+        .is_tty = true,
+    });
+    reporter.start();
+    try testing.expect(reporter.thread != null);
+
+    const before = reporter.elapsedNs();
+    reporter.deinit();
+    const shutdown_ns = reporter.elapsedNs() - before;
+
+    // Shutdown must not block on the thread's wait interval. The bound is
+    // generous so a loaded machine cannot fail this, while still catching a
+    // shutdown that waits out a whole tick.
+    try testing.expect(shutdown_ns < tick_ns / 2);
 }

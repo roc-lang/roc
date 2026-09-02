@@ -578,15 +578,15 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
     switch (header) {
         .app => |app| {
             node.tag = .app_header;
-            // TODO this doesn't seem right, were giving it a record_field index instead of a token index
-            node.main_token = @intFromEnum(app.platform_idx);
             // Store provides collection
             node.data.lhs = @intFromEnum(app.provides);
-            // `packages` and the optional `roc` version pin do not both fit in
-            // the node, so they share an extra_data record.
-            const ed_start = try store.reserveExtraDataStart(2);
+            // `packages`, the optional platform entry, and the optional `roc`
+            // version pin do not all fit in the node, so they share an
+            // extra_data record.
+            const ed_start = try store.reserveExtraDataStart(3);
             store.extra_data.appendAssumeCapacity(@intFromEnum(app.packages));
             store.extra_data.appendAssumeCapacity(try packOptionalIndex(app.roc_version));
+            store.extra_data.appendAssumeCapacity(try packOptionalIndex(app.platform_idx));
             node.data.rhs = ed_start;
             node.region = app.region;
         },
@@ -1357,8 +1357,15 @@ pub fn addRecordField(store: *NodeStore, field: AST.RecordField) std.mem.Allocat
     };
     node.tag = .record_field;
     node.main_token = field.name;
-    if (field.value) |v| {
-        node.data.lhs = @intFromEnum(v);
+    // rhs discriminates the value state: 0 = punned, 1 = unset, 2 = supplied
+    // (with lhs holding the expression index).
+    switch (field.value) {
+        .supplied => |v| {
+            node.data.lhs = @intFromEnum(v);
+            node.data.rhs = 2;
+        },
+        .punned => node.data.rhs = 0,
+        .unset => node.data.rhs = 1,
     }
 
     const nid = try store.nodes.append(store.gpa, node);
@@ -1748,7 +1755,7 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
         .app_header => {
             const ed_start = node.data.rhs;
             return .{ .app = .{
-                .platform_idx = @enumFromInt(node.main_token),
+                .platform_idx = unpackOptionalIndex(AST.RecordField.Idx, store.extra_data.items[ed_start + 2]),
                 .provides = @enumFromInt(node.data.lhs),
                 .packages = @enumFromInt(store.extra_data.items[ed_start]),
                 .roc_version = unpackOptionalIndex(AST.RecordField.Idx, store.extra_data.items[ed_start + 1]),
@@ -2627,7 +2634,13 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
 pub fn getRecordField(store: *const NodeStore, field_idx: AST.RecordField.Idx) AST.RecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(field_idx)));
     const name = node.main_token;
-    const value: ?AST.Expr.Idx = if (node.tag == .malformed) null else if (node.data.lhs > 0) @enumFromInt(node.data.lhs) else null;
+    const value: AST.RecordField.Value = if (node.tag == .malformed)
+        .punned
+    else switch (node.data.rhs) {
+        0 => .punned,
+        1 => .unset,
+        else => .{ .supplied = @enumFromInt(node.data.lhs) },
+    };
 
     return .{
         .name = name,

@@ -1,4 +1,10 @@
-//! Decision-tree match compiler shared by both LIR lowerers.
+//! Decision-tree match compiler for the direct solved-to-LIR lowering.
+//!
+//! `.boxy` does not consume this yet: it folds match branches into a
+//! sequential chain of its own pattern tests, so the sharing invariant and
+//! the statement-count lint below cover `.lss` only. Bringing `.boxy` onto
+//! this compiler needs a `Ctx` written over its checked patterns and its
+//! representation plan.
 //!
 //! This module turns a `match` (a list of branches, each a pattern plus an
 //! optional guard and a body) into an explicit decision tree that the host

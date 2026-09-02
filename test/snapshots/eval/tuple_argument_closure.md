@@ -38,7 +38,7 @@ EndOfFile,
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call (constraint-fn-var 227)
+(e-call (constraint-fn-var 234)
 	(e-lambda
 		(args
 			(p-tuple

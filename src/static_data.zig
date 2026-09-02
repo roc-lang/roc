@@ -96,6 +96,31 @@ pub fn collectRequiredRcHelpers(
     return try result.toOwnedSlice(allocator);
 }
 
+/// Collect the distinct LIR procedures a static-data graph names by symbol.
+///
+/// A procedure an object outside the code module references by name has to keep
+/// external linkage; every other one can stay internal to its module.
+pub fn collectReferencedProcs(
+    allocator: Allocator,
+    exports: []const StaticDataExport,
+) Allocator.Error![]lir.LIR.LirProcSpecId {
+    var seen = std.AutoHashMap(u32, void).init(allocator);
+    defer seen.deinit();
+    var result = std.ArrayList(lir.LIR.LirProcSpecId).empty;
+    errdefer result.deinit(allocator);
+
+    for (exports) |data_export| {
+        for (data_export.relocations) |relocation| {
+            const proc = relocation.procedure orelse continue;
+            const gop = try seen.getOrPut(@intFromEnum(proc));
+            if (gop.found_existing) continue;
+            try result.append(allocator, proc);
+        }
+    }
+
+    return try result.toOwnedSlice(allocator);
+}
+
 /// Deterministic object-file symbol name for an internal LIR procedure.
 pub fn procSymbolName(allocator: Allocator, proc_symbol: lir.Symbol) Allocator.Error![]u8 {
     return try std.fmt.allocPrint(allocator, "roc__proc_{x}", .{proc_symbol.raw()});
@@ -713,6 +738,7 @@ const StaticInitializerMachine = struct {
                 break :blk .{ .outer = value, .base = value, .base_layout = target_layout };
             },
             .scalar,
+            .erased_box,
             .list,
             .list_of_zst,
             .closure,
@@ -764,6 +790,7 @@ const StaticInitializerMachine = struct {
             .box => self.layoutValue(self.layouts().builtinBoxAbi(union_layout).elem_layout_idx orelse .zst),
             .scalar,
             .box_of_zst,
+            .erased_box,
             .list,
             .list_of_zst,
             .struct_,

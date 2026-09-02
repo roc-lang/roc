@@ -8,7 +8,6 @@ const runtime = @import("main.zig");
 
 /// Configure the shared runtime root for evaluator-vtable host calls.
 pub const roc_host_call_mode: builtins.host_abi.HostCallMode = .vtable;
-pub const roc_omit_wasm_compiler_rt_exports = runtime.roc_omit_wasm_compiler_rt_exports;
 pub const roc_disable_tracy = runtime.roc_disable_tracy;
 pub const panic = runtime.panic;
 pub const std_options_elf_debug_info_search_paths = runtime.std_options_elf_debug_info_search_paths;

@@ -529,7 +529,10 @@ fn hostArch() HostArch {
 }
 
 fn flushInstructionCache(memory: []const u8) void {
-    switch (hostArch()) {
+    // Resolved at comptime so the `__clear_cache` reference is only analyzed
+    // on the architectures that need it. The shim no longer links compiler-rt,
+    // which is where that builtin would come from.
+    switch (comptime hostArch()) {
         .x86, .x86_64 => {},
         .aarch64, .other => {
             const clearCache = struct {

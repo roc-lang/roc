@@ -64,6 +64,7 @@
 #include <llvm/Transforms/Utils/LowerMemIntrinsics.h>
 #include <llvm/Transforms/Utils/NameAnonGlobals.h>
 
+#include <lld/Common/CommonLinkerContext.h>
 #include <lld/Common/Driver.h>
 
 #if __GNUC__ >= 9
@@ -728,24 +729,32 @@ namespace lld {
     }
 }
 
-bool ZigLLDLinkCOFF(int argc, const char **argv, bool can_exit_early, bool disable_output) {
+static bool runLldDriver(lld::Driver driver, int argc, const char **argv,
+                         bool can_exit_early, bool disable_output) {
     std::vector<const char *> args(argv, argv + argc);
-    return lld::coff::link(args, llvm::outs(), llvm::errs(), can_exit_early, disable_output);
+
+    // A frontend link allocates the CommonLinkerContext that unsafeLldMain
+    // normally destroys. Roc invokes the frontend directly, so release it here
+    // before another in-process link can observe the previous driver's state.
+    const bool success = driver(args, llvm::outs(), llvm::errs(), can_exit_early, disable_output);
+    lld::CommonLinkerContext::destroy();
+    return success;
+}
+
+bool ZigLLDLinkCOFF(int argc, const char **argv, bool can_exit_early, bool disable_output) {
+    return runLldDriver(&lld::coff::link, argc, argv, can_exit_early, disable_output);
 }
 
 bool ZigLLDLinkELF(int argc, const char **argv, bool can_exit_early, bool disable_output) {
-    std::vector<const char *> args(argv, argv + argc);
-    return lld::elf::link(args, llvm::outs(), llvm::errs(), can_exit_early, disable_output);
+    return runLldDriver(&lld::elf::link, argc, argv, can_exit_early, disable_output);
 }
 
 bool ZigLLDLinkMachO(int argc, const char **argv, bool can_exit_early, bool disable_output) {
-    std::vector<const char *> args(argv, argv + argc);
-    return lld::macho::link(args, llvm::outs(), llvm::errs(), can_exit_early, disable_output);
+    return runLldDriver(&lld::macho::link, argc, argv, can_exit_early, disable_output);
 }
 
 bool ZigLLDLinkWasm(int argc, const char **argv, bool can_exit_early, bool disable_output) {
-    std::vector<const char *> args(argv, argv + argc);
-    return lld::wasm::link(args, llvm::outs(), llvm::errs(), can_exit_early, disable_output);
+    return runLldDriver(&lld::wasm::link, argc, argv, can_exit_early, disable_output);
 }
 
 static_assert((FloatABI::ABIType)ZigLLVMFloatABI_Default == FloatABI::ABIType::Default, "");

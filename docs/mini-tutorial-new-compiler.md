@@ -707,7 +707,7 @@ Let's break the header down:
 
 ### Platforms
 
-Roc has a first-class concept of _platforms_ and _applications_. You can [read about the design philosophy](https://www.roc-lang.org/platforms), but for our purposes what matters is:
+Roc has a first-class concept of _platforms_ and _applications_. You can [read about the design philosophy](https://www.roc-lang.org/docs/main/langref/platforms/), but for our purposes what matters is:
 
 - Every Roc application specifies [exactly one platform](https://www.roc-lang.org/faq#multiple-platforms) that it will be built on
 - The platform provides all the I/O primitives (such as `Stdout` and `Stdin` - they are imported as `pf.Stdout` and `pf.Stdin`)

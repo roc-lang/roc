@@ -63,9 +63,20 @@ test "NodeStore round trip - Headers" {
     try headers.append(gpa, AST.Header{
         .app = .{
             .packages = rand_idx(random, AST.Collection.Idx),
-            .platform_idx = rand_idx(random, AST.RecordField.Idx),
+            .platform_idx = @enumFromInt(11),
             .provides = rand_idx(random, AST.Collection.Idx),
             .roc_version = @enumFromInt(7),
+            .region = rand_region(random),
+        },
+    });
+
+    // An app header that names no platform round trips with a null platform.
+    try headers.append(gpa, AST.Header{
+        .app = .{
+            .packages = rand_idx(random, AST.Collection.Idx),
+            .platform_idx = null,
+            .provides = rand_idx(random, AST.Collection.Idx),
+            .roc_version = null,
             .region = rand_region(random),
         },
     });
@@ -1128,6 +1139,35 @@ test "NodeStore rejects optional index sentinel overflow in release builds" {
         .body = @enumFromInt(1),
         .region = .{ .start = 0, .end = 0 },
     }));
+}
+
+test "NodeStore round trip - expression record field value states" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.initCapacity(gpa, 4);
+    defer store.deinit();
+
+    const fields = [_]AST.RecordField{
+        .{
+            .name = 1,
+            .value = .{ .supplied = @enumFromInt(2) },
+            .region = .{ .start = 1, .end = 3 },
+        },
+        .{
+            .name = 4,
+            .value = .punned,
+            .region = .{ .start = 4, .end = 5 },
+        },
+        .{
+            .name = 6,
+            .value = .unset,
+            .region = .{ .start = 6, .end = 8 },
+        },
+    };
+
+    for (fields) |field| {
+        const idx = try store.addRecordField(field);
+        try testing.expectEqualDeep(field, store.getRecordField(idx));
+    }
 }
 
 test "NodeStore round trip - annotation record field optional marker" {

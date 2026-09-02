@@ -171,6 +171,6 @@ output expected.
   (`src/builtins/builtin_registry.zig`)—the symbol name/ABI half of
   the same backend-drift disease, now consolidated; this project is
   the data-layout half.
-- [../small/silent-drift-guards.md](../small/silent-drift-guards.md)—
+- `silent-drift-guards` (landed; doc removed)—
   the pattern language for mirrors that cannot share code (the Python
   debuggers are exactly that case).

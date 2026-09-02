@@ -600,6 +600,26 @@ The `main!` function the Echo Platform receives will get command-line arguments,
 as a `List(Str)`. (In WebAssembly, these won't be _command-line_ arguments, but rather arbitrary
 arguments from the outside world.)
 
+An application that needs package dependencies can still use the Echo Platform, by writing an
+`app` header that names no platform:
+
+```roc
+app [main!] {
+    unicode: "https://github.com/roc-lang/unicode/releases/download/4.0.0/3DGC3M4b2pxaRLg4i8cmxWkm2E2WbCPCLntQzf2mkbUV.tar.zst",
+}
+
+import unicode.Grapheme
+
+main! = |_| {
+    echo!(Grapheme.owned("café") |> Str.inspect)
+    Ok({})
+}
+```
+
+Such an application gets the Echo Platform and its unqualified `echo!` exactly as a headerless
+one does; the header is there only to declare the packages it imports from. Writing the header
+without any packages (`app [main!] {}`) is the same thing as writing no header at all.
+
 The Echo Platform is intentionally limited to this one effectful function because that's all
 that is needed to teach a wide variety of beginner Roc concepts—expressions, defining and calling functions,
 looping over inputs that get evaluated at runtime (as opposed to compile-time, as user-defined constants would be),

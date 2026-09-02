@@ -249,54 +249,94 @@ test "cross-module - optional record - imported type declaration keeps the optio
     try test_env_b.assertLastDefType("Try(U8, [MissingField])");
 }
 
-test "cross-module - defaulted record - imported alias default crosses the boundary (review M3)" {
+test "cross-module - defaulted record - imported nominal default crosses the boundary (review M3)" {
     // The DefaultId's origin half is env-local and must rebase across the
     // store boundary (design.md "Defaulted Fields"): B constructs at A's
-    // alias, omitting the defaulted field.
+    // nominal, omitting the defaulted field.
     const source_a =
-        \\Cfg : { count : U8 ?? 10, name : Str }
-        \\
-        \\get_count! : Cfg -> U8
-        \\get_count! = |c| c.count
+        \\Cfg := { count : U8 ?? 10, name : Str }.{
+        \\  get_count! : Cfg -> U8
+        \\  get_count! = |c| c.count
+        \\}
     ;
-    var test_env_a = try TestEnv.init("A", source_a);
+    var test_env_a = try TestEnv.init("Cfg", source_a);
     defer test_env_a.deinit();
-    try test_env_a.assertLastDefType("Cfg -> U8");
+    try test_env_a.assertDefType("Cfg.get_count!", "Cfg -> U8");
 
     const source_b =
-        \\import A
+        \\import Cfg
         \\
-        \\use_it = A.get_count!({ name: "b" })
+        \\use_it = Cfg.get_count!(Cfg.{ name: "b" })
     ;
-    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "Cfg", &test_env_a);
     defer test_env_b.deinit();
     try test_env_b.assertLastDefType("U8");
 }
 
-test "cross-module - defaulted record - textually identical local default does not merge (review M3)" {
-    // One written default is one identity: B declaring its own `?? 10` is a
-    // DIFFERENT default than A's even though the text matches, so the two
-    // record types mismatch (design.md "Defaulted Fields").
+test "cross-module - defaulted record - textually identical local declaration does not merge (review M3)" {
+    // One written declaration is one identity: B declaring its own
+    // textually identical nominal (default included) is a DIFFERENT type
+    // than A's, so the two never merge. Pre-restriction this fired the
+    // default-identity conflict on structural rows; with `??` confined to
+    // nominal backings, the nominal identities mismatch first and the
+    // default-identity conflict (Incompatible Defaults) is no longer
+    // constructible from source—it stays pinned at the unify level
+    // (unify_test "different default identities still mismatch").
     const source_a =
-        \\Cfg : { count : U8 ?? 10 }
+        \\Cfg := { count : U8 ?? 10 }
         \\
         \\mk! : Cfg
-        \\mk! = {}
-    ;
+        \\mk! = Cfg.{}
+    ; // declared in module A; B declares its own textually identical backing
     var test_env_a = try TestEnv.init("A", source_a);
     defer test_env_a.deinit();
 
     const source_b =
         \\import A
         \\
-        \\local : { count : U8 ?? 10 }
-        \\local = {}
+        \\Local := { count : U8 ?? 10 }
+        \\
+        \\local : Local
+        \\local = Local.{}
         \\
         \\lst = [A.mk!, local]
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
     try test_env_b.assertOneTypeError("Type Mismatch");
+}
+
+test "cross-module - defaulted record - foreign-helper dispatch cycle is check's residue" {
+    // The cycle's connecting edges are invisible to canonicalization TWICE
+    // over: the default calls `Helper.go`—a FOREIGN def whose body CAN
+    // cannot walk—and `go` dispatches on its parameter, resolved only by
+    // constraint discharge back to B's own `make`, whose body omits `x`.
+    // The checker's residue walk closes it through scheme-use evidence:
+    // seeding at the walked lookup nodes joins the where-clause constraint's
+    // per-use copies to the discharged instantiation that stamped the local
+    // target (design.md "Defaulted Fields"). A default may name an imported
+    // item directly: qualified imports resolve through the parser-owned
+    // declaration index regardless of statement position.
+    const source_helper =
+        \\Helper := {}.{
+        \\  go : c -> U8 where [c.make : c -> U8]
+        \\  go = |c| c.make()
+        \\}
+    ;
+    var test_env_helper = try TestEnv.init("Helper", source_helper);
+    defer test_env_helper.deinit();
+
+    const source_b =
+        \\import Helper
+        \\
+        \\Cfg := { x : U8 ?? Helper.go(Cfg.{ x: 1 }) }.{
+        \\    make = |_cfg| Cfg.{}.x
+        \\}
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "Helper", &test_env_helper);
+    defer test_env_b.deinit();
+    try test_env_b.assertCanErrors(&.{});
+    try test_env_b.assertOneTypeError("Recursive Default Value");
 }
 
 test "cross-module - check type - static dispatch" {

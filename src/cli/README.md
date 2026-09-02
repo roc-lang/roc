@@ -10,5 +10,6 @@ The CLI is the main entry point for developers using Roc. Its responsibilities i
 - **Performance Profiling**: Integration with Tracy profiler for performance analysis
 - **Testing**: Built-in execution of top-level `expect`s through the `test` command
 - **Shared Memory Management**: Testing utilities for the shared memory system used in IPC
+- **Default-App Staging**: Turning a file that runs on the built-in Echo platform—a headerless file with `main!`, or an `app` header that names no platform—into an ordinary app rooted beside a copy of that platform, through `default_app.zig`
 
 The CLI coordinates between the compiler frontend (parsing, type checking) and backend (code generation, linking) to provide a seamless development experience.

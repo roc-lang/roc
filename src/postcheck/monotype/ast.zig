@@ -85,16 +85,8 @@ pub const PackedListLiteral = struct {
 };
 
 /// Slice descriptor over one of the program side arrays.
-pub fn Span(comptime _: type) type {
-    return extern struct {
-        start: u32,
-        len: u32,
-
-        pub fn empty() @This() {
-            return .{ .start = 0, .len = 0 };
-        }
-    };
-}
+/// Span into one of this IR's flat side tables.
+pub const Span = Common.Span;
 
 /// Checked function definition used by a Monotype function template.
 pub const FnDef = union(enum(u8)) {
@@ -123,8 +115,17 @@ pub const HostedFn = struct {
 
 /// Nested function site inside an owner function template.
 pub const NestedFn = struct {
+    /// Checked template that lexically recorded the site: the site's owning
+    /// template, or—when `default_root` is set—the template whose body
+    /// materialized the defaulted-field expression containing the site.
     owner: names.ProcTemplate,
     site: names.ProcSiteId,
+    /// Set iff `site` is a DEFAULT-ROOT site (a lambda/closure inside a
+    /// defaulted-field expression, design.md "Defaulted Fields"): the
+    /// declaring module's 32-byte content identity. `site` indexes THAT
+    /// module's `nested_proc_sites` table, where the site's owner is
+    /// `.default_root` (the site belongs to no procedure template).
+    default_root: ?names.ModuleContentIdentity = null,
     context_fn_key: names.TypeDigest,
     /// Digest of every local-procedure declaration context visible inside this
     /// nested function. ConstStore restoration combines it with the restored
@@ -196,6 +197,10 @@ pub const CallableIdentity = union(enum(u8)) {
         owner_template: u32,
         owner_fn_digest: names.TypeDigest,
         site: u32,
+        /// Set iff `site` is a default-root site: the declaring module's
+        /// content identity (the site id is relative to THAT module's site
+        /// table, so the identity must participate in the callable identity).
+        default_root_module: ?names.ModuleContentIdentity = null,
     },
     hosted: HostedId,
     generated: GeneratedId,
@@ -262,26 +267,26 @@ pub fn fnTemplateDigest(template: FnTemplate, types: *Type.Store, name_store: *c
     return .{ .bytes = hasher.finalResult() };
 }
 
-/// Compute the stable digest used in specialization identity from the exact
-/// durable evidence nodes and lexical frames carried by a function template.
+/// Compute the stable specialization digest from durable evidence topology,
+/// checked callable type keys, and lexical frames carried by a function template.
 pub fn fnEvidenceDigest(
     evidence: []const check.ConstStore.ConstFnEvidence,
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
 ) EvidenceDigest {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    writeBytes(&hasher, "roc.monotype.fn_evidence.v1");
+    writeBytes(&hasher, "roc.monotype.fn_evidence.v2");
     writeU32(&hasher, @intCast(evidence.len));
     for (evidence) |entry| {
         writeU8(&hasher, @intFromEnum(entry));
         switch (entry) {
             .target => |target| {
                 writeBytes(&hasher, &target.view.bytes);
-                writeMethodTarget(&hasher, target.method);
+                writeMethodTarget(&hasher, target.method, target.method_callable_key);
                 if (target.instantiation) |instantiation| {
                     writeU8(&hasher, 1);
                     writeBytes(&hasher, &instantiation.view.bytes);
-                    writeU32(&hasher, @intFromEnum(instantiation.callable_ty));
+                    writeBytes(&hasher, &instantiation.callable_key.bytes);
                 } else writeU8(&hasher, 0);
                 writeU8(&hasher, @intFromEnum(target.nested));
                 switch (target.nested) {
@@ -293,6 +298,18 @@ pub fn fnEvidenceDigest(
                 }
             },
             .structural => |derivation| writeStructuralDerivation(&hasher, derivation),
+            .constraint_callable => |source| {
+                writeBytes(&hasher, &source.view.bytes);
+                writeBytes(&hasher, &source.callable_key.bytes);
+                writeU32(&hasher, @intFromEnum(source.source.plan));
+                writeU32(&hasher, @intFromEnum(source.source.method));
+                writeU32(&hasher, source.source.path.start);
+                writeU32(&hasher, source.source.path.len);
+                if (source.source.structural) |kind| {
+                    writeU8(&hasher, 1);
+                    writeU8(&hasher, @intFromEnum(kind));
+                } else writeU8(&hasher, 0);
+            },
             .unreachable_value, .checked_error => {},
         }
     }
@@ -311,7 +328,76 @@ pub fn fnEvidenceDigest(
     return .{ .bytes = hasher.finalResult() };
 }
 
-fn writeMethodTarget(hasher: *std.crypto.hash.sha2.Sha256, target: static_dispatch.MethodTarget) void {
+/// Exact checked-identity equality for retained function evidence. Checked
+/// callable ids are replay payload; their type keys are the durable identity.
+pub fn fnEvidenceEql(
+    left_evidence: []const check.ConstStore.ConstFnEvidence,
+    left_frames: []const check.ConstStore.ConstFnEvidenceFrame,
+    left_head: ?u32,
+    right_evidence: []const check.ConstStore.ConstFnEvidence,
+    right_frames: []const check.ConstStore.ConstFnEvidenceFrame,
+    right_head: ?u32,
+) bool {
+    if (left_head != right_head or left_evidence.len != right_evidence.len or left_frames.len != right_frames.len) return false;
+    for (left_evidence, right_evidence) |left, right| {
+        switch (left) {
+            .target => |left_target| switch (right) {
+                .target => |right_target| {
+                    if (!fnEvidenceTargetEql(left_target, right_target)) return false;
+                },
+                .constraint_callable, .structural, .unreachable_value, .checked_error => return false,
+            },
+            .structural => |left_structural| switch (right) {
+                .structural => |right_structural| if (!std.meta.eql(left_structural, right_structural)) return false,
+                .target, .constraint_callable, .unreachable_value, .checked_error => return false,
+            },
+            .constraint_callable => |left_source| switch (right) {
+                .constraint_callable => |right_source| if (!std.meta.eql(left_source.view, right_source.view) or
+                    !std.meta.eql(left_source.callable_key, right_source.callable_key) or
+                    left_source.source.plan != right_source.source.plan or
+                    left_source.source.method != right_source.source.method or
+                    !std.meta.eql(left_source.source.structural, right_source.source.structural) or
+                    !std.meta.eql(left_source.source.path, right_source.source.path)) return false,
+                .target, .structural, .unreachable_value, .checked_error => return false,
+            },
+            .unreachable_value => if (right != .unreachable_value) return false,
+            .checked_error => if (right != .checked_error) return false,
+        }
+    }
+    for (left_frames, right_frames) |left, right| {
+        if (!std.meta.eql(left, right)) return false;
+    }
+    return true;
+}
+
+fn fnEvidenceTargetEql(left: anytype, right: @TypeOf(left)) bool {
+    if (!std.meta.eql(left.view, right.view)) return false;
+    if (!methodTargetIdentityEql(left.method, left.method_callable_key, right.method, right.method_callable_key)) return false;
+    if (left.instantiation) |left_instantiation| {
+        const right_instantiation = right.instantiation orelse return false;
+        if (!std.meta.eql(left_instantiation.view, right_instantiation.view)) return false;
+        if (!std.meta.eql(left_instantiation.callable_key, right_instantiation.callable_key)) return false;
+    } else if (right.instantiation != null) return false;
+    return std.meta.eql(left.nested, right.nested);
+}
+
+fn methodTargetIdentityEql(
+    left: static_dispatch.MethodTarget,
+    left_callable_key: names.CanonicalTypeKey,
+    right: static_dispatch.MethodTarget,
+    right_callable_key: names.CanonicalTypeKey,
+) bool {
+    return left.module_idx == right.module_idx and
+        left.def_idx == right.def_idx and
+        std.meta.eql(left.kind, right.kind) and
+        std.meta.eql(left_callable_key, right_callable_key);
+}
+
+fn writeMethodTarget(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    target: static_dispatch.MethodTarget,
+    callable_key: names.CanonicalTypeKey,
+) void {
     writeU32(hasher, target.module_idx);
     writeU32(hasher, @intFromEnum(target.def_idx));
     writeU8(hasher, @intFromEnum(target.kind));
@@ -331,7 +417,7 @@ fn writeMethodTarget(hasher: *std.crypto.hash.sha2.Sha256, target: static_dispat
         },
         .structural => |kind| writeU8(hasher, @intFromEnum(kind)),
     }
-    writeU32(hasher, @intFromEnum(target.callable_ty));
+    writeBytes(hasher, &callable_key.bytes);
 }
 
 fn writeStructuralDerivation(hasher: *std.crypto.hash.sha2.Sha256, derivation: static_dispatch.StructuralDerivation) void {
@@ -352,6 +438,75 @@ fn writeOptionalU32(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
     } else writeU8(hasher, 0);
 }
 
+test "function evidence identity uses checked callable type keys" {
+    var method_key: names.CanonicalTypeKey = .{};
+    method_key.bytes[0] = 1;
+    var instantiation_key: names.CanonicalTypeKey = .{};
+    instantiation_key.bytes[0] = 2;
+    const frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),
+    };
+    const left = [_]check.ConstStore.ConstFnEvidence{.{ .target = .{
+        .view = .{},
+        .method = .{
+            .module_idx = 3,
+            .def_idx = @enumFromInt(4),
+            .kind = .{ .structural = .parser },
+            .callable_ty = @enumFromInt(5),
+        },
+        .method_callable_key = method_key,
+        .instantiation = .{
+            .view = .{},
+            .callable_key = instantiation_key,
+            .callable_ty = @enumFromInt(6),
+        },
+        .nested = .from_callable,
+    } }};
+    var right = left;
+    right[0].target.method.callable_ty = @enumFromInt(7);
+    right[0].target.instantiation.?.callable_ty = @enumFromInt(8);
+
+    try std.testing.expect(fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
+    try std.testing.expectEqual(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0));
+
+    right[0].target.method_callable_key.bytes[0] = 9;
+    try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
+    try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
+
+    right[0].target.method_callable_key = method_key;
+    right[0].target.instantiation.?.callable_key.bytes[0] = 9;
+    try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
+    try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
+}
+
+test "constraint callable evidence identity ignores checked type replay payload" {
+    var callable_key: names.CanonicalTypeKey = .{};
+    callable_key.bytes[0] = 1;
+    const frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),
+    };
+    const left = [_]check.ConstStore.ConstFnEvidence{.{ .constraint_callable = .{
+        .view = .{},
+        .callable_key = callable_key,
+        .source = .{
+            .plan = @enumFromInt(2),
+            .callable_ty = @enumFromInt(3),
+            .method = @enumFromInt(4),
+            .structural = null,
+            .path = .{ .start = 5, .len = 1 },
+        },
+    } }};
+    var right = left;
+    right[0].constraint_callable.source.callable_ty = @enumFromInt(6);
+
+    try std.testing.expect(fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
+    try std.testing.expectEqual(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0));
+
+    right[0].constraint_callable.callable_key.bytes[0] = 9;
+    try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
+    try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
+}
+
 fn writeFnDef(hasher: *std.crypto.hash.sha2.Sha256, fn_def: FnDef) void {
     switch (fn_def) {
         .local_template => |template| {
@@ -366,6 +521,12 @@ fn writeFnDef(hasher: *std.crypto.hash.sha2.Sha256, fn_def: FnDef) void {
             writeBytes(hasher, "nested");
             writeProcTemplate(hasher, nested.owner);
             writeU32(hasher, @intFromEnum(nested.site));
+            if (nested.default_root) |identity| {
+                writeBytes(hasher, "default_root");
+                writeBytes(hasher, &identity.bytes);
+            } else {
+                writeBytes(hasher, "no_default_root");
+            }
             writeBytes(hasher, &nested.context_fn_key.bytes);
             if (nested.local_proc_context_digest) |digest| {
                 writeBytes(hasher, "local_proc_contexts");
@@ -601,6 +762,10 @@ pub const TrySequence = struct {
     /// The Err propagation edge is compiler-proven cold. LIR lowering may
     /// preserve this as explicit branch metadata; backends must not infer it.
     err_is_cold: bool = false,
+    /// Explicit enclosing continuation for compiler-generated shared error
+    /// propagation. Its single parameter has the input Try's Err payload type.
+    /// Null preserves ordinary inline Err construction.
+    err_target: ?JoinPointId = null,
     ok_body: ExprId,
 };
 
@@ -617,6 +782,10 @@ pub const TryRecordSequence = struct {
     /// The Err propagation edge is compiler-proven cold. LIR lowering may
     /// preserve this as explicit branch metadata; backends must not infer it.
     err_is_cold: bool = false,
+    /// Explicit enclosing continuation for compiler-generated shared error
+    /// propagation. Its single parameter has the input Try's Err payload type.
+    /// Null preserves ordinary inline Err construction.
+    err_target: ?JoinPointId = null,
     ok_body: ExprId,
 };
 
@@ -638,7 +807,8 @@ pub const ContinueExpr = struct {
     values: Span(ExprId),
 };
 
-/// A typed shared continuation introduced after Monotype lifting.
+/// A typed shared continuation introduced by generated Monotype or a later
+/// specialization pass.
 ///
 /// `body` is evaluated when a matching `jump` supplies `params`; `remainder`
 /// is the expression that may transfer control to the join point. Both have
@@ -646,6 +816,10 @@ pub const ContinueExpr = struct {
 pub const JoinPointExpr = struct {
     id: JoinPointId,
     params: Span(TypedLocal),
+    /// Lexically enclosing locals whose ownership is transferred into the
+    /// shared body even when the body's value computation does not read them.
+    /// ARC performs their eventual release once in the body.
+    retained: Span(TypedLocal) = Span(TypedLocal).empty(),
     body: ExprId,
     remainder: ExprId,
 };
@@ -654,6 +828,11 @@ pub const JoinPointExpr = struct {
 pub const JumpExpr = struct {
     target: JoinPointId,
     args: Span(ExprId),
+    /// Explicit sparse rebinding of lexically enclosing loop parameters before
+    /// the jump. `loop_params` and `loop_values` are parallel; all values are
+    /// evaluated before any parameter is replaced.
+    loop_params: Span(TypedLocal) = Span(TypedLocal).empty(),
+    loop_values: Span(ExprId) = Span(ExprId).empty(),
 };
 
 /// Source control-flow construct observed during compile-time finalization.
@@ -1062,7 +1241,7 @@ pub const ProgramView = struct {
     runtime_schema_requests: []const RuntimeSchemaRequest,
     static_data_values: []const StaticDataValue,
     comptime_sites: []const ComptimeSite,
-    source_files: []const []const u8,
+    source_files: []const base.SourceFileEntry,
     expr_locs: []const base.SourceLoc,
     expr_regions: []const base.Region,
     stmt_locs: []const base.SourceLoc,
@@ -1245,9 +1424,9 @@ pub const ProgramBuilder = struct {
     runtime_schema_requests: ProgramList(RuntimeSchemaRequest, "runtime_schema_requests"),
     static_data_values: ProgramList(StaticDataValue, "static_data_values"),
     comptime_sites: ProgramList(ComptimeSite, "comptime_sites"),
-    /// Source file table for `SourceLoc.file` indices (module display names,
-    /// owned by this program).
-    source_files: ProgramList([]const u8, "source_files"),
+    /// Source file table for `SourceLoc.file` indices (module display and
+    /// package-qualified names, owned by this program).
+    source_files: ProgramList(base.SourceFileEntry, "source_files"),
     /// Source location per expression, parallel to `exprs`.
     expr_locs: ProgramList(base.SourceLoc, "expr_locs"),
     /// Checked source region per expression, parallel to `exprs`.
@@ -1322,7 +1501,10 @@ pub const ProgramBuilder = struct {
         self.stmt_locs.deinit(self.allocator);
         self.expr_regions.deinit(self.allocator);
         self.expr_locs.deinit(self.allocator);
-        for (self.source_files.unsafeRawItemsForView()) |file| self.allocator.free(file);
+        for (self.source_files.unsafeRawItemsForView()) |file| {
+            self.allocator.free(file.name);
+            self.allocator.free(file.qualified_name);
+        }
         self.source_files.deinit(self.allocator);
         for (self.comptime_sites.unsafeRawItemsForView()) |site| {
             self.allocator.free(site.branch_regions);
@@ -1604,13 +1786,19 @@ pub const ProgramBuilder = struct {
         return self.proc_debug_names.get(symbol);
     }
 
-    /// Register a source file (module display name) and return its index for
-    /// `SourceLoc.file`. Callers deduplicate; this always appends.
-    pub fn addSourceFile(self: *ProgramBuilder, name: []const u8) std.mem.Allocator.Error!u32 {
+    /// Register a source file (module display name plus package-qualified
+    /// module identity) and return its index for `SourceLoc.file`. Callers
+    /// deduplicate; this always appends.
+    pub fn addSourceFile(self: *ProgramBuilder, file: base.SourceFileEntry) std.mem.Allocator.Error!u32 {
         const id: u32 = @intCast(self.source_files.len());
-        const owned = try self.allocator.dupe(u8, name);
-        errdefer self.allocator.free(owned);
-        try self.source_files.append(self.allocator, owned);
+        const owned_name = try self.allocator.dupe(u8, file.name);
+        errdefer self.allocator.free(owned_name);
+        const owned_qualified = try self.allocator.dupe(u8, file.qualified_name);
+        errdefer self.allocator.free(owned_qualified);
+        try self.source_files.append(self.allocator, .{
+            .name = owned_name,
+            .qualified_name = owned_qualified,
+        });
         return id;
     }
 
@@ -1808,8 +1996,25 @@ pub const ProgramBuilder = struct {
     }
 
     pub fn addStaticDataValue(self: *ProgramBuilder, value: StaticDataValue) std.mem.Allocator.Error!Common.StaticDataId {
+        try self.ensureStaticDataValueCapacity(1);
+        return self.addStaticDataValueAssumeCapacity(value);
+    }
+
+    /// Preflight static-data publication so parallel identity tables cannot
+    /// diverge if allocation fails midway through a logical append.
+    pub fn ensureStaticDataValueCapacity(
+        self: *ProgramBuilder,
+        additional: usize,
+    ) std.mem.Allocator.Error!void {
+        try self.static_data_values.ensureUnusedCapacity(self.allocator, additional);
+    }
+
+    pub fn addStaticDataValueAssumeCapacity(
+        self: *ProgramBuilder,
+        value: StaticDataValue,
+    ) Common.StaticDataId {
         const id: Common.StaticDataId = @enumFromInt(@as(u32, @intCast(self.static_data_values.len())));
-        try self.static_data_values.append(self.allocator, value);
+        self.static_data_values.appendAssumeCapacity(value);
         return id;
     }
 
@@ -1890,15 +2095,11 @@ pub const ProgramBuilder = struct {
     }
 
     pub fn addExprSpan(self: *ProgramBuilder, ids: []const ExprId) std.mem.Allocator.Error!Span(ExprId) {
-        const start: u32 = @intCast(self.expr_ids.len());
-        try self.expr_ids.appendSlice(self.allocator, ids);
-        return .{ .start = start, .len = @intCast(ids.len) };
+        return try Common.appendSpan(ExprId, &self.expr_ids, self.allocator, ids);
     }
 
     pub fn addPatSpan(self: *ProgramBuilder, ids: []const PatId) std.mem.Allocator.Error!Span(PatId) {
-        const start: u32 = @intCast(self.pat_ids.len());
-        try self.pat_ids.appendSlice(self.allocator, ids);
-        return .{ .start = start, .len = @intCast(ids.len) };
+        return try Common.appendSpan(PatId, &self.pat_ids, self.allocator, ids);
     }
 
     pub fn addTypedLocalSpan(self: *ProgramBuilder, values: []const TypedLocal) std.mem.Allocator.Error!Span(TypedLocal) {
@@ -1912,52 +2113,35 @@ pub const ProgramBuilder = struct {
     }
 
     pub fn addFieldExprSpan(self: *ProgramBuilder, values: []const FieldExpr) std.mem.Allocator.Error!Span(FieldExpr) {
-        const start: u32 = @intCast(self.field_exprs.len());
-        try self.field_exprs.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendSpan(FieldExpr, &self.field_exprs, self.allocator, values);
     }
 
     pub fn addFieldAccessSegmentSpan(self: *ProgramBuilder, values: []const FieldAccessSegment) std.mem.Allocator.Error!Span(FieldAccessSegment) {
-        if (values.len == 0) Common.invariant("field access segment span must be nonempty");
-        const start: u32 = @intCast(self.field_access_segments.len());
-        try self.field_access_segments.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendNonemptySpan(FieldAccessSegment, &self.field_access_segments, self.allocator, values, "field access segment span must be nonempty");
     }
 
     pub fn addFnDefCaptureSpan(self: *ProgramBuilder, values: []const FnDefCapture) std.mem.Allocator.Error!Span(FnDefCapture) {
-        const start: u32 = @intCast(self.fn_def_captures.len());
-        try self.fn_def_captures.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendSpan(FnDefCapture, &self.fn_def_captures, self.allocator, values);
     }
 
     pub fn addRecordDestructSpan(self: *ProgramBuilder, values: []const RecordDestruct) std.mem.Allocator.Error!Span(RecordDestruct) {
-        const start: u32 = @intCast(self.record_destructs.len());
-        try self.record_destructs.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendSpan(RecordDestruct, &self.record_destructs, self.allocator, values);
     }
 
     pub fn addStrPatternStepSpan(self: *ProgramBuilder, values: []const StrPatternStep) std.mem.Allocator.Error!Span(StrPatternStep) {
-        const start: u32 = @intCast(self.str_pattern_steps.len());
-        try self.str_pattern_steps.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendSpan(StrPatternStep, &self.str_pattern_steps, self.allocator, values);
     }
 
     pub fn addBranchSpan(self: *ProgramBuilder, values: []const Branch) std.mem.Allocator.Error!Span(Branch) {
-        const start: u32 = @intCast(self.branches.len());
-        try self.branches.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendSpan(Branch, &self.branches, self.allocator, values);
     }
 
     pub fn addIfBranchSpan(self: *ProgramBuilder, values: []const IfBranch) std.mem.Allocator.Error!Span(IfBranch) {
-        const start: u32 = @intCast(self.if_branches.len());
-        try self.if_branches.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendSpan(IfBranch, &self.if_branches, self.allocator, values);
     }
 
     pub fn addStmtSpan(self: *ProgramBuilder, ids: []const StmtId) std.mem.Allocator.Error!Span(StmtId) {
-        const start: u32 = @intCast(self.stmt_ids.len());
-        try self.stmt_ids.appendSlice(self.allocator, ids);
-        return .{ .start = start, .len = @intCast(ids.len) };
+        return try Common.appendSpan(StmtId, &self.stmt_ids, self.allocator, ids);
     }
 
     pub fn exprSpan(self: *const ProgramBuilder, span_: Span(ExprId)) ProgramSpanBorrow(ExprId, "expr_ids") {
@@ -1994,9 +2178,7 @@ pub const ProgramBuilder = struct {
     }
 
     pub fn addCaptureOperandSpan(self: *ProgramBuilder, values: []const CaptureOperand) std.mem.Allocator.Error!Span(CaptureOperand) {
-        const start: u32 = @intCast(self.capture_operands.len());
-        try self.capture_operands.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendSpan(CaptureOperand, &self.capture_operands, self.allocator, values);
     }
 
     pub fn captureOperandSpan(self: *const ProgramBuilder, span_: Span(CaptureOperand)) ProgramSpanBorrow(CaptureOperand, "capture_operands") {

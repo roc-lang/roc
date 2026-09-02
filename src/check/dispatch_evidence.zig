@@ -12,9 +12,9 @@
 //! Order contract: depth-first over the resolved type structure—function
 //! args then return, ordinary alias/nominal args then backing, and logical row
 //! fields/tags across the complete extension chain, all in store order—
-//! emitting each constrained var's constraints in range order at its first
-//! occurrence; then the collected
-//! constraints' fn types are walked the same way in emission order (they can
+//! emitting one target parameter per dispatcher/method at the constrained
+//! var's first occurrence; then every independent constraint fn type is walked
+//! the same way in source order (they can
 //! bind further constrained vars, e.g. `where [a.iter : a -> i, i.next : ..]`).
 //!
 //! Each param also carries the semantic PATH from the scheme root to its
@@ -27,6 +27,7 @@
 //! paths over the concrete monomorphic callable instead.
 
 const std = @import("std");
+const Ident = @import("base").Ident;
 const types_mod = @import("types");
 
 const Allocator = std.mem.Allocator;
@@ -70,10 +71,20 @@ pub const PathStep = extern struct {
 };
 
 /// One (constrained scheme var, constraint) pair, at its canonical index.
+const ConstraintCallableSource = struct {
+    intro_expr: ?u32,
+    callable_var: Var,
+};
+
+/// One canonical procedure evidence parameter and its producer-authored
+/// dispatcher source.
 pub const EvidenceParam = struct {
     /// Resolved root of the constrained scheme var.
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
+    /// Producer-authored origin from which a specialization must obtain the
+    /// dispatcher's concrete type. `path` is relative to this source.
+    source: Source,
     /// Semantic steps from the scheme root to the dispatcher's first
     /// occurrence. Empty when no path over the normalized callable exists:
     /// dispatchers reachable only through a constraint's fn type, and open-row
@@ -85,6 +96,24 @@ pub const EvidenceParam = struct {
     /// pool stops growing.
     path_start: u32 = 0,
     path_len: u32 = 0,
+
+    pub const Source = union(enum) {
+        scheme_callable,
+        /// Exact checked expression whose dispatch constraint introduced the
+        /// callable containing this parameter.
+        constraint_callable: ConstraintCallableSource,
+        erased_row_remainder,
+    };
+};
+
+const WalkSource = union(enum) {
+    scheme_callable,
+    constraint_callable: ConstraintCallableSource,
+};
+
+const QueuedCallable = struct {
+    var_: Var,
+    intro_expr: ?u32,
 };
 
 const StackEntry = struct {
@@ -102,7 +131,12 @@ const RowContext = enum { none, record, tag };
 pub const Scratch = struct {
     visited: std.AutoHashMapUnmanaged(Var, void) = .{},
     stack: std.ArrayListUnmanaged(StackEntry) = .empty,
-    fn_var_queue: std.ArrayListUnmanaged(Var) = .empty,
+    fn_var_queue: std.ArrayListUnmanaged(QueuedCallable) = .empty,
+    /// Runtime evidence selects a method target, not one particular
+    /// instantiation of that target's callable scheme. Independent same-name
+    /// calls therefore share this receiver-local slot while retaining their
+    /// own callable relations in the checked plans.
+    emitted_methods: std.AutoHashMapUnmanaged(Ident.Idx, void) = .{},
     /// Flat pool backing every stack entry's (and emitted param's) path.
     path_pool: std.ArrayListUnmanaged(PathStep) = .empty,
     /// Child collection buffer for one node's children, in declared order.
@@ -119,6 +153,7 @@ pub const Scratch = struct {
         self.visited.deinit(gpa);
         self.stack.deinit(gpa);
         self.fn_var_queue.deinit(gpa);
+        self.emitted_methods.deinit(gpa);
         self.path_pool.deinit(gpa);
         self.children.deinit(gpa);
         self.* = .{};
@@ -128,6 +163,7 @@ pub const Scratch = struct {
         self.visited.clearRetainingCapacity();
         self.stack.clearRetainingCapacity();
         self.fn_var_queue.clearRetainingCapacity();
+        self.emitted_methods.clearRetainingCapacity();
         self.path_pool.clearRetainingCapacity();
         self.children.clearRetainingCapacity();
     }
@@ -148,15 +184,20 @@ pub fn enumerateEvidenceParams(
     scratch.clear();
 
     const out_base = out.items.len;
-    try walk(gpa, store, root, true, scratch, out);
+    try walk(gpa, store, root, .scheme_callable, scratch, out);
     // Constraint fn types can bind further constrained vars; the queue holds
     // every emitted constraint's fn var in emission order. `walk` may grow the
     // queue while we drain it—index-based drain keeps that sound. Params
-    // found through the queue are pathless: no path over the scheme's
-    // callable reaches them.
+    // found through the queue retain a semantic path relative to the exact
+    // constraint callable which introduced them.
     var queue_index: usize = 0;
     while (queue_index < scratch.fn_var_queue.items.len) : (queue_index += 1) {
-        try walk(gpa, store, scratch.fn_var_queue.items[queue_index], false, scratch, out);
+        const queued = scratch.fn_var_queue.items[queue_index];
+        const source: WalkSource = .{ .constraint_callable = .{
+            .intro_expr = queued.intro_expr,
+            .callable_var = queued.var_,
+        } };
+        try walk(gpa, store, queued.var_, source, scratch, out);
     }
     // The pool has stopped growing: materialize each param's path slice (the
     // walk records offsets because interim appends may reallocate the pool).
@@ -169,7 +210,7 @@ fn walk(
     gpa: Allocator,
     store: *const types_mod.Store,
     walk_root: Var,
-    with_paths: bool,
+    source: WalkSource,
     scratch: *Scratch,
     out: *std.ArrayListUnmanaged(EvidenceParam),
 ) Allocator.Error!void {
@@ -188,8 +229,8 @@ fn walk(
         }
 
         switch (resolved.desc.content) {
-            .flex => |flex| try emitConstraints(gpa, store, resolved.var_, flex.constraints, entry, with_paths, scratch, out),
-            .rigid => |rigid| try emitConstraints(gpa, store, resolved.var_, rigid.constraints, entry, with_paths, scratch, out),
+            .flex => |flex| try emitConstraints(gpa, store, resolved.var_, flex.constraints, entry, source, false, scratch, out),
+            .rigid => |rigid| try emitConstraints(gpa, store, resolved.var_, rigid.constraints, entry, source, false, scratch, out),
             .alias => |alias| {
                 scratch.children.clearRetainingCapacity();
                 for (store.sliceAliasArgs(alias), 0..) |arg, i| {
@@ -258,8 +299,8 @@ fn walkRowContinuation(
         // flattened monomorphic row. Keep its obligation in canonical order,
         // but publish it pathless rather than misidentifying the whole row as
         // its dispatcher.
-        .flex => |flex| try emitConstraints(gpa, store, resolved.var_, flex.constraints, entry, false, scratch, out),
-        .rigid => |rigid| try emitConstraints(gpa, store, resolved.var_, rigid.constraints, entry, false, scratch, out),
+        .flex => |flex| try emitConstraints(gpa, store, resolved.var_, flex.constraints, entry, .scheme_callable, true, scratch, out),
+        .rigid => |rigid| try emitConstraints(gpa, store, resolved.var_, rigid.constraints, entry, .scheme_callable, true, scratch, out),
         .alias => |alias| {
             scratch.children.clearRetainingCapacity();
             try scratch.children.append(gpa, rowContinuation(store.getAliasBackingVar(alias), entry.row_context));
@@ -433,17 +474,31 @@ fn emitConstraints(
     dispatcher_root: Var,
     constraints: StaticDispatchConstraint.SafeList.Range,
     entry: StackEntry,
-    with_paths: bool,
+    source: WalkSource,
+    erased_row_remainder: bool,
     scratch: *Scratch,
     out: *std.ArrayListUnmanaged(EvidenceParam),
 ) Allocator.Error!void {
+    scratch.emitted_methods.clearRetainingCapacity();
     for (store.sliceStaticDispatchConstraints(constraints)) |constraint| {
-        try out.append(gpa, .{
-            .dispatcher_var = dispatcher_root,
-            .constraint = constraint,
-            .path_start = if (with_paths) entry.path_start else 0,
-            .path_len = if (with_paths) entry.path_len else 0,
+        const emitted = try scratch.emitted_methods.getOrPut(gpa, constraint.fn_name);
+        if (!emitted.found_existing) {
+            try out.append(gpa, .{
+                .dispatcher_var = dispatcher_root,
+                .constraint = constraint,
+                .source = if (erased_row_remainder) .erased_row_remainder else switch (source) {
+                    .scheme_callable => .scheme_callable,
+                    .constraint_callable => |constraint_callable| .{ .constraint_callable = constraint_callable },
+                },
+                .path_start = entry.path_start,
+                .path_len = entry.path_len,
+            });
+        }
+        // A shared target does not make the callables interchangeable: each
+        // one can expose further independently constrained variables.
+        try scratch.fn_var_queue.append(gpa, .{
+            .var_ = constraint.fn_var,
+            .intro_expr = constraint.provenance.intro_expr.get(),
         });
-        try scratch.fn_var_queue.append(gpa, constraint.fn_var);
     }
 }

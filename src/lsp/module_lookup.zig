@@ -119,13 +119,33 @@ pub fn getDeclarationPattern(statement: CIR.Statement) ?CIR.Pattern.Idx {
 /// Find a definition by name, searching through all_defs and all_statements.
 /// Returns information about the first matching definition found.
 pub fn findDefinitionByName(module_env: *ModuleEnv, name: []const u8) ?DefinitionInfo {
+    return findDefinitionByModuleMember(module_env, module_env.module_name, name);
+}
+
+/// Find a definition by an explicit module/type name and member name.
+/// This is useful for qualified definitions such as `List.append` in Builtin.roc,
+/// whose containing module is `Builtin` rather than `List`.
+pub fn findDefinitionByModuleMember(module_env: *ModuleEnv, module_name: []const u8, name: []const u8) ?DefinitionInfo {
+    const matches_name = struct {
+        fn check(ident_name: []const u8, qualifier: []const u8, member: []const u8) bool {
+            if (std.mem.eql(u8, ident_name, member)) return true;
+            if (qualifier.len == 0) return false;
+
+            const qualified_len = qualifier.len + 1 + member.len;
+            return ident_name.len == qualified_len and
+                std.mem.startsWith(u8, ident_name, qualifier) and
+                ident_name[qualifier.len] == '.' and
+                std.mem.eql(u8, ident_name[qualifier.len + 1 ..], member);
+        }
+    }.check;
+
     // Search through all_defs first
     const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
     for (defs_slice) |def_idx| {
         const def = module_env.store.getDef(def_idx);
         if (extractIdentFromPattern(&module_env.store, def.pattern)) |ident_idx| {
             const ident_name = module_env.getIdentText(ident_idx);
-            if (std.mem.eql(u8, ident_name, name)) {
+            if (matches_name(ident_name, module_name, name)) {
                 return DefinitionInfo{
                     .pattern_idx = def.pattern,
                     .expr_idx = def.expr,
@@ -144,7 +164,7 @@ pub fn findDefinitionByName(module_env: *ModuleEnv, name: []const u8) ?Definitio
         if (parts.pattern) |pattern_idx| {
             if (extractIdentFromPattern(&module_env.store, pattern_idx)) |ident_idx| {
                 const ident_name = module_env.getIdentText(ident_idx);
-                if (std.mem.eql(u8, ident_name, name)) {
+                if (matches_name(ident_name, module_name, name)) {
                     return DefinitionInfo{
                         .pattern_idx = pattern_idx,
                         .expr_idx = parts.expr,
@@ -158,15 +178,59 @@ pub fn findDefinitionByName(module_env: *ModuleEnv, name: []const u8) ?Definitio
     return null;
 }
 
-/// Find a definition by name, also matching unqualified names against qualified ones.
-/// For example, name "concat" will match a definition named "Str.concat".
-/// This is useful for resolving external lookups where the caller knows only the
-/// unqualified function name.
+/// Find a type declaration whose qualified name is `module_name.name`.
+pub fn findTypeDeclarationByModuleMember(module_env: *ModuleEnv, module_name: []const u8, name: []const u8) ?CIR.Statement.Idx {
+    const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+    for (statements_slice) |stmt_idx| {
+        const header_idx: ?CIR.TypeHeader.Idx = switch (module_env.store.getStatement(stmt_idx)) {
+            .s_alias_decl => |alias| alias.header,
+            .s_nominal_decl => |nominal| nominal.header,
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_where_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => null,
+        };
+        if (header_idx) |header_idx_value| {
+            const header = module_env.store.getTypeHeader(header_idx_value);
+            const header_name = module_env.getIdentText(header.name);
+            const qualified_len = module_name.len + 1 + name.len;
+            const exact_match = module_name.len > 0 and header_name.len == qualified_len and
+                std.mem.startsWith(u8, header_name, module_name) and
+                header_name[module_name.len] == '.' and
+                std.mem.eql(u8, header_name[module_name.len + 1 ..], name);
+            const nested_match = module_name.len > 0 and header_name.len > qualified_len and
+                header_name[header_name.len - qualified_len - 1] == '.' and
+                std.mem.eql(u8, header_name[header_name.len - qualified_len ..][0..module_name.len], module_name) and
+                header_name[header_name.len - name.len - 1] == '.' and
+                std.mem.eql(u8, header_name[header_name.len - name.len ..], name);
+            if (exact_match or nested_match) {
+                return stmt_idx;
+            }
+        }
+    }
+    return null;
+}
+
+/// Find a definition by name, accepting a qualified definition's final segment.
 pub fn findDefinitionByUnqualifiedName(module_env: *ModuleEnv, name: []const u8) ?DefinitionInfo {
-    // Try exact match first
     if (findDefinitionByName(module_env, name)) |info| return info;
 
-    // Fall back to suffix matching: "name" matches "Module.name"
     var iter = iterateDefinitions(module_env);
     while (iter.next()) |def_info| {
         const def_name = module_env.getIdentText(def_info.ident_idx);
@@ -256,16 +320,14 @@ pub fn findDefinitionsWithPrefix(
 
 // Module Lookup Functions
 
-/// Find a module by name in the build environment's Coordinator state.
+/// Find a module by name in the build environment's Coordinator state within an importing package context.
 /// Returns null if the module is not found or the build environment is null.
-pub fn findModuleByName(build_env: *BuildEnv, module_name: []const u8) ?ModuleInfo {
-    // Extract the base module name (e.g., "Stdout" from "pf.Stdout")
-    const base_name = if (std.mem.findLast(u8, module_name, ".")) |dot_pos|
-        module_name[dot_pos + 1 ..]
-    else
-        module_name;
-
-    if (build_env.findModuleByName(base_name)) |mod_state| {
+pub fn findModuleByNameInPackage(
+    build_env: *BuildEnv,
+    importing_pkg: ?*compile.coordinator.PackageState,
+    module_name: []const u8,
+) ?ModuleInfo {
+    if (build_env.findModuleByQualifiedNameInPackage(importing_pkg, module_name)) |mod_state| {
         if (mod_state.moduleEnv()) |module_env_ptr| {
             return ModuleInfo{
                 .module_env = module_env_ptr,
@@ -276,6 +338,12 @@ pub fn findModuleByName(build_env: *BuildEnv, module_name: []const u8) ?ModuleIn
     return null;
 }
 
+/// Find a module by name in the build environment's Coordinator state.
+/// Returns null if the module is not found or the build environment is null.
+pub fn findModuleByName(build_env: *BuildEnv, module_name: []const u8) ?ModuleInfo {
+    return findModuleByNameInPackage(build_env, null, module_name);
+}
+
 /// Find a module by name, optionally checking if it's a builtin type first.
 /// This is a convenience wrapper that combines builtin checking with module lookup.
 pub fn findModuleByNameWithBuiltinCheck(
@@ -283,17 +351,13 @@ pub fn findModuleByNameWithBuiltinCheck(
     module_name: []const u8,
     builtin_types: []const []const u8,
 ) ?ModuleInfo {
-    // Extract the base module name
-    const base_name = if (std.mem.findLast(u8, module_name, ".")) |dot_pos|
-        module_name[dot_pos + 1 ..]
-    else
-        module_name;
-
-    // Check if this is a builtin type
-    for (builtin_types) |builtin| {
-        if (std.mem.eql(u8, base_name, builtin)) {
-            // Builtin types don't have a separate module env in the normal sense
-            return null;
+    // Only check builtin types if module_name is unqualified
+    if (std.mem.find(u8, module_name, ".") == null) {
+        for (builtin_types) |builtin| {
+            if (std.mem.eql(u8, module_name, builtin)) {
+                // Builtin types don't have a separate module env in the normal sense
+                return null;
+            }
         }
     }
 
