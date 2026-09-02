@@ -63,6 +63,9 @@ pub const RootRequestSet = struct {
     test_plan_metadata: []const postcheck.Common.RootTestPlanMetadata = &.{},
 };
 
+/// Deterministic task counts for parallel solved-LIR body lowering.
+pub const SolvedLirParallelMetrics = postcheck.SolvedLirLower.ParallelMetrics;
+
 /// Target settings and checked module state for the checked-to-LIR pipeline.
 pub const TargetConfig = struct {
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
@@ -105,6 +108,8 @@ pub const TargetConfig = struct {
     /// so a differential harness can execute the Debug verifier's materialized
     /// Lambda Mono program. The slot receives a value only in Debug builds.
     debug_materialized_out: ?*?postcheck.LambdaMono.Ast.Program = null,
+    /// Optional deterministic task counts for solved-LIR body-shard lowering.
+    solved_lir_parallel_metrics_out: ?*SolvedLirParallelMetrics = null,
     /// Receives the expression count of the lifted program handed to lambda-set
     /// solving. Every later post-check stage walks that program in full, so the
     /// count is the size measure a growth regression shows up in.
@@ -737,6 +742,7 @@ pub fn lowerCheckedModulesToLir(
     solved = undefined;
     var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved_input, .{
         .inline_plan = inline_plan.view(),
+        .post_check_executor = target.post_check_executor,
         .inline_expects = target.inline_expects,
         .list_in_place_map = target.list_in_place_map,
         .dict_seed_mode = switch (target.checked_module_state) {
@@ -747,6 +753,7 @@ pub fn lowerCheckedModulesToLir(
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = roots.test_plan_metadata,
         .debug_materialized_out = target.debug_materialized_out,
+        .parallel_metrics = target.solved_lir_parallel_metrics_out,
     });
     lir_gen_timing_scope.end();
     errdefer lowered.deinit();
