@@ -60,6 +60,8 @@ pub const ArcDismantle = @import("arc_dismantle.zig");
 /// Shared-memory ARC-inserted LIR image for interpreter-shim execution.
 pub const LirImage = @import("lir_image.zig");
 
+pub const ImmortalLocals = @import("immortal_locals.zig");
+
 /// Symbol identifiers used throughout statement-only LIR.
 pub const Symbol = LIR.Symbol;
 /// Explicit local metadata used throughout statement-only LIR.

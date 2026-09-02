@@ -11,6 +11,7 @@ const check = @import("check");
 const core = @import("lir_core");
 
 const Arc = @import("arc.zig");
+const ImmortalLocals = @import("immortal_locals.zig");
 const Trmc = @import("trmc.zig");
 const BoxReuse = @import("box_reuse.zig");
 const ReturnSlot = @import("return_slot.zig");
@@ -660,6 +661,10 @@ fn finishLoweredOutput(
         .consume_dead_boxes = target.consume_dead_boxes,
     });
     if (target.timing) |timing| timing.finish(arc_started_ns, .arc);
+
+    // After the certifier has checked ARC's ledger, so that what it verified
+    // is the placement ARC produced.
+    _ = try ImmortalLocals.elide(allocator, &lowered.lir_result.store);
 
     try LirDump.run(&lowered.lir_result);
 
