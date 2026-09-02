@@ -31484,17 +31484,46 @@ fn missingTryInfoFromNominal(
     };
 }
 
-/// A builtin `Try` whose error row is still an unbound flex var, as in a
-/// record field annotated `Try(ok, _)`. Such a field opts into the
-/// optional-field convention; parse derivation pins the row to `[Missing]`.
+/// A builtin `Try` whose error row can still be pinned to the optional-field
+/// marker. A field annotated `Try(ok, _)` starts with a flex error row, but a
+/// later use can constrain that row to `[Missing, ..flex]` before codec
+/// validation reaches its final-type boundary. Both states carry the same
+/// exact open relation; parse derivation closes it to `[Missing]`.
 fn unboundTryInfoFromNominal(
     self: *Self,
     nominal: types_mod.NominalType,
 ) Allocator.Error!?BuiltinTryInfo {
     const try_info = (try self.builtinTryInfoFromNominal(nominal)) orelse return null;
-    return switch (self.types.resolveVar(try_info.err_var).desc.content) {
-        .flex => try_info,
-        .rigid, .alias, .field_presence, .structure, .err => null,
+    return if (try self.varIsOpenOptionalParseError(try_info.err_var)) try_info else null;
+}
+
+fn varIsOpenOptionalParseError(self: *Self, var_: Var) Allocator.Error!bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .flex => true,
+        .alias => |alias| try self.varIsOpenOptionalParseError(self.types.getAliasBackingVar(alias)),
+        .structure => |structure| switch (structure) {
+            .tag_union => |tag_union| blk: {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                const tag_names = tags.items(.name);
+                const tag_args = tags.items(.args);
+                if (tag_names.len != 1) break :blk false;
+                if (self.types.sliceVars(tag_args[0]).len != 0) break :blk false;
+                if (self.types.resolveVar(tag_union.ext).desc.content != .flex) break :blk false;
+                const text = self.cir.getIdentStoreConst().getText(tag_names[0]);
+                break :blk Ident.textEql(text, "Missing");
+            },
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .empty_tag_union,
+            => false,
+        },
+        .rigid, .field_presence, .err => false,
     };
 }
 
