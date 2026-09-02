@@ -5546,6 +5546,7 @@ pub fn build(b: *std.Build) void {
         // Zig (the vendored IR builder), so no LLVM library linkage is needed.
         if (std.mem.eql(u8, module_test.test_step.name, "compile")) {
             module_test.test_step.root_module.addImport("llvm_codegen", llvm_codegen_module);
+            module_test.test_step.root_module.addImport("postcheck", roc_modules.postcheck);
         }
 
         if (std.mem.eql(u8, module_test.test_step.name, "glue")) {
