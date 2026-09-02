@@ -344,6 +344,8 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "code actions do not annotate a lambda parameter", .run = codeActionsLeaveLambdaParametersAlone },
     .{ .name = "code actions leave out a test they cannot write", .run = codeActionsLeaveOutUnwritableTest },
     .{ .name = "code actions offer nothing for a document that does not compile", .run = codeActionsOfferNothingWithoutTypes },
+    .{ .name = "code actions annotate the innermost binding a selection reaches", .run = codeActionsAnnotateInnermostOfSeveral },
+    .{ .name = "code actions leave a trailing comment on its own line", .run = codeActionsKeepTrailingComment },
     .{ .name = "the name on an annotation is a usable starting point", .run = annotationNameResolvesLikeAnyOccurrence },
     .{ .name = "positions are UTF-16 code units, not bytes", .run = positionsUseUtf16CodeUnits },
     .{ .name = "rename refuses a declaration that is not a plain name", .run = renameRefusesNonIsolatedDeclaration },
@@ -5783,4 +5785,113 @@ pub fn inlayHintsCarryTheirAnnotationEdit() integration_spec.SpecError!void {
     const left_hint = try hintAt(hints, 3, 8) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings(": Str", try stringField(left_hint, "label"));
     try std.testing.expect((try hintEdit(left_hint)) == null);
+}
+
+/// Verifies a selection covering several bindings annotates the innermost.
+///
+/// Reported by review on #11069. The choice used to be made by comparing name
+/// lengths, which says nothing about nesting: `outer` and `inner` are shorter
+/// than `doubled`, so the outermost binding won.
+pub fn codeActionsAnnotateInnermostOfSeveral() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "code_action_innermost.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\pick : Str -> Str
+        \\pick = |text| {{
+        \\    outer = Str.concat(text, "!")
+        \\    inner = {{
+        \\        doubled = Str.concat(outer, outer)
+        \\        doubled
+        \\    }}
+        \\    inner
+        \\}}
+        \\
+        \\main = pick("roc")
+    , .{platform_path});
+    defer allocator.free(source);
+
+    // From `outer` on line 4 down through `doubled` on line 6, so all three
+    // names fall inside the range.
+    const request = try codeActionRequest(allocator, 2, fixture.uri, 4, 4, 6, 15);
+    defer allocator.free(request);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{request});
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const actions = try response.result();
+
+    const annotate = try codeActionByPrefix(actions, "Annotate 'doubled'") orelse return error.TestUnexpectedResult;
+    try expectInsertionAt(try codeActionEdit(annotate, fixture.uri), 6, 0, "        doubled : Str\n");
+
+    // The outer bindings are in the range too, and neither is offered.
+    try std.testing.expect((try codeActionByPrefix(actions, "Annotate 'outer'")) == null);
+    try std.testing.expect((try codeActionByPrefix(actions, "Annotate 'inner'")) == null);
+}
+
+/// Verifies a generated test goes below a comment written after the value.
+///
+/// Reported by review on #11069. Inserting at the value's own end put the test
+/// in front of the comment, which carried the comment onto the generated
+/// `expect` and left it reading as a remark about the test.
+pub fn codeActionsKeepTrailingComment() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "code_action_comment.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\greet : Str -> Str
+        \\greet = |name| name # says nothing yet
+        \\
+        \\main = greet("roc")
+    , .{platform_path});
+    defer allocator.free(source);
+
+    const request = try codeActionRequest(allocator, 2, fixture.uri, 3, 0, 3, 0);
+    defer allocator.free(request);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{request});
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const actions = try response.result();
+
+    const generate = try codeActionByPrefix(actions, "Generate an expect test for 'greet'") orelse return error.TestUnexpectedResult;
+
+    // The value ends at column 19; the comment runs to column 38, and the test
+    // starts after it.
+    try expectInsertionAt(
+        try codeActionEdit(generate, fixture.uri),
+        3,
+        38,
+        "\n\n## TODO Replace these placeholder values with a case worth checking.\nexpect greet(\"\") == \"\"",
+    );
 }

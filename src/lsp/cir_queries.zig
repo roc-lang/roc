@@ -1386,6 +1386,19 @@ pub fn collectDeclaredPatterns(
     return results;
 }
 
+/// Where the line holding `offset` ends, before its line break.
+///
+/// Generated source is inserted here so that whatever the author wrote after a
+/// value on the same line -- in practice a comment -- keeps the line it was
+/// written on.
+fn lineEndAfter(source: []const u8, offset: u32) u32 {
+    if (offset >= source.len) return @intCast(source.len);
+    const newline = std.mem.findScalarPos(u8, source, offset, '\n') orelse
+        return @intCast(source.len);
+    if (newline > offset and source[newline - 1] == '\r') return @intCast(newline - 1);
+    return @intCast(newline);
+}
+
 /// A top-level definition the requested range falls inside.
 pub const TopLevelDefinition = struct {
     pattern: CIR.Pattern.Idx,
@@ -1428,7 +1441,12 @@ pub fn findTopLevelDefinitionAtOffset(
         const extent_end = @max(name_region.end.offset, body_region.end.offset);
         if (extent_end < start_offset or name_region.start.offset > end_offset) continue;
 
-        const body_range = regionToRange(module_env, body_region) orelse continue;
+        // Past anything else written on that line, not at the value's own end.
+        // A comment after the value would otherwise be pushed down onto the
+        // generated `expect` and read as a remark about it.
+        var insertion_region = body_region;
+        insertion_region.end.offset = lineEndAfter(source, body_region.end.offset);
+        const body_range = regionToRange(module_env, insertion_region) orelse continue;
         return .{
             .pattern = def.pattern,
             .name = name,

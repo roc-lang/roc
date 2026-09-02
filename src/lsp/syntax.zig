@@ -3266,8 +3266,11 @@ pub const SyntaxChecker = struct {
         var declared = try cir_queries.collectDeclaredPatterns(module_env, self.allocator);
         defer declared.deinit(self.allocator);
 
-        // A selection can cover several bindings at once. The shortest is the
-        // innermost, which is the one the cursor is on.
+        // A selection can cover several bindings at once, and the innermost is
+        // the one to annotate. A binding nested inside another is written after
+        // it, so the last name the selection reaches is the innermost one along
+        // that path. Name length says nothing about nesting: comparing it let
+        // an outer binding with a shorter name win over the inner one.
         var chosen: ?cir_queries.UnannotatedBinding = null;
         for (bindings.items) |binding| {
             if (!patternListContains(declared.items, binding.pattern)) continue;
@@ -3275,9 +3278,7 @@ pub const SyntaxChecker = struct {
                 chosen = binding;
                 continue;
             };
-            const current_len = current.region.end.offset - current.region.start.offset;
-            const binding_len = binding.region.end.offset - binding.region.start.offset;
-            if (binding_len < current_len) chosen = binding;
+            if (binding.region.start.offset > current.region.start.offset) chosen = binding;
         }
         const target = chosen orelse return null;
 
