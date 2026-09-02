@@ -3173,7 +3173,7 @@ the method name in a registry.
 Monotype instantiates a generated-codec contract once at the codec boundary.
 While the specialization graph is mutable, codec preparation relates the
 contract's source and frozen constructor roles to that boundary, instantiates
-both its public value shape and its explicitly checker-published generated-body
+both its public value shape and its explicitly checker-authored generated-body
 shape so every nested subject ID remains related to its specialized shape cell,
 reserves the exact callees, and records the method identity and checker-authored
 role with each prepared call. A declaration-backed nominal has a distinct body
@@ -5918,7 +5918,7 @@ Other solved-graph mutations:
 - `tryValidateOptionalInvalidValueMethod`—policy: Derived Parser
   Required-Field Error Composition (above). Once source types settle, one
   commit-probe instantiates and relates the format's optional `invalid_value`
-  capability at the exact parser boundary. Full success publishes the checked
+  capability at the exact parser boundary. Full success records the checked
   conditional call; absence or mismatch rolls back every type, evidence, and
   worklist mutation. `JsonParseGenericWrapperErrors.roc` pins the committed
   side, while `ParserRequiredFieldError.roc` pins rollback by declaring an
