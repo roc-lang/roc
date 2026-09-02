@@ -4754,6 +4754,12 @@ fn poisonRecursiveNonFunctionDefs(
         region: Region,
     };
 
+    const DependencyGraph = @import("DependencyGraph.zig");
+    var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binders.deinit(self.env.gpa);
+    var binder_scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binder_scratch.deinit(self.env.gpa);
+
     for (eval_order.sccs) |scc| {
         if (!scc.is_recursive) continue;
 
@@ -4764,12 +4770,18 @@ fn poisonRecursiveNonFunctionDefs(
             const def = self.env.store.getDef(def_idx);
             if (isRecursiveFunctionDefExpr(self.env.store.getExpr(def.expr))) continue;
 
-            const ident = defPatternIdent(&self.env.store, def.pattern) orelse continue;
-            try defs_to_poison.append(self.env.gpa, .{
-                .def_idx = def_idx,
-                .ident = ident,
-                .region = self.env.store.getPatternRegion(def.pattern),
-            });
+            // Every name the def binds is computed from the one cyclic
+            // value, so each is circular: the single name of a plain def,
+            // or each name a destructure binds.
+            binders.clearRetainingCapacity();
+            try DependencyGraph.appendPatternBinders(self.env, def.pattern, &binders, &binder_scratch, self.env.gpa);
+            for (binders.items) |binder| {
+                try defs_to_poison.append(self.env.gpa, .{
+                    .def_idx = def_idx,
+                    .ident = defPatternIdent(&self.env.store, binder).?,
+                    .region = self.env.store.getPatternRegion(binder),
+                });
+            }
         }
 
         std.mem.sort(RecursiveNonFunctionDef, defs_to_poison.items, {}, struct {
@@ -4784,13 +4796,23 @@ fn poisonRecursiveNonFunctionDefs(
             }
         }.lessThan);
 
+        var poisoned_defs: std.AutoHashMapUnmanaged(CIR.Def.Idx, void) = .{};
+        defer poisoned_defs.deinit(self.env.gpa);
         for (defs_to_poison.items) |def_to_poison| {
-            const malformed_idx = try self.env.pushMalformed(CIR.Expr.Idx, Diagnostic{
+            const diagnostic = Diagnostic{
                 .circular_value_definition = .{
                     .ident = def_to_poison.ident,
                     .region = def_to_poison.region,
                 },
-            });
+            };
+            // A destructuring def reports once per bound name; its one
+            // right-hand side is replaced once.
+            const poisoned = try poisoned_defs.getOrPut(self.env.gpa, def_to_poison.def_idx);
+            if (poisoned.found_existing) {
+                try self.env.pushDiagnostic(diagnostic);
+                continue;
+            }
+            const malformed_idx = try self.env.pushMalformed(CIR.Expr.Idx, diagnostic);
             self.env.store.setDefExpr(def_to_poison.def_idx, malformed_idx);
         }
     }
