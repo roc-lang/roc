@@ -350,6 +350,9 @@ const Analysis = struct {
     /// Canonical projected struct binding for repeated complete reads of the
     /// same root and committed layout.
     projected_container: []const u32,
+    /// Join cells with exactly one explicit initialization edge can be treated
+    /// as definition-sensitive containers rather than merged loop state.
+    single_init_join: []const bool,
     /// Solved-borrowed bindings whose value reaches an explicitly owned
     /// direct-call or low-level operand. Field-take variants override exactly
     /// these bindings to owned instead of manufacturing a retain at that
@@ -403,7 +406,7 @@ const Analysis = struct {
         const local_layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
         if (local_layout.tag != .struct_) return false;
         if (self.solution.isBorrowed(local) and !self.is_param[local_index] and self.projected_root[local_index] == no_index) return false;
-        if (self.solution.isJoinParam(local)) return false;
+        if (self.solution.isJoinParam(local) and !self.single_init_join[local_index]) return false;
         if (self.solution.maybeUninitializedCondition(local) != null) return false;
 
         const info = self.layouts.getStructInfo(local_layout);
@@ -759,6 +762,22 @@ pub fn compute(
         try body_clone.appendSuccessors(@constCast(store), &reach_work, stmt_id);
     }
 
+    const join_init_counts = try gpa.alloc(u32, store.localCount());
+    defer gpa.free(join_init_counts);
+    @memset(join_init_counts, 0);
+    for (0..store.cfStmtCount()) |stmt_index| {
+        if (!reachable.isSet(stmt_index)) continue;
+        const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+        if (stmt == .set_local and stmt.set_local.mode == .initialize_join_param) {
+            join_init_counts[@intFromEnum(stmt.set_local.target)] += 1;
+        }
+    }
+    const single_init_join = try gpa.alloc(bool, store.localCount());
+    defer gpa.free(single_init_join);
+    for (join_init_counts, 0..) |count, index| {
+        single_init_join[index] = count == 1;
+    }
+
     const projected_root = try gpa.alloc(u32, store.localCount());
     defer gpa.free(projected_root);
     @memset(projected_root, no_index);
@@ -858,6 +877,7 @@ pub fn compute(
         .is_param = is_param,
         .projected_root = projected_root,
         .projected_container = projected_container,
+        .single_init_join = single_init_join,
         .owned_demand = try gpa.alloc(bool, store.localCount()),
     };
     defer analysis.deinit();
@@ -1079,7 +1099,11 @@ pub fn compute(
             },
             .set_local => |stmt| {
                 try analysis.useWholeAt(stmt.value, current);
-                analysis.useWhole(stmt.target);
+                if (stmt.mode == .initialize_join_param and analysis.single_init_join[@intFromEnum(stmt.target)]) {
+                    try analysis.noteDef(stmt.target, current);
+                } else {
+                    analysis.useWhole(stmt.target);
+                }
                 try stack.append(gpa, stmt.next);
             },
             .debug => |stmt| {
@@ -1225,6 +1249,7 @@ pub fn compute(
             switch (store.getCFStmt(candidate.def_stmt)) {
                 inline .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag => |stmt| stmt.next,
                 .assign_ref => |stmt| if (analysis.projected_root[@intFromEnum(local)] != no_index) stmt.next else continue :candidates,
+                .set_local => |stmt| if (stmt.mode == .initialize_join_param and analysis.single_init_join[@intFromEnum(local)]) stmt.next else continue :candidates,
                 .init_uninitialized,
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
@@ -1240,7 +1265,6 @@ pub fn compute(
                 .assign_call_dict,
                 .store_struct,
                 .store_tag,
-                .set_local,
                 .debug,
                 .expect,
                 .expect_err,
@@ -1458,7 +1482,11 @@ pub fn compute(
                         try flow_frames.append(gpa, .{ .cursor = stmt.on_match, .state = state });
                         cursor = stmt.on_miss;
                     },
-                    .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {
+                    .loop_continue, .loop_break => {
+                        if (solution.isJoinParam(local)) poison |= state.may;
+                        break :chain;
+                    },
+                    .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => {
                         break :chain;
                     },
                 }

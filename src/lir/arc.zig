@@ -9791,6 +9791,38 @@ test "RC join remainder starts from join entry ownership" {
     try f.expectRc(extracted, 0, 0, 0);
 }
 
+test "RC single-incoming join parameter dismantles its fields" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const state = try f.local(f.pair_list);
+    const field = try f.local(f.list_i64);
+    const result = try f.local(f.list_i64);
+    const join_id = f.freshJoinPointId();
+
+    const ret = try f.ret(result);
+    const reverse = try f.assignLowLevel(result, &.{field}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), ret);
+    const take = try f.assignRefField(field, state, 1, reverse);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const initialize = try f.setLocal(state, pair, .initialize_join_param, jump);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{state}),
+        .body = take,
+        .remainder = initialize,
+    } });
+    const make_pair = try f.assignStruct(pair, &.{ first, second }, join);
+    const make_second = try f.assignList(second, &.{}, make_pair);
+    const body = try f.assignList(first, &.{}, make_second);
+    _ = try f.addProc(&.{}, body, f.list_i64);
+
+    try f.run();
+    try testing.expectEqual(@as(usize, 0), f.countRc(field, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(state, .decref));
+}
+
 test "RC join body keeps local born in remainder" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();

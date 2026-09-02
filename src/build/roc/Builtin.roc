@@ -21462,9 +21462,52 @@ dict_find = |data, key| {
 	}
 }
 
-dict_find_for_insert : Dict.DictData(k, v), k -> (Dict.DictData(k, v), [Found({ bucket_index : U64, entry_index : U64, value : v }), Missing({ bucket_index : U64, dist_and_fingerprint : U32 })])
+dict_find_for_insert : Dict.DictData(k, v), k -> (Dict.DictData(k, v), [Found({ bucket_index : U64, entry_index : U64 }), Missing({ bucket_index : U64, dist_and_fingerprint : U32 })])
 	where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
-dict_find_for_insert = |data, key| (data, dict_find(data, key))
+dict_find_for_insert = |data, key| {
+	insert_outcome = if List.is_empty(data.entries) {
+		if List.is_empty(data.buckets) {
+			Missing({ bucket_index: 0, dist_and_fingerprint: 0 })
+		} else {
+			hash = dict_hash_key(key, data.shifts)
+			Missing({
+				bucket_index: dict_bucket_index_from_hash(hash, data.shifts),
+				dist_and_fingerprint: dict_dist_and_fingerprint_from_hash(hash),
+			})
+		}
+	} else if List.is_empty(data.buckets) {
+		crash "Dict invariant violated: entries without buckets"
+	} else {
+		hash = dict_hash_key(key, data.shifts)
+		dict_find_for_insert_from(
+			data.buckets,
+			data.entries,
+			dict_bucket_index_from_hash(hash, data.shifts),
+			dict_dist_and_fingerprint_from_hash(hash),
+			key,
+		)
+	}
+	(data, insert_outcome)
+}
+
+dict_find_for_insert_from : List(Dict.DictBucket), List((k, v)), U64, U32, k -> [Found({ bucket_index : U64, entry_index : U64 }), Missing({ bucket_index : U64, dist_and_fingerprint : U32 })]
+	where [k.is_eq : k, k -> Bool]
+dict_find_for_insert_from = |buckets, entries, bucket_index, dist_and_fingerprint, key| {
+	bucket = list_get_unsafe(buckets, bucket_index)
+	if dist_and_fingerprint == bucket.dist_and_fingerprint {
+		entry_index = U32.to_u64(bucket.entry_index)
+		(found_key, _) = list_get_unsafe(entries, entry_index)
+		if found_key == key {
+			Found({ bucket_index, entry_index })
+		} else {
+			dict_find_for_insert_from(buckets, entries, dict_next_bucket_index(bucket_index, List.len(buckets)), dict_increment_dist(dist_and_fingerprint), key)
+		}
+	} else if dist_and_fingerprint > bucket.dist_and_fingerprint {
+		Missing({ bucket_index, dist_and_fingerprint })
+	} else {
+		dict_find_for_insert_from(buckets, entries, dict_next_bucket_index(bucket_index, List.len(buckets)), dict_increment_dist(dist_and_fingerprint), key)
+	}
+}
 
 dict_find_from : List(Dict.DictBucket), List((k, v)), U64, U32, k -> [Found({ bucket_index : U64, entry_index : U64, value : v }), Missing({ bucket_index : U64, dist_and_fingerprint : U32 })]
 	where [k.is_eq : k, k -> Bool]

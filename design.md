@@ -10413,7 +10413,8 @@ whole.
 A container qualifies for dismantling when all of the following hold:
 
 - its committed layout is a struct containing at least one refcounted field
-- its binding is owned, bound exactly once, and is not a join parameter
+- its binding is owned and bound exactly once; a join parameter qualifies only
+  when the CFG contains exactly one explicit `initialize_join_param` write
 - every occurrence of it is a field read (directly or through a borrowed
   pure same-value alias whose own occurrences are all field reads) or an
   operand-position whole use: moved into an aggregate or a call, returned,
@@ -10428,6 +10429,14 @@ parameter-benefit mask consumed by variant admission; the caller does not
 rediscover the benefit from field reads or uniqueness checks. The base emission
 keeps the borrowed schedule untouched.
 
+A join cell with exactly one reachable `initialize_join_param` write has one
+definition rather than a merge. Dismantle analysis uses that explicit count to
+treat the write as the container definition and starts field-take flow at its
+successor. A prospective take that reaches `loop_continue` or `loop_break` is
+rejected because the implicit boundary keeps the join definition live. A join
+cell with zero or multiple incoming definitions remains ineligible; the pass
+never guesses which incoming ownership place it denotes.
+
 Ownership-complete aggregate reads extend that schedule across wrappers without
 scalarizing them. An aggregate read is ownership-complete when, for the
 runtime shape established by the read, it contains every refcounted field the
@@ -10440,13 +10449,14 @@ no layout shape is treated as evidence that a variant is active.
 Ownership-complete aggregate reads and borrowed pure aliases form explicit
 ownership places. The place graph is solved to a fixpoint, so a nested read
 chain such as tag payload to struct field keeps the root aggregate's unit key.
-When one ownership place is projected repeatedly along a single control-flow
-path, dismantle analysis chooses the earliest same-root, same-layout projection
-that dominates each later projection and rewrites those later reads as explicit
-local aliases before ARC solving. Divergent projections remain separate places.
-This canonicalization is justified only by the committed projection shape and
-explicit CFG dominance; it never equates layouts or values heuristically. A borrowed
-projected struct whose complete root can own in the current emission may then
+When one ownership place is read repeatedly by ownership-complete struct-field
+or tag-payload reads along a single control-flow path, dismantle analysis
+chooses the earliest same-root, same-layout read that dominates each later read
+and rewrites those later reads as explicit local aliases before ARC solving.
+Divergent reads remain separate places. This canonicalization is justified only
+by the committed field or tag-payload operation and explicit CFG dominance; it
+never equates layouts or values heuristically. A borrowed struct produced by
+such a read whose complete root can own in the current emission may then
 receive that root unit and dismantle its own committed fields exactly like a
 directly owned struct. Both the transfer into the projected container and every
 later alias are present in LIR, so certification does not depend on the

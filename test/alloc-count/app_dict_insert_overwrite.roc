@@ -2,13 +2,11 @@ app [run!] { pf: platform "./platform/main.roc" }
 
 import pf.Host
 
-# RED TEST: currently fails. `Dict.insert` reallocates on every overwrite.
-#
 # Inserting an absent key into a uniquely owned, pre-sized dictionary mutates
 # the entry list and Robin Hood bucket table in place and allocates nothing --
 # that is what app_dict_insert.roc pins. Overwriting a key that is already
-# present needs strictly less work: no growth, no bucket shifting, just one
-# entry replaced. It nevertheless allocates once per call.
+# present likewise performs no growth or bucket shifting and must preserve the
+# unique entry backing across the lookup result wrapper.
 #
 # Narrowed as far as the builtin surface allows:
 #
@@ -18,10 +16,8 @@ import pf.Host
 #     is what a dictionary stores -- allocates nothing, so the write itself is
 #     fine when the list is genuinely unique.
 #
-# That leaves the entry list being shared at the point `Dict.insert`'s `Found`
-# branch writes to it. This is a cost regression, not a wrong answer: a copying
-# insert still returns the correct dictionary, which is why no test that
-# checks only contents has ever caught it.
+# This allocation assertion pins the ownership schedule in addition to the
+# result, because a copying insert would still return the correct dictionary.
 run! : Str => Str
 run! = |input| {
 	# Derived from the runtime input so compile-time evaluation cannot remove
