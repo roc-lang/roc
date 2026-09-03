@@ -165,19 +165,21 @@ pub fn bundle(
     while (try entry_iter.next()) |entry| {
         // Standardize archive names on forward slashes. Valid Unix source
         // paths can contain backslashes, but archive names remain portable.
-        const tar_path = if (builtin.target.os.tag == .windows) blk: {
-            const path_buf = try allocator.alloc(u8, entry.archive_path.len);
-            @memcpy(path_buf, entry.archive_path);
-            std.mem.replaceScalar(u8, path_buf, '\\', '/');
-            break :blk path_buf;
-        } else if (std.mem.find(u8, entry.archive_path, "\\") == null) entry.archive_path else {
+        var normalized_tar_path: ?[]u8 = null;
+        defer if (normalized_tar_path) |path| allocator.free(path);
+        const has_backslash = std.mem.find(u8, entry.archive_path, "\\") != null;
+        const tar_path = if (builtin.target.os.tag == .windows and has_backslash) blk: {
+            const path = try allocator.dupe(u8, entry.archive_path);
+            std.mem.replaceScalar(u8, path, '\\', '/');
+            normalized_tar_path = path;
+            break :blk path;
+        } else if (!has_backslash) entry.archive_path else {
             if (error_context) |ctx| {
                 ctx.path = entry.archive_path;
                 ctx.reason = .contained_backslash_on_unix;
             }
             return error.InvalidPath;
         };
-        defer if (builtin.target.os.tag == .windows) allocator.free(tar_path);
 
         if (pathHasBundleErr(tar_path)) |validation_error| {
             if (error_context) |ctx| {
