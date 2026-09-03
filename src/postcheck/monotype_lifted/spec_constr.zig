@@ -778,6 +778,11 @@ const LoopExitSelection = struct {
     },
 };
 
+const LoopExitSiteChange = struct {
+    sites: *std.ArrayList(Ast.ExprId),
+    previous_len: usize,
+};
+
 /// A function currently being inlined, with the number of known-constructor
 /// nodes carried by the call's arguments and captures. A same-function call
 /// nested inside its own inlining may re-enter only when its known-constructor
@@ -4771,6 +4776,12 @@ const Cloner = struct {
     /// selection remains active; propagating this stamp makes that clone
     /// idempotent without inferring provenance from expression shape.
     selected_loop_exit_tys: collections.DenseMap(Ast.ExprId, Type.TypeId),
+    /// Insertions into `selected_loop_exit_tys`, in order, so a rejected loop
+    /// fixed-point attempt can discard provenance for its discarded expressions.
+    selected_loop_exit_changes: std.ArrayList(Ast.ExprId),
+    /// Every selected-loop exit-site append, including appends to enclosing
+    /// selections, so rejected nested attempts cannot leave stale expression ids.
+    loop_exit_site_changes: std.ArrayList(LoopExitSiteChange),
     join_stack: std.ArrayList(ActiveJoinClone),
     /// Remaining arms the shape-preserving let-of-case rewrite may still
     /// process. That rewrite re-clones each arm's body against the small
@@ -4792,6 +4803,9 @@ const Cloner = struct {
     active_recursive_value_locals: collections.DenseMap(Ast.LocalId, void),
     rebased_inline_scopes: std.AutoHashMap(InlineScopeRebasePair, Ast.InlineScopeId),
     inline_scope_origins: collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId),
+    /// Insertions into the two inline-scope maps, in order, for rejected loop
+    /// attempt rollback. Accepted entries remain useful for the rest of the clone.
+    rebased_inline_scope_changes: std.ArrayList(InlineScopeRebasePair),
     /// Depth of the wrapper-strip recursion in the static value matchers
     /// (`bindPatToValue`/`bindPatToMatchValue`/`bindPatToFlowValue`), counting
     /// each `runtime_anchor.structure`/`nominal.backing`/
@@ -4856,12 +4870,15 @@ const Cloner = struct {
             .loop_stack = .empty,
             .loop_exit_stack = .empty,
             .selected_loop_exit_tys = collections.DenseMap(Ast.ExprId, Type.TypeId).init(pass.allocator),
+            .selected_loop_exit_changes = .empty,
+            .loop_exit_site_changes = .empty,
             .join_stack = .empty,
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
             .let_case_builds = .empty,
             .active_recursive_value_locals = collections.DenseMap(Ast.LocalId, void).init(pass.allocator),
             .rebased_inline_scopes = std.AutoHashMap(InlineScopeRebasePair, Ast.InlineScopeId).init(pass.allocator),
             .inline_scope_origins = collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId).init(pass.allocator),
+            .rebased_inline_scope_changes = .empty,
             .wrapper_strip_depth = 0,
             .materialize_strip_depth = 0,
             .inline_calls = .all,
@@ -4889,12 +4906,15 @@ const Cloner = struct {
             .loop_stack = .empty,
             .loop_exit_stack = .empty,
             .selected_loop_exit_tys = collections.DenseMap(Ast.ExprId, Type.TypeId).init(pass.allocator),
+            .selected_loop_exit_changes = .empty,
+            .loop_exit_site_changes = .empty,
             .join_stack = .empty,
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
             .let_case_builds = .empty,
             .active_recursive_value_locals = collections.DenseMap(Ast.LocalId, void).init(pass.allocator),
             .rebased_inline_scopes = std.AutoHashMap(InlineScopeRebasePair, Ast.InlineScopeId).init(pass.allocator),
             .inline_scope_origins = collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId).init(pass.allocator),
+            .rebased_inline_scope_changes = .empty,
             .wrapper_strip_depth = 0,
             .materialize_strip_depth = 0,
             .inline_calls = .all,
@@ -4924,11 +4944,14 @@ const Cloner = struct {
         self.loop_stack.deinit(self.pass.allocator);
         self.loop_exit_stack.deinit(self.pass.allocator);
         self.selected_loop_exit_tys.deinit();
+        self.selected_loop_exit_changes.deinit(self.pass.allocator);
+        self.loop_exit_site_changes.deinit(self.pass.allocator);
         self.join_stack.deinit(self.pass.allocator);
         self.let_case_builds.deinit(self.pass.allocator);
         self.active_recursive_value_locals.deinit();
         self.rebased_inline_scopes.deinit();
         self.inline_scope_origins.deinit();
+        self.rebased_inline_scope_changes.deinit(self.pass.allocator);
         self.subst.deinit();
         self.arena.deinit();
     }
@@ -6051,7 +6074,7 @@ const Cloner = struct {
                             .ty = expr.ty,
                             .data = .{ .break_ = if (maybe) |value| try self.cloneExpr(value) else null },
                         });
-                        try self.selected_loop_exit_tys.put(projected, selected_ty);
+                        try self.recordSelectedLoopExitTy(projected, selected_ty);
                         return projected;
                     }
                     const value = maybe orelse Common.invariant("selected value-producing loop had a valueless break");
@@ -6077,7 +6100,7 @@ const Cloner = struct {
                         .loop_params = try self.cloneLoopUpdateParams(jump.loop_params),
                         .loop_values = try self.cloneExprSpan(jump.loop_values),
                     } } });
-                    try sites.append(self.pass.allocator, duplicated);
+                    try self.recordLoopExitSite(sites, duplicated);
                     return duplicated;
                 }
                 break :blk .{ .jump = .{
@@ -6423,6 +6446,114 @@ const Cloner = struct {
         return try self.cloneExpr(body);
     }
 
+    fn recordSelectedLoopExitTy(
+        self: *Cloner,
+        expr: Ast.ExprId,
+        ty: Type.TypeId,
+    ) Allocator.Error!void {
+        try self.selected_loop_exit_changes.ensureUnusedCapacity(self.pass.allocator, 1);
+        const entry = try self.selected_loop_exit_tys.getOrPut(expr);
+        if (entry.found_existing) {
+            Common.invariant("selected loop-exit expression received duplicate provenance");
+        }
+        entry.value_ptr.* = ty;
+        self.selected_loop_exit_changes.appendAssumeCapacity(expr);
+    }
+
+    fn recordLoopExitSite(
+        self: *Cloner,
+        sites: *std.ArrayList(Ast.ExprId),
+        expr: Ast.ExprId,
+    ) Allocator.Error!void {
+        try self.loop_exit_site_changes.ensureUnusedCapacity(self.pass.allocator, 1);
+        const previous_len = sites.items.len;
+        try sites.append(self.pass.allocator, expr);
+        self.loop_exit_site_changes.appendAssumeCapacity(.{
+            .sites = sites,
+            .previous_len = previous_len,
+        });
+    }
+
+    const LoopAttemptMark = struct {
+        analysis: Pass.AnalysisMark,
+        callable_workers: usize,
+        selected_loop_exit_changes: usize,
+        loop_exit_site_changes: usize,
+        rebased_inline_scope_changes: usize,
+        let_case_depth: usize,
+        active_exit_selection: bool,
+    };
+
+    fn markLoopAttempt(
+        self: *Cloner,
+        exit_selection: ?LoopExitSelection,
+    ) LoopAttemptMark {
+        var active_exit_selection = exit_selection != null;
+        if (!active_exit_selection) {
+            for (self.loop_exit_stack.items) |selection| {
+                if (selection != null) {
+                    active_exit_selection = true;
+                    break;
+                }
+            }
+        }
+
+        return .{
+            .analysis = self.pass.markAnalysis(),
+            .callable_workers = self.pass.callable_workers.count(),
+            .selected_loop_exit_changes = self.selected_loop_exit_changes.items.len,
+            .loop_exit_site_changes = self.loop_exit_site_changes.items.len,
+            .rebased_inline_scope_changes = self.rebased_inline_scope_changes.items.len,
+            .let_case_depth = self.let_case_builds.items.len,
+            .active_exit_selection = active_exit_selection,
+        };
+    }
+
+    /// Rewind a rejected loop attempt when all of its output is still private to
+    /// that attempt. Callable workers, active let-of-case joins, and selected
+    /// loop exits can retain or mutate references outside the append-only program
+    /// suffix, so those rare attempts keep their unreachable output.
+    fn rewindLoopAttempt(
+        self: *Cloner,
+        mark: LoopAttemptMark,
+    ) void {
+        if (mark.let_case_depth != 0 or
+            mark.active_exit_selection or
+            self.pass.callable_workers.count() != mark.callable_workers)
+        {
+            return;
+        }
+
+        while (self.loop_exit_site_changes.items.len > mark.loop_exit_site_changes) {
+            const change = self.loop_exit_site_changes.pop() orelse
+                Common.invariant("loop exit-site change log underflow");
+            if (change.sites.items.len < change.previous_len) {
+                Common.invariant("loop exit-site list shrank before attempt rollback");
+            }
+            change.sites.shrinkRetainingCapacity(change.previous_len);
+        }
+
+        while (self.selected_loop_exit_changes.items.len > mark.selected_loop_exit_changes) {
+            const expr = self.selected_loop_exit_changes.pop() orelse
+                Common.invariant("selected loop-exit change log underflow");
+            if (!self.selected_loop_exit_tys.remove(expr)) {
+                Common.invariant("selected loop-exit change had no provenance entry");
+            }
+        }
+
+        while (self.rebased_inline_scope_changes.items.len > mark.rebased_inline_scope_changes) {
+            const key = self.rebased_inline_scope_changes.pop() orelse
+                Common.invariant("inline-scope rebase change log underflow");
+            const removed = self.rebased_inline_scopes.fetchRemove(key) orelse
+                Common.invariant("inline-scope rebase change had no cache entry");
+            if (!self.inline_scope_origins.remove(removed.value)) {
+                Common.invariant("inline-scope rebase change had no origin entry");
+            }
+        }
+
+        self.pass.rewindAnalysis(mark.analysis);
+    }
+
     fn currentLoopExitSelection(self: *Cloner) ?LoopExitSelection {
         if (self.loop_exit_stack.items.len == 0) return null;
         return self.loop_exit_stack.items[self.loop_exit_stack.items.len - 1];
@@ -6465,7 +6596,7 @@ const Cloner = struct {
                     .ty = break_ty,
                     .data = .{ .break_ = try self.materialize(tuple.items[selection.kept_indices[0]]) },
                 });
-                try self.selected_loop_exit_tys.put(projected_expr, selection.result_ty);
+                try self.recordSelectedLoopExitTy(projected_expr, selection.result_ty);
                 break :blk projected_expr;
             },
             .jump => |jump_transfer| blk: {
@@ -6479,7 +6610,7 @@ const Cloner = struct {
                         .args = try self.pass.program.addExprSpan(args),
                     } },
                 });
-                try jump_transfer.sites.append(self.pass.allocator, jump);
+                try self.recordLoopExitSite(jump_transfer.sites, jump);
                 break :blk jump;
             },
         };
@@ -7637,6 +7768,8 @@ const Cloner = struct {
         // a loop containing one must retain its whole runtime slots.
         if (exprContainsReturn(self.pass.program, loop.body)) has_constructor = false;
         while (has_constructor) {
+            const attempt_mark = self.markLoopAttempt(exit_selection);
+
             var new_params = std.ArrayList(Ast.TypedLocal).empty;
             defer new_params.deinit(self.pass.allocator);
 
@@ -7679,6 +7812,7 @@ const Cloner = struct {
             }
 
             self.subst.restore(split_start);
+            self.rewindLoopAttempt(attempt_mark);
             // Back edges demoted their unsupplied leaves in place. Any slot that
             // still carries constructor structure is worth another split attempt.
             has_constructor = false;
@@ -10975,8 +11109,12 @@ const Cloner = struct {
                 .call_site = original.call_site,
                 .parent = base,
             });
-            try self.rebased_inline_scopes.put(.{ .source = src, .outer = outer }, rebased);
+            const rebase_key = InlineScopeRebasePair{ .source = src, .outer = outer };
+            try self.rebased_inline_scope_changes.ensureUnusedCapacity(self.pass.allocator, 1);
             try self.inline_scope_origins.put(rebased, src);
+            errdefer _ = self.inline_scope_origins.remove(rebased);
+            try self.rebased_inline_scopes.putNoClobber(rebase_key, rebased);
+            self.rebased_inline_scope_changes.appendAssumeCapacity(rebase_key);
             base = rebased;
         }
         return base;
@@ -13192,6 +13330,19 @@ fn emptyLiftedProgramForTest(allocator: Allocator) Ast.Program {
     );
 }
 
+test "SpecConstr analysis rewind discards field access segments" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const before = program.markSpecConstrAnalysis();
+    const field = try program.names.internRecordFieldLabel("field");
+    _ = try program.addFieldAccessSegmentSpan(&.{.{ .field = field }});
+    program.rewindSpecConstrAnalysis(before);
+
+    try std.testing.expectEqualDeep(before, program.markSpecConstrAnalysis());
+}
+
 test "loop exit selection clone is isolated from ordinary rewrites" {
     const allocator = std.testing.allocator;
     var program = emptyLiftedProgramForTest(allocator);
@@ -13213,6 +13364,54 @@ test "loop exit selection clone is isolated from ordinary rewrites" {
     try std.testing.expectEqual(InlineCallMode.none, exit_selection.inline_calls);
     try std.testing.expect(!exit_selection.rewrite_call_patterns);
     try std.testing.expect(!exit_selection.emit_callable_workers);
+}
+
+test "rejected loop shape attempts do not retain emitted expressions" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const union_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
+    const initial_name = try program.names.internTagLabel("Initial");
+    const next_name = try program.names.internTagLabel("Next");
+    const param = try program.addLocal(@enumFromInt(1), union_ty);
+    const initial = try program.addExpr(.{ .ty = union_ty, .data = .{ .tag = .{
+        .name = initial_name,
+        .payloads = Ast.Span(Ast.ExprId).empty(),
+    } } });
+    const next = try program.addExpr(.{ .ty = union_ty, .data = .{ .tag = .{
+        .name = next_name,
+        .payloads = Ast.Span(Ast.ExprId).empty(),
+    } } });
+    const continue_ = try program.addExpr(.{ .ty = union_ty, .data = .{ .continue_ = .{
+        .values = try program.addExprSpan(&.{next}),
+    } } });
+    const loop = try program.addExpr(.{ .ty = union_ty, .data = .{ .loop_ = .{
+        .params = try program.addTypedLocalSpan(&.{.{ .local = param, .ty = union_ty }}),
+        .initial_values = try program.addExprSpan(&.{initial}),
+        .body = continue_,
+    } } });
+
+    const exprs_before = program.exprCount();
+    const locals_before = program.localsView().len;
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+
+    const cloned = try cloner.cloneExpr(loop);
+
+    // The first split attempt emits a mismatched back edge, then demotes the
+    // slot. Only initial-value anchoring and the whole-slot retry remain.
+    try std.testing.expectEqual(@as(usize, 6), program.exprCount() - exprs_before);
+    try std.testing.expectEqual(@as(usize, 1), program.localsView().len - locals_before);
+    const cloned_loop = program.getExpr(cloned);
+    if (cloned_loop.data != .loop_) return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), GuardedList.borrowLen(program.typedLocalSpan(cloned_loop.data.loop_.params)));
+    try std.testing.expectEqual(@as(usize, 1), GuardedList.borrowLen(program.exprSpan(cloned_loop.data.loop_.initial_values)));
+    const cloned_continue = program.getExpr(cloned_loop.data.loop_.body);
+    if (cloned_continue.data != .continue_) return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), GuardedList.borrowLen(program.exprSpan(cloned_continue.data.continue_.values)));
 }
 
 test "SpecConstr preserves record update ordering while exposing its final shape" {
