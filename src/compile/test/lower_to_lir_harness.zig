@@ -17,6 +17,28 @@ const roc_target = @import("roc_target");
 const Coordinator = @import("../coordinator.zig").Coordinator;
 const CoreCtx = @import("ctx").CoreCtx;
 
+const ReverseCompletionExecutor = struct {
+    inner: base.post_check_task_executor.Executor,
+
+    fn run(
+        context: *anyopaque,
+        tasks: []const base.post_check_task_executor.Task,
+        completions: []base.post_check_task_executor.Completion,
+    ) std.mem.Allocator.Error!void {
+        const self: *ReverseCompletionExecutor = @ptrCast(@alignCast(context));
+        try self.inner.run(tasks, completions);
+        std.mem.reverse(base.post_check_task_executor.Completion, completions);
+    }
+
+    fn executor(self: *ReverseCompletionExecutor) base.post_check_task_executor.Executor {
+        return .{
+            .context = self,
+            .worker_count = self.inner.worker_count,
+            .runFn = ReverseCompletionExecutor.run,
+        };
+    }
+};
+
 var shared_test_builtins: ?eval.BuiltinModules = null;
 var shared_test_builtins_mutex: std.Io.Mutex = .init;
 
@@ -108,6 +130,10 @@ pub const LirLoweringOptions = struct {
     lifted_expr_count_out: ?*usize = null,
     /// Receives the complete checked-to-LIR timing snapshot after lowering.
     timing_out: ?*lir.CheckedPipeline.TimingSnapshot = null,
+    /// Receives deterministic solved-LIR body-shard task counts.
+    solved_lir_parallel_metrics_out: ?*lir.CheckedPipeline.SolvedLirParallelMetrics = null,
+    /// Deliver post-check completions in reverse order after callbacks finish.
+    reverse_post_check_completions: bool = false,
     /// Stop after Monotype lowering. Focused postcheck regressions use this
     /// boundary when later LIR passes are outside the behavior under test.
     monotype_only: bool = false,
@@ -206,6 +232,18 @@ pub fn expectProcedureRootParallelismDeterministicLir(app_body: []const u8) Lowe
     try expectPostCheckParallelismDeterministicLir(app_body, true);
 }
 
+fn expectNamedWorkerLocalCommitted(
+    store: *const lir.LirStore,
+    _: *const layout.Store,
+) LowerToLirHarnessError!void {
+    var matching_names: usize = 0;
+    for (0..store.localCount()) |index| {
+        const name = store.localName(@enumFromInt(@as(u32, @intCast(index)))) orelse continue;
+        if (std.mem.eql(u8, name, "named_local")) matching_names += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), matching_names);
+}
+
 fn expectPostCheckParallelismDeterministicLir(
     app_body: []const u8,
     parallel_procedure_root_fixture: bool,
@@ -221,16 +259,19 @@ fn expectPostCheckParallelismDeterministicLir(
     }, null);
 
     for ([_]usize{ 2, 4 }) |specialization_workers| {
-        for (0..2) |_| {
+        for (0..2) |attempt| {
             const candidate = try gpa.alloc(u8, cap);
             defer gpa.free(candidate);
             var candidate_writer = std.Io.Writer.fixed(candidate);
             var timing: lir.CheckedPipeline.TimingSnapshot = .{};
+            var solved_lir_parallel: lir.CheckedPipeline.SolvedLirParallelMetrics = .{};
             try runToLir(app_body, &candidate_writer, .{
                 .specialization_workers = specialization_workers,
                 .parallel_procedure_root_fixture = parallel_procedure_root_fixture,
                 .timing_out = &timing,
-            }, null);
+                .solved_lir_parallel_metrics_out = &solved_lir_parallel,
+                .reverse_post_check_completions = attempt == 1,
+            }, if (parallel_procedure_root_fixture) expectNamedWorkerLocalCommitted else null);
             try std.testing.expectEqualStrings(reference_writer.buffered(), candidate_writer.buffered());
             if (parallel_procedure_root_fixture) {
                 const parallel = timing.monotype_parallel;
@@ -243,6 +284,13 @@ fn expectPostCheckParallelismDeterministicLir(
                 );
                 try std.testing.expect(parallel.peak_worker_lanes_used > 0);
                 try std.testing.expect(parallel.peak_worker_lanes_used <= parallel.peak_worker_lanes_available);
+                try std.testing.expect(solved_lir_parallel.task_waves > 0);
+                try std.testing.expect(solved_lir_parallel.tasks_submitted >= 2);
+                try std.testing.expect(solved_lir_parallel.tasks_committed > 0);
+                try std.testing.expectEqual(
+                    solved_lir_parallel.tasks_submitted,
+                    solved_lir_parallel.tasks_committed + solved_lir_parallel.tasks_retried_serial,
+                );
             }
         }
     }
@@ -283,7 +331,7 @@ fn runToLir(
     try tmp_dir.dir.createDirPath(std.testing.io, ".roc_echo_platform");
     const app_exports = if (opts.parallel_procedure_root_fixture) "main!, auxiliary!" else "main!";
     const auxiliary_source = if (opts.parallel_procedure_root_fixture)
-        "\nauxiliary! = |msg| Echo.line!(msg)\n"
+        "\nauxiliary! = |arg| {\n    named_local = arg\n    named_local\n}\n"
     else
         "";
     const synthetic_source = try std.fmt.allocPrint(
@@ -304,7 +352,7 @@ fn runToLir(
         \\platform ""
         \\    requires {} {
         \\        main! : List(Str) => Try({}, [Exit(I8), ..]),
-        \\        auxiliary! : Str => {},
+        \\        auxiliary! : I64 => I64,
         \\    }
         \\    exposes [Echo]
         \\    packages {}
@@ -315,7 +363,7 @@ fn runToLir(
         \\
         \\main_for_host! : List(Str) => I8
         \\main_for_host! = |args| {
-        \\    auxiliary!("starting")
+        \\    _auxiliary_result = auxiliary!(0)
         \\    match main!(args) {
         \\        Ok({}) => 0
         \\        Err(Exit(code)) => code
@@ -432,6 +480,18 @@ fn lowerAppPathToLir(
     }
 
     var timing = lir.CheckedPipeline.Timing.init(std.testing.io);
+    const coordinator_executor = if (opts.specialization_workers > 1)
+        coord.postCheckExecutor()
+    else
+        null;
+    var reverse_executor = if (coordinator_executor) |executor|
+        ReverseCompletionExecutor{ .inner = executor }
+    else
+        undefined;
+    const post_check_executor = if (coordinator_executor) |executor|
+        if (opts.reverse_post_check_completions) reverse_executor.executor() else executor
+    else
+        null;
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
         .{
@@ -449,10 +509,8 @@ fn lowerAppPathToLir(
             .proc_debug_names = opts.proc_debug_names,
             .prove_ranges = opts.prove_ranges,
             .lifted_expr_count_out = opts.lifted_expr_count_out,
-            .post_check_executor = if (opts.specialization_workers > 1)
-                coord.postCheckExecutor()
-            else
-                null,
+            .post_check_executor = post_check_executor,
+            .solved_lir_parallel_metrics_out = opts.solved_lir_parallel_metrics_out,
             .timing = if (opts.timing_out != null) &timing else null,
         },
     );
