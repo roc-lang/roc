@@ -726,8 +726,8 @@ pub const Program = struct {
         };
     }
 
-    /// Discard SpecConstr analysis-only appends while retaining their capacity
-    /// for the next analysis walk.
+    /// Discard speculative SpecConstr appends while retaining their capacity for
+    /// a retry or the next analysis walk.
     pub fn rewindSpecConstrAnalysis(self: *Program, mark: SpecConstrAnalysisMark) void {
         self.assertSpecConstrAnalysisMark(mark);
         self.freeAnalysisLocalNames(mark.local_names);
