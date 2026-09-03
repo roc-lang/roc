@@ -84,6 +84,16 @@ const TwoTagsSafeList = TwoTags.SafeList;
 
 const Problem = problem_mod.Problem;
 const Context = problem_mod.Context;
+const TypeMismatchEvidence = problem_mod.TypeMismatchEvidence;
+
+const RawTypePair = struct {
+    expected: Var,
+    actual: Var,
+};
+
+const RawMismatchEvidence = struct {
+    record: ?RawTypePair = null,
+};
 
 /// Exact checker evidence produced when a fresh record construction omits a
 /// defaulted field through width absorption. `record_var` is the original
@@ -247,6 +257,15 @@ pub const FieldPresenceRelation = enum {
     required_access,
 };
 
+/// Which semantic side of an owning record diagnostic contains the nominal.
+/// Alias expansion may reverse the unifier's algorithmic operand order, so
+/// retained structural evidence must not infer this role from local ordering.
+pub const NominalRecordMismatchRole = enum {
+    none,
+    expected,
+    actual,
+};
+
 /// Controls what a top-level type mismatch does to the two operands.
 pub const MismatchBehavior = enum {
     /// Merge both operands into a single `.err` type. This is the default: it
@@ -268,6 +287,9 @@ pub const Options = struct {
     root_relation: RootRelation = .ordinary,
     row_width_relation: RowWidthRelation = .construction,
     field_presence_relation: FieldPresenceRelation = .ordinary,
+    /// Retain the outer nominal record opening with this semantic role if the
+    /// relation rejects and its reporter needs the instantiated backing.
+    nominal_record_mismatch_role: NominalRecordMismatchRole = .none,
     /// Source-backed record construction whose omission decisions this
     /// relation owns. The checker publishes successful default absorptions
     /// against this exact expression when the empty row operand is an
@@ -304,6 +326,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         env.occurs_scratch,
         opts.row_width_relation,
         opts.field_presence_relation,
+        opts.nominal_record_mismatch_role,
         env.construction_probe,
         opts.record_construction_var,
     );
@@ -324,6 +347,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
 
         const expected_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, a);
         const actual_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, b);
+        const evidence = try snapshotMismatchEvidence(env);
         const problem_idx = try env.problems.appendProblem(env.problems_gpa, .{ .type_mismatch = .{
             .types = .{
                 .expected_var = a,
@@ -332,12 +356,31 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
                 .actual_snapshot = actual_snapshot,
             },
             .context = opts.context,
+            .evidence = evidence,
         } });
         try env.types.poisonOnMismatch(a, b);
         return Result{ .problem = problem_idx };
     };
 
     return .unified;
+}
+
+fn snapshotRawRecordEvidence(env: *const Env, raw: RawTypePair) std.mem.Allocator.Error!TypeMismatchEvidence {
+    return .{ .record = .{
+        .expected_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, raw.expected),
+        .actual_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, raw.actual),
+    } };
+}
+
+/// Snapshot exact mismatch operands retained by an owning relation. The raw
+/// vars point at the already-instantiated structures the unifier compared, so
+/// reporting never has to reopen a nominal declaration.
+pub fn snapshotMismatchEvidence(env: *const Env) std.mem.Allocator.Error!TypeMismatchEvidence {
+    const raw = env.unify_scratch.mismatch_evidence;
+    return if (raw.record) |record|
+        try snapshotRawRecordEvidence(env, record)
+    else
+        .none;
 }
 
 /// A temporary unification context used to unify two type variables within a `Store`.
@@ -368,6 +411,7 @@ const Unifier = struct {
     occurs_scratch: *occurs.Scratch,
     row_width_relation: RowWidthRelation,
     field_presence_relation: FieldPresenceRelation,
+    nominal_record_mismatch_role: NominalRecordMismatchRole,
     /// The unresolved "actual" var before resolution, used for deferred constraint origin tracking.
     /// This allows error messages to point to the original expression rather than the resolved type.
     unresolved_a: ?Var,
@@ -394,6 +438,7 @@ const Unifier = struct {
         occurs_scratch: *occurs.Scratch,
         row_width_relation: RowWidthRelation,
         field_presence_relation: FieldPresenceRelation,
+        nominal_record_mismatch_role: NominalRecordMismatchRole,
         construction_probe: ?ConstructionProbe,
         record_construction_var: ?Var,
     ) Unifier {
@@ -405,6 +450,7 @@ const Unifier = struct {
             .occurs_scratch = occurs_scratch,
             .row_width_relation = row_width_relation,
             .field_presence_relation = field_presence_relation,
+            .nominal_record_mismatch_role = nominal_record_mismatch_role,
             .unresolved_a = null,
             .unresolved_b = null,
             .enclosing_records = null,
@@ -700,6 +746,10 @@ const Unifier = struct {
             .ignore => return,
             .set_flag => |flag_idx| {
                 self.scratch.mismatch_flags.items.items[flag_idx] = true;
+            },
+            .record_then_propagate => |record| {
+                self.scratch.mismatch_evidence.record = record;
+                return error.TypeMismatch;
             },
         }
     }
@@ -2018,6 +2068,7 @@ const Unifier = struct {
                 return;
             } else {
                 // Anon has fields but nominal is empty
+                try self.retainOuterRecordMismatch(vars, opened_backing, direction);
                 return error.TypeMismatch;
             }
         }
@@ -2037,12 +2088,40 @@ const Unifier = struct {
         } });
 
         // Unify the record fields
+        try self.retainOuterRecordMismatch(vars, opened_backing, direction);
+
         try self.unifyTwoRecords(
             vars,
             anon_record_fields,
             anon_record_ext,
             nominal_backing_record.fields,
             .{ .ext = nominal_backing_record.ext },
+        );
+    }
+
+    /// Retain only the outer record relation owned by the active diagnostic.
+    /// Nested nominal payloads belong to fields inside that record and must
+    /// not replace its structural evidence.
+    fn retainOuterRecordMismatch(
+        self: *Self,
+        vars: *const ResolvedVarDescs,
+        opened_backing: Var,
+        direction: NominalDirection,
+    ) std.mem.Allocator.Error!void {
+        if (self.nominal_record_mismatch_role == .none or self.enclosing_records != null) return;
+
+        const anonymous_var = switch (direction) {
+            .a_is_nominal => vars.b.var_,
+            .b_is_nominal => vars.a.var_,
+        };
+        const evidence: RawTypePair = switch (self.nominal_record_mismatch_role) {
+            .none => unreachable,
+            .expected => .{ .expected = opened_backing, .actual = anonymous_var },
+            .actual => .{ .expected = anonymous_var, .actual = opened_backing },
+        };
+        _ = try self.scratch.unify_work_stack.append(
+            self.scratch.gpa,
+            .{ .mismatch_handler = .{ .record_then_propagate = evidence } },
         );
     }
 
@@ -3747,6 +3826,7 @@ const MismatchHandling = union(enum) {
     propagate,
     ignore,
     set_flag: u32,
+    record_then_propagate: RawTypePair,
 };
 
 const SameAliasAfterArgs = struct {
@@ -3818,7 +3898,7 @@ pub fn partitionFields(
     a_fields_range: RecordFieldSafeList.Range,
     b_fields_range: RecordFieldSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedRecordFields {
-    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, null, null);
+    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, .none, null, null);
     return try unifier.partitionFields(scratch, a_fields_range, b_fields_range);
 }
 
@@ -3832,7 +3912,7 @@ pub fn partitionTags(
     a_tags_range: TagSafeList.Range,
     b_tags_range: TagSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedTags {
-    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, null, null);
+    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, .none, null, null);
     return try unifier.partitionTags(scratch, a_tags_range, b_tags_range);
 }
 
@@ -3890,6 +3970,7 @@ pub const Scratch = struct {
     // explicit unification work stack
     unify_work_stack: WorkFrame.SafeList,
     mismatch_flags: MkSafeList(bool),
+    mismatch_evidence: RawMismatchEvidence,
 
     // records - used internal by unification
     gathered_fields: RecordFieldSafeList,
@@ -3956,6 +4037,7 @@ pub const Scratch = struct {
             .fresh_vars = try VarSafeList.initCapacity(gpa, 8),
             .unify_work_stack = try WorkFrame.SafeList.initCapacity(gpa, 32),
             .mismatch_flags = try MkSafeList(bool).initCapacity(gpa, 8),
+            .mismatch_evidence = .{},
             .gathered_fields = try RecordFieldSafeList.initCapacity(gpa, 32),
             .only_in_a_fields = try RecordFieldSafeList.initCapacity(gpa, 32),
             .only_in_b_fields = try RecordFieldSafeList.initCapacity(gpa, 32),
@@ -4012,6 +4094,7 @@ pub const Scratch = struct {
     pub fn reset(self: *Scratch) void {
         self.unify_work_stack.items.clearRetainingCapacity();
         self.mismatch_flags.items.clearRetainingCapacity();
+        self.mismatch_evidence = .{};
         self.gathered_fields.items.clearRetainingCapacity();
         self.only_in_a_fields.items.clearRetainingCapacity();
         self.only_in_b_fields.items.clearRetainingCapacity();

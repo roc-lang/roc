@@ -4956,6 +4956,15 @@ fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) 
     return self.runUnify(a, b, env, unifyOptionsForContext(ctx, .poison_to_err));
 }
 
+/// Unify the record relation that owns a record-aware diagnostic. If a
+/// nominal backing must be opened, retain that exact instantiated structure
+/// for the reporter without changing the user-facing root types.
+fn unifyRecordInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
+    var opts = unifyOptionsForContext(ctx, .poison_to_err);
+    opts.nominal_record_mismatch_role = .expected;
+    return self.runUnify(a, b, env, opts);
+}
+
 fn exprIsFreshRecordConstruction(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
     const expr = self.cir.store.getExpr(expr_idx);
     return expr == .e_record or expr == .e_empty_record;
@@ -4973,7 +4982,18 @@ fn unifyOwnedRelation(
     ctx: problem.Context,
     row_width_relation: unifier.RowWidthRelation,
 ) std.mem.Allocator.Error!unifier.Result {
-    return self.unifyOwnedRootRelation(expected, actual, env, ctx, row_width_relation, .ordinary);
+    return self.unifyOwnedRootRelation(expected, actual, env, ctx, row_width_relation, .ordinary, .none);
+}
+
+fn unifyOwnedRecordRelation(
+    self: *Self,
+    expected: Var,
+    actual: Var,
+    env: *Env,
+    ctx: problem.Context,
+    row_width_relation: unifier.RowWidthRelation,
+) std.mem.Allocator.Error!unifier.Result {
+    return self.unifyOwnedRootRelation(expected, actual, env, ctx, row_width_relation, .ordinary, .actual);
 }
 
 /// `unifyOwnedRelation` for a relation whose initial pair carries a root
@@ -4986,6 +5006,7 @@ fn unifyOwnedRootRelation(
     ctx: problem.Context,
     row_width_relation: unifier.RowWidthRelation,
     root_relation: unifier.RootRelation,
+    nominal_record_mismatch_role: unifier.NominalRecordMismatchRole,
 ) std.mem.Allocator.Error!unifier.Result {
     const result = try self.runUnify(expected, actual, env, .{
         .context = ctx,
@@ -4994,6 +5015,7 @@ fn unifyOwnedRootRelation(
         .row_width_relation = row_width_relation,
         .field_presence_relation = fieldPresenceRelationForContext(ctx, row_width_relation),
         .record_construction_var = if (row_width_relation == .construction) actual else null,
+        .nominal_record_mismatch_role = nominal_record_mismatch_role,
     });
     if (result.isAccepted()) return result;
     return .{ .problem = try self.appendTypeMismatch(expected, actual, ctx) };
@@ -5010,6 +5032,8 @@ fn appendTypeMismatch(
 ) std.mem.Allocator.Error!problem.Problem.Idx {
     const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected);
     const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual);
+    const unify_env = self.unifyEnv();
+    const evidence = try unifier.snapshotMismatchEvidence(&unify_env);
     return self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
         .types = .{
             .expected_var = expected,
@@ -5018,6 +5042,7 @@ fn appendTypeMismatch(
             .actual_snapshot = actual_snapshot,
         },
         .context = ctx,
+        .evidence = evidence,
     } });
 }
 
@@ -5042,6 +5067,7 @@ fn unifyNominalConstructorBacking(
         .{ .nominal_constructor = ctx },
         row_width_relation,
         .nominal_constructor_backing,
+        .none,
     );
 }
 
@@ -17795,7 +17821,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             }}),
                         },
                     }, env, expr_region);
-                    _ = try self.unifyInContext(
+                    _ = try self.unifyRecordInContext(
                         record_being_updated_var,
                         actual_field_record,
                         env,
@@ -17835,7 +17861,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     }, env, expr_region);
 
                     // Unify this record update with the record we're updating
-                    _ = try self.unifyInContext(record_being_updated_var, single_field_record, env, .{ .record_update = .{
+                    _ = try self.unifyRecordInContext(record_being_updated_var, single_field_record, env, .{ .record_update = .{
                         .field_name = field.name,
                         .field_region_idx = @enumFromInt(@intFromEnum(field_idx)),
                         .record_region_idx = @enumFromInt(@intFromEnum(record_being_updated_var)),
@@ -19084,7 +19110,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // A rejected access belongs to this expression. Preserve the
                 // independently-solved receiver graph and make only the access
                 // erroneous so post-check lowering emits its runtime crash.
-                const access_result = try self.unifyOwnedRelation(record_being_accessed, acc_receiver_var, env, .{ .record_access = .{
+                const access_result = try self.unifyOwnedRecordRelation(record_being_accessed, acc_receiver_var, env, .{ .record_access = .{
                     .field_name = access.name,
                     .field_region = access_region,
                     .mode = switch (access.mode) {
