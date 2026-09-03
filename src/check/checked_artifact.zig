@@ -17357,6 +17357,15 @@ const EvidencePass = struct {
                 } else .scheme_callable,
                 .constraint_callable => |constraint_callable| constraint: {
                     if (!self.constraintCallableHasSpecializationDefault(param)) break :constraint .use_site_only;
+                    // A default-field root always instantiates its local
+                    // procedures with checked use-site evidence, so Boxy reads
+                    // such a literal dispatcher from that evidence descriptor
+                    // instead of a runtime dictionary.
+                    if (constraint_callable.intro_expr) |intro_expr| {
+                        if (self.plan_table.lookupByExpr(@enumFromInt(intro_expr))) |plan| {
+                            if (self.planIsDefaultRoot(plan)) break :constraint .use_site_only;
+                        }
+                    }
                     break :constraint .{ .constraint_callable = .{
                         .callable_ty = self.checked_types.rootForSourceVar(self.module, constraint_callable.callable_var) orelse
                             checkedArtifactInvariant("constraint-callable evidence source type was not published", .{}),
@@ -17390,7 +17399,7 @@ const EvidencePass = struct {
                 .method = try self.names.internMethodIdent(idents, param.constraint.fn_name),
                 .dispatcher_ty = self.checked_types.rootForSourceVar(self.module, param.dispatcher_var) orelse
                     checkedArtifactInvariant("checked evidence parameter dispatcher type was not published", .{}),
-                .runtime_dictionary = param.constraint.origin.literalKind() == null,
+                .runtime_dictionary = source == .constraint_callable or param.constraint.origin.literalKind() == null,
                 .structural = self.structuralKindForMethodIdent(param.constraint.fn_name),
                 .source = source,
                 .path = .{ .start = path_start, .len = @intCast(published_path.len) },
@@ -17407,6 +17416,14 @@ const EvidencePass = struct {
             .alias, .field_presence, .structure, .err => return null,
         };
         return numericDefaultPhaseForConstraints(self.module, constraints);
+    }
+
+    fn planIsDefaultRoot(self: *const EvidencePass, plan_id: static_dispatch.StaticDispatchPlanId) bool {
+        const span = self.template_iterator_refs.default_plan_refs;
+        for (self.plan_table.template_refs[span.start .. span.start + span.len]) |default_plan_id| {
+            if (default_plan_id == plan_id) return true;
+        }
+        return false;
     }
 
     /// Whether a dispatcher reachable only through a constraint callable has a
@@ -29491,7 +29508,7 @@ pub const CheckedModuleArtifact = struct {
     // callable relation or only the shared method target.
     // Version 76 combines the version-75 artifact with retained callable
     // evidence provenance used by pathless specialization.
-    const serialized_layout_version: u32 = 76;
+    const serialized_layout_version: u32 = 77;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -35679,8 +35696,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xFB, 0x3E, 0x9B, 0x23, 0x9B, 0xC9, 0xF4, 0x58, 0x81, 0x68, 0xB4, 0xF4, 0x94, 0xD3, 0x05, 0xC1,
-        0xE8, 0x72, 0x3C, 0x16, 0xAA, 0x66, 0x01, 0xD2, 0xC1, 0x0A, 0x76, 0xFF, 0x43, 0xB8, 0xCF, 0x15,
+        0x42, 0x08, 0xFE, 0x13, 0x77, 0xF9, 0x10, 0xEF, 0x7F, 0xBF, 0xCF, 0xD9, 0x9A, 0x05, 0x10, 0x7E,
+        0x8B, 0x6F, 0x50, 0x17, 0x2D, 0x2B, 0x04, 0x37, 0xD2, 0x20, 0x7B, 0x27, 0x04, 0xB0, 0xBC, 0x1A,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

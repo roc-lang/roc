@@ -2921,7 +2921,12 @@ callable through which a hidden dispatcher with a specialization-time literal
 default was enumerated; a nested constraint requirement resolved only by
 checked use-site evidence; an explicit specialization-time literal default; or
 an erased open-row remainder. An empty path is not a defaulting signal and
-consumers must never infer one source category from path length.
+consumers must never infer one source category from path length. A literal
+dispatcher whose constraint was introduced by a dispatch plan owned by a
+standalone default-field expression is marked use-site-only: the default root
+always instantiates its local procedures with checked use-site evidence, and
+Boxy reads that literal's descriptor from the evidence instead of binding a
+runtime dictionary.
 
 A hidden dispatcher is one reachable only through a constraint callable, so it
 has no component in the procedure's callable type and no request type can
