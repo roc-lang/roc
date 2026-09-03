@@ -57,9 +57,17 @@ cd "$repo_root"
 # interact rather than adding their separate instruction-count changes: the
 # resulting entrypoint totals are 106 on x64musl and 92 on arm64musl. The
 # pinned compare loop itself is unchanged.
+# A vectorization attempt after the main optimization pipeline reaches the
+# fixture's `List.repeat` setup, which fills the buffer 32 bytes at a time
+# through vector registers instead of a scalar store per element. That is why
+# the two targets move in opposite directions: x64musl drops from 106 to 102
+# and arm64musl rises from 92 to 94, where the rise is the splat and the wider
+# store pair replacing a longer scalar sequence. The pinned compare loop is
+# untouched, still load, load, compare, advance with the `from_le_bytes` bounds
+# test doubling as the loop's termination.
 expectations=(
-    "x64musl:106"
-    "arm64musl:92"
+    "x64musl:102"
+    "arm64musl:94"
 )
 
 failed=0
