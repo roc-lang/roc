@@ -7729,23 +7729,14 @@ fn formatUnbundlePathValidationReason(reason: unbundle.PathValidationReason) []c
 
 /// Use the Coordinator to discover every transitive module the entry point
 /// imports (directly, via re-exports, or via a `package [...]` header) and
-/// append any not already in `file_paths` so the bundle includes them
-/// automatically. `uncompressed_size` is updated to reflect the newly added
-/// files. Also validates platform target binaries if a platform is found.
+/// append the absolute path of any not already in `source_paths`. Also
+/// validates platform target binaries if a platform is found.
 fn discoverAndAddBundleModules(
     ctx: *CliCtx,
-    first_roc_file: []const u8,
-    file_paths: *std.ArrayList([]const u8),
-    uncompressed_size: *u64,
+    abs_entry: []const u8,
+    source_paths: *std.ArrayList([]const u8),
     stderr: anytype,
 ) CliMainError!void {
-    // Resolve the entry point to an absolute path
-    const abs_entry = std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, first_roc_file, ctx.gpa) catch |err| {
-        try stderr.print("Error: Could not resolve path '{s}': {}\n", .{ first_roc_file, err });
-        return err;
-    };
-    defer ctx.gpa.free(abs_entry);
-
     // Create a BuildEnv to parse headers and discover modules via the
     // Coordinator. Bundling compiles the workspace to discover transitive
     // modules; it uses the checked-module cache like every other pipeline.
@@ -7753,9 +7744,9 @@ fn discoverAndAddBundleModules(
     defer build_env.deinit();
 
     // Run the build—the Coordinator discovers all transitive module dependencies
-    build_env.build(abs_entry) catch {
+    build_env.build(abs_entry) catch |build_err| {
         // Drain and display any errors from the build
-        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        const drained = try build_env.drainReports();
         defer build_env.freeDrainedReportsPathsOnly(drained);
 
         for (drained) |mod| {
@@ -7770,7 +7761,7 @@ fn discoverAndAddBundleModules(
                 }
             }
         }
-        // Build errors are not fatal for bundling—continue to check what we can
+        return build_err;
     };
 
     // Detect platform from BuildEnv packages using the accessor
@@ -7780,18 +7771,15 @@ fn discoverAndAddBundleModules(
     var bundled_set = std.StringHashMap(void).init(ctx.gpa);
     defer bundled_set.deinit();
 
-    for (file_paths.items) |rel_path| {
-        const abs_path = std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, rel_path, ctx.gpa) catch continue;
-        defer ctx.gpa.free(abs_path);
-        try bundled_set.put(try ctx.arena.dupe(u8, abs_path), {});
+    for (source_paths.items) |abs_path| {
+        try bundled_set.put(abs_path, {});
     }
 
     // Append any discovered module that is not already in the bundle list.
     // URL dependencies are skipped: their files live in the local package
     // cache, and consumers resolve them from the URLs in the header.
-    // The Coordinator yields absolute paths; convert each to a path relative
-    // to cwd so it round-trips through `cwd.openFile` and survives the
-    // bundle's path-validation step (which rejects absolute paths).
+    // The Coordinator yields absolute paths. Keep that explicit source
+    // identity here; rocBundle assigns the separate archive path later.
     if (build_env.coordinator) |coord| {
         var coord_pkg_it = coord.packages.iterator();
         while (coord_pkg_it.next()) |pkg_entry| {
@@ -7800,25 +7788,9 @@ fn discoverAndAddBundleModules(
                 if (!build_env.isBundleableModule(pkg_entry.key_ptr.*, abs_path)) continue;
                 if (bundled_set.contains(abs_path)) continue;
 
-                const rel_path = std.fs.path.relative(ctx.arena, build_env.cwd, null, build_env.cwd, abs_path) catch {
-                    try stderr.print("Error: Discovered module path is outside the current directory and cannot be bundled: {s}\n", .{abs_path});
-                    return error.MissingBundleFiles;
-                };
-
-                // Confirm the file is actually readable from cwd before adding it.
-                const file = std.Io.Dir.cwd().openFile(ctx.io.std_io, rel_path, .{}) catch |err| {
-                    try stderr.print("Error: Could not open discovered module '{s}': {}\n", .{ rel_path, err });
-                    return err;
-                };
-                const stat = file.stat(ctx.io.std_io) catch |err| {
-                    file.close(ctx.io.std_io);
-                    return err;
-                };
-                file.close(ctx.io.std_io);
-
-                try file_paths.append(ctx.arena, rel_path);
-                try bundled_set.put(try ctx.arena.dupe(u8, abs_path), {});
-                uncompressed_size.* += stat.size;
+                const owned_abs_path = try ctx.arena.dupe(u8, abs_path);
+                try source_paths.append(ctx.arena, owned_abs_path);
+                try bundled_set.put(owned_abs_path, {});
             }
         }
     }
@@ -7853,63 +7825,32 @@ fn discoverAndAddBundleModules(
     }
 }
 
-/// Find the longest directory path that is an ancestor of every input in `abs_paths`.
-/// All inputs must be absolute paths (they may be paths to files or directories).
-/// Returns the common parent directory with no trailing path separator (except for
-/// a filesystem root such as "/"). Returns an empty slice if the inputs share no
-/// directory ancestor (e.g. two Windows paths on different drives).
-fn longestCommonParentDir(allocator: std.mem.Allocator, abs_paths: []const []const u8) Allocator.Error![]u8 {
-    std.debug.assert(abs_paths.len > 0);
+/// Give a source file its portable name inside a bundle rooted at
+/// `bundle_root`. A source outside that root cannot be represented without
+/// either escaping the extraction directory or changing source-level package
+/// paths, so reject it explicitly.
+fn bundleArchivePath(
+    allocator: Allocator,
+    bundle_root: []const u8,
+    abs_source_path: []const u8,
+) (Allocator.Error || error{InvalidPath})![]u8 {
+    const relative_path = try std.fs.path.relative(allocator, bundle_root, null, bundle_root, abs_source_path);
+    errdefer allocator.free(relative_path);
 
-    const isSep = struct {
-        fn f(byte: u8) bool {
-            return byte == '/' or byte == '\\';
-        }
-    }.f;
-
-    // Start with the dirname of the first path.
-    var common = std.ArrayList(u8).empty;
-    errdefer common.deinit(allocator);
-    const first_dir = std.fs.path.dirname(abs_paths[0]) orelse abs_paths[0];
-    try common.appendSlice(allocator, first_dir);
-
-    for (abs_paths[1..]) |path| {
-        const dir = std.fs.path.dirname(path) orelse path;
-
-        // Find longest byte prefix shared between `common` and `dir`.
-        var i: usize = 0;
-        const max = @min(common.items.len, dir.len);
-        while (i < max and common.items[i] == dir[i]) : (i += 1) {}
-
-        // i is on a directory boundary if it is at the end of either path
-        // OR the next byte of either path is a separator.
-        const at_boundary = (i == common.items.len and (i == dir.len or isSep(dir[i]))) or
-            (i == dir.len and (i == common.items.len or isSep(common.items[i])));
-
-        if (!at_boundary) {
-            // Back up to the last separator within [0..i). Drop everything after it.
-            var j: usize = i;
-            while (j > 0) {
-                j -= 1;
-                if (isSep(common.items[j])) {
-                    // Keep the separator only when it's the root sep at index 0.
-                    i = if (j == 0) 1 else j;
-                    break;
-                }
-            } else {
-                i = 0;
-            }
-        }
-
-        common.items.len = @min(common.items.len, i);
+    if (relative_path.len == 0 or
+        std.fs.path.isAbsolute(relative_path) or
+        std.mem.eql(u8, relative_path, "..") or
+        std.mem.startsWith(u8, relative_path, "../") or
+        std.mem.startsWith(u8, relative_path, "..\\"))
+    {
+        return error.InvalidPath;
     }
 
-    // Strip trailing separators (preserve a single root separator).
-    while (common.items.len > 1 and isSep(common.items[common.items.len - 1])) {
-        common.items.len -= 1;
+    if (builtin.target.os.tag == .windows) {
+        std.mem.replaceScalar(u8, relative_path, '\\', '/');
     }
 
-    return common.toOwnedSlice(allocator);
+    return relative_path;
 }
 
 /// Bundles a roc package and its dependencies into a compressed tar archive
@@ -7937,144 +7878,108 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
         std.Io.Dir.cwd().deleteTree(ctx.io.std_io, ".roc_bundle_tmp") catch {};
     }
 
-    // Collect all files to bundle
-    var file_paths = std.ArrayList([]const u8).empty;
-    defer file_paths.deinit(ctx.arena);
-
-    var uncompressed_size: u64 = 0;
+    // Collect canonical source paths separately from their eventual archive
+    // names. A command-line spelling is only a way to find a file; it must not
+    // accidentally decide where that file appears inside the bundle.
+    var source_paths = std.ArrayList([]const u8).empty;
+    defer source_paths.deinit(ctx.arena);
 
     // If no paths provided, default to "main.roc"
     const paths_to_use = if (args.paths.len == 0) &[_][]const u8{"main.roc"} else args.paths;
 
-    // Remember the first path from CLI args (before sorting)
-    const first_cli_path = paths_to_use[0];
+    // Find the first .roc file to use as entry point for module discovery
+    const first_roc_index: ?usize = for (paths_to_use, 0..) |path, index| {
+        if (std.mem.endsWith(u8, path, ".roc")) break index;
+    } else null;
 
-    // Detect whether any input path is absolute. Absolute paths are not allowed
-    // inside the archive (the unbundle side rejects them, and a relative path
-    // is what the user actually wants extracted). If any input is absolute we
-    // rebase all paths against their longest common parent directory and pass
-    // that directory to the bundle library—so the archive itself only ever
-    // contains relative paths.
-    var any_absolute = false;
+    // Resolve every explicitly requested file exactly once. Discovered module
+    // paths are already absolute, so all following work uses one path form.
     for (paths_to_use) |path| {
-        if (std.fs.path.isAbsolute(path)) {
-            any_absolute = true;
-            break;
-        }
-    }
-
-    // Check that all files exist and collect their sizes
-    for (paths_to_use) |path| {
-        const file = cwd.openFile(ctx.io.std_io, path, .{}) catch |err| {
-            try stderr.print("Error: Could not open file '{s}': {}\n", .{ path, err });
+        const abs_path = cwd.realPathFileAlloc(ctx.io.std_io, path, ctx.arena) catch |err| {
+            try stderr.print("Error: Could not resolve file '{s}': {}\n", .{ path, err });
             return err;
         };
-        defer file.close(ctx.io.std_io);
-
-        const stat = try file.stat(ctx.io.std_io);
-        uncompressed_size += stat.size;
-
-        try file_paths.append(ctx.arena, path);
+        try source_paths.append(ctx.arena, abs_path);
     }
 
-    // Find the first .roc file to use as entry point for module discovery
-    const first_roc_file: ?[]const u8 = for (paths_to_use) |path| {
-        if (std.mem.endsWith(u8, path, ".roc")) break path;
-    } else null;
+    const entry_source_path = source_paths.items[first_roc_index orelse 0];
+    const bundle_root_path = std.fs.path.dirname(entry_source_path) orelse {
+        try stderr.print("Error: Could not determine the directory containing entry point '{s}'.\n", .{entry_source_path});
+        return error.InvalidPath;
+    };
 
     // Use the Coordinator to discover all transitive module dependencies
     // (explicit imports plus modules exposed by a `package [...]` header)
     // and append any not already in the file list.
-    if (first_roc_file) |roc_file| {
-        try discoverAndAddBundleModules(ctx, roc_file, &file_paths, &uncompressed_size, stderr);
+    if (first_roc_index != null) {
+        try discoverAndAddBundleModules(ctx, entry_source_path, &source_paths, stderr);
     }
 
-    // Sort and deduplicate paths
-    std.mem.sort([]const u8, file_paths.items, {}, struct {
-        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.order(u8, a, b) == .lt;
+    var entries = std.ArrayList(bundle.Entry).empty;
+    defer entries.deinit(ctx.arena);
+    var archive_sources = std.StringHashMap([]const u8).init(ctx.gpa);
+    defer archive_sources.deinit();
+    var entry_archive_path: ?[]const u8 = null;
+
+    for (source_paths.items) |abs_source_path| {
+        const archive_path = bundleArchivePath(ctx.arena, bundle_root_path, abs_source_path) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidPath => {
+                try stderr.print(
+                    "Error: Cannot bundle '{s}' because it is outside the entry point directory '{s}'.\n",
+                    .{ abs_source_path, bundle_root_path },
+                );
+                return error.InvalidPath;
+            },
+        };
+
+        const existing_source = try archive_sources.getOrPut(archive_path);
+        if (existing_source.found_existing) {
+            if (std.mem.eql(u8, existing_source.value_ptr.*, abs_source_path)) continue;
+            try stderr.print(
+                "Error: Both '{s}' and '{s}' would be stored as '{s}' in the bundle.\n",
+                .{ existing_source.value_ptr.*, abs_source_path, existing_source.key_ptr.* },
+            );
+            return error.InvalidPath;
+        }
+        existing_source.value_ptr.* = abs_source_path;
+
+        try entries.append(ctx.arena, .{
+            .source_path = archive_path,
+            .archive_path = archive_path,
+        });
+        if (std.mem.eql(u8, abs_source_path, entry_source_path)) {
+            entry_archive_path = archive_path;
+        }
+    }
+
+    std.mem.sort(bundle.Entry, entries.items, {}, struct {
+        fn lessThan(_: void, a: bundle.Entry, b: bundle.Entry) bool {
+            return std.mem.order(u8, a.archive_path, b.archive_path) == .lt;
         }
     }.lessThan);
 
-    // Remove duplicates by keeping only unique consecutive elements
-    var unique_count: usize = 0;
-    for (file_paths.items, 0..) |path, i| {
-        if (i == 0 or !std.mem.eql(u8, path, file_paths.items[i - 1])) {
-            file_paths.items[unique_count] = path;
-            unique_count += 1;
-        }
-    }
-    file_paths.items.len = unique_count;
-
-    // If we have more than one file, ensure the first CLI arg stays first
-    if (file_paths.items.len > 1) {
-        // Find the first CLI path in the sorted array
-        var found_index: ?usize = null;
-        for (file_paths.items, 0..) |path, i| {
-            if (std.mem.eql(u8, path, first_cli_path)) {
-                found_index = i;
+    // Keep the entry point first while sorting every other name. This makes
+    // bundle hashes deterministic without depending on coordinator map order.
+    if (entry_archive_path) |entry_path| {
+        for (entries.items, 0..) |entry, index| {
+            if (std.mem.eql(u8, entry.archive_path, entry_path)) {
+                const entry_point = entries.items[index];
+                var destination = index;
+                while (destination > 0) : (destination -= 1) {
+                    entries.items[destination] = entries.items[destination - 1];
+                }
+                entries.items[0] = entry_point;
                 break;
             }
         }
-
-        // Swap the found item with the first position if needed
-        if (found_index) |idx| {
-            if (idx != 0) {
-                const temp = file_paths.items[0];
-                file_paths.items[0] = file_paths.items[idx];
-                file_paths.items[idx] = temp;
-            }
-        }
     }
 
-    // If any input was absolute, rebase all paths against their longest common
-    // parent directory so the archive only contains relative paths. The opened
-    // directory becomes the base_dir passed to the bundle library.
-    //
-    // Discovery (above) added transitively imported modules as cwd-relative
-    // paths; `realpathAlloc` resolves both forms so they share the common
-    // parent uniformly here.
-    var rebased_base_dir: ?std.Io.Dir = null;
-    defer if (rebased_base_dir) |d| d.close(ctx.io.std_io);
-    var archive_paths: []const []const u8 = file_paths.items;
-    if (any_absolute) {
-        const resolved = try ctx.arena.alloc([]u8, file_paths.items.len);
-        for (file_paths.items, 0..) |p, i| {
-            resolved[i] = cwd.realPathFileAlloc(ctx.io.std_io, p, ctx.arena) catch |err| {
-                try stderr.print("Error: Could not resolve path '{s}': {}\n", .{ p, err });
-                return err;
-            };
-        }
-
-        const common = try longestCommonParentDir(ctx.arena, resolved);
-        if (common.len == 0) {
-            try stderr.print("Error: Input file paths have no common parent directory.\n", .{});
-            return error.InvalidPath;
-        }
-
-        const opened_dir = std.Io.Dir.openDirAbsolute(ctx.io.std_io, common, .{}) catch |err| {
-            try stderr.print("Error: Could not open common parent directory '{s}': {}\n", .{ common, err });
-            return err;
-        };
-        rebased_base_dir = opened_dir;
-
-        // Build relative-to-common paths for the archive.
-        const rel_paths = try ctx.arena.alloc([]const u8, resolved.len);
-        for (resolved, 0..) |abs, i| {
-            // abs must start with `common`; everything after is the relative path.
-            // common has no trailing separator, so skip the leading separator byte
-            // that follows it within abs.
-            if (abs.len <= common.len or
-                !std.mem.eql(u8, abs[0..common.len], common) or
-                !(abs[common.len] == '/' or abs[common.len] == '\\'))
-            {
-                try stderr.print("Error: Path '{s}' is not under the common parent '{s}'.\n", .{ abs, common });
-                return error.InvalidPath;
-            }
-            rel_paths[i] = abs[common.len + 1 ..];
-        }
-        archive_paths = rel_paths;
-    }
+    var bundle_root_dir = std.Io.Dir.openDirAbsolute(ctx.io.std_io, bundle_root_path, .{}) catch |err| {
+        try stderr.print("Error: Could not open entry point directory '{s}': {}\n", .{ bundle_root_path, err });
+        return err;
+    };
+    defer bundle_root_dir.close(ctx.io.std_io);
 
     // Create temporary output file
     const temp_filename = "temp_bundle.tar.zst";
@@ -8085,35 +7990,32 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     });
     defer temp_file.close(ctx.io.std_io);
 
-    // Create file path iterator
-    const FilePathIterator = struct {
-        paths: []const []const u8,
+    const EntryIterator = struct {
+        entries: []const bundle.Entry,
         index: usize = 0,
 
-        pub fn next(self: *@This()) Allocator.Error!?[]const u8 {
-            if (self.index >= self.paths.len) return null;
-            const path = self.paths[self.index];
+        pub fn next(self: *@This()) Allocator.Error!?bundle.Entry {
+            if (self.index >= self.entries.len) return null;
+            const entry = self.entries[self.index];
             self.index += 1;
-            return path;
+            return entry;
         }
     };
 
-    var iter = FilePathIterator{ .paths = archive_paths };
+    var iter = EntryIterator{ .entries = entries.items };
 
     // Bundle the files
     var allocator_copy = ctx.arena;
     var error_ctx: bundle.ErrorContext = undefined;
     var temp_writer_buffer: [4096]u8 = undefined;
     var temp_writer = temp_file.writerStreaming(ctx.io.std_io, &temp_writer_buffer);
-    const bundle_base_dir = rebased_base_dir orelse cwd;
-    const final_filename = bundle.bundleFiles(
+    const bundle_result = bundle.bundleFiles(
         &iter,
         @intCast(args.compression_level),
         &allocator_copy,
         ctx.io.std_io,
         &temp_writer.interface,
-        bundle_base_dir,
-        null, // path_prefix parameter - null means no stripping
+        bundle_root_dir,
         &error_ctx,
     ) catch |err| {
         switch (err) {
@@ -8140,6 +8042,8 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
         return err;
     };
     // No need to free when using arena allocator
+    const final_filename = bundle_result.filename;
+    const uncompressed_size = bundle_result.uncompressed_size;
 
     try temp_writer.interface.flush();
 
@@ -18272,36 +18176,22 @@ test "check errors determine command failure after work completes" {
     try failOnCheckErrors(.{});
 }
 
-test "longestCommonParentDir" {
+test "bundle archive paths are relative to the entry point directory" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    const cases = [_]struct {
-        paths: []const []const u8,
-        expected: []const u8,
-    }{
-        // Single file: parent directory of that file.
-        .{ .paths = &.{"/tmp/pkg/main.roc"}, .expected = "/tmp/pkg" },
-        // Two files sharing a parent.
-        .{ .paths = &.{ "/tmp/pkg/main.roc", "/tmp/pkg/Mod.roc" }, .expected = "/tmp/pkg" },
-        // Files in sibling subdirectories: common parent.
-        .{ .paths = &.{ "/tmp/nested/a/main.roc", "/tmp/nested/b/Mod.roc" }, .expected = "/tmp/nested" },
-        // Names share a byte prefix but no directory boundary—must back up.
-        .{ .paths = &.{ "/tmp/abc/a.roc", "/tmp/abd/b.roc" }, .expected = "/tmp" },
-        // Only root in common.
-        .{ .paths = &.{ "/etc/foo.roc", "/var/bar.roc" }, .expected = "/" },
-        // Three files with same parent.
-        .{ .paths = &.{ "/a/b/c/x.roc", "/a/b/c/y.roc", "/a/b/c/z.roc" }, .expected = "/a/b/c" },
-        // Three files where the third narrows the common parent.
-        .{ .paths = &.{ "/a/b/c/x.roc", "/a/b/c/y.roc", "/a/b/d/z.roc" }, .expected = "/a/b" },
-    };
+    const root = if (builtin.target.os.tag == .windows) "C:\\pkg\\src" else "/pkg/src";
+    const main_path = if (builtin.target.os.tag == .windows) "C:\\pkg\\src\\main.roc" else "/pkg/src/main.roc";
+    const nested = if (builtin.target.os.tag == .windows) "C:\\pkg\\src\\internal\\Helper.roc" else "/pkg/src/internal/Helper.roc";
+    const outside = if (builtin.target.os.tag == .windows) "C:\\pkg\\src-other\\Secret.roc" else "/pkg/src-other/Secret.roc";
 
-    for (cases) |tc| {
-        const got = try longestCommonParentDir(allocator, tc.paths);
-        defer allocator.free(got);
-        testing.expectEqualStrings(tc.expected, got) catch |err| {
-            std.debug.print("Failed case: expected='{s}' got='{s}'\n", .{ tc.expected, got });
-            return err;
-        };
-    }
+    const main_archive_path = try bundleArchivePath(allocator, root, main_path);
+    defer allocator.free(main_archive_path);
+    try testing.expectEqualStrings("main.roc", main_archive_path);
+
+    const nested_archive_path = try bundleArchivePath(allocator, root, nested);
+    defer allocator.free(nested_archive_path);
+    try testing.expectEqualStrings("internal/Helper.roc", nested_archive_path);
+
+    try testing.expectError(error.InvalidPath, bundleArchivePath(allocator, root, outside));
 }
