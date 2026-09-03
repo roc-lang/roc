@@ -4649,10 +4649,14 @@ rejection or enter a later scheme.
 Instantiation copies the root type and every pending requirement under one
 substitution. The receiver follows ordinary rank behavior: an enclosing weak
 value stays shared, while a receiver quantified by an enclosing scheme is
-copied. The callable root is copied even though its outer receiver keeps that
-root below generalized rank; everything below the callable root follows
-ordinary rank behavior, so its generalized argument and result variables are
-fresh per use. Derived-shape validation is the one exception: it instantiates
+copied. A generated-codec requirement force-copies its receiver's monomorphic
+structural spine as well: the spine can contain a generalized descendant shared
+with the scheme root, and reusing the spine would leave the requirement attached
+to the definition's old descendant instead of the use's substitution. The
+callable root is copied even though its outer receiver keeps that root below
+generalized rank; everything below the callable root follows ordinary rank
+behavior, so its generalized argument and result variables are fresh per use.
+Derived-shape validation is the one exception: it instantiates
 a method's scheme only to narrow the root copy against an expected callable
 shape, it is not a value use, and no definition boundary owns the validation
 site. A validation instantiation therefore keeps a requirement whose receiver
@@ -4752,9 +4756,20 @@ counter, so a boundary that resolves pending dispatch targets by checking a
 sibling module-level group in a nested frame sees that group's schemes one rank
 deeper, and only the explicit capture-group identity keeps those live
 module-level schemes out of the closing boundary's nested-frame retirement.
-The checked-module boundary rejects
-any remaining checker-local requirement and empties the scheme index, so no
-import can observe a root type after its requirement was silently discarded.
+The checked-module boundary rejects any remaining ordinary checker-local
+requirement and empties the checker-local scheme index, so no import can observe
+a root type after such a requirement was silently discarded. A successfully
+validated generated-codec requirement is different: its current concrete shape
+can still change when a downstream use substitutes a nested generalized
+variable. Checking serializes that exact receiver and callable relation in a
+node-sorted binding-scheme side table, referencing the constraint already stored
+in the module's TypeStore and carrying the scheme root that groups all source
+aliases. Import copying copies the binding root, codec receiver, and callable
+through one shared source-to-destination substitution map and recreates the
+explicit TypeScheme requirement. Rechecking a deserialized checked environment
+uses that scheme root to rehydrate the same alias-indexed TypeScheme before
+source checking starts. No import stage infers a codec relation from the solved
+receiver shape or from method-name heuristics.
 
 Boundary literal defaulting protects variables in the callable relation but
 does not protect the receiver solely because it is the callable's first
@@ -6604,6 +6619,19 @@ independent of worker scheduling without locking coordinator state. Root kinds
 that reserve durable identities or write directly to the final program remain
 serial barriers until they have the same sealed-draft boundary.
 
+Post-check timing keeps two distinct measures for this boundary. Monotype wall
+time is the elapsed coordinator interval, including worker waits and ordered
+commit. Aggregate worker work is the sum of executor callback intervals and can
+exceed wall time when callbacks overlap; it is diagnostic work, not another
+sequential phase. Coordinator post-batch work separately measures validation,
+serial fallback, discard, and ordered commit after each executor barrier. Task,
+lane, retry, and discard counts explain the relationship without using
+scheduling-dependent values for compiler behavior.
+
+Boxy follows a different post-check pipeline and reports its planning and
+lowering wall phases directly rather than projecting Monotype categories onto
+work it does not perform.
+
 Instantiation graph node ids are dense, append-only indexes for the lifetime of
 the graph. Per-node optional attributes such as a row root's current extension
 and a generated-private request's source interface are therefore dense parallel
@@ -7748,6 +7776,23 @@ defaultable arithmetic operators default to `Dec`, quote and interpolation
 literals default to `Str`, and every requirement on such a var resolves against
 the default owner during checking. Structural-capable requirements on other
 unpinnable vars resolve structurally; the rest are statically unreachable.
+
+The checker pinning-frontier judgment appends each selected receiver and
+`DefaultTarget` to `default_materializations`. Its compatibility fixpoint
+consumes those `DefaultMaterialization` entries before the checked-module
+boundary, instantiates the selected owner's method scheme, and
+unifies every independent callable relation exactly. The default owner is
+selected once per receiver; creation-site constraints retain their source and
+copied scheme constraints retain their exact per-edge callable and use-site
+identity, including detached requirements. `CheckedModule` construction
+consumes each `dispatch_target` evidence slot or `rejected_static_dispatches`
+entry and never repeats the compatibility decision.
+
+Requirements instantiated from a candidate method target are conditional on
+that exact parent edge being selected. If checking rejects the parent, its
+derivation descendants become inactive without marking their callable classes
+rejected; an independently live relation that later shares one of those classes
+therefore remains valid and must still be checked on its own edge.
 
 Generalized rank is not evidence that an edge can pin a constrained var. A
 body-required `where` constraint may remain unresolved only while its receiver
@@ -10547,7 +10592,15 @@ ownership places. The place graph is solved to a fixpoint, so a nested read
 chain such as tag payload to struct field keeps the root aggregate's unit key.
 If the final read result binds owned, that read moves the unit only when the
 root unit is present and the ownership place has no later RC-bearing use on
-that path; otherwise it retains exactly as an ordinary read would. This use
+that path; otherwise it retains exactly as an ordinary read would. An operand
+belongs to the place exactly when its solved liveness leader is the place's
+unit local: the unit local itself and every binding the solver anchored on it
+as a borrow (pure aliases, complete and partial field or tag payload reads,
+lent call results, and their transitive borrows), all of which read the stored
+allocation without holding a unit of their own. Owned bindings hold their own
+retained unit and are their own leaders, so their later uses never keep the
+place live; binding an owned pure alias of a member does count as a use,
+because that bind retains through the place. This use
 query is definition-sensitive: a `set_local` that writes the root ends the
 current place definition after its value operand is read. Uses reached through
 the following jump belong to the newly written join value and cannot keep the
@@ -10577,11 +10630,26 @@ distinct refcounted field and that a fully dead representation lists every such
 field. It does not compare a partial list to its field-claim state: claims
 settle lazily when field reads are consumed and are shared by an alias set, so
 they are not a path-local snapshot of one binding. The later consumption and
-terminal balance checks independently prove those transfers. A borrowed result
+terminal balance checks independently prove those transfers. An RC-bearing field or
+tag payload read does consult those claims: reading a field whose stored unit a
+take on that path has already spent (settled, or pending settlement from an
+aggregate move) fails certification unless an intact surplus unit still keeps
+the field live, because the field's bytes no longer denote a unit the value
+holds. A borrowed result
 keeps the root unit key until a later consuming operation makes the same
 path-sensitive decision. This applies to ordinary owned locals and to owned
 join parameters; join parameters are not themselves assigned one global place
 origin because each incoming edge defines the join cell independently.
+
+When the root is read again only on the restoring outcomes of a direct call
+that receives the read result, the read still moves the root unit and registers
+that unit as the root-unit receipt of the call's outcome refinement. The call
+site consumes that receipt before it re-plans the refinement: the receipt makes
+the outcome convention mandatory for its position exactly as a field receipt
+does, the restoring outcomes return the root's unit, and a call that cannot
+admit the convention while holding a root-unit receipt is an ARC invariant
+violation rather than an unconditional consumption of a unit the root is read
+through again.
 
 Ownership-complete root transfer and committed struct-field transfer are two
 exact alternatives at one read, not cumulative decisions. If the root unit
@@ -10624,7 +10692,13 @@ where the field cannot have been taken yet—a take where it may already be
 gone would double-consume its unit on that path. A borrow of the field, and
 any whole use of the container, must likewise run where no take can have
 happened: after a take, the container's bytes for that field can alias the
-taker's mutation rather than the original value. An explicit outcome field
+taker's mutation rather than the original value. A borrowing read binds a
+name that keeps reading the field's stored unit without holding a unit of its
+own, and so does every binding the solver anchors as a borrow through that
+name (its pure aliases, its own field and payload reads, and call results
+lent from it). Every operand mention of any of those bindings is therefore a
+borrow observation of the field at that statement, so a take the mention
+could follow is rejected exactly like a borrowing read placed there. An explicit outcome field
 receipt changes the matching edge state from taken back to available before
 that edge is walked; this is the only transition that can clear a
 `may-taken` bit. Merges meet pointwise, and a loop poisons its own takes: a
@@ -11336,6 +11410,23 @@ checked CIR
   -> native dev backend on native compiler hosts
   -> store eval result in ConstStore
 ```
+
+An interactive REPL expression is an explicit `.repl_expr` compile-time root
+whose checked body returns `Str.inspect(expression)`. The evaluation helper
+that generated the zero-argument wrapper resolves its asserted body once and
+puts that exact expression identity in the root request; `CheckedModuleBuilder`
+and `CompileTimeFinalization` consume the identity directly. Checking retains the zero-argument
+REPL-root context so inspecting an
+uncalled constrained polymorphic function does not force its body, but checking
+finalization evaluates the selected body itself and stores its `Str` result in
+the root payload. This payload is not a source-visible top-level constant and is
+not installed in the module's const-template tables. An effectful REPL body is a
+checking error; it is never silently demoted to a runtime root. Runtime backend
+selection and specialization settings therefore do not affect ordinary REPL
+expression evaluation. The finalizer replays `dbg` observations in root request
+order and forwards observations from the `.repl_expr` root to the REPL's
+structured event stream; observations from other compile-time roots are not
+misattributed to the current interactive expression.
 
 On native compiler hosts, every `compile_time_*` root uses the dev backend for
 compile-time evaluation: ordinary constants, selected hoisted constants,

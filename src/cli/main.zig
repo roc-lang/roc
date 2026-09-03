@@ -6833,7 +6833,7 @@ fn lowerLirWithBuildEnv(
         &spec_timing,
     );
     errdefer lowered.deinit();
-    if (reporter) |r| finishPostCheckLowering(r, &spec_timing);
+    if (reporter) |r| finishPostCheckLowering(r, &spec_timing, specialization_strategy);
 
     const internal_static_data: ?[]backend.StaticDataExport = switch (artifact) {
         .lir_image => null,
@@ -9884,7 +9884,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         &spec_timing,
     );
     defer lowered.deinit();
-    finishPostCheckLowering(&reporter, &spec_timing);
+    finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
@@ -10252,7 +10252,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         &spec_timing,
     );
     defer lowered.deinit();
-    finishPostCheckLowering(&reporter, &spec_timing);
+    finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
@@ -10620,7 +10620,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         &spec_timing,
     );
     defer lowered.deinit();
-    finishPostCheckLowering(&reporter, &spec_timing);
+    finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
 
     reporter.begin("LIR Image Generation");
     const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
@@ -11659,10 +11659,32 @@ test "runtime specialization strategy helpers" {
     try std.testing.expectEqualStrings("Lowering", loweringProgressLabel(.boxy));
 }
 
+test "post-check optimization scope per opt level" {
+    try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers, postCheckInlineModeForOpt(.speed));
+    try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers, postCheckInlineModeForOpt(.size));
+    try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers, postCheckInlineModeForOpt(.dev));
+    try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.none, postCheckInlineModeForOpt(.interpreter));
+    try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.all_calls, specConstrCloneInliningForOpt(.speed));
+    try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.all_calls, specConstrCloneInliningForOpt(.size));
+    try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.iterator_fusion, specConstrCloneInliningForOpt(.dev));
+}
+
 fn postCheckInlineModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineMode {
     return switch (opt) {
-        .size, .speed => .wrappers,
-        .dev, .interpreter => .none,
+        .size, .speed, .dev => .wrappers,
+        .interpreter => .none,
+    };
+}
+
+/// Optimized builds let SpecConstr's value-aware clones chase known values
+/// through any direct call; dev builds confine that chase to iterator
+/// pipelines, which keeps post-check time and emitted program size bounded
+/// while still collapsing `Iter` loops. The interpreter never reaches
+/// SpecConstr (its inline mode is `.none`), so its value here is inert.
+fn specConstrCloneInliningForOpt(opt: cli_args.OptLevel) postcheck.MonotypeLifted.SpecConstr.CloneInlining {
+    return switch (opt) {
+        .size, .speed => .all_calls,
+        .dev, .interpreter => .iterator_fusion,
     };
 }
 
@@ -11786,6 +11808,7 @@ fn lowerCheckedSourceToLir(
             .target_usize = target_usize,
             .specialization_strategy = specialization_strategy,
             .inline_mode = postCheckInlineModeForOpt(opt),
+            .spec_constr_clone_inlining = specConstrCloneInliningForOpt(opt),
             .consume_dead_boxes = switch (roots) {
                 .linked_output => true,
                 .platform_entrypoints => |artifact| artifact == .dev_run_image,
@@ -14319,7 +14342,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         },
     }
     reporter.end();
-    recordPostCheckLowering(&reporter, &spec_timing);
+    recordPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
     if (test_mode == .dev) recordDevTestExecution(&reporter, &dev_timing);
     reporter.finish();
 
@@ -15580,9 +15603,9 @@ fn compileTimeEvaluationBreakdown(timing: anytype) [8]progress.SubTiming {
     };
 }
 
-const post_check_lowering_phase_name = "Post-Check Lowering";
+const aggregate_post_check_lowering_phase_name = "Post-Check Lowering (aggregate call time)";
 
-fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [24]progress.SubTiming {
+fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [25]progress.SubTiming {
     const classified_body_ns = timing.monotype_procedure_body_type_graph_ns +|
         timing.monotype_procedure_body_call_dispatch_ns +|
         timing.monotype_procedure_body_draft_ir_ns +|
@@ -15604,6 +15627,7 @@ fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [24]pr
         .{ .name = "Body Local Procedure Context", .ns = timing.monotype_procedure_body_local_proc_context_ns },
         .{ .name = "Body Sealing + Commit", .ns = timing.monotype_procedure_body_finalization_ns },
         .{ .name = "Procedure Completion", .ns = timing.monotype_procedure_completion_ns },
+        .{ .name = "Parallel Worker Wait", .ns = timing.monotype_procedure_parallel_wait_ns },
         .{ .name = "Layout Requests", .ns = timing.monotype_layout_requests_ns },
         .{ .name = "Static Data Requests", .ns = timing.monotype_static_data_requests_ns },
         .{ .name = "Monotype Finalization", .ns = timing.monotype_finalization_ns },
@@ -15617,16 +15641,37 @@ fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [24]pr
     };
 }
 
-fn finishPostCheckLowering(reporter: *progress.Reporter, timing: *const lir.CheckedPipeline.Timing) void {
+fn boxyPostCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [4]progress.SubTiming {
+    return .{
+        .{ .name = "Boxy Planning", .ns = timing.boxy_plan_ns },
+        .{ .name = "Boxy Lowering", .ns = timing.boxy_lower_ns },
+        .{ .name = "LIR Passes", .ns = timing.lir_passes_ns },
+        .{ .name = "ARC", .ns = timing.arc_ns },
+    };
+}
+
+fn finishPostCheckLowering(
+    reporter: *progress.Reporter,
+    timing: *const lir.CheckedPipeline.Timing,
+    strategy: base.SpecializationStrategy,
+) void {
     const snapshot = timing.snapshot();
-    reporter.endWithBreakdownSequential(&postCheckLoweringBreakdown(snapshot));
-    reporter.recordCounters("Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
-    reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
-    reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
+    switch (strategy) {
+        .lss => reporter.endWithParentBreakdown(&postCheckLoweringBreakdown(snapshot)),
+        .boxy => reporter.endWithParentBreakdown(&boxyPostCheckLoweringBreakdown(snapshot)),
+    }
+    if (strategy == .lss) {
+        reporter.recordCounters("Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
+        reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
+        reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
+        reporter.recordCounters("Monotype parallel execution", &monotypeParallelCounters(snapshot.monotype_parallel));
+    }
 }
 
 fn postCheckLoweringTotalNs(timing: lir.CheckedPipeline.TimingSnapshot) u64 {
     return timing.monotype_ns +|
+        timing.boxy_plan_ns +|
+        timing.boxy_lower_ns +|
         timing.lift_ns +|
         timing.spec_constr_ns +|
         timing.lambda_solve_ns +|
@@ -15636,17 +15681,32 @@ fn postCheckLoweringTotalNs(timing: lir.CheckedPipeline.TimingSnapshot) u64 {
         timing.arc_ns;
 }
 
-fn recordPostCheckLowering(reporter: *progress.Reporter, timing: *const lir.CheckedPipeline.Timing) void {
+fn recordPostCheckLowering(
+    reporter: *progress.Reporter,
+    timing: *const lir.CheckedPipeline.Timing,
+    strategy: base.SpecializationStrategy,
+) void {
     const snapshot = timing.snapshot();
-    reporter.recordCompletedWithBreakdown(
-        post_check_lowering_phase_name,
-        postCheckLoweringTotalNs(snapshot),
-        .{},
-        &postCheckLoweringBreakdown(snapshot),
-    );
-    reporter.recordCounters("Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
-    reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
-    reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
+    switch (strategy) {
+        .lss => reporter.recordCompletedWithBreakdown(
+            aggregate_post_check_lowering_phase_name,
+            postCheckLoweringTotalNs(snapshot),
+            .{},
+            &postCheckLoweringBreakdown(snapshot),
+        ),
+        .boxy => reporter.recordCompletedWithBreakdown(
+            aggregate_post_check_lowering_phase_name,
+            postCheckLoweringTotalNs(snapshot),
+            .{},
+            &boxyPostCheckLoweringBreakdown(snapshot),
+        ),
+    }
+    if (strategy == .lss) {
+        reporter.recordCounters("Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
+        reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
+        reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
+        reporter.recordCounters("Monotype parallel execution", &monotypeParallelCounters(snapshot.monotype_parallel));
+    }
 }
 
 fn devTestExecutionBreakdown(timing: eval.test_helpers.DevBoolRootTimingSnapshot) [6]progress.SubTiming {
@@ -15753,6 +15813,24 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [20]p
     };
 }
 
+fn monotypeParallelCounters(parallel: postcheck.Monotype.Lower.ParallelMetricsSnapshot) [13]progress.Counter {
+    return .{
+        .{ .name = "Aggregate worker work (ns)", .count = parallel.worker_work_ns },
+        .{ .name = "Coordinator post-batch work (ns)", .count = parallel.coordinator_post_batch_work_ns },
+        .{ .name = "Root tasks submitted", .count = parallel.root_tasks_submitted },
+        .{ .name = "Root tasks committed", .count = parallel.root_tasks_committed },
+        .{ .name = "Root tasks retried serially", .count = parallel.root_tasks_retried_serial },
+        .{ .name = "Specialization tasks submitted", .count = parallel.specialization_tasks_submitted },
+        .{ .name = "Specialization tasks committed", .count = parallel.specialization_tasks_committed },
+        .{ .name = "Specialization tasks retried serially", .count = parallel.specialization_tasks_retried_serial },
+        .{ .name = "Specialization tasks discarded ready", .count = parallel.specialization_tasks_discarded_ready },
+        .{ .name = "Parallel task waves", .count = parallel.task_waves },
+        .{ .name = "Peak worker lanes available", .count = parallel.peak_worker_lanes_available },
+        .{ .name = "Peak worker lanes used", .count = parallel.peak_worker_lanes_used },
+        .{ .name = "Tasks reusing a lowering lane", .count = parallel.within_lowering_lane_reuse_tasks },
+    };
+}
+
 test "post-check timing names distinct work and keep inlining separate from SpecConstr" {
     const rows = postCheckLoweringBreakdown(.{
         .monotype_setup_ns = 1,
@@ -15770,6 +15848,7 @@ test "post-check timing names distinct work and keep inlining separate from Spec
         .monotype_procedure_body_local_proc_context_ns = 6,
         .monotype_procedure_body_finalization_ns = 7,
         .monotype_procedure_completion_ns = 8,
+        .monotype_procedure_parallel_wait_ns = 19,
         .monotype_layout_requests_ns = 9,
         .monotype_static_data_requests_ns = 10,
         .monotype_finalization_ns = 11,
@@ -15795,15 +15874,40 @@ test "post-check timing names distinct work and keep inlining separate from Spec
     try std.testing.expectEqualStrings("Body Local Procedure Context", rows[11].name);
     try std.testing.expectEqualStrings("Body Sealing + Commit", rows[12].name);
     try std.testing.expectEqualStrings("Procedure Completion", rows[13].name);
+    try std.testing.expectEqualStrings("Parallel Worker Wait", rows[14].name);
+    try std.testing.expectEqual(@as(u64, 19), rows[14].ns);
     const expected_body_ns = [_]u64{ 6, 1, 2, 3, 4, 5, 6 };
     for (rows[5..12], expected_body_ns) |row, expected_ns| try std.testing.expectEqual(expected_ns, row.ns);
-    try std.testing.expectEqualStrings("SpecConstr", rows[18].name);
-    try std.testing.expectEqualStrings("Inline Planning", rows[20].name);
-    try std.testing.expectEqual(@as(u64, 13), rows[18].ns);
-    try std.testing.expectEqual(@as(u64, 15), rows[20].ns);
+    try std.testing.expectEqualStrings("SpecConstr", rows[19].name);
+    try std.testing.expectEqualStrings("Inline Planning", rows[21].name);
+    try std.testing.expectEqual(@as(u64, 13), rows[19].ns);
+    try std.testing.expectEqual(@as(u64, 15), rows[21].ns);
     for (rows) |row| {
-        try std.testing.expect(!std.mem.eql(u8, post_check_lowering_phase_name, row.name));
+        try std.testing.expect(!std.mem.eql(u8, aggregate_post_check_lowering_phase_name, row.name));
     }
+}
+
+test "post-check Boxy timing uses a strategy-specific breakdown" {
+    const rows = boxyPostCheckLoweringBreakdown(.{
+        .boxy_plan_ns = 7,
+        .boxy_lower_ns = 11,
+        .lir_passes_ns = 13,
+        .arc_ns = 17,
+    });
+    try std.testing.expectEqualStrings("Boxy Planning", rows[0].name);
+    try std.testing.expectEqual(@as(u64, 7), rows[0].ns);
+    try std.testing.expectEqualStrings("Boxy Lowering", rows[1].name);
+    try std.testing.expectEqual(@as(u64, 11), rows[1].ns);
+    try std.testing.expectEqualStrings("LIR Passes", rows[2].name);
+    try std.testing.expectEqual(@as(u64, 13), rows[2].ns);
+    try std.testing.expectEqualStrings("ARC", rows[3].name);
+    try std.testing.expectEqual(@as(u64, 17), rows[3].ns);
+    try std.testing.expectEqual(@as(u64, 48), postCheckLoweringTotalNs(.{
+        .boxy_plan_ns = 7,
+        .boxy_lower_ns = 11,
+        .lir_passes_ns = 13,
+        .arc_ns = 17,
+    }));
 }
 
 test "post-check diagnostics preserve labeled Monotype counts" {
@@ -15838,6 +15942,30 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 305), body[10].count);
     try std.testing.expectEqualStrings("Nested closures prepared", body[19].name);
     try std.testing.expectEqual(@as(u64, 302), body[19].count);
+
+    const parallel = monotypeParallelCounters(.{
+        .worker_work_ns = 401,
+        .coordinator_post_batch_work_ns = 402,
+        .root_tasks_submitted = 403,
+        .specialization_tasks_discarded_ready = 404,
+        .peak_worker_lanes_available = 8,
+        .peak_worker_lanes_used = 4,
+        .within_lowering_lane_reuse_tasks = 405,
+    });
+    try std.testing.expectEqualStrings("Aggregate worker work (ns)", parallel[0].name);
+    try std.testing.expectEqual(@as(u64, 401), parallel[0].count);
+    try std.testing.expectEqualStrings("Coordinator post-batch work (ns)", parallel[1].name);
+    try std.testing.expectEqual(@as(u64, 402), parallel[1].count);
+    try std.testing.expectEqualStrings("Root tasks submitted", parallel[2].name);
+    try std.testing.expectEqual(@as(u64, 403), parallel[2].count);
+    try std.testing.expectEqualStrings("Specialization tasks discarded ready", parallel[8].name);
+    try std.testing.expectEqual(@as(u64, 404), parallel[8].count);
+    try std.testing.expectEqualStrings("Peak worker lanes available", parallel[10].name);
+    try std.testing.expectEqual(@as(u64, 8), parallel[10].count);
+    try std.testing.expectEqualStrings("Peak worker lanes used", parallel[11].name);
+    try std.testing.expectEqual(@as(u64, 4), parallel[11].count);
+    try std.testing.expectEqualStrings("Tasks reusing a lowering lane", parallel[12].name);
+    try std.testing.expectEqual(@as(u64, 405), parallel[12].count);
 }
 
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {

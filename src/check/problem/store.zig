@@ -224,6 +224,7 @@ pub const Store = struct {
                     .polymorphic_value,
                     .polymorphic_var_annotation,
                     .effectful_top_level,
+                    .effectful_comptime_expression,
                     .effectful_expect,
                     .effectful_function_name,
                     .annotation_only_value,

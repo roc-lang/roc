@@ -298,6 +298,9 @@ pub const Context = union(enum) {
     pub const MethodTypeContext = struct {
         /// The dispatcher type variable
         constraint_var: Var,
+        /// Exact owning use for a copied relation. Direct constraints retain
+        /// their historical type-var-derived region when this is null.
+        source_region: ?base.Region = null,
         /// The name of the type being dispatched
         dispatcher_name: Ident.Idx,
         /// The method name

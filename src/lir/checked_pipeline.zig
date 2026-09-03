@@ -11,6 +11,7 @@ const check = @import("check");
 const core = @import("lir_core");
 
 const Arc = @import("arc.zig");
+const ImmortalLocals = @import("immortal_locals.zig");
 const Trmc = @import("trmc.zig");
 const BoxReuse = @import("box_reuse.zig");
 const ReturnSlot = @import("return_slot.zig");
@@ -71,6 +72,12 @@ pub const TargetConfig = struct {
     post_check_executor: ?base.post_check_task_executor.Executor = null,
     checked_module_state: CheckedModuleState = .complete,
     inline_mode: InlineMode = .none,
+    /// Direct-call inlining scope for SpecConstr's value-aware clones.
+    /// Optimized builds use `.all_calls`; dev builds use `.iterator_fusion`
+    /// so post-check time and emitted program size stay bounded. Consulted
+    /// only when `inline_mode` is not `.none`, since that is what gates
+    /// SpecConstr itself.
+    spec_constr_clone_inlining: SpecConstrCloneInlining = .all_calls,
     inline_expects: InlineExpectMode = .run,
     /// Whether ARC may consume a dead Box lender while unboxing.
     consume_dead_boxes: bool = false,
@@ -135,9 +142,25 @@ pub const Timing = struct {
     monotype_procedure_body_local_proc_context_ns: TimingCounter = .{},
     monotype_procedure_body_finalization_ns: TimingCounter = .{},
     monotype_procedure_completion_ns: TimingCounter = .{},
+    monotype_procedure_parallel_wait_ns: TimingCounter = .{},
     monotype_layout_requests_ns: TimingCounter = .{},
     monotype_static_data_requests_ns: TimingCounter = .{},
     monotype_finalization_ns: TimingCounter = .{},
+    monotype_parallel_worker_work_ns: TimingCounter = .{},
+    monotype_parallel_coordinator_post_batch_work_ns: TimingCounter = .{},
+    monotype_parallel_root_tasks_submitted: TimingCounter = .{},
+    monotype_parallel_root_tasks_committed: TimingCounter = .{},
+    monotype_parallel_root_tasks_retried_serial: TimingCounter = .{},
+    monotype_parallel_specialization_tasks_submitted: TimingCounter = .{},
+    monotype_parallel_specialization_tasks_committed: TimingCounter = .{},
+    monotype_parallel_specialization_tasks_retried_serial: TimingCounter = .{},
+    monotype_parallel_specialization_tasks_discarded_ready: TimingCounter = .{},
+    monotype_parallel_task_waves: TimingCounter = .{},
+    monotype_parallel_peak_worker_lanes_available: TimingCounter = .{},
+    monotype_parallel_peak_worker_lanes_used: TimingCounter = .{},
+    monotype_parallel_within_lowering_lane_reuse_tasks: TimingCounter = .{},
+    boxy_plan_ns: TimingCounter = .{},
+    boxy_lower_ns: TimingCounter = .{},
     lift_ns: TimingCounter = .{},
     spec_constr_ns: TimingCounter = .{},
     lambda_solve_ns: TimingCounter = .{},
@@ -175,9 +198,27 @@ pub const Timing = struct {
             .monotype_procedure_body_local_proc_context_ns = self.monotype_procedure_body_local_proc_context_ns.load(),
             .monotype_procedure_body_finalization_ns = self.monotype_procedure_body_finalization_ns.load(),
             .monotype_procedure_completion_ns = self.monotype_procedure_completion_ns.load(),
+            .monotype_procedure_parallel_wait_ns = self.monotype_procedure_parallel_wait_ns.load(),
             .monotype_layout_requests_ns = self.monotype_layout_requests_ns.load(),
             .monotype_static_data_requests_ns = self.monotype_static_data_requests_ns.load(),
             .monotype_finalization_ns = self.monotype_finalization_ns.load(),
+            .monotype_parallel = .{
+                .worker_work_ns = self.monotype_parallel_worker_work_ns.load(),
+                .coordinator_post_batch_work_ns = self.monotype_parallel_coordinator_post_batch_work_ns.load(),
+                .root_tasks_submitted = self.monotype_parallel_root_tasks_submitted.load(),
+                .root_tasks_committed = self.monotype_parallel_root_tasks_committed.load(),
+                .root_tasks_retried_serial = self.monotype_parallel_root_tasks_retried_serial.load(),
+                .specialization_tasks_submitted = self.monotype_parallel_specialization_tasks_submitted.load(),
+                .specialization_tasks_committed = self.monotype_parallel_specialization_tasks_committed.load(),
+                .specialization_tasks_retried_serial = self.monotype_parallel_specialization_tasks_retried_serial.load(),
+                .specialization_tasks_discarded_ready = self.monotype_parallel_specialization_tasks_discarded_ready.load(),
+                .task_waves = self.monotype_parallel_task_waves.load(),
+                .peak_worker_lanes_available = self.monotype_parallel_peak_worker_lanes_available.load(),
+                .peak_worker_lanes_used = self.monotype_parallel_peak_worker_lanes_used.load(),
+                .within_lowering_lane_reuse_tasks = self.monotype_parallel_within_lowering_lane_reuse_tasks.load(),
+            },
+            .boxy_plan_ns = self.boxy_plan_ns.load(),
+            .boxy_lower_ns = self.boxy_lower_ns.load(),
             .lift_ns = self.lift_ns.load(),
             .spec_constr_ns = self.spec_constr_ns.load(),
             .lambda_solve_ns = self.lambda_solve_ns.load(),
@@ -206,9 +247,13 @@ pub const Timing = struct {
         self.monotype_procedure_body_local_proc_context_ns.add(snapshot_value.monotype_procedure_body_local_proc_context_ns);
         self.monotype_procedure_body_finalization_ns.add(snapshot_value.monotype_procedure_body_finalization_ns);
         self.monotype_procedure_completion_ns.add(snapshot_value.monotype_procedure_completion_ns);
+        self.monotype_procedure_parallel_wait_ns.add(snapshot_value.monotype_procedure_parallel_wait_ns);
         self.monotype_layout_requests_ns.add(snapshot_value.monotype_layout_requests_ns);
         self.monotype_static_data_requests_ns.add(snapshot_value.monotype_static_data_requests_ns);
         self.monotype_finalization_ns.add(snapshot_value.monotype_finalization_ns);
+        self.addMonotypeParallel(snapshot_value.monotype_parallel);
+        self.boxy_plan_ns.add(snapshot_value.boxy_plan_ns);
+        self.boxy_lower_ns.add(snapshot_value.boxy_lower_ns);
         self.lift_ns.add(snapshot_value.lift_ns);
         self.spec_constr_ns.add(snapshot_value.spec_constr_ns);
         self.lambda_solve_ns.add(snapshot_value.lambda_solve_ns);
@@ -235,6 +280,8 @@ pub const Timing = struct {
             .lir_gen => self.lir_gen_ns.add(elapsed_ns),
             .lir_passes => self.lir_passes_ns.add(elapsed_ns),
             .arc => self.arc_ns.add(elapsed_ns),
+            .boxy_plan => self.boxy_plan_ns.add(elapsed_ns),
+            .boxy_lower => self.boxy_lower_ns.add(elapsed_ns),
         }
     }
 
@@ -254,9 +301,27 @@ pub const Timing = struct {
         self.monotype_procedure_body_local_proc_context_ns.add(snapshot_value.procedure_body_local_proc_context_ns);
         self.monotype_procedure_body_finalization_ns.add(snapshot_value.procedure_body_finalization_ns);
         self.monotype_procedure_completion_ns.add(snapshot_value.procedure_completion_ns);
+        self.monotype_procedure_parallel_wait_ns.add(snapshot_value.procedure_parallel_wait_ns);
         self.monotype_layout_requests_ns.add(snapshot_value.layout_requests_ns);
         self.monotype_static_data_requests_ns.add(snapshot_value.static_data_requests_ns);
         self.monotype_finalization_ns.add(snapshot_value.finalization_ns);
+        self.addMonotypeParallel(snapshot_value.parallel);
+    }
+
+    fn addMonotypeParallel(self: *Timing, parallel: postcheck.Monotype.Lower.ParallelMetricsSnapshot) void {
+        self.monotype_parallel_worker_work_ns.add(parallel.worker_work_ns);
+        self.monotype_parallel_coordinator_post_batch_work_ns.add(parallel.coordinator_post_batch_work_ns);
+        self.monotype_parallel_root_tasks_submitted.add(parallel.root_tasks_submitted);
+        self.monotype_parallel_root_tasks_committed.add(parallel.root_tasks_committed);
+        self.monotype_parallel_root_tasks_retried_serial.add(parallel.root_tasks_retried_serial);
+        self.monotype_parallel_specialization_tasks_submitted.add(parallel.specialization_tasks_submitted);
+        self.monotype_parallel_specialization_tasks_committed.add(parallel.specialization_tasks_committed);
+        self.monotype_parallel_specialization_tasks_retried_serial.add(parallel.specialization_tasks_retried_serial);
+        self.monotype_parallel_specialization_tasks_discarded_ready.add(parallel.specialization_tasks_discarded_ready);
+        self.monotype_parallel_task_waves.add(parallel.task_waves);
+        self.monotype_parallel_peak_worker_lanes_available.max(parallel.peak_worker_lanes_available);
+        self.monotype_parallel_peak_worker_lanes_used.max(parallel.peak_worker_lanes_used);
+        self.monotype_parallel_within_lowering_lane_reuse_tasks.add(parallel.within_lowering_lane_reuse_tasks);
     }
 
     fn addMonotypeDiagnostics(self: *Timing, diagnostics: postcheck.Monotype.Lower.Diagnostics) void {
@@ -293,9 +358,13 @@ pub const TimingSnapshot = struct {
     monotype_procedure_body_local_proc_context_ns: u64 = 0,
     monotype_procedure_body_finalization_ns: u64 = 0,
     monotype_procedure_completion_ns: u64 = 0,
+    monotype_procedure_parallel_wait_ns: u64 = 0,
     monotype_layout_requests_ns: u64 = 0,
     monotype_static_data_requests_ns: u64 = 0,
     monotype_finalization_ns: u64 = 0,
+    monotype_parallel: postcheck.Monotype.Lower.ParallelMetricsSnapshot = .{},
+    boxy_plan_ns: u64 = 0,
+    boxy_lower_ns: u64 = 0,
     lift_ns: u64 = 0,
     spec_constr_ns: u64 = 0,
     lambda_solve_ns: u64 = 0,
@@ -315,6 +384,29 @@ const TimingPhase = enum {
     lir_gen,
     lir_passes,
     arc,
+    boxy_plan,
+    boxy_lower,
+};
+
+const PipelineTimingScope = struct {
+    timing: ?*Timing = null,
+    started_ns: i64 = 0,
+    phase: TimingPhase = undefined,
+
+    fn begin(timing: ?*Timing, phase: TimingPhase) PipelineTimingScope {
+        const active = timing orelse return .{};
+        return .{
+            .timing = active,
+            .started_ns = active.start(),
+            .phase = phase,
+        };
+    }
+
+    fn end(self: *PipelineTimingScope) void {
+        const timing = self.timing orelse return;
+        timing.finish(self.started_ns, self.phase);
+        self.timing = null;
+    }
 };
 
 fn timingNowNs(std_io: std.Io) i64 {
@@ -341,6 +433,61 @@ test "pipeline timing aggregates Monotype diagnostics" {
     try std.testing.expectEqual(@as(u64, 24), diagnostics.body.call_expressions);
 }
 
+test "pipeline timing keeps aggregate Monotype worker work separate from wall time" {
+    var timing = Timing.init(std.testing.io);
+    timing.monotype_ns.add(97);
+    timing.addMonotypeParallel(.{
+        .worker_work_ns = 11,
+        .coordinator_post_batch_work_ns = 12,
+        .root_tasks_submitted = 13,
+        .root_tasks_committed = 14,
+        .root_tasks_retried_serial = 15,
+        .specialization_tasks_submitted = 16,
+        .specialization_tasks_committed = 17,
+        .specialization_tasks_retried_serial = 18,
+        .specialization_tasks_discarded_ready = 19,
+        .task_waves = 20,
+        .peak_worker_lanes_available = 4,
+        .peak_worker_lanes_used = 3,
+        .within_lowering_lane_reuse_tasks = 21,
+    });
+    timing.addMonotypeParallel(.{
+        .worker_work_ns = 31,
+        .coordinator_post_batch_work_ns = 32,
+        .root_tasks_submitted = 33,
+        .root_tasks_committed = 34,
+        .root_tasks_retried_serial = 35,
+        .specialization_tasks_submitted = 36,
+        .specialization_tasks_committed = 37,
+        .specialization_tasks_retried_serial = 38,
+        .specialization_tasks_discarded_ready = 39,
+        .task_waves = 40,
+        .peak_worker_lanes_available = 8,
+        .peak_worker_lanes_used = 5,
+        .within_lowering_lane_reuse_tasks = 41,
+    });
+    timing.addSnapshot(.{ .boxy_plan_ns = 43, .boxy_lower_ns = 47 });
+
+    const snapshot_value = timing.snapshot();
+    const parallel = snapshot_value.monotype_parallel;
+    try std.testing.expectEqual(@as(u64, 97), snapshot_value.monotype_ns);
+    try std.testing.expectEqual(@as(u64, 42), parallel.worker_work_ns);
+    try std.testing.expectEqual(@as(u64, 44), parallel.coordinator_post_batch_work_ns);
+    try std.testing.expectEqual(@as(u64, 46), parallel.root_tasks_submitted);
+    try std.testing.expectEqual(@as(u64, 48), parallel.root_tasks_committed);
+    try std.testing.expectEqual(@as(u64, 50), parallel.root_tasks_retried_serial);
+    try std.testing.expectEqual(@as(u64, 52), parallel.specialization_tasks_submitted);
+    try std.testing.expectEqual(@as(u64, 54), parallel.specialization_tasks_committed);
+    try std.testing.expectEqual(@as(u64, 56), parallel.specialization_tasks_retried_serial);
+    try std.testing.expectEqual(@as(u64, 58), parallel.specialization_tasks_discarded_ready);
+    try std.testing.expectEqual(@as(u64, 60), parallel.task_waves);
+    try std.testing.expectEqual(@as(u64, 8), parallel.peak_worker_lanes_available);
+    try std.testing.expectEqual(@as(u64, 5), parallel.peak_worker_lanes_used);
+    try std.testing.expectEqual(@as(u64, 62), parallel.within_lowering_lane_reuse_tasks);
+    try std.testing.expectEqual(@as(u64, 43), snapshot_value.boxy_plan_ns);
+    try std.testing.expectEqual(@as(u64, 47), snapshot_value.boxy_lower_ns);
+}
+
 /// Whether the root checked module is complete or inside checking finalization.
 pub const CheckedModuleState = enum {
     complete,
@@ -352,6 +499,7 @@ pub const RuntimeRecordSchema = postcheck.SolvedLirLower.RuntimeRecordSchema;
 pub const RuntimeTagSchema = postcheck.SolvedLirLower.RuntimeTagSchema;
 pub const RuntimeTagUnionSchema = postcheck.SolvedLirLower.RuntimeTagUnionSchema;
 pub const InlineMode = postcheck.SolvedInline.Mode;
+pub const SpecConstrCloneInlining = postcheck.MonotypeLifted.SpecConstr.CloneInlining;
 pub const InlineExpectMode = postcheck.SolvedLirLower.InlineExpectMode;
 pub const MonotypeCacheControl = postcheck.Monotype.Lower.SpecializationCacheControl;
 
@@ -519,33 +667,36 @@ pub fn lowerCheckedModulesToLir(
     if (monotype_timing) |*detail| {
         detail.body_work_timing_enabled = target.timing.?.detailed_monotype_body;
     }
-    var mono = try postcheck.Monotype.Lower.run(
-        allocator,
-        checkedModules(modules),
-        rootRequests(roots, layout_requests, static_data_requests),
-        .{
-            .proc_debug_names = target.proc_debug_names or LirDump.filter() != null,
-            .specialization_cache = target.monotype_cache,
-            .post_check_executor = target.post_check_executor,
-            .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
-            .target_usize = target.target_usize,
-            .inline_expects = switch (target.inline_expects) {
-                .run => .run,
-                .omit => .omit,
+    var mono = monotype: {
+        defer if (target.timing) |timing| {
+            timing.finish(monotype_started_ns, .monotype);
+            if (monotype_timing) |*detail| timing.addMonotypeSnapshot(detail.snapshot());
+            if (monotype_diagnostics) |diagnostics| timing.addMonotypeDiagnostics(diagnostics);
+        };
+        break :monotype try postcheck.Monotype.Lower.run(
+            allocator,
+            checkedModules(modules),
+            rootRequests(roots, layout_requests, static_data_requests),
+            .{
+                .proc_debug_names = target.proc_debug_names or LirDump.filter() != null,
+                .specialization_cache = target.monotype_cache,
+                .post_check_executor = target.post_check_executor,
+                .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
+                .target_usize = target.target_usize,
+                .inline_expects = switch (target.inline_expects) {
+                    .run => .run,
+                    .omit => .omit,
+                },
+                .timing = if (monotype_timing) |*timing| timing else null,
+                .diagnostics = if (monotype_diagnostics) |*diagnostics| diagnostics else null,
             },
-            .timing = if (monotype_timing) |*timing| timing else null,
-            .diagnostics = if (monotype_diagnostics) |*diagnostics| diagnostics else null,
-        },
-    );
-    if (target.timing) |timing| {
-        timing.finish(monotype_started_ns, .monotype);
-        if (monotype_timing) |*detail| timing.addMonotypeSnapshot(detail.snapshot());
-        if (monotype_diagnostics) |diagnostics| timing.addMonotypeDiagnostics(diagnostics);
-    }
+        );
+    };
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
 
-    const lift_started_ns = if (target.timing) |timing| timing.start() else 0;
+    var lift_timing_scope = PipelineTimingScope.begin(target.timing, .lift);
+    defer lift_timing_scope.end();
 
     // Each post-check transform consumes its input even when it returns an
     // error. Transfer ownership before entering the transform so its cleanup
@@ -556,38 +707,40 @@ pub fn lowerCheckedModulesToLir(
     var lifted = try postcheck.MonotypeLifted.Lift.run(allocator, mono_input);
     var lifted_owned = true;
     errdefer if (lifted_owned) lifted.deinit();
-    if (target.timing) |timing| timing.finish(lift_started_ns, .lift);
+    lift_timing_scope.end();
 
     var procedure_usage = if (target.inline_mode != .none) blk: {
-        const spec_constr_started_ns = if (target.timing) |timing| timing.start() else 0;
-        const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted);
-        if (target.timing) |timing| timing.finish(spec_constr_started_ns, .spec_constr);
+        var spec_constr_timing_scope = PipelineTimingScope.begin(target.timing, .spec_constr);
+        defer spec_constr_timing_scope.end();
+        const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted, target.spec_constr_clone_inlining);
+        spec_constr_timing_scope.end();
         break :blk usage;
     } else postcheck.MonotypeLifted.SpecConstr.OwnedProcedureUsage.empty(allocator);
     defer procedure_usage.deinit();
 
     if (target.lifted_expr_count_out) |slot| slot.* = lifted.exprCount();
 
-    const lambda_solve_started_ns = if (target.timing) |timing| timing.start() else 0;
+    var lambda_solve_timing_scope = PipelineTimingScope.begin(target.timing, .lambda_solve);
+    defer lambda_solve_timing_scope.end();
     const lifted_input = lifted;
     lifted_owned = false;
     lifted = undefined;
     var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted_input);
     var solved_owned = true;
     errdefer if (solved_owned) solved.deinit();
-    if (target.timing) |timing| timing.finish(lambda_solve_started_ns, .lambda_solve);
+    lambda_solve_timing_scope.end();
 
-    const inline_plan_started_ns = if (target.inline_mode != .none)
-        if (target.timing) |timing| timing.start() else 0
-    else
-        0;
+    var inline_plan_timing_scope = PipelineTimingScope.begin(
+        if (target.inline_mode != .none) target.timing else null,
+        .inline_plan,
+    );
+    defer inline_plan_timing_scope.end();
     var inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved);
     defer inline_plan.deinit();
-    if (target.inline_mode != .none) {
-        if (target.timing) |timing| timing.finish(inline_plan_started_ns, .inline_plan);
-    }
+    inline_plan_timing_scope.end();
 
-    const lir_gen_started_ns = if (target.timing) |timing| timing.start() else 0;
+    var lir_gen_timing_scope = PipelineTimingScope.begin(target.timing, .lir_gen);
+    defer lir_gen_timing_scope.end();
     const solved_input = solved;
     solved_owned = false;
     solved = undefined;
@@ -604,7 +757,7 @@ pub fn lowerCheckedModulesToLir(
         .test_plan_metadata = roots.test_plan_metadata,
         .debug_materialized_out = target.debug_materialized_out,
     });
-    if (target.timing) |timing| timing.finish(lir_gen_started_ns, .lir_gen);
+    lir_gen_timing_scope.end();
     errdefer lowered.deinit();
 
     return finishLoweredOutput(allocator, roots, target, &lowered);
@@ -617,7 +770,8 @@ fn finishLoweredOutput(
     lowered: anytype,
 ) LowerResourceError!LoweredProgram {
     verifyArithmeticBoundary(&lowered.lir_result.store, false);
-    const lir_passes_started_ns = if (target.timing) |timing| timing.start() else 0;
+    var lir_passes_timing_scope = PipelineTimingScope.begin(target.timing, .lir_passes);
+    defer lir_passes_timing_scope.end();
 
     // TRMC/TCE must rewrite recursive procs before ARC insertion: it deletes
     // calls and changes allocation sites, and ARC panics on pre-existing RC
@@ -638,15 +792,20 @@ fn finishLoweredOutput(
         try TagReachability.run(&lowered.lir_result);
     }
     try ReachableProcs.run(&lowered.lir_result);
-    if (target.timing) |timing| timing.finish(lir_passes_started_ns, .lir_passes);
+    lir_passes_timing_scope.end();
 
-    const arc_started_ns = if (target.timing) |timing| timing.start() else 0;
+    var arc_timing_scope = PipelineTimingScope.begin(target.timing, .arc);
+    defer arc_timing_scope.end();
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = lowered.lir_result.root_procs.items,
         .specialize = target.inline_mode != .none,
         .consume_dead_boxes = target.consume_dead_boxes,
     });
-    if (target.timing) |timing| timing.finish(arc_started_ns, .arc);
+    arc_timing_scope.end();
+
+    // After the certifier has checked ARC's ledger, so that what it verified
+    // is the placement ARC produced.
+    _ = try ImmortalLocals.elide(allocator, &lowered.lir_result.store);
 
     try LirDump.run(&lowered.lir_result);
 
@@ -681,6 +840,8 @@ fn lowerBoxyCheckedModulesToLir(
     layout_requests: []const checked.CheckedTypeId,
     static_data_requests: []const postcheck.Common.StaticDataRequest,
 ) LowerResourceError!LoweredProgram {
+    var boxy_plan_timing_scope = PipelineTimingScope.begin(target.timing, .boxy_plan);
+    defer boxy_plan_timing_scope.end();
     var boxy_layout_requests = std.ArrayList(checked.CheckedTypeId).empty;
     defer boxy_layout_requests.deinit(allocator);
     try boxy_layout_requests.appendSlice(allocator, layout_requests);
@@ -693,7 +854,10 @@ fn lowerBoxyCheckedModulesToLir(
         .static_data_requests = static_data_requests,
     }, .{});
     defer plan.deinit();
+    boxy_plan_timing_scope.end();
 
+    var boxy_lower_timing_scope = PipelineTimingScope.begin(target.timing, .boxy_lower);
+    defer boxy_lower_timing_scope.end();
     var lowered = try postcheck.Boxy.Lower.run(
         allocator,
         checkedModules(modules),
@@ -706,6 +870,7 @@ fn lowerBoxyCheckedModulesToLir(
         },
     );
     errdefer lowered.deinit();
+    boxy_lower_timing_scope.end();
 
     return finishLoweredOutput(allocator, roots, target, &lowered);
 }

@@ -981,7 +981,7 @@ fn liftModuleAfterSpecConstr(
     mono = undefined;
     errdefer lifted.deinit();
 
-    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
+    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted, .all_calls);
 
     return .{
         .resources = resources,
@@ -1186,7 +1186,7 @@ fn expectInlinePlanDecision(
     var lifted_owned = true;
     errdefer if (lifted_owned) lifted.deinit();
 
-    var procedure_usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted);
+    var procedure_usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted, .all_calls);
     defer procedure_usage.deinit();
 
     var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);
@@ -7574,7 +7574,7 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
     mono_consumed = true;
     defer lifted.deinit();
 
-    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
+    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted, .all_calls);
 
     // The input program has no tuple nested directly inside another tuple, so a
     // nested tuple after specialization means the substituted aggregate leaked
@@ -7707,7 +7707,7 @@ test "custom literal field default gets an ordinary conversion root" {
         switch (conversion.kind) {
             .numeral_conversion => numeral_roots += 1,
             .quote_conversion => quote_roots += 1,
-            .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect => return error.TestUnexpectedResult,
+            .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect, .repl_expr => return error.TestUnexpectedResult,
         }
     }
     try std.testing.expectEqual(@as(usize, 1), numeral_roots);

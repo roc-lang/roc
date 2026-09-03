@@ -160,9 +160,11 @@ pub const Constants = struct {
     ///     family for internal builtin types.
     /// 71: Annotation node payload packs its boolean flags into one byte and
     ///     records the source region of the annotated name.
-    /// 72: Canonicalization warns on a `?` applied to a function's return
+    /// 72: Checked binding schemes serialize generated-codec relations that
+    ///     downstream specializations must revalidate.
+    /// 73: Canonicalization warns on a `?` applied to a function's return
     ///     value (new diagnostic).
-    pub const CACHE_VERSION = 72;
+    pub const CACHE_VERSION = 73;
 };
 
 /// Configuration for the Roc cache system.

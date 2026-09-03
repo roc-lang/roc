@@ -87,6 +87,7 @@ pub const UnsupportedGeneratedMethod = types.UnsupportedGeneratedMethod;
 pub const AssociatedItemNotFound = types.AssociatedItemNotFound;
 pub const PolymorphicVarAnnotation = types.PolymorphicVarAnnotation;
 pub const EffectfulTopLevel = types.EffectfulTopLevel;
+pub const EffectfulComptimeExpression = types.EffectfulComptimeExpression;
 pub const EffectfulExpect = types.EffectfulExpect;
 pub const EffectfulFunctionName = types.EffectfulFunctionName;
 

@@ -796,6 +796,14 @@ pub fn getRegionAt(store: *const NodeStore, node_idx: Node.Idx) Region {
     return store.regions.get(idx).*;
 }
 
+/// Move a node to another source region. A forward-reference placeholder is
+/// created at the first use of a name and becomes that name's binder once the
+/// declaration is reached, at which point it belongs at the declaration.
+pub fn setRegionAt(store: *NodeStore, node_idx: Node.Idx, region: Region) void {
+    const idx: Region.Idx = @enumFromInt(@intFromEnum(node_idx));
+    store.regions.set(idx, region);
+}
+
 fn literalDispatchKindForTag(tag: Node.Tag) ?LiteralDispatchPlan.Kind {
     const literal_tag = narrowNodeTag(LiteralNodeTag, tag) orelse return null;
     return switch (literal_tag) {

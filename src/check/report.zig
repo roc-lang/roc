@@ -86,6 +86,7 @@ const UnsupportedGeneratedMethod = problem_mod.UnsupportedGeneratedMethod;
 const AssociatedItemNotFound = problem_mod.AssociatedItemNotFound;
 const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
 const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
+const EffectfulComptimeExpression = problem_mod.EffectfulComptimeExpression;
 const EffectfulExpect = problem_mod.EffectfulExpect;
 const EffectfulFunctionName = problem_mod.EffectfulFunctionName;
 
@@ -1011,6 +1012,9 @@ pub const ReportBuilder = struct {
             },
             .effectful_top_level => |data| {
                 return self.buildEffectfulTopLevelReport(data);
+            },
+            .effectful_comptime_expression => |data| {
+                return self.buildEffectfulComptimeExpressionReport(data);
             },
             .effectful_expect => |data| {
                 return self.buildEffectfulExpectReport(data);
@@ -3071,7 +3075,10 @@ pub const ReportBuilder = struct {
         // Note: The unifier's actual/expected are opposite to display order.
         // We want to show "type has X" (from expected_snapshot) then "expected Y" (from actual_snapshot)
         return try self.makeMismatchReport(
-            .{ .simple = regionIdxFrom(ctx.constraint_var) },
+            if (ctx.source_region) |region|
+                .{ .direct = region }
+            else
+                .{ .simple = regionIdxFrom(ctx.constraint_var) },
             &.{
                 D.bytes("The"),
                 D.ident(ctx.method_name).withAnnotation(.inline_code),
@@ -4612,6 +4619,20 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try D.renderSlice(&.{
             D.bytes("Move the effect into a function body so it runs when the function is called."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildEffectfulComptimeExpressionReport(self: *Self, data: EffectfulComptimeExpression) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Effectful Compile Time Expression", "This REPL expression performs an effect, but REPL expressions are evaluated at compile time.", .runtime_error);
+        errdefer report.deinit();
+
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Use a pure expression here, or run effectful code from a Roc application."),
         }, self, &report);
         return report;
     }
