@@ -854,7 +854,7 @@ pub const Store = struct {
                     const expected = block_keys[node_blocks[node]] orelse continue;
                     const actual = try walker.keyFromNode(@enumFromInt(node));
                     defer allocator.free(actual);
-                    std.debug.assert(std.mem.eql(u8, expected, actual));
+                    std.debug.assert(sameKeyBytes(expected, actual));
                 }
             }
 
@@ -876,6 +876,14 @@ pub const Store = struct {
             self_analysis.allocator.free(partition.block_keys);
             self_analysis.allocator.free(partition.block_representatives);
             self_analysis.allocator.free(partition.node_blocks);
+        }
+
+        fn sameKeyBytes(lhs: []const u8, rhs: []const u8) bool {
+            if (lhs.len != rhs.len) return false;
+            for (lhs, rhs) |left, right| {
+                if (left != right) return false;
+            }
+            return true;
         }
 
         /// Interning key of the block a node belongs to, or `null` when that
