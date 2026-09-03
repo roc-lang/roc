@@ -257,6 +257,15 @@ pub const FieldPresenceRelation = enum {
     required_access,
 };
 
+/// Which semantic side of an owning record diagnostic contains the nominal.
+/// Alias expansion may reverse the unifier's algorithmic operand order, so
+/// retained structural evidence must not infer this role from local ordering.
+pub const NominalRecordMismatchRole = enum {
+    none,
+    expected,
+    actual,
+};
+
 /// Controls what a top-level type mismatch does to the two operands.
 pub const MismatchBehavior = enum {
     /// Merge both operands into a single `.err` type. This is the default: it
@@ -278,9 +287,9 @@ pub const Options = struct {
     root_relation: RootRelation = .ordinary,
     row_width_relation: RowWidthRelation = .construction,
     field_presence_relation: FieldPresenceRelation = .ordinary,
-    /// Retain the outer nominal record opening if this relation rejects and
-    /// its reporter needs to inspect the instantiated backing.
-    retain_record_mismatch: bool = false,
+    /// Retain the outer nominal record opening with this semantic role if the
+    /// relation rejects and its reporter needs the instantiated backing.
+    nominal_record_mismatch_role: NominalRecordMismatchRole = .none,
     /// Source-backed record construction whose omission decisions this
     /// relation owns. The checker publishes successful default absorptions
     /// against this exact expression when the empty row operand is an
@@ -317,7 +326,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         env.occurs_scratch,
         opts.row_width_relation,
         opts.field_presence_relation,
-        opts.retain_record_mismatch,
+        opts.nominal_record_mismatch_role,
         env.construction_probe,
         opts.record_construction_var,
     );
@@ -402,7 +411,7 @@ const Unifier = struct {
     occurs_scratch: *occurs.Scratch,
     row_width_relation: RowWidthRelation,
     field_presence_relation: FieldPresenceRelation,
-    retain_record_mismatch: bool,
+    nominal_record_mismatch_role: NominalRecordMismatchRole,
     /// The unresolved "actual" var before resolution, used for deferred constraint origin tracking.
     /// This allows error messages to point to the original expression rather than the resolved type.
     unresolved_a: ?Var,
@@ -429,7 +438,7 @@ const Unifier = struct {
         occurs_scratch: *occurs.Scratch,
         row_width_relation: RowWidthRelation,
         field_presence_relation: FieldPresenceRelation,
-        retain_record_mismatch: bool,
+        nominal_record_mismatch_role: NominalRecordMismatchRole,
         construction_probe: ?ConstructionProbe,
         record_construction_var: ?Var,
     ) Unifier {
@@ -441,7 +450,7 @@ const Unifier = struct {
             .occurs_scratch = occurs_scratch,
             .row_width_relation = row_width_relation,
             .field_presence_relation = field_presence_relation,
-            .retain_record_mismatch = retain_record_mismatch,
+            .nominal_record_mismatch_role = nominal_record_mismatch_role,
             .unresolved_a = null,
             .unresolved_b = null,
             .enclosing_records = null,
@@ -2099,11 +2108,16 @@ const Unifier = struct {
         opened_backing: Var,
         direction: NominalDirection,
     ) std.mem.Allocator.Error!void {
-        if (!self.retain_record_mismatch or self.enclosing_records != null) return;
+        if (self.nominal_record_mismatch_role == .none or self.enclosing_records != null) return;
 
-        const evidence: RawTypePair = switch (direction) {
-            .a_is_nominal => .{ .expected = opened_backing, .actual = vars.b.var_ },
-            .b_is_nominal => .{ .expected = vars.a.var_, .actual = opened_backing },
+        const anonymous_var = switch (direction) {
+            .a_is_nominal => vars.b.var_,
+            .b_is_nominal => vars.a.var_,
+        };
+        const evidence: RawTypePair = switch (self.nominal_record_mismatch_role) {
+            .none => unreachable,
+            .expected => .{ .expected = opened_backing, .actual = anonymous_var },
+            .actual => .{ .expected = anonymous_var, .actual = opened_backing },
         };
         _ = try self.scratch.unify_work_stack.append(
             self.scratch.gpa,
@@ -3884,7 +3898,7 @@ pub fn partitionFields(
     a_fields_range: RecordFieldSafeList.Range,
     b_fields_range: RecordFieldSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedRecordFields {
-    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, false, null, null);
+    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, .none, null, null);
     return try unifier.partitionFields(scratch, a_fields_range, b_fields_range);
 }
 
@@ -3898,7 +3912,7 @@ pub fn partitionTags(
     a_tags_range: TagSafeList.Range,
     b_tags_range: TagSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedTags {
-    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, false, null, null);
+    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, .none, null, null);
     return try unifier.partitionTags(scratch, a_tags_range, b_tags_range);
 }
 

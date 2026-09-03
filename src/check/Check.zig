@@ -4953,7 +4953,7 @@ fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) 
 /// for the reporter without changing the user-facing root types.
 fn unifyRecordInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
     var opts = unifyOptionsForContext(ctx, .poison_to_err);
-    opts.retain_record_mismatch = true;
+    opts.nominal_record_mismatch_role = .expected;
     return self.runUnify(a, b, env, opts);
 }
 
@@ -4974,7 +4974,7 @@ fn unifyOwnedRelation(
     ctx: problem.Context,
     row_width_relation: unifier.RowWidthRelation,
 ) std.mem.Allocator.Error!unifier.Result {
-    return self.unifyOwnedRootRelation(expected, actual, env, ctx, row_width_relation, .ordinary, false);
+    return self.unifyOwnedRootRelation(expected, actual, env, ctx, row_width_relation, .ordinary, .none);
 }
 
 fn unifyOwnedRecordRelation(
@@ -4985,7 +4985,7 @@ fn unifyOwnedRecordRelation(
     ctx: problem.Context,
     row_width_relation: unifier.RowWidthRelation,
 ) std.mem.Allocator.Error!unifier.Result {
-    return self.unifyOwnedRootRelation(expected, actual, env, ctx, row_width_relation, .ordinary, true);
+    return self.unifyOwnedRootRelation(expected, actual, env, ctx, row_width_relation, .ordinary, .actual);
 }
 
 /// `unifyOwnedRelation` for a relation whose initial pair carries a root
@@ -4998,7 +4998,7 @@ fn unifyOwnedRootRelation(
     ctx: problem.Context,
     row_width_relation: unifier.RowWidthRelation,
     root_relation: unifier.RootRelation,
-    retain_record_mismatch: bool,
+    nominal_record_mismatch_role: unifier.NominalRecordMismatchRole,
 ) std.mem.Allocator.Error!unifier.Result {
     const result = try self.runUnify(expected, actual, env, .{
         .context = ctx,
@@ -5007,7 +5007,7 @@ fn unifyOwnedRootRelation(
         .row_width_relation = row_width_relation,
         .field_presence_relation = fieldPresenceRelationForContext(ctx, row_width_relation),
         .record_construction_var = if (row_width_relation == .construction) actual else null,
-        .retain_record_mismatch = retain_record_mismatch,
+        .nominal_record_mismatch_role = nominal_record_mismatch_role,
     });
     if (result.isAccepted()) return result;
     return .{ .problem = try self.appendTypeMismatch(expected, actual, ctx) };
@@ -5059,7 +5059,7 @@ fn unifyNominalConstructorBacking(
         .{ .nominal_constructor = ctx },
         row_width_relation,
         .nominal_constructor_backing,
-        false,
+        .none,
     );
 }
 

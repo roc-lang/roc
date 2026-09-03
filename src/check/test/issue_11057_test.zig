@@ -83,6 +83,27 @@ test "issue 11057: nominal update evidence uses the instantiated backing" {
     try test_env.assertOneTypeErrorMsg(field_mismatch);
 }
 
+test "issue 11057: nominal update evidence keeps roles through an alias" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\NamedConfig := { foo : U64, bar : U64 }
+        \\Config : NamedConfig
+        \\
+        \\config : Config
+        \\config = NamedConfig.{ foo: 1, bar: 2 }
+        \\
+        \\bar = True
+        \\
+        \\config2 = { ..config, bar }
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeErrorMsg(field_mismatch);
+}
+
 // spellchecker:off
 test "issue 11057: a missing nominal record field remains a field diagnostic" {
     const source =
