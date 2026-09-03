@@ -970,4 +970,40 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "42" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/11064
+        .name = "issue 11064: unannotated imported field reader runs from every match arm calling it",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Bar",
+            .source =
+            \\Bar := [].{
+            \\    header = |request|
+            \\        request.headers.find_first(|h| h.name == "x-foo").map_err(|_| NotFound)
+            \\}
+            ,
+        }},
+        .source =
+        \\import Bar
+        \\
+        \\main = {
+        \\    req = { uri: "/a/b", headers: [{ name: "x-foo", value: "42" }] }
+        \\    baz(req, ["a", "b"])
+        \\}
+        \\
+        \\baz = |req, parts|
+        \\    match parts {
+        \\        ["a", "b"] => foo(req)
+        \\        ["a", "b", "c"] => foo(req)
+        \\        _ => "no route"
+        \\    }
+        \\
+        \\foo = |req|
+        \\    match Bar.header(req) {
+        \\        Ok(h) => "found ${h.value}"
+        \\        Err(_) => "not found"
+        \\    }
+        ,
+        .expected = .{ .inspect_str = "\"found 42\"" },
+    },
 };
