@@ -7826,7 +7826,7 @@ method, while each dispatch plan checks and instantiates that target against its
 own callable relation.
 
 **Edges supply substitutions.** A scheme's quantified variables are its
-identity variables in canonical order (`scheme_vars` on the checked template
+identity variables in identity order (`scheme_vars` on the checked template
 or dispatch scope); each evidence parameter names the slot its dispatcher
 occupies. Checking persists every scheme edge: an ordinary instantiation
 records the (pristine var, fresh var) pair of every quantified variable it
@@ -7910,13 +7910,13 @@ restored compile-time function values call or specialize schemes with no
 checked instantiation record. For these the substitution is read from the
 request: the scheme root instantiates in a context for the scheme's module,
 the request interface is related to it, and the slots are read back. The
-obligations are then derived to a fixpoint: a receiver whose cell has a method
+requirements are then derived to a fixpoint: a receiver whose cell has a method
 owner selects its target through the exact registry lookup, and that target's
 callable is related to the constraint's callable type (recorded on every
 evidence parameter) instantiated over the substitution, which binds the
 quantified variables only that callable reaches—the receivers of later
-obligations. A receiver still open after the fixpoint forwards to the
-enclosing frame's obligation on the cell it shares with an enclosing quantified
+requirements. A receiver still open after the fixpoint forwards to the
+enclosing frame's requirement on the cell it shares with an enclosing quantified
 variable, derives on a detached literal-default cell, or resolves structurally
 or vacuously for an ownerless shape. Because target relations and literal
 defaults are deterministic, the substitution is a function of the request
@@ -7943,7 +7943,7 @@ path resolves over its template's checked callable type before Monotype may
 consume it.
 
 Exact registry lookups—`(MethodOwner, MethodNameId)`—happen during
-checking, and during obligation derivation for compiler-generated edges. The
+checking, and during requirement derivation for compiler-generated edges. The
 registry only ever answers exact lookups after the owner is known from checked
 type content or from a live cell's content; no stage asks "which owners could
 match this constraint?".
