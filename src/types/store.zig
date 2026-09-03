@@ -791,6 +791,15 @@ pub const Store = struct {
         /// enclosing annotated return's error row when every visible error is
         /// included, keeping the hosted callee's declared closed row intact.
         hosted_try_question_widening,
+        /// (ii) design.md "Polarity" / Rewrite Inventory
+        /// `closeTagRowsForDerivation`: a polarity marker rigid in tag-ext
+        /// position (the alias-declaration-body deferral, which stands for
+        /// exactly "flex or `[]`, per use site") reaches a derivation through
+        /// a directly-used local alias declaration, where no instantiation
+        /// ever resolves it. The derivation determines the row exactly, so
+        /// the marker closes: it redirects to the empty tag union, the same
+        /// outcome instantiation's `.close` behavior produces.
+        derivation_marker_ext_closure,
     };
 
     /// Set a type variable to redirect to the provided variables.

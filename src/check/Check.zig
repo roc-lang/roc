@@ -30165,6 +30165,11 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             continue;
                         }
                         if (constraint.fn_name.eql(self.cir.idents.parser_for)) {
+                            // A derived parser determines each tag row exactly, so
+                            // implicit output-position openness collapses first —
+                            // including rows inside the nominal's args (eg a Dict
+                            // key union). See closeTagRowsForDerivation.
+                            try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
                             switch (try self.nominalSupportsDerivedParseShape(nominal_type, env, region)) {
                                 .supported => if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
                                     try self.satisfyImplicitParserConstraint(
@@ -30201,6 +30206,11 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 );
                                 continue;
                             };
+                            // A derived encoder determines each tag row exactly, so
+                            // implicit output-position openness collapses first —
+                            // including rows inside the nominal's args (see
+                            // closeTagRowsForDerivation).
+                            try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
                             switch (try self.nominalSupportsDerivedEncodeShape(nominal_type, encoding_var, env, region)) {
                                 .supported => if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
                                     try self.satisfyImplicitEncoderForConstraint(
@@ -30536,6 +30546,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         );
                         if (method_lookup == null or staticDispatchBindingIsDerivedMarker(method_lookup.?)) {
                             const backing_var = self.types.getAliasBackingVar(alias);
+                            // Collapse implicit output-position openness before
+                            // deriving against the alias backing (see
+                            // closeTagRowsForDerivation).
+                            try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
                             switch (try self.varSupportsDerivedParseShape(backing_var, env, region)) {
                                 .supported => {
                                     try self.satisfyImplicitParserConstraint(
@@ -30577,6 +30591,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 );
                                 continue;
                             };
+                            // Collapse implicit output-position openness before
+                            // deriving against the alias backing (see
+                            // closeTagRowsForDerivation).
+                            try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
                             switch (try self.varSupportsDerivedEncodeShape(backing_var, encoding_var, env, region)) {
                                 .supported => {
                                     try self.satisfyImplicitEncoderForConstraint(
@@ -30828,6 +30846,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                     } else if (constraint.fn_name.eql(self.cir.idents.parser_for)) {
                         const region = self.getRegionAt(deferred_constraint.var_);
+                        // A derived parser determines each tag row exactly, so
+                        // implicit output-position openness collapses first
+                        // (see closeTagRowsForDerivation).
+                        try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
                         switch (try self.typeSupportsDerivedParse(dispatcher_content.structure, env, region)) {
                             .supported => {
                                 if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
@@ -30879,6 +30901,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                     } else if (constraint.fn_name.eql(self.cir.idents.encoder_for)) {
                         const region = self.getRegionAt(deferred_constraint.var_);
+                        // A derived encoder determines each tag row exactly, so
+                        // implicit output-position openness collapses first
+                        // (see closeTagRowsForDerivation).
+                        try self.closeTagRowsForDerivation(deferred_constraint.var_, env);
                         const encoding_var = self.encoderForConstraintEncodingVar(constraint) orelse {
                             try self.reportConstraintError(
                                 deferred_constraint.var_,
@@ -31858,6 +31884,129 @@ fn nominalIsBuiltinBoolType(self: *const Self, nominal_type: types_mod.NominalTy
     return ident.eql(self.cir.idents.bool) or ident.eql(self.cir.idents.bool_type);
 }
 
+/// Close every reachable tag-union row whose extension is an unbound flex var
+/// before deriving a structural parser, encoder, or `map`/`map!` for `var_`
+/// (design.md "Polarity"; Rewrite Inventory `closeTagRowsForDerivation`).
+///
+/// Under polarity, annotated tag unions in output positions carry an implicit
+/// flex extension. A derived implementation determines each row exactly (a
+/// parser or encoder handles precisely the listed tags; derived map
+/// additionally selects its payload, which an open payload row would defeat
+/// by reading as a type variable), so the openness collapses here: each flex
+/// ext unifies with `[]`, exactly like an exhaustive match closing an
+/// inferred row. Downstream shape checks (closed-row requirements, the
+/// `[Missing]`/`[Null]` optional-field conventions, key-string dict keys)
+/// then see the closed rows.
+///
+/// Only the ext of an existing tag union structure is closed. A bare flex var
+/// elsewhere (eg the unbound err row of `Try(ok, _)`, which parse derivation
+/// pins to `[Missing]` separately) is left untouched, and so is a rigid ext:
+/// a polymorphic open row may hold tags no derivation was checked for, so it
+/// stays rejected. The one rigid that does close is the alias-declaration
+/// polarity MARKER (the helper's marker arm). The walk follows structure
+/// only — never a variable's static-dispatch constraints — so a where-method
+/// signature reachable through a constrained rigid keeps the markers its
+/// per-use instantiation resolves.
+fn closeTagRowsForDerivation(self: *Self, var_: Var, env: *Env) Allocator.Error!void {
+    self.var_set.clearRetainingCapacity();
+    try self.closeTagRowsForDerivationHelp(var_, env, &self.var_set);
+}
+
+fn closeTagRowsForDerivationHelp(
+    self: *Self,
+    var_: Var,
+    env: *Env,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    if (visited.contains(resolved.var_)) return;
+    try visited.put(resolved.var_, {});
+
+    switch (resolved.desc.content) {
+        .flex, .rigid, .err, .field_presence => {},
+        .alias => |alias| {
+            // Index-based iteration: recursion can append vars, invalidating
+            // any slice into the store's backing array.
+            var arg_span = alias.vars.nonempty;
+            arg_span.dropFirstElem();
+            var i: usize = 0;
+            while (i < arg_span.count) : (i += 1) {
+                const arg_var = self.types.vars.items.items[@intFromEnum(arg_span.start) + i];
+                try self.closeTagRowsForDerivationHelp(arg_var, env, visited);
+            }
+            try self.closeTagRowsForDerivationHelp(self.types.getAliasBackingVar(alias), env, visited);
+        },
+        .structure => |flat_type| switch (flat_type) {
+            .record => |record| {
+                const fields_range = record.fields;
+                var i: usize = 0;
+                while (i < fields_range.count) : (i += 1) {
+                    // Re-fetch per iteration: recursion can grow the store.
+                    const field = self.types.record_fields.get(@enumFromInt(@intFromEnum(fields_range.start) + i));
+                    try self.closeTagRowsForDerivationHelp(field.presence.typeVar(), env, visited);
+                }
+                try self.closeTagRowsForDerivationHelp(record.ext, env, visited);
+            },
+            .record_unbound => |fields_range| {
+                var i: usize = 0;
+                while (i < fields_range.count) : (i += 1) {
+                    const field = self.types.record_fields.get(@enumFromInt(@intFromEnum(fields_range.start) + i));
+                    try self.closeTagRowsForDerivationHelp(field.presence.typeVar(), env, visited);
+                }
+            },
+            .tuple => |tuple| {
+                var i: usize = 0;
+                while (i < tuple.elems.count) : (i += 1) {
+                    const elem_var = self.types.vars.items.items[@intFromEnum(tuple.elems.start) + i];
+                    try self.closeTagRowsForDerivationHelp(elem_var, env, visited);
+                }
+            },
+            .nominal_type => |nominal| {
+                const args_range = types_mod.Store.getNominalArgsRange(nominal);
+                var i: usize = 0;
+                while (i < args_range.count) : (i += 1) {
+                    const arg_var = self.types.vars.items.items[@intFromEnum(args_range.start) + i];
+                    try self.closeTagRowsForDerivationHelp(arg_var, env, visited);
+                }
+            },
+            .tag_union => |tag_union| {
+                const tags_range = tag_union.tags;
+                var tag_i: usize = 0;
+                while (tag_i < tags_range.count) : (tag_i += 1) {
+                    const tag_args = self.types.tags.get(@enumFromInt(@intFromEnum(tags_range.start) + tag_i)).args;
+                    var arg_i: usize = 0;
+                    while (arg_i < tag_args.count) : (arg_i += 1) {
+                        const arg_var = self.types.vars.items.items[@intFromEnum(tag_args.start) + arg_i];
+                        try self.closeTagRowsForDerivationHelp(arg_var, env, visited);
+                    }
+                }
+
+                const ext_resolved = self.types.resolveVar(tag_union.ext);
+                switch (ext_resolved.desc.content) {
+                    .flex => {
+                        const ext_region = self.getRegionAt(ext_resolved.var_);
+                        const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, ext_region);
+                        _ = try self.unify(tag_union.ext, empty_tu_var, env);
+                    },
+                    // The alias-declaration-body deferral: a marker in a
+                    // directly-used local alias declaration never meets an
+                    // instantiation that would resolve it, and the derivation
+                    // determines the row exactly, so it closes here (see
+                    // RedirectRule.derivation_marker_ext_closure). A rigid
+                    // cannot be unified with `[]`, hence the redirect.
+                    .rigid => |rigid| if (rigid.name.eql(self.cir.idents.polarity_var)) {
+                        const ext_region = self.getRegionAt(ext_resolved.var_);
+                        const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, ext_region);
+                        try self.types.dangerousSetVarRedirect(.derivation_marker_ext_closure, ext_resolved.var_, empty_tu_var);
+                    },
+                    else => try self.closeTagRowsForDerivationHelp(tag_union.ext, env, visited),
+                }
+            },
+            .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => {},
+        },
+    }
+}
+
 fn typeSupportsDerivedParse(
     self: *Self,
     flat_type: types_mod.FlatType,
@@ -32037,7 +32186,11 @@ fn varSupportsDerivedParseTagExt(
             => .unsupported,
         },
         .alias => |alias| try self.varSupportsDerivedParseTagExt(self.types.getAliasBackingVar(alias), env, region),
-        .err, .flex => .supported,
+        .err => .supported,
+        // An unbound flex ext can be implicit output-position openness
+        // (polarity); closeTagRowsForDerivation grounds reachable rows before
+        // this check, so a still-flex ext is a genuinely unresolved row.
+        .flex => .unresolved,
         .rigid, .field_presence => .unsupported,
     };
 }
@@ -34235,6 +34388,12 @@ fn satisfyDerivedMapConstraint(
     region: Region,
     effectful: bool,
 ) Allocator.Error!DerivedMapConstraintResult {
+    // A derived map determines the union and its payload selection exactly,
+    // so implicit output-position openness collapses first — on the
+    // dispatcher's own row and on payload rows, whose flex extensions would
+    // otherwise read as type variables and defeat the unambiguous-payload
+    // judgment (design.md: closeTagRowsForDerivation).
+    try self.closeTagRowsForDerivation(dispatcher_var, env);
     var tags = std.ArrayList(types_mod.Tag).empty;
     defer tags.deinit(self.gpa);
     const analysis = (try self.analyzeDerivedMap(dispatcher_var, env, region, &tags)) orelse return .unsupported;
@@ -36428,6 +36587,10 @@ fn validateDerivedParseTagExt(
         },
         .alias => |alias| try self.validateDerivedParseTagExt(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, walk, failure_expr),
         .err => .ok,
+        // A flex ext that reaches validation is an inferred row (implicit
+        // output-position openness was already collapsed by
+        // closeTagRowsForDerivation): a derived parser produces exactly the
+        // listed tags, so it closes here, exactly as derived encoding does.
         .flex => blk: {
             const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
             const result = try self.unify(ext_var, empty_tu_var, env);

@@ -4473,6 +4473,21 @@ host-boundary annotations (hosted lambdas and `provides` defs) and platform
 `requires` types keep their rows as written, because the host side is a fixed
 ABI rather than a Roc producer participating in unification.
 
+Derived structural implementations — parsers, encoders, and derived
+`map`/`map!` — are consumers that determine each tag row exactly (and, for
+map, its payload selection, which an open payload row would defeat by
+reading as a type variable), so before one is derived for a type every
+reachable tag-union extension that is an unbound flex collapses to `[]`
+(`Check.closeTagRowsForDerivation`), like an exhaustive match closing an
+inferred row. A polarity MARKER that reaches a derivation directly closes the
+same way (`RedirectRule.derivation_marker_ext_closure`): a block-local alias
+such as `Shape : { kind : [A, B] }` used as `Shape.parser_for(...)` consumes
+the declaration var without instantiation, so nothing else ever resolves its
+marker, and the derivation decides its "flex or `[]`, per use" as `[]`. That
+rewrites the declaration itself, so a later use of the same alias sees the
+closed row. Rigid extensions are never closed: a polymorphic open row may
+hold tags no derivation was checked for, so it stays rejected.
+
 Display follows the same polarity: an anonymous, unshared, unconstrained flex
 ext in an output position is not rendered as `..`; rigid extensions are
 always rendered (a marker, which is written closed, is rendered closed).
@@ -4535,9 +4550,11 @@ was checked, so that parser dispatch is rejected.
 
 This is the parser counterpart of derived encoder validation, which already
 closes an unconstrained flexible tag extension once the encoder's exact
-structural shape is selected. Parser eligibility recognizes a flexible
-variable only in the explicit tag-extension position; a bare flexible shape or
-payload remains unsupported until earlier constraints resolve it.
+structural shape is selected. Implicit output-position openness is already
+collapsed by `Check.closeTagRowsForDerivation` before eligibility runs, so a
+flexible extension that survives to the eligibility probe is a genuinely
+unresolved row and defers rather than qualifying; a bare flexible shape or
+payload likewise remains unsupported until earlier constraints resolve it.
 
 Both sides are pinned by tests: accepted—
 test/cli/JsonTagUnionProtocol.roc (issue #10418's unannotated
@@ -5911,6 +5928,14 @@ site to any family below must classify it here.
 - `markErroneousBranchWithExpected`—mechanism: diagnostic recovery. The
   expression already has a reported error; its var is redirected to a fresh
   var unified with the expected return so checking can continue past it.
+- `closeTagRowsForDerivationHelp`'s marker arm
+  (`RedirectRule.derivation_marker_ext_closure`)—policy: Polarity /
+  `closeTagRowsForDerivation` (below). A polarity marker rigid in tag-ext
+  position stands for exactly "flex or `[]`, per use site"; a marker
+  reaching a derivation through a directly-used local alias declaration
+  meets no instantiation that would resolve it, and the derivation
+  determines the row exactly, so the marker redirects to the empty tag
+  union — the same outcome instantiation's `.close` behavior produces.
 
 Other solved-graph mutations:
 
@@ -5950,6 +5975,25 @@ Other solved-graph mutations:
   ignorable payload vars for tags the expression provably never constructs
   close to the empty tag union, so matches on constructed values are
   exhaustive without wildcard arms.
+- `closeTagRowsForDerivation`—policy: Polarity (above). Before a structural
+  parser, encoder, or derived `map`/`map!` is derived for a type, every
+  reachable tag-union extension that is an unbound flex var (implicit
+  output-position openness) unifies with the empty tag union: a derived
+  implementation determines each row exactly — and derived map additionally
+  determines its payload selection, which an open payload row would defeat
+  by reading as a type variable — so the openness collapses like an
+  exhaustive match closing an inferred row. A polarity MARKER rigid in
+  tag-ext position (the alias-declaration-body deferral) collapses the same
+  way via `RedirectRule.derivation_marker_ext_closure` (above): a
+  directly-used local alias declaration's marker meets no resolving
+  instantiation, and the derivation decides its "flex or `[]`" as `[]`.
+  Both sides are pinned by the "check type - polarity - derivation ..." and
+  "... derived map/parser/encoder ..." tests in
+  src/check/test/type_checking_integration.zig: accepted—open payload rows
+  under a derived map, `Try(Str, [Missing])` fields under a derived parser
+  and encoder, a Dict key union inside a nominal arg, and a block-local
+  alias marker consumed by `Shape.parser_for`; rejected—a named rigid
+  extension, which no derivation closes.
 - `validateDerivedParseTagExt`—policy: Derived Parser Tag-Row Closure
   (above). Once structural parser eligibility has selected a known tag union,
   its unconstrained flexible extension closes to the empty tag union through

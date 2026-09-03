@@ -8928,6 +8928,125 @@ test "check type - polarity - constrained body may not pass an unlisted method a
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
+// polarity: derivation closes implicitly open rows (closeTagRowsForDerivation) //
+
+test "check type - polarity - derived map closes implicitly open payload rows" {
+    // `wrap`'s result is open at the call, and so are the two unions inside
+    // its payload. A derived map determines the payload exactly, so all of
+    // them close before the payload is selected: left open, the two payload
+    // rows would read as two type variables and defeat the selection.
+    const source =
+        \\wrap : Str -> [Found({ color : [Red, Green], size : [Small, Large] }), Missing]
+        \\wrap = |_| Missing
+        \\
+        \\out = wrap("x").map(|found| found.color)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[Found([Green, Red]), Missing]");
+}
+
+test "check type - polarity - derived parser accepts an implicitly open Missing row" {
+    // The `[Missing]` optional-field convention is written closed; in an
+    // output position it is implicitly open, and the derived parser closes
+    // it back before judging the field.
+    const source =
+        \\parse_user : Str -> Try({ name : Str, nick : Try(Str, [Missing]) }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\parse_user = |s| Json.parse(s)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try({ name: Str, nick: Try(Str, [Missing]) }, [InvalidJson(Str), MissingRequiredField(Str)])");
+}
+
+test "check type - polarity - derived encoder closes an implicitly open Missing row" {
+    // The encoder side recognizes the optional-field convention only on an
+    // exactly closed `[Missing]`, so the value's implicitly opened row must
+    // collapse before the field is judged.
+    const source =
+        \\user : { name : Str, nick : Try(Str, [Missing]) }
+        \\user = { name: "a", nick: Err(Missing) }
+        \\
+        \\out = Json.to_str(user)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - polarity - derivation closes a local alias marker used directly" {
+    // A block-local alias declaration stores a polarity marker as the ext of
+    // its `[Missing]`. `Shape.parser_for` consumes the declaration var
+    // without instantiation, so nothing else ever resolves that marker; the
+    // derivation closes it (RedirectRule.derivation_marker_ext_closure), and
+    // the field is the `Try(_, [Missing])` optional field it was written as.
+    const source =
+        \\Format := [Default].{
+        \\  rename_field : Format, Str -> Str
+        \\  rename_field = |_, name| name
+        \\
+        \\  parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError])
+        \\  parse_str = |_, state|
+        \\    match state {
+        \\      Present(value) => Ok({ value, rest: Done })
+        \\      Done => Err(FormatError)
+        \\    }
+        \\
+        \\  parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError])
+        \\  parse_record_start = |_, state| Ok(Uncounted(state))
+        \\
+        \\  parse_record_field : Format,
+        \\  Encoding.FieldName.FieldNames(_shape),
+        \\  State -> Try(
+        \\    [
+        \\      Field({ field : Encoding.FieldName(_shape), rest : State }),
+        \\      TryField({ name : Str, rest : State }),
+        \\      TryFieldCaseless({ name : Str, rest : State }),
+        \\      Continue(State),
+        \\      Done(State),
+        \\    ],
+        \\    [FormatError],
+        \\  )
+        \\  parse_record_field = |_, _, state|
+        \\    match state {
+        \\      Present(_) => Ok(TryField({ name: "name", rest: state }))
+        \\      Done => Ok(Done(state))
+        \\    }
+        \\
+        \\  parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError])
+        \\  parse_record_after_field = |_, state| Ok(Continue(state))
+        \\
+        \\  skip_record_field : Format, State -> Try(State, [FormatError])
+        \\  skip_record_field = |_, _| Ok(Done)
+        \\}
+        \\
+        \\State := [Present(Str), Done]
+        \\
+        \\main : State -> Try({ name : Try(Str, [Missing]) }, [FormatError])
+        \\main = |state| {
+        \\  Shape : { name : Try(Str, [Missing]) }
+        \\  parse_shape = Shape.parser_for(Format.Default)
+        \\  parsed = parse_shape(state)?
+        \\  Ok(parsed.value)
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "main" } }, "State -> Try({ name: Try(Str, [Missing]) }, [FormatError])");
+}
+
+test "check type - polarity - derived parser closes an implicitly open Dict key union" {
+    // The key union sits inside the nominal's args; the walk reaches it
+    // there, and the closed unit union is a key-string key.
+    const source =
+        \\parse_counts : Str -> Try(Dict([Active, Paused], U64), [InvalidJson(Str)])
+        \\parse_counts = |s| Json.parse(s)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try(Dict([Active, Paused], U64), [InvalidJson(Str), ..errs])");
+}
+
+test "check type - polarity - derivation leaves a rigid tag-row extension rejected" {
+    // Only unbound flex extensions collapse. A named rigid extension may
+    // carry tags no parser was checked for, so the derivation stays rejected.
+    const source =
+        \\parse_open : Str -> Try([Friendly, ..tags], [InvalidJson(Str), MissingRequiredField(Str)])
+        \\parse_open = |json| Json.parse(json)
+    ;
+    try checkTypesModule(source, .fail_first, "Missing Method");
+}
+
 test "check type - polarity - input is inferred as closed" {
     const source =
         \\mk_my_tag = |MyTag as a| a
