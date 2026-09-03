@@ -229,6 +229,9 @@ pub const Dismantles = struct {
     /// unit directly. The solve-time transfer still checks path liveness and
     /// keeps the ordinary retain when the root must survive.
     complete_takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, LIR.LocalId),
+    /// Later complete projections rewritten to explicit aliases of the
+    /// dominating projected container that owns their representation.
+    projection_aliases: std.AutoHashMapUnmanaged(LIR.LocalId, LIR.LocalId),
 
     pub fn deinit(self: *Dismantles) void {
         const gpa = self.arena.child_allocator;
@@ -239,6 +242,7 @@ pub const Dismantles = struct {
         self.field_restitution_args.deinit(gpa);
         self.projection_units.deinit(gpa);
         self.complete_takes.deinit(gpa);
+        self.projection_aliases.deinit(gpa);
         self.arena.deinit();
     }
 
@@ -294,6 +298,10 @@ pub const Dismantles = struct {
 
     pub fn completeTakeRoot(self: *const Dismantles, stmt: LIR.CFStmtId) ?LIR.LocalId {
         return self.complete_takes.get(stmt);
+    }
+
+    pub fn projectionAliasRoot(self: *const Dismantles, local: LIR.LocalId) ?LIR.LocalId {
+        return self.projection_aliases.get(local);
     }
 };
 
@@ -1245,6 +1253,7 @@ pub fn compute(
         .field_restitution_args = .empty,
         .projection_units = .empty,
         .complete_takes = .empty,
+        .projection_aliases = .empty,
     };
     errdefer result.deinit();
     result.owned_only_param_benefits = try result.arena.allocator().alloc(arc_sig.ParamMask, store.procSpecCount());
@@ -1678,6 +1687,7 @@ pub fn compute(
         const stmt = store.getCFStmtPtr(@enumFromInt(stmt_index));
         if (stmt.* != .assign_ref) dismantleInvariant("projected alias definition stopped being a reference read");
         stmt.assign_ref.op = .{ .local = representative_local };
+        try result.projection_aliases.put(gpa, @enumFromInt(@as(u32, @intCast(local_index))), representative_local);
     }
 
     // Variant admission consumes the exact owned-only benefit without

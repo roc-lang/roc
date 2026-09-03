@@ -5151,6 +5151,9 @@ const Inserter = struct {
     /// so its later uses never depend on the place.
     fn localInOwnershipPlace(self: *const Inserter, local: LIR.LocalId, place: LIR.LocalId) bool {
         if (self.owned_binding_override.contains(local)) return local == place;
+        if (self.dismantles.projectionAliasRoot(local)) |root| {
+            if (self.owned_binding_override.contains(root)) return root == place;
+        }
         return self.solution.leaderOf(local) == place;
     }
 
