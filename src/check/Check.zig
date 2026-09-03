@@ -8192,6 +8192,9 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.reportNonExhaustiveForPatterns(&env);
 
     try self.pruneSelectedHoistedRootsAfterSolving();
+    // Pruning can mark a destructured name erroneous; its uses are poisoned
+    // like those of any other erroneous binding.
+    try self.poisonErroneousValueUses();
     try self.finalizeLiteralDispatchResolutions();
     try self.finalizeTopLevelDemandDependencies(&env);
     try self.finalizeExpectEffectSlots();
@@ -8508,10 +8511,19 @@ fn hoistedRootIsIntrinsicallyKept(
         const is_function = self.varIsFunctionType(type_var);
         if (is_function or self.selectedHoistedRootIsTopLevel(root.*)) {
             root.value_kind = if (is_function) .callable_binding else .data_constant;
-            return if (self.selectedHoistedRootIsTopLevel(root.*))
-                true
-            else
-                try self.varIsConcreteCallableRootType(type_var);
+            if (self.selectedHoistedRootIsTopLevel(root.*)) {
+                // A top-level name whose type, or whose destructured value's
+                // type, failed checking has no value to evaluate. The binder
+                // is erroneous from here on so that every use of the name is
+                // poisoned like a use of an erroneous plain def.
+                const has_error = try canonical_type_keys.containsError(self.gpa, self.types, self.cir, type_var) or
+                    try canonical_type_keys.containsError(self.gpa, self.types, self.cir, ModuleEnv.varFrom(root.expr));
+                if (has_error) {
+                    if (root.pattern) |pattern| try self.erroneous_value_patterns.put(self.gpa, pattern, {});
+                }
+                return !has_error;
+            }
+            return try self.varIsConcreteCallableRootType(type_var);
         }
     }
 
@@ -18331,9 +18343,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // before canonicalization, so target_node_idx is always valid.
             if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
                 const target_def: CIR.Def.Idx = @enumFromInt(@intFromEnum(ext_ref.other_cir_node_idx));
-                if (generatedDerivedMethodDef(ext_ref.other_cir, target_def)) {
+                // An exposed name bound by a top-level destructure points at
+                // its binder pattern rather than a def; only a def can be a
+                // generated method marker or an annotation-only declaration.
+                const target_is_def = ext_ref.other_cir.store.nodes.get(ext_ref.other_cir_node_idx).tag == .def;
+                if (target_is_def and generatedDerivedMethodDef(ext_ref.other_cir, target_def)) {
                     try self.reportAnnotationOnlyValueUse(expr_var, expr_region, env);
-                } else if (annotationOnlyValueDef(ext_ref.other_cir, target_def)) {
+                } else if (target_is_def and annotationOnlyValueDef(ext_ref.other_cir, target_def)) {
                     try self.reportValuelessDeclarationUse(expr_var, expr_region);
                 } else {
                     const ext_instantiated_var = try self.instantiateImportedBindingVar(
@@ -19947,8 +19963,16 @@ fn methodTypeVarFromOriginalEnv(
 }
 
 fn patternIdentInModule(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?Ident.Idx {
-    const def = module_env.store.getDef(def_idx);
-    const pattern = module_env.store.getPattern(def.pattern);
+    // An exposed name bound by a top-level destructure is reached through its
+    // binder pattern rather than a def.
+    const tag = module_env.store.nodes.get(ModuleEnv.nodeIdxFrom(def_idx)).tag;
+    const pattern_idx: CIR.Pattern.Idx = if (tag == .def)
+        module_env.store.getDef(def_idx).pattern
+    else if (tag == .pattern_identifier or tag == .pattern_as)
+        @enumFromInt(@intFromEnum(def_idx))
+    else
+        return null;
+    const pattern = module_env.store.getPattern(pattern_idx);
     return switch (pattern) {
         .assign => |assign| assign.ident,
         .as => |as_pattern| as_pattern.ident,

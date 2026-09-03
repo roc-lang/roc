@@ -484,6 +484,7 @@ const TypeAnno = CIR.TypeAnno;
 const Annotation = CIR.Annotation;
 const WhereClause = CIR.WhereClause;
 const Diagnostic = CIR.Diagnostic;
+const DependencyGraph = @import("DependencyGraph.zig");
 const RecordField = CIR.RecordField;
 
 /// Struct to track fields that have been seen before during canonicalization
@@ -4740,7 +4741,6 @@ pub fn canonicalizeFile(
     try DefaultCycles.checkDefaultCycles(self.env, self.env.gpa);
 
     // Compute dependency-based evaluation order using SCC analysis
-    const DependencyGraph = @import("DependencyGraph.zig");
     var graph = try DependencyGraph.buildDependencyGraph(
         self.env,
         self.env.all_defs,
@@ -4785,7 +4785,6 @@ fn poisonRecursiveNonFunctionDefs(
         region: Region,
     };
 
-    const DependencyGraph = @import("DependencyGraph.zig");
     var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
     defer binders.deinit(self.env.gpa);
     var binder_scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
@@ -5212,6 +5211,9 @@ fn canonicalizeStmtDecl(
     // If this declaration successfully defined an exposed value, remove it from exposed_ident_texts
     // and add the node index to exposed_items
     const pattern = self.parse_ir.store.getPattern(decl.pattern);
+    if (pattern != .ident) {
+        try self.recordExposedDestructuredNames(def_idx);
+    }
     if (pattern == .ident) {
         const token_region = self.parse_ir.tokens.resolve(@intCast(pattern.ident.ident_tok));
         const ident_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
@@ -5227,6 +5229,35 @@ fn canonicalizeStmtDecl(
             try self.env.setExposedValueNodeIndexById(idx, def_idx_u32);
         }
 
+        _ = self.exposed_ident_texts.remove(ident_text);
+    }
+}
+
+/// Whether a module's exposed items may name values bound by top-level
+/// destructures. A plain module's exposed values are reached only through
+/// value lookups, which accept a binder pattern as the target; an app's
+/// provided entrypoints and a platform's provided and hosted entries are
+/// consumed as defs.
+fn destructuredNamesAreExposable(self: *const Self) bool {
+    return self.env.module_kind == .module;
+}
+
+/// Bookkeep each exposed name a destructuring def binds the way a plainly
+/// named def is: it becomes an exposed item pointing at the name's binder
+/// pattern and leaves the pending exposed set.
+fn recordExposedDestructuredNames(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
+    if (!self.destructuredNamesAreExposable()) return;
+    var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binders.deinit(self.env.gpa);
+    var binder_scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binder_scratch.deinit(self.env.gpa);
+    const def = self.env.store.getDef(def_idx);
+    try DependencyGraph.appendPatternBinders(self.env, def.pattern, &binders, &binder_scratch, self.env.gpa);
+    for (binders.items) |binder| {
+        const ident = defPatternIdent(&self.env.store, binder) orelse continue;
+        const ident_text = self.env.getIdent(ident);
+        if (!self.exposed_ident_texts.contains(ident_text)) continue;
+        try self.env.setExposedValueNodeIndexById(ident, @intFromEnum(binder));
         _ = self.exposed_ident_texts.remove(ident_text);
     }
 }
@@ -6096,6 +6127,11 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
     // Check each definition to see if it corresponds to an exposed item.
     // We check exposed_idents which only contains items from the exposing clause,
     // not associated items like "Color.as_str" which are registered separately.
+    var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binders.deinit(self.env.gpa);
+    var binder_scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binder_scratch.deinit(self.env.gpa);
+
     for (defs_slice) |def_idx| {
         const def = self.env.store.getDef(def_idx);
         const pattern = self.env.store.getPattern(def.pattern);
@@ -6105,6 +6141,21 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
             if (self.exposed_idents.contains(pattern.assign.ident)) {
                 try self.env.store.addScratchDef(def_idx);
                 try self.env.setExposedValueNodeIndexById(pattern.assign.ident, @intFromEnum(def_idx));
+            }
+            continue;
+        }
+
+        // A destructuring def in a plain module exposes each exposed name it
+        // binds. The exposed item points at the name's binder pattern: its var
+        // is the name's type, and the checked artifact publishes the name's
+        // extraction root under it.
+        if (!self.destructuredNamesAreExposable()) continue;
+        binders.clearRetainingCapacity();
+        try DependencyGraph.appendPatternBinders(self.env, def.pattern, &binders, &binder_scratch, self.env.gpa);
+        for (binders.items) |binder| {
+            const ident = defPatternIdent(&self.env.store, binder) orelse continue;
+            if (self.exposed_idents.contains(ident)) {
+                try self.env.setExposedValueNodeIndexById(ident, @intFromEnum(binder));
             }
         }
     }
