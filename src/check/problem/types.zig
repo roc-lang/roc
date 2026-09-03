@@ -439,9 +439,9 @@ pub const TypeMismatch = struct {
     types: TypePair,
     /// Where this type mismatch occurred (for contextual error messages)
     context: Context = .none,
-    /// Exact structural evidence retained by unification for reports that
-    /// would otherwise have to reconstruct a nested mismatch from the root
-    /// operands. This is populated only for contexts that consume it.
+    /// Exact structural evidence retained by unification so reports can show
+    /// a nested mismatch hidden behind the root operands. This is populated
+    /// only for contexts that consume it.
     evidence: TypeMismatchEvidence = .none,
 };
 
