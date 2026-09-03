@@ -43,7 +43,7 @@ const name_width: usize = 37;
 
 /// Maximum number of top-level phases a single operation reports.
 const max_phases: usize = 16;
-const max_subphases: usize = 24;
+const max_subphases: usize = 25;
 // Test-cache diagnostics plus the post-check workload groups already require
 // four entries; retain headroom so later explicit diagnostics are not silently
 // dropped merely because their recording order changes.
@@ -200,6 +200,16 @@ pub const Reporter = struct {
     pub fn endWithBreakdown(self: *Reporter, subs: []const SubTiming) void {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
+        self.endActiveLocked(subs);
+    }
+
+    /// End the active phase with aggregate/interleaved subtimings while keeping
+    /// its wall-time parent row visible even when no memory sample was recorded.
+    pub fn endWithParentBreakdown(self: *Reporter, subs: []const SubTiming) void {
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+        const idx = self.active orelse return;
+        self.phases[idx].show_parent_with_subs = true;
         self.endActiveLocked(subs);
     }
 
@@ -845,6 +855,31 @@ test "static breakdown lists every phase with the timings flag" {
     } else {
         try testing.expect(std.mem.find(u8, out, "Type Checking") == null);
     }
+}
+
+test "parent breakdown remains grouped without a memory sample" {
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    var reporter = Reporter.init(.{
+        .std_io = std.Io.Threaded.global_single_threaded.io(),
+        .writer = &buf.writer,
+        .op_label = "roc build",
+        .timings_flag = true,
+        .is_tty = false,
+    });
+    defer reporter.deinit();
+    reporter.start();
+    reporter.begin("Aggregate Parent");
+    reporter.endWithParentBreakdown(&.{
+        .{ .name = "Interleaved Work", .ns = 10 * std.time.ns_per_ms },
+    });
+    reporter.phases[0].mem_min = std.math.maxInt(u64);
+    reporter.phases[0].mem_max = 0;
+    reporter.finish();
+
+    const out = buf.written();
+    try testing.expect(std.mem.find(u8, out, "Aggregate Parent") != null);
+    try testing.expect(std.mem.find(u8, out, "Interleaved Work") != null);
 }
 
 test "fast run without the timings flag prints nothing" {

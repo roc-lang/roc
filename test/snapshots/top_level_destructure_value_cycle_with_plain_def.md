@@ -11,7 +11,7 @@ c = a
 # EXPECTED
 CIRCULAR VALUE DEFINITION - top_level_destructure_value_cycle_with_plain_def.md:1:2:1:3
 CIRCULAR VALUE DEFINITION - top_level_destructure_value_cycle_with_plain_def.md:1:5:1:6
-CIRCULAR VALUE DEFINITION - top_level_destructure_value_cycle_with_plain_def.md:1:15:1:16
+CIRCULAR VALUE DEFINITION - top_level_destructure_value_cycle_with_plain_def.md:2:1:2:2
 # PROBLEMS
 ── ✗ circular value definition ─ top_level_destructure_value_cycle_with_plain_def.md:1:2
 
@@ -33,12 +33,12 @@ The value b is part of a recursive non-function definition cycle.
 Only functions can be recursive. Non-function top-level values must be fully
 computable without depending on themselves through other values.
 
-── ✗ circular value definition ─ top_level_destructure_value_cycle_with_plain_def.md:1:15
+── ✗ circular value definition ─ top_level_destructure_value_cycle_with_plain_def.md:2:1
 
 The value c is part of a recursive non-function definition cycle.
 
-{a, b} = { a: c, b: 1 }
-              ^
+c = a
+^
 
 Only functions can be recursive. Non-function top-level values must be fully
 computable without depending on themselves through other values.
