@@ -19,6 +19,7 @@ const unifier = @import("unify.zig");
 const occurs = @import("occurs.zig");
 const problem = @import("problem.zig");
 const snapshot_mod = @import("snapshot.zig");
+const type_diff = @import("snapshot/diff.zig");
 const exhaustive = @import("exhaustive.zig");
 const ExhaustivenessContext = @import("exhaustiveness_context.zig");
 const hoist_roots = @import("hoist_roots.zig");
@@ -6238,7 +6239,7 @@ fn instantiateVarPolarized(
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    var opened_marker_exts: std.ArrayListUnmanaged(Var) = .empty;
+    var opened_marker_exts: std.ArrayListUnmanaged(Instantiator.OpenedMarkerExt) = .empty;
     defer opened_marker_exts.deinit(self.gpa);
     var instantiate_ctx = Instantiator{
         .store = self.types,
@@ -6261,14 +6262,18 @@ fn instantiateVarPolarized(
 /// Record alias markers an annotation-position instantiation resolved open,
 /// so the post-body audit covers rows opened through an alias exactly like
 /// rows opened directly in the annotation.
-fn recordOpenedMarkerExts(self: *Self, opened: []const Var, region_behavior: InstantiateRegionBehavior) std.mem.Allocator.Error!void {
+fn recordOpenedMarkerExts(self: *Self, opened: []const Instantiator.OpenedMarkerExt, region_behavior: InstantiateRegionBehavior) std.mem.Allocator.Error!void {
     if (opened.len == 0) return;
     const region = switch (region_behavior) {
         .explicit => |region| region,
         .use_root_instantiated, .use_last_var => Region.zero(),
     };
-    for (opened) |ext_var| {
-        try self.implicit_open_exts.append(self.gpa, .{ .var_ = ext_var, .region = region });
+    for (opened) |marker| {
+        try self.implicit_open_exts.append(self.gpa, .{
+            .var_ = marker.ext,
+            .region = region,
+            .listed_tags = marker.listed_tags,
+        });
     }
 }
 
@@ -6417,7 +6422,7 @@ fn instantiateVarWithSubsPolarized(
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    var opened_marker_exts: std.ArrayListUnmanaged(Var) = .empty;
+    var opened_marker_exts: std.ArrayListUnmanaged(Instantiator.OpenedMarkerExt) = .empty;
     defer opened_marker_exts.deinit(self.gpa);
     var instantiate_ctx = Instantiator{
         .store = self.types,
@@ -14706,6 +14711,14 @@ const ImplicitOpenExt = struct {
     /// for an absent ext or an alias marker resolved open. Reported as
     /// redundant when the binding generalizes regardless of it.
     explicit_ext_region: ?Region = null,
+    /// The tags the annotation lists on the union this extension opens,
+    /// captured when the extension is minted. They cannot be re-read from
+    /// the union var after the body check: unifying the annotated row with
+    /// the body's row merges both sides into one descriptor holding every
+    /// tag, listed or not. The audit uses them to suggest a listed tag for
+    /// an unlisted one that looks like a typo; null (no hint) when the
+    /// minting site did not see the union.
+    listed_tags: ?types_mod.Tag.SafeMultiList.Range = null,
 };
 
 /// The slice of `implicit_open_exts` one annotation's generation minted.
@@ -14743,9 +14756,20 @@ fn auditImplicitOpenExts(self: *Self, annotation_idx: CIR.Annotation.Idx, redund
         const extension = resolved.desc.content.structure.tag_union;
         if (extension.tags.count == 0) continue;
         const first_tag = self.types.tags.get(extension.tags.start);
+        // The same close-match judgment as the Type Mismatch tag-typo hint,
+        // over the tags the annotation actually lists.
+        const suggestion: ?Ident.Idx = if (entry.listed_tags) |listed_tags|
+            type_diff.findBestTypoSuggestion(
+                first_tag.name,
+                self.types.getTagsSlice(listed_tags).items(.name),
+                self.cir.getIdentStoreConst(),
+            )
+        else
+            null;
         _ = try self.problems.appendProblem(self.gpa, .{ .tag_union_extended_beyond_annotation = .{
             .region = entry.region,
             .tag_name = first_tag.name,
+            .suggestion = suggestion,
         } });
         try self.markErroneous(entry.var_);
     }
@@ -15812,6 +15836,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             .var_ = open_ext_var,
                             .region = anno_region,
                             .explicit_ext_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(ext_anno_idx)),
+                            .listed_tags = tags_range,
                         });
                         break :inner_blk open_ext_var;
                     }
@@ -15825,7 +15850,11 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
                 if (implicitly_open) {
                     const open_ext_var = try self.fresh(env, anno_region);
-                    try self.implicit_open_exts.append(self.gpa, .{ .var_ = open_ext_var, .region = anno_region });
+                    try self.implicit_open_exts.append(self.gpa, .{
+                        .var_ = open_ext_var,
+                        .region = anno_region,
+                        .listed_tags = tags_range,
+                    });
                     break :inner_blk open_ext_var;
                 }
 

@@ -710,4 +710,8 @@ pub const TagUnionExtendedBeyondAnnotation = struct {
     region: base.Region,
     /// The first tag the definition produced beyond the annotation
     tag_name: base.Ident.Idx,
+    /// A tag the annotation lists that `tag_name` is a likely typo of (the
+    /// same edit-distance judgment as the Type Mismatch tag-typo hint), when
+    /// there is one and the audit knew the listed tags.
+    suggestion: ?base.Ident.Idx,
 };

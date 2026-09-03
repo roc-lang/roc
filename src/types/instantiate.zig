@@ -281,7 +281,9 @@ pub const Instantiator = struct {
     /// When set, every polarity var this instantiation resolves OPEN (a fresh
     /// flex ext) is appended here, so the caller can record it for the
     /// post-body audit of implicitly opened rows (`Check.auditImplicitOpenExts`).
-    opened_marker_exts: ?*std.ArrayListUnmanaged(Var) = null,
+    /// An entry learns the tags of the union it extends when that union's
+    /// copy is finished (`OpenedMarkerExt.listed_tags`).
+    opened_marker_exts: ?*std.ArrayListUnmanaged(OpenedMarkerExt) = null,
     /// How to resolve polarity vars (see `PolarityVarBehavior`). `.close`
     /// reproduces the written (closed) row and is the safe default.
     polarity_var_behavior: PolarityVarBehavior = .close,
@@ -352,6 +354,16 @@ pub const Instantiator = struct {
         /// declaration's method signature copied into a referencing
         /// annotation, or an alias body embedded in one).
         defer_open,
+    };
+
+    /// A polarity marker this instantiation resolved open: the fresh flex
+    /// ext it became, and the tags the copied union lists next to it. The
+    /// tags are attached when the union's copy is finished, the one point
+    /// where the ext and the union's tags meet; a marker is always a union's
+    /// ext, so `listed_tags` is null only for a copy that never reached one.
+    pub const OpenedMarkerExt = struct {
+        ext: Var,
+        listed_tags: ?Tag.SafeMultiList.Range = null,
     };
 
     const Self = @This();
@@ -517,7 +529,7 @@ pub const Instantiator = struct {
                         };
                         const marker_var = try self.store.freshFromContentWithRank(marker_content, self.current_rank);
                         if (opened) {
-                            if (self.opened_marker_exts) |sink| try sink.append(self.store.gpa, marker_var);
+                            if (self.opened_marker_exts) |sink| try sink.append(self.store.gpa, .{ .ext = marker_var });
                         }
                         try self.var_map.put(resolved_var, marker_var);
                         try machine.value_stack.append(self.store.gpa, marker_var);
@@ -1178,6 +1190,17 @@ pub const Instantiator = struct {
                 },
                 .await_ext => {
                     const fresh_ext = machine.value_stack.pop().?;
+                    // A marker resolved open is this union's ext: hand the
+                    // post-body audit the tags it sits next to, so its report
+                    // can suggest a listed tag for an unlisted near-miss.
+                    if (self.opened_marker_exts) |sink| {
+                        for (sink.items) |*opened| {
+                            if (opened.ext == fresh_ext and opened.listed_tags == null) {
+                                opened.listed_tags = frame.tags_range;
+                                break;
+                            }
+                        }
+                    }
                     try self.finishFrame(frame.common, Content{ .structure = FlatType{ .tag_union = TagUnion{
                         .tags = frame.tags_range,
                         .ext = fresh_ext,

@@ -2283,6 +2283,20 @@ pub const ReportBuilder = struct {
             D.bytes("to the tag union in the annotation."),
         }, self, &report);
 
+        // The same hint the Type Mismatch report gives for a tag typo.
+        if (data.suggestion) |suggestion| {
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("Maybe"),
+                D.ident(data.tag_name).withAnnotation(.inline_code),
+                D.bytes("should be"),
+                D.ident(suggestion).withAnnotation(.inline_code),
+                D.bytes("?").withNoPrecedingSpace(),
+            }, self, &report);
+        }
+
         return report;
     }
 
