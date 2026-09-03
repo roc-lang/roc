@@ -56,6 +56,8 @@ pub const ComptimeSite = Mono.ComptimeSite;
 pub const FieldExpr = Mono.FieldExpr;
 /// Record update expression.
 pub const RecordUpdate = Mono.RecordUpdate;
+/// Explicit producer-to-consumer result relation.
+pub const TypedBoundary = Mono.TypedBoundary;
 /// One source-ordered segment in a flattened record-field access path.
 pub const FieldAccessSegment = Mono.FieldAccessSegment;
 /// Keyed pre-lift function capture operand.
@@ -110,6 +112,11 @@ pub const Fn = struct {
     /// while the lifted function still has that signature; transformations
     /// that synthesize a different ABI clear it explicitly.
     signature: ?Type.TypeId = null,
+    /// The iterator-fusion pass normalized this function from explicit
+    /// checker-stamped iterator producers. Later structural LIR passes consume
+    /// this provenance directly instead of rediscovering iterator intent from
+    /// procedure names or body shape.
+    iterator_fusion_scope: bool = false,
     args: Span(TypedLocal),
     captures: Span(TypedLocal),
     body: FnBody,

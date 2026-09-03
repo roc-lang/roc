@@ -131,6 +131,16 @@ const Solver = struct {
     /// allocating and zeroing chunks; pooled maps keep chunks across uses.
     solved_set_pool: collections.DenseMapPool(Type.TypeVarId, void),
     solved_position_pool: collections.DenseMapPool(Type.TypeVarId, u32),
+    /// Tag positions by name per stored tag row, keyed by the row's start.
+    /// Rows are immutable once stored, so an index stays valid for the
+    /// solver's lifetime and a row unified against many small rows is
+    /// indexed once.
+    tag_row_indexes: std.AutoHashMapUnmanaged(u32, TagRowIndex),
+    /// The clone context every callable-free lazy leaf expands in. A
+    /// callable-free Monotype has no lambda-set state to solve, so all of its
+    /// uses can read one clone; giving each use its own would make every
+    /// meeting of two uses unify the whole type again.
+    shared_leaf_context: ?u32,
     mono_set_pool: collections.DenseMapPool(MonoType.TypeId, void),
     clone_map_pool: collections.DenseMapPool(MonoType.TypeId, Type.TypeVarId),
 
@@ -247,12 +257,17 @@ const Solver = struct {
             .leaf_contexts = .empty,
             .solved_set_pool = collections.DenseMapPool(Type.TypeVarId, void).init(allocator),
             .solved_position_pool = collections.DenseMapPool(Type.TypeVarId, u32).init(allocator),
+            .tag_row_indexes = .empty,
+            .shared_leaf_context = null,
             .mono_set_pool = collections.DenseMapPool(MonoType.TypeId, void).init(allocator),
             .clone_map_pool = collections.DenseMapPool(MonoType.TypeId, Type.TypeVarId).init(allocator),
         };
     }
 
     fn deinit(self: *Solver) void {
+        var row_indexes = self.tag_row_indexes.valueIterator();
+        while (row_indexes.next()) |row_index| row_index.by_name.deinit(self.allocator);
+        self.tag_row_indexes.deinit(self.allocator);
         self.clone_map_pool.deinit();
         self.mono_set_pool.deinit();
         self.solved_position_pool.deinit();
@@ -652,6 +667,10 @@ const Solver = struct {
             .comptime_exhaustiveness_failed,
             => {},
             .static_data_candidate => |candidate| _ = try self.expectExpr(candidate.runtime_expr, expected),
+            .typed_boundary => |boundary| {
+                const producer = try self.inferExpr(boundary.value);
+                try self.unify(expected, producer);
+            },
             .list => |items| {
                 const elem_ty = try self.listElem(expected);
                 for (self.lifted.exprSpan(items)) |child| {
@@ -1384,8 +1403,14 @@ const Solver = struct {
     /// same cyclic graph an eager clone produced.
     fn expandMonoRoot(self: *Solver, root: Type.TypeVarId, leaf: MonoLeaf) Allocator.Error!Type.Content {
         const ctx: u32 = if (leaf.ctx != Type.no_leaf_context) leaf.ctx else blk: {
+            const raw_id = @intFromEnum(leaf.id);
+            const callable_free = !self.contains_callable[raw_id] and !self.contains_forced_dynamic[raw_id];
+            if (callable_free) {
+                if (self.shared_leaf_context) |shared| break :blk shared;
+            }
             const index: u32 = @intCast(self.leaf_contexts.items.len);
             try self.leaf_contexts.append(self.allocator, collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(self.allocator));
+            if (callable_free) self.shared_leaf_context = index;
             break :blk index;
         };
         if (self.leaf_contexts.items[ctx].get(leaf.id)) |existing| {
@@ -1755,8 +1780,8 @@ const Solver = struct {
         rhs: Type.TypeVarId,
         structural_isolated: bool,
     ) Allocator.Error!void {
-        const a = self.program.types.rootCompressed(lhs);
-        const b = self.program.types.rootCompressed(rhs);
+        var a = self.program.types.rootCompressed(lhs);
+        var b = self.program.types.rootCompressed(rhs);
         if (a == b) return;
 
         const raw_left = self.program.types.get(a);
@@ -1767,6 +1792,11 @@ const Solver = struct {
         }
         const left = if (std.meta.activeTag(raw_left) == .mono) try self.expandMonoRoot(a, raw_left.mono) else raw_left;
         const right = if (std.meta.activeTag(raw_right) == .mono) try self.expandMonoRoot(b, raw_right.mono) else raw_right;
+        // Expanding a leaf already materialized in its context links the
+        // root to that clone, so the pair may have become one class.
+        a = self.program.types.rootCompressed(a);
+        b = self.program.types.rootCompressed(b);
+        if (a == b) return;
 
         const left_tag = std.meta.activeTag(left);
         if (left_tag == .link) Common.invariant("Lambda Solved root returned a link");
@@ -2635,42 +2665,73 @@ const Solver = struct {
 
     /// Merge two tag unions, collecting the shared tags' payload spans for the
     /// caller to unify once the merged span has been recorded.
+    /// Positions of a stored tag row's tags by name; the first position wins
+    /// for a repeated name.
+    const TagRowIndex = struct {
+        len: u32,
+        by_name: std.AutoHashMapUnmanaged(Type.names.TagNameId, usize),
+    };
+
+    fn tagRowIndex(self: *Solver, span: Type.Span) Allocator.Error!*const TagRowIndex {
+        const gop = try self.tag_row_indexes.getOrPut(self.allocator, span.start);
+        if (gop.found_existing and gop.value_ptr.len == span.len) return gop.value_ptr;
+        if (!gop.found_existing) gop.value_ptr.* = .{ .len = span.len, .by_name = .empty };
+        gop.value_ptr.len = span.len;
+        gop.value_ptr.by_name.clearRetainingCapacity();
+        try gop.value_ptr.by_name.ensureTotalCapacity(self.allocator, span.len);
+        for (0..span.count()) |index| {
+            const entry = gop.value_ptr.by_name.getOrPutAssumeCapacity(self.program.types.tagItem(span, index).name);
+            if (!entry.found_existing) entry.value_ptr.* = index;
+        }
+        return gop.value_ptr;
+    }
+
     fn mergeTags(
         self: *Solver,
         lhs: Type.Span,
         rhs: Type.Span,
         payload_pairs: *std.ArrayList(DeferredSpanPair),
     ) Allocator.Error!Type.Span {
-        var merged = std.ArrayList(Type.Tag).empty;
-        defer merged.deinit(self.allocator);
+        const right_index = try self.tagRowIndex(rhs);
         var shared_count: usize = 0;
-
+        var every_left_in_right = true;
         for (0..lhs.count()) |left_index| {
             const left_tag = self.program.types.tagItem(lhs, left_index);
-            try merged.append(self.allocator, left_tag);
-            for (0..rhs.count()) |right_index| {
-                const right_tag = self.program.types.tagItem(rhs, right_index);
-                if (left_tag.name != right_tag.name) continue;
+            if (right_index.by_name.get(left_tag.name)) |right_position| {
                 try payload_pairs.append(self.allocator, .{
                     .lhs = left_tag.payloads,
-                    .rhs = right_tag.payloads,
+                    .rhs = self.program.types.tagItem(rhs, right_position).payloads,
                 });
                 shared_count += 1;
-                break;
+            } else {
+                every_left_in_right = false;
             }
         }
 
         if (shared_count == 0) Common.invariant("disjoint tag unions failed Lambda Solved unification");
 
-        for (0..rhs.count()) |right_index| {
-            const right_tag = self.program.types.tagItem(rhs, right_index);
-            for (0..lhs.count()) |left_index| {
-                if (self.program.types.tagItem(lhs, left_index).name == right_tag.name) break;
-            } else {
-                try merged.append(self.allocator, right_tag);
-            }
-        }
+        // The right row already holds every left tag: the merge is the right
+        // row itself.
+        if (every_left_in_right) return rhs;
 
+        var merged = std.ArrayList(Type.Tag).empty;
+        defer merged.deinit(self.allocator);
+        var left_names = std.AutoHashMapUnmanaged(Type.names.TagNameId, void).empty;
+        defer left_names.deinit(self.allocator);
+        try left_names.ensureTotalCapacity(self.allocator, @intCast(lhs.count()));
+        for (0..lhs.count()) |left_index| {
+            const left_tag = self.program.types.tagItem(lhs, left_index);
+            try merged.append(self.allocator, left_tag);
+            left_names.putAssumeCapacity(left_tag.name, {});
+        }
+        for (0..rhs.count()) |right_position| {
+            const right_tag = self.program.types.tagItem(rhs, right_position);
+            if (left_names.contains(right_tag.name)) continue;
+            try merged.append(self.allocator, right_tag);
+        }
+        // Every right tag already sits in the left row: the merge is the
+        // left row itself.
+        if (merged.items.len == lhs.count()) return lhs;
         return try self.program.types.addTags(merged.items);
     }
 
@@ -3222,6 +3283,8 @@ fn solvedTypeDigestTestSolver(
     solver.lifted = undefined;
     solver.lifted.names = name_store;
     solver.solved_position_pool = collections.DenseMapPool(Type.TypeVarId, u32).init(allocator);
+    solver.tag_row_indexes = .empty;
+    solver.shared_leaf_context = null;
     return solver;
 }
 

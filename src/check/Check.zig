@@ -4956,6 +4956,15 @@ fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) 
     return self.runUnify(a, b, env, unifyOptionsForContext(ctx, .poison_to_err));
 }
 
+/// Unify the record relation that owns a record-aware diagnostic. If a
+/// nominal backing must be opened, retain that exact instantiated structure
+/// for the reporter without changing the user-facing root types.
+fn unifyRecordInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
+    var opts = unifyOptionsForContext(ctx, .poison_to_err);
+    opts.nominal_record_mismatch_role = .expected;
+    return self.runUnify(a, b, env, opts);
+}
+
 fn exprIsFreshRecordConstruction(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
     const expr = self.cir.store.getExpr(expr_idx);
     return expr == .e_record or expr == .e_empty_record;
@@ -4973,7 +4982,18 @@ fn unifyOwnedRelation(
     ctx: problem.Context,
     row_width_relation: unifier.RowWidthRelation,
 ) std.mem.Allocator.Error!unifier.Result {
-    return self.unifyOwnedRootRelation(expected, actual, env, ctx, row_width_relation, .ordinary);
+    return self.unifyOwnedRootRelation(expected, actual, env, ctx, row_width_relation, .ordinary, .none);
+}
+
+fn unifyOwnedRecordRelation(
+    self: *Self,
+    expected: Var,
+    actual: Var,
+    env: *Env,
+    ctx: problem.Context,
+    row_width_relation: unifier.RowWidthRelation,
+) std.mem.Allocator.Error!unifier.Result {
+    return self.unifyOwnedRootRelation(expected, actual, env, ctx, row_width_relation, .ordinary, .actual);
 }
 
 /// `unifyOwnedRelation` for a relation whose initial pair carries a root
@@ -4986,6 +5006,7 @@ fn unifyOwnedRootRelation(
     ctx: problem.Context,
     row_width_relation: unifier.RowWidthRelation,
     root_relation: unifier.RootRelation,
+    nominal_record_mismatch_role: unifier.NominalRecordMismatchRole,
 ) std.mem.Allocator.Error!unifier.Result {
     const result = try self.runUnify(expected, actual, env, .{
         .context = ctx,
@@ -4994,6 +5015,7 @@ fn unifyOwnedRootRelation(
         .row_width_relation = row_width_relation,
         .field_presence_relation = fieldPresenceRelationForContext(ctx, row_width_relation),
         .record_construction_var = if (row_width_relation == .construction) actual else null,
+        .nominal_record_mismatch_role = nominal_record_mismatch_role,
     });
     if (result.isAccepted()) return result;
     return .{ .problem = try self.appendTypeMismatch(expected, actual, ctx) };
@@ -5010,6 +5032,8 @@ fn appendTypeMismatch(
 ) std.mem.Allocator.Error!problem.Problem.Idx {
     const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected);
     const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual);
+    const unify_env = self.unifyEnv();
+    const evidence = try unifier.snapshotMismatchEvidence(&unify_env);
     return self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
         .types = .{
             .expected_var = expected,
@@ -5018,6 +5042,7 @@ fn appendTypeMismatch(
             .actual_snapshot = actual_snapshot,
         },
         .context = ctx,
+        .evidence = evidence,
     } });
 }
 
@@ -5042,6 +5067,7 @@ fn unifyNominalConstructorBacking(
         .{ .nominal_constructor = ctx },
         row_width_relation,
         .nominal_constructor_backing,
+        .none,
     );
 }
 
@@ -9229,11 +9255,81 @@ fn hoistedTopLevelDefForNode(
 ) ?HoistedCallableDef {
     for (module.store.sliceDefs(module.global_value_defs)) |def_idx| {
         const def = module.store.getDef(def_idx);
-        if (ModuleEnv.nodeIdxFrom(def_idx) == node or ModuleEnv.nodeIdxFrom(def.pattern) == node or ModuleEnv.nodeIdxFrom(def.expr) == node) {
+        if (ModuleEnv.nodeIdxFrom(def_idx) == node or ModuleEnv.nodeIdxFrom(def.expr) == node or patternBindsNode(module, def.pattern, node)) {
             return .{ .module = module, .def = def_idx };
         }
     }
     return null;
+}
+
+/// Whether `pattern` is `node` or binds `node` somewhere inside it, so that a
+/// name bound by a destructure resolves to the def that destructures.
+///
+/// The walk is an explicit worklist (zero-recursion policy).
+fn patternBindsNode(module: *const ModuleEnv, root: CIR.Pattern.Idx, node: CIR.Node.Idx) bool {
+    if (ModuleEnv.nodeIdxFrom(root) == node) return true;
+    if (module.store.getPattern(root) == .assign) return false;
+
+    var stack_allocator_state = std.heap.stackFallback(2048, module.gpa);
+    const stack_allocator = stack_allocator_state.get();
+    var pending: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer pending.deinit(stack_allocator);
+
+    pending.append(stack_allocator, root) catch return false;
+    while (pending.pop()) |current| {
+        if (ModuleEnv.nodeIdxFrom(current) == node) return true;
+        switch (module.store.getPattern(current)) {
+            .assign => {},
+            .as => |as_pattern| pending.append(stack_allocator, as_pattern.pattern) catch return false,
+            .applied_tag => |tag| {
+                for (module.store.slicePatterns(tag.args)) |arg| {
+                    pending.append(stack_allocator, arg) catch return false;
+                }
+            },
+            .nominal => |nominal| pending.append(stack_allocator, nominal.backing_pattern) catch return false,
+            .nominal_external => |nominal| pending.append(stack_allocator, nominal.backing_pattern) catch return false,
+            .record_destructure => |record| {
+                for (module.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                    const destruct = module.store.getRecordDestruct(destruct_idx);
+                    pending.append(stack_allocator, destruct.kind.toPatternIdx()) catch return false;
+                }
+            },
+            .list => |list| {
+                for (module.store.slicePatterns(list.patterns)) |item| {
+                    pending.append(stack_allocator, item) catch return false;
+                }
+                if (list.rest_info) |rest| {
+                    if (rest.pattern) |rest_pattern| {
+                        pending.append(stack_allocator, rest_pattern) catch return false;
+                    }
+                }
+            },
+            .tuple => |tuple| {
+                for (module.store.slicePatterns(tuple.patterns)) |item| {
+                    pending.append(stack_allocator, item) catch return false;
+                }
+            },
+            .str_interpolation => |str| {
+                for (0..str.steps.span.len) |offset| {
+                    const step = module.store.getStrPatternStep(str.steps, @intCast(offset));
+                    if (step.capture) |capture| {
+                        pending.append(stack_allocator, capture) catch return false;
+                    }
+                }
+            },
+            .num_literal,
+            .num_from_numeral_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .underscore,
+            .runtime_error,
+            => {},
+        }
+    }
+    return false;
 }
 
 fn hoistedExprSpanAllowsStoredConst(
@@ -12889,6 +12985,7 @@ fn predeclareAnnotationScheme(
         .use_last_var,
     );
     try self.judgeFieldKindsAtBoundary(env);
+    self.unify_scratch.clearPersistentOpenings();
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
     try self.deduplicateGeneralizedDispatchRequirements(scheme_var);
     try self.publishBindingScheme(scheme_var);
@@ -13260,6 +13357,7 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
             }
         }
         try self.judgeFieldKindsAtBoundary(env);
+        self.unify_scratch.clearPersistentOpenings();
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
         for (scc.defs) |member_def_idx| {
             const member_def = self.cir.store.getDef(member_def_idx);
@@ -17229,6 +17327,7 @@ const ExprCheckFrame = struct {
                 try checker.defaultLiteralsAtGeneralizationBoundary(.{ .owner = self.expr_var_raw, .interface = self.expr_var }, env);
             }
             try checker.judgeFieldKindsAtBoundary(env);
+            checker.unify_scratch.clearPersistentOpenings();
             try checker.generalizer.generalize(checker.gpa, &env.var_pool, env.rank());
             try checker.deduplicateGeneralizedDispatchRequirements(self.expr_var_raw);
             try checker.publishBindingScheme(self.expr_var_raw);
@@ -17795,7 +17894,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             }}),
                         },
                     }, env, expr_region);
-                    _ = try self.unifyInContext(
+                    _ = try self.unifyRecordInContext(
                         record_being_updated_var,
                         actual_field_record,
                         env,
@@ -17835,7 +17934,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     }, env, expr_region);
 
                     // Unify this record update with the record we're updating
-                    _ = try self.unifyInContext(record_being_updated_var, single_field_record, env, .{ .record_update = .{
+                    _ = try self.unifyRecordInContext(record_being_updated_var, single_field_record, env, .{ .record_update = .{
                         .field_name = field.name,
                         .field_region_idx = @enumFromInt(@intFromEnum(field_idx)),
                         .record_region_idx = @enumFromInt(@intFromEnum(record_being_updated_var)),
@@ -19084,7 +19183,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // A rejected access belongs to this expression. Preserve the
                 // independently-solved receiver graph and make only the access
                 // erroneous so post-check lowering emits its runtime crash.
-                const access_result = try self.unifyOwnedRelation(record_being_accessed, acc_receiver_var, env, .{ .record_access = .{
+                const access_result = try self.unifyOwnedRecordRelation(record_being_accessed, acc_receiver_var, env, .{ .record_access = .{
                     .field_name = access.name,
                     .field_region = access_region,
                     .mode = switch (access.mode) {
@@ -20700,6 +20799,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     try self.judgeRecordDestructBinds(env);
                     try self.defaultLiteralsAtGeneralizationBoundary(.{ .owner = decl_pattern_var, .interface = decl_pattern_var }, env);
                     try self.judgeFieldKindsAtBoundary(env);
+                    self.unify_scratch.clearPersistentOpenings();
                     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
                     try self.deduplicateGeneralizedDispatchRequirements(decl_pattern_var);
                     try self.publishBindingScheme(decl_pattern_var);
@@ -32974,10 +33074,27 @@ fn expectCircularValueDefinitions(test_env: anytype, expected_names: []const []c
     }
 }
 
-test "top-level destructure in a value cycle with a plain def reports every name it binds" {
+test "top-level destructure of a literal in a value cycle reports the names in the cycle" {
     const TestEnv = @import("test/TestEnv.zig");
+    // `{a, b} = { a: c, b: 1 }` is the defs `a = c` and `b = 1`, so only `a`
+    // is part of the cycle with `c`.
     const source =
         \\{a, b} = { a: c, b: 1 }
+        \\c = a
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try expectCircularValueDefinitions(&test_env, &.{ "a", "c" });
+}
+
+test "top-level destructure of a computed value in a value cycle reports every name it binds" {
+    const TestEnv = @import("test/TestEnv.zig");
+    // The destructured value is computed, so every name it binds is
+    // computed by the one cyclic def.
+    const source =
+        \\pair = |x| { a: x, b: 1 }
+        \\{a, b} = pair(c)
         \\c = a
     ;
     var test_env = try TestEnv.init("Test", source);
@@ -32986,7 +33103,7 @@ test "top-level destructure in a value cycle with a plain def reports every name
     try expectCircularValueDefinitions(&test_env, &.{ "a", "b", "c" });
 }
 
-test "top-level tuple destructure in a value cycle reports every name it binds" {
+test "top-level tuple destructure of a literal in a value cycle reports the names in the cycle" {
     const TestEnv = @import("test/TestEnv.zig");
     const source =
         \\(a, b) = (c, 1)
@@ -32995,7 +33112,22 @@ test "top-level tuple destructure in a value cycle reports every name it binds" 
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try expectCircularValueDefinitions(&test_env, &.{ "a", "b", "c" });
+    try expectCircularValueDefinitions(&test_env, &.{ "a", "c" });
+}
+
+test "a function destructured from a top-level literal generalizes like a plain function def" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\{ same, n } = { same: |x| x, n: 1 }
+        \\first = same("s")
+        \\second = same(n)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("first", "Str");
+    try test_env.assertDefType("second", "Dec");
 }
 
 test "name bound by a nested top-level destructure in a value cycle is a circular value definition" {
@@ -33169,6 +33301,91 @@ test "a function bound by a top-level destructure is callable from another def" 
     defer test_env.deinit();
 
     try test_env.assertDefType("later", "Dec");
+}
+
+test "a top-level destructured literal keeps the ordinary path when it has a rest pattern or extra fields" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\{ a, .. } = { a: 1, b: 2 }
+        \\{ c } = { c: 3, d: 4 }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertDefTypeOptions("a", "Dec", .{ .allow_type_errors = true });
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "a top-level destructured literal splits nested matching literals and keeps other fields as destructures" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\pair = |x| { inner: x }
+        \\{ outer: { inner }, rest: { deep }, k } = { outer: pair("s"), rest: { deep: |x| x }, k: 2 }
+        \\first = deep(inner)
+        \\second = deep(k)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("first", "Str");
+    try test_env.assertDefType("second", "Dec");
+}
+
+test "a top-level destructured tuple literal splits into defs, including a function" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\(twice, base) = (|x| Str.concat(x, x), "ab")
+        \\doubled = twice(base)
+        \\shouted = twice("!")
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("doubled", "Str");
+}
+
+test "a name bound by a top-level destructured literal to itself is still a self-referential definition" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\{ a, b } = { a: a, b: 1 }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneCanError("Invalid Assignment To Itself");
+}
+
+test "an annotation before a top-level destructured literal annotates the field it names" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\count : U64
+        \\{ count, label } = { count: 1, label: "n" }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("count", "U64");
+    try test_env.assertDefType("label", "Str");
+}
+
+test "a binder inside a destructured literal's field value does not adopt a sibling's forward reference" {
+    const TestEnv = @import("test/TestEnv.zig");
+    // `early` refers to the destructured `x`, not to the lambda parameter
+    // spelled `x` inside the earlier field `f`; that parameter shadows the
+    // top-level `x` exactly as it would shadow a plainly defined one.
+    const source =
+        \\early = x
+        \\{ f, x } = { f: |x| Str.concat(x, "!"), x: 1 }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneCanError("Duplicate Definition");
+    try test_env.assertDefTypeOptions("early", "Dec", .{ .allow_type_errors = false, .allow_can_errors = true });
+    try test_env.assertDefTypeOptions("f", "Str -> Str", .{ .allow_type_errors = false, .allow_can_errors = true });
 }
 
 test "literal strict demands flow through polymorphic called function summaries" {

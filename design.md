@@ -3742,13 +3742,16 @@ checked identity, while lift-generated keys already name the target's lifted
 slot and remain exact. After that boundary, capture recomputation accepts only
 lifted keys; it never retries a lookup in another identity namespace.
 
-Optional tag reachability uses a recursive abstract value tree. A struct field
-or tag payload carries the complete nested `ValueInfo` output for the value
-stored there, and every `set_local` join merges that complete tree. The
-pass may remove a switch edge only from this producer-complete fixed point; it
-must not flatten nested values to their top-level tag set, because an iterator
-successor can change a tag nested below both a step payload and the loop-carried
-state record.
+Optional tag reachability uses a finite abstract LIR-construction graph. Each
+analyzed LIR local records the LIR constructor sites that can produce it; a
+struct-field read or tag-payload read follows those sites to the locals stored
+there, and whole-value joins merge their finite constructor-site sets. The pass
+may remove a switch edge only from this producer-complete fixed point. It must
+neither flatten nested constructor outputs to their top-level tag set nor copy
+child tag-reachability data into a recursively unfolded tree:
+an iterator successor can change a tag nested below both a step payload and the
+loop-carried state record, while recursive values and shared constructor DAGs
+must keep analysis state bounded by the finite LIR graph.
 
 `SolvedLirLower` computes the logical Lambda Mono callable, capture, procedure,
 and function-free type decisions while directly consuming Lambda Solved syntax.
@@ -4067,18 +4070,83 @@ Minted iterator backings keep finite callable slots inline. Only
 forced-dynamic backings take this explicit erased-callable boundary. The direct
 LIR lowerer dumbly consumes the solved result: finite callables become generated
 tag-union values; erased callables become packed erased-callable values and
-indirect calls. It does not apply iterator depth policy or repair callable
+indirect calls. It does not invent iterator selection or repair callable
 variant sets.
 
 #### SpecConstr And Loop Scalarization
 
-Monotype Lifted SpecConstr is a general call-pattern specialization pass. It
-runs only when `InlineMode` is not `.none`. It consumes explicit lifted
-constructor and callable values and creates workers whose arguments are the
-parts the callee immediately observes.
+Monotype Lifted SpecConstr is a general constructor- and callable-shape pass.
+In optimizing inline modes it performs call-pattern discovery, creates workers
+whose arguments are the parts the callee immediately observes, normalizes
+function bodies, and projects unused loop results.
 
-Iterator and stream loops are important clients. After wrapper inlining exposes
-a known iterator constructor, SpecConstr can:
+`.none` mode runs only the pass's bounded, demand-directed iterator-fusion
+clone. It clones only function bodies containing a checker-stamped iterator
+producer, and within those bodies it decomposes only loop state whose type owns
+generated-private iterator topology; unrelated procedures and aggregate loops
+remain outside SpecConstr. Direct-call inlining is admitted by the checker's
+exact `IteratorProcedureId` stamp and remains admitted transitively only inside
+that producer pipeline. A callable step is admitted only after ordinary
+known-value flow reads it from a generated-private iterator backing whose exact
+topology identifies the step field. A checker-stamped `forced_dynamic` iterator
+representation is an opaque boundary to this reduced pass: partial fusion must
+not duplicate its erased-callable packing. This path does not discover general
+call patterns, reserve specialization workers, project loop exits, or run
+general solved-call inline analysis. It shares SpecConstr's
+representation-identity checks, recursion measure, and cumulative code-growth
+budget.
+
+An iterator helper's independently specialized Monotype result root can differ
+from the call-site result root even when the call proves their language-level
+relation. Inlining must not erase that evidence. SpecConstr therefore wraps an
+exposed producer result in an explicit `typed_boundary`: its child keeps the
+callee-authored type and the wrapper keeps the call-site type. Lambda Solved
+unifies the two slots exactly as the removed call did, Lambda Mono preserves the
+boundary node, and direct LIR lowering performs the ordinary typed assignment.
+SpecConstr also retains the producer's structural value beside that runtime
+expression. A field read or match can consume a known record or tag through the
+structural view without materializing it; an opaque use materializes the exact
+typed boundary. Together with the scoped pre-ARC LIR rewrites described below,
+this removes the iterator record and the immediately matched
+`One`/`Skip`/`Done` value before code generation while preserving every
+representation decision for paths that really observe the value.
+
+Body exposure is bounded by the existing source-body admission and cumulative
+65,536-unit growth budget. The active inline stack is an explicit termination
+proof: an acyclic call needs no constructor-size measure, while recursive
+re-entry is admitted only when both frames have exact constructor sizes and the
+new size is strictly smaller. Exhausting either bound retains the ordinary call.
+The clone stamps each normalized function with `iterator_fusion_scope`; Lambda
+Solved retains the lifted function table and direct LIR lowering copies that
+provenance onto the corresponding procedure. LIR and the backends do not
+identify iterators or reconstruct this decision.
+
+For `.none` plus lambda-set specialization, pre-ARC LIR consumes that explicit
+scope with three exact structural rewrites. First, an internal Roc-ABI procedure
+is inlined only when the reachable call inventory proves one direct call, no
+root or first-class escape, and therefore no reachable code growth. Second, a
+one-use forwarding join sinks its consumer only when reachable incoming-edge
+counts prove exclusivity, the outer join is nonrecursive, and the forwarded
+layout contains no reference-counted storage; moving owning continuations needs
+explicit path-ownership data and is not admitted. Third, literal tag edges may
+bypass a join whose body immediately matches that tag. Complete fusion moves
+all arms; partial fusion retains the original path and clones only arms
+whose locally defined values are ownership-neutral. Join scalarization then
+removes aggregate fixed points when every initializer, field read, and tag
+payload read is explicit. Every mutation plan requires disjoint statement
+roles before it changes the graph. These passes visit only stamped procedures, so ordinary dev
+code pays neither their analysis cost nor their structural changes.
+
+The clone propagates constructor values through ordinary bindings and solves
+loop fixed points over their leaves. As a result, `.none` mode does not rebuild
+the successor iterator record and callable on each back edge when the producer
+shape is statically known. Iterator construction outside the loop remains an
+ordinary value operation, and a forced-dynamic iterator retains its explicit
+erased-callable dispatch. No stage recognizes iterator behavior from source
+names, field spelling, generic loop shape, or backend output.
+
+Iterator and stream loops are important clients. Once explicit producer topology
+and ordinary value flow expose a known iterator constructor, SpecConstr can:
 
 - split known record, tuple, tag, nominal, and callable arguments into leaves;
 - redirect matching direct calls to specialized workers;
@@ -6730,6 +6798,12 @@ store identity independent of completion order while allowing the supported
 body traversal itself to run without locks. Widening the parallel subset
 requires a corresponding immutable or shard-owned boundary for each newly
 admitted global side table, not ad hoc worker mutation.
+
+A typed boundary is worker-admissible exactly when its child is
+worker-admissible. Its source and destination types and layouts belong to the
+frozen coordinator prefix, and the ordinary typed assignment it emits belongs
+entirely to the private LIR suffix; the boundary introduces no additional
+global identity or side table.
 
 Instantiation graph node ids are dense, append-only indexes for the lifetime of
 the graph. Per-node optional attributes such as a row root's current extension
@@ -11469,6 +11543,18 @@ live range, register assignment, spill slot, and every transition between the
 two; architecture-specific code generators own only the one
 floating-point/vector register-allocation mask and instruction encoding. They
 do not own a second local-location map or independently move LIR local values.
+
+Stable does not mean distinct. Before emitting a procedure, `LirCodeGen` walks
+its exact control-flow graph and inventories every definition and indirect
+write. A one-definition `assign_ref.local` may adopt its source's authoritative
+location only when both locals have the same runtime representation and the
+source is immutable. Multiply-defined locals, join parameters, uninitialized
+poisoning, output-pointer writes, control-flow capture writes, and aggregate
+stores therefore retain independent locations. This lets immutable alias
+chains emit no load/store copies without allowing a later source mutation to
+change an earlier snapshot. Floating-point values that require per-binding NaN
+normalization and vector values retain independent locations. The proof never
+uses emission order, last-use guesses, or an adjacent-instruction peephole.
 
 Floating-point and vector locations draw from the same register-allocation mask:
 XMM registers alias on x86-64 and V registers alias on AArch64. Vector locals

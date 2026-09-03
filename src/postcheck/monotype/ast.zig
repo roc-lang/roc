@@ -907,6 +907,14 @@ pub const StaticDataCandidate = struct {
     runtime_expr: ExprId,
 };
 
+/// Explicit result relation between independently specialized Monotype graphs.
+/// The child retains its producer-authored type; this expression's `ty` is the
+/// consumer type. Lambda Solved preserves the unification the removed call
+/// supplied, and LIR lowering performs the resulting typed assignment.
+pub const TypedBoundary = struct {
+    value: ExprId,
+};
+
 /// A checked early return plus the explicit target lambda return type.
 pub const Return = struct {
     value: ExprId,
@@ -928,6 +936,7 @@ pub const ExprData = union(enum(u8)) {
     str_lit: StringLiteralId,
     bytes_lit: PackedListLiteral,
     static_data_candidate: StaticDataCandidate,
+    typed_boundary: TypedBoundary,
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),

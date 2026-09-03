@@ -1461,6 +1461,7 @@ const Lowerer = struct {
                 if (!self.isWorkerBodyExpr(payload, next_depth)) break false;
             } else true,
             .nominal => |inner| self.isWorkerBodyExpr(inner, next_depth),
+            .typed_boundary => |boundary| self.isWorkerBodyExpr(boundary.value, next_depth),
             .let_ => |let_| let_.comptime_site == null and
                 self.isWorkerBodyExpr(let_.value, next_depth) and
                 self.isWorkerBodyExpr(let_.rest, next_depth),
@@ -1573,6 +1574,7 @@ const Lowerer = struct {
                 try self.prepareWorkerBodyCalls(payload, next_depth);
             },
             .nominal => |inner| try self.prepareWorkerBodyCalls(inner, next_depth),
+            .typed_boundary => |boundary| try self.prepareWorkerBodyCalls(boundary.value, next_depth),
             .let_ => |let_| {
                 try self.prepareWorkerBodyCalls(let_.value, next_depth);
                 try self.prepareWorkerBodyCalls(let_.rest, next_depth);
@@ -2107,6 +2109,7 @@ const Lowerer = struct {
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(entry.symbol),
             .args = args_span,
+            .iterator_fusion_scope = source_fn.iterator_fusion_scope,
             .erased_reuse_arg = erased_reuse_arg,
             .erased_call_args = if (spec.abi == .erased)
                 try self.erasedCallArgsPlan(arg_locals[0..lifted_args.len])
@@ -3407,9 +3410,10 @@ const Lowerer = struct {
         }
         for (0..source.len) |index| {
             const tag = GuardedList.at(source, index);
+            // A tag's discriminant is its position in the union's tag row.
             schema_tags[index] = .{
                 .name = try self.allocator.dupe(u8, self.solved.lifted.names.tagLabelText(tag.name)),
-                .discriminant = self.tagIndex(ty, tag.name),
+                .discriminant = @intCast(index),
             };
         }
         try self.runtime_schemas.tag_unions.append(self.allocator, .{
@@ -3707,6 +3711,7 @@ const Lowerer = struct {
             .@"unreachable" => Common.invariant("unreachable marker escaped its terminated block-final position during direct LIR lowering"),
             .uninitialized, .uninitialized_payload => next,
             .static_data_candidate => |candidate| try self.lowerStaticDataCandidateInto(target, candidate, expr_ty, next),
+            .typed_boundary => |boundary| try self.lowerTypedBoundaryInto(target, expr_ty, boundary, next),
             .list => |items| try self.lowerListIntoAtType(target, expr_ty, items, next),
             .tuple => |items| try self.lowerTupleIntoAtType(target, expr_ty, items, next),
             .record => |fields| try self.lowerRecordInto(target, expr_ty, fields, next),
@@ -3832,6 +3837,7 @@ const Lowerer = struct {
             .nominal => |backing| try self.lowerNominalInto(target, ty, backing, next),
             .let_ => |let_| try self.lowerLetIntoAtType(target, ty, let_, next),
             .static_data_candidate => |candidate| try self.lowerStaticDataCandidateInto(target, candidate, ty, next),
+            .typed_boundary => |boundary| try self.lowerTypedBoundaryInto(target, ty, boundary, next),
             .field_access => |field| try self.lowerFieldAccessInto(target, field.receiver, field.segments, next),
             .call_value => |call| try self.lowerValueCallInto(target, ty, call.callee, self.solved.lifted.exprSpan(call.args), next),
             .match_ => |match_| try self.lowerMatchInto(target, ty, match_.scrutinee, match_.branches, match_.comptime_site, next),
@@ -3875,6 +3881,19 @@ const Lowerer = struct {
             .expect,
             => try self.lowerExprInto(target, expr_id, next),
         };
+    }
+
+    fn lowerTypedBoundaryInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        target_ty: Type.TypeId,
+        boundary: Lifted.TypedBoundary,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const source_ty = try self.lowerExprContextTy(boundary.value);
+        const source = try self.addTemp(source_ty);
+        const after_source = try self.assignTypedBoundary(target, target_ty, source, source_ty, next);
+        return try self.lowerExprIntoAtType(source, boundary.value, source_ty, after_source);
     }
 
     fn lowerListIntoAtType(
@@ -4912,6 +4931,19 @@ const Lowerer = struct {
         capture_ty: ?Type.TypeId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
+        if (self.boxBackingLayoutForDirectConstruction(target)) |backing_layout| {
+            const backing_local = try self.addLocalForLayout(backing_layout);
+            const boundary = try self.assignBoxBoundary(target, backing_local, backing_layout, next);
+            return try self.lowerFiniteCallableValueInto(
+                backing_local,
+                variant_index,
+                captures,
+                capture_operands,
+                capture_ty,
+                boundary,
+            );
+        }
+
         if (capture_ty) |payload_ty| {
             if (self.captureSpan(captures).len != capture_operands.len) {
                 Common.invariant("finite callable capture operand count differed from lifted function captures");

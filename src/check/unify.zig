@@ -84,6 +84,16 @@ const TwoTagsSafeList = TwoTags.SafeList;
 
 const Problem = problem_mod.Problem;
 const Context = problem_mod.Context;
+const TypeMismatchEvidence = problem_mod.TypeMismatchEvidence;
+
+const RawTypePair = struct {
+    expected: Var,
+    actual: Var,
+};
+
+const RawMismatchEvidence = struct {
+    record: ?RawTypePair = null,
+};
 
 /// Exact checker evidence produced when a fresh record construction omits a
 /// defaulted field through width absorption. `record_var` is the original
@@ -247,6 +257,15 @@ pub const FieldPresenceRelation = enum {
     required_access,
 };
 
+/// Which semantic side of an owning record diagnostic contains the nominal.
+/// Alias expansion may reverse the unifier's algorithmic operand order, so
+/// retained structural evidence must not infer this role from local ordering.
+pub const NominalRecordMismatchRole = enum {
+    none,
+    expected,
+    actual,
+};
+
 /// Controls what a top-level type mismatch does to the two operands.
 pub const MismatchBehavior = enum {
     /// Merge both operands into a single `.err` type. This is the default: it
@@ -268,6 +287,9 @@ pub const Options = struct {
     root_relation: RootRelation = .ordinary,
     row_width_relation: RowWidthRelation = .construction,
     field_presence_relation: FieldPresenceRelation = .ordinary,
+    /// Retain the outer nominal record opening with this semantic role if the
+    /// relation rejects and its reporter needs the instantiated backing.
+    nominal_record_mismatch_role: NominalRecordMismatchRole = .none,
     /// Source-backed record construction whose omission decisions this
     /// relation owns. The checker publishes successful default absorptions
     /// against this exact expression when the empty row operand is an
@@ -304,6 +326,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         env.occurs_scratch,
         opts.row_width_relation,
         opts.field_presence_relation,
+        opts.nominal_record_mismatch_role,
         env.construction_probe,
         opts.record_construction_var,
     );
@@ -324,6 +347,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
 
         const expected_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, a);
         const actual_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, b);
+        const evidence = try snapshotMismatchEvidence(env);
         const problem_idx = try env.problems.appendProblem(env.problems_gpa, .{ .type_mismatch = .{
             .types = .{
                 .expected_var = a,
@@ -332,12 +356,33 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
                 .actual_snapshot = actual_snapshot,
             },
             .context = opts.context,
+            .evidence = evidence,
         } });
         try env.types.poisonOnMismatch(a, b);
         return Result{ .problem = problem_idx };
     };
 
+    // Openings from a call that may still roll back must not outlive it.
+    if (!env.types.savepointActive()) try env.unify_scratch.persistOpenings();
     return .unified;
+}
+
+fn snapshotRawRecordEvidence(env: *const Env, raw: RawTypePair) std.mem.Allocator.Error!TypeMismatchEvidence {
+    return .{ .record = .{
+        .expected_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, raw.expected),
+        .actual_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, raw.actual),
+    } };
+}
+
+/// Snapshot exact mismatch operands retained by an owning relation. The raw
+/// vars point at the already-instantiated structures the unifier compared, so
+/// reporting never has to reopen a nominal declaration.
+pub fn snapshotMismatchEvidence(env: *const Env) std.mem.Allocator.Error!TypeMismatchEvidence {
+    const raw = env.unify_scratch.mismatch_evidence;
+    return if (raw.record) |record|
+        try snapshotRawRecordEvidence(env, record)
+    else
+        .none;
 }
 
 /// A temporary unification context used to unify two type variables within a `Store`.
@@ -368,6 +413,7 @@ const Unifier = struct {
     occurs_scratch: *occurs.Scratch,
     row_width_relation: RowWidthRelation,
     field_presence_relation: FieldPresenceRelation,
+    nominal_record_mismatch_role: NominalRecordMismatchRole,
     /// The unresolved "actual" var before resolution, used for deferred constraint origin tracking.
     /// This allows error messages to point to the original expression rather than the resolved type.
     unresolved_a: ?Var,
@@ -394,6 +440,7 @@ const Unifier = struct {
         occurs_scratch: *occurs.Scratch,
         row_width_relation: RowWidthRelation,
         field_presence_relation: FieldPresenceRelation,
+        nominal_record_mismatch_role: NominalRecordMismatchRole,
         construction_probe: ?ConstructionProbe,
         record_construction_var: ?Var,
     ) Unifier {
@@ -405,6 +452,7 @@ const Unifier = struct {
             .occurs_scratch = occurs_scratch,
             .row_width_relation = row_width_relation,
             .field_presence_relation = field_presence_relation,
+            .nominal_record_mismatch_role = nominal_record_mismatch_role,
             .unresolved_a = null,
             .unresolved_b = null,
             .enclosing_records = null,
@@ -700,6 +748,10 @@ const Unifier = struct {
             .ignore => return,
             .set_flag => |flag_idx| {
                 self.scratch.mismatch_flags.items.items[flag_idx] = true;
+            },
+            .record_then_propagate => |record| {
+                self.scratch.mismatch_evidence.record = record;
+                return error.TypeMismatch;
             },
         }
     }
@@ -1453,6 +1505,22 @@ const Unifier = struct {
             break :blk VarSafeList.Range{ .start = @enumFromInt(start), .count = @intCast(args.len) };
         };
 
+        // An earlier call in this generalization scope may already have
+        // opened this application; its backing is pure structure, so this
+        // call unifies against the same graph.
+        if (self.scratch.persistentOpening(.{
+            .decl = decl_idx,
+            .args = self.scratch.opened_nominal_args.sliceRange(memo_args_range),
+        })) |opened| if (self.types_store.resolveVar(opened).desc.content == .structure) {
+            try self.scratch.opened_nominals.append(self.scratch.gpa, .{
+                .decl = decl_idx,
+                .args = memo_args_range,
+                .opened = opened,
+            });
+            try self.scratch.opened_nominal_persistable.append(self.scratch.gpa, false);
+            return .{ .opened = opened };
+        };
+
         const baseline: u32 = @intCast(self.types_store.len());
         const opened = try instantiate_mod.instantiateNominalBacking(
             self.types_store,
@@ -1476,6 +1544,21 @@ const Unifier = struct {
             .args = memo_args_range,
             .opened = opened,
         });
+        // Only an opening made of structure alone may be shared with later
+        // calls: a minted variable would carry one call's bindings into the
+        // next.
+        var persistable = true;
+        var minted: u32 = baseline;
+        while (minted < now) : (minted += 1) {
+            switch (self.types_store.resolveVar(@enumFromInt(minted)).desc.content) {
+                .flex, .rigid => {
+                    persistable = false;
+                    break;
+                },
+                .alias, .structure, .field_presence, .err => {},
+            }
+        }
+        try self.scratch.opened_nominal_persistable.append(self.scratch.gpa, persistable);
 
         return .{ .opened = opened };
     }
@@ -2018,6 +2101,7 @@ const Unifier = struct {
                 return;
             } else {
                 // Anon has fields but nominal is empty
+                try self.retainOuterRecordMismatch(vars, opened_backing, direction);
                 return error.TypeMismatch;
             }
         }
@@ -2037,12 +2121,40 @@ const Unifier = struct {
         } });
 
         // Unify the record fields
+        try self.retainOuterRecordMismatch(vars, opened_backing, direction);
+
         try self.unifyTwoRecords(
             vars,
             anon_record_fields,
             anon_record_ext,
             nominal_backing_record.fields,
             .{ .ext = nominal_backing_record.ext },
+        );
+    }
+
+    /// Retain only the outer record relation owned by the active diagnostic.
+    /// Nested nominal payloads belong to fields inside that record and must
+    /// not replace its structural evidence.
+    fn retainOuterRecordMismatch(
+        self: *Self,
+        vars: *const ResolvedVarDescs,
+        opened_backing: Var,
+        direction: NominalDirection,
+    ) std.mem.Allocator.Error!void {
+        if (self.nominal_record_mismatch_role == .none or self.enclosing_records != null) return;
+
+        const anonymous_var = switch (direction) {
+            .a_is_nominal => vars.b.var_,
+            .b_is_nominal => vars.a.var_,
+        };
+        const evidence: RawTypePair = switch (self.nominal_record_mismatch_role) {
+            .none => unreachable,
+            .expected => .{ .expected = opened_backing, .actual = anonymous_var },
+            .actual => .{ .expected = anonymous_var, .actual = opened_backing },
+        };
+        _ = try self.scratch.unify_work_stack.append(
+            self.scratch.gpa,
+            .{ .mismatch_handler = .{ .record_then_propagate = evidence } },
         );
     }
 
@@ -3149,17 +3261,9 @@ const Unifier = struct {
     ) std.mem.Allocator.Error!PartitionedTags {
         // Sort the tags (gathering maintains partial order, but unification may create unsorted unions)
         const a_tags = scratch.gathered_tags.sliceRange(a_tags_range);
-        std.mem.sort(Tag, a_tags, self, struct {
-            fn less(unifier: *const Self, a: Tag, b: Tag) bool {
-                return std.mem.order(u8, unifier.getTypeIdentText(a.name), unifier.getTypeIdentText(b.name)) == .lt;
-            }
-        }.less);
+        self.sortTagsByName(a_tags);
         const b_tags = scratch.gathered_tags.sliceRange(b_tags_range);
-        std.mem.sort(Tag, b_tags, self, struct {
-            fn less(unifier: *const Self, a: Tag, b: Tag) bool {
-                return std.mem.order(u8, unifier.getTypeIdentText(a.name), unifier.getTypeIdentText(b.name)) == .lt;
-            }
-        }.less);
+        self.sortTagsByName(b_tags);
 
         // Get the start of index of the new range
         const a_tags_start: u32 = @intCast(scratch.only_in_a_tags.len());
@@ -3210,6 +3314,26 @@ const Unifier = struct {
             .only_in_b = scratch.only_in_b_tags.rangeToEnd(b_tags_start),
             .in_both = scratch.in_both_tags.rangeToEnd(both_tags_start),
         };
+    }
+
+    /// Order tags by name text. A row gathered from a union built by an
+    /// earlier merge is already ordered, and a merge of two ordered rows is
+    /// linear, so the ordered case is confirmed in one pass before sorting.
+    fn sortTagsByName(self: *const Self, tags: []Tag) void {
+        var ordered = true;
+        var index: usize = 1;
+        while (index < tags.len) : (index += 1) {
+            if (std.mem.order(u8, self.getTypeIdentText(tags[index - 1].name), self.getTypeIdentText(tags[index].name)) == .gt) {
+                ordered = false;
+                break;
+            }
+        }
+        if (ordered) return;
+        std.mem.sort(Tag, tags, self, struct {
+            fn less(unifier: *const Self, a: Tag, b: Tag) bool {
+                return std.mem.order(u8, unifier.getTypeIdentText(a.name), unifier.getTypeIdentText(b.name)) == .lt;
+            }
+        }.less);
     }
 
     /// Given a list of shared tags & a list of extended tags, unify the shared tags.
@@ -3747,6 +3871,7 @@ const MismatchHandling = union(enum) {
     propagate,
     ignore,
     set_flag: u32,
+    record_then_propagate: RawTypePair,
 };
 
 const SameAliasAfterArgs = struct {
@@ -3818,7 +3943,7 @@ pub fn partitionFields(
     a_fields_range: RecordFieldSafeList.Range,
     b_fields_range: RecordFieldSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedRecordFields {
-    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, null, null);
+    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, .none, null, null);
     return try unifier.partitionFields(scratch, a_fields_range, b_fields_range);
 }
 
@@ -3832,7 +3957,7 @@ pub fn partitionTags(
     a_tags_range: TagSafeList.Range,
     b_tags_range: TagSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedTags {
-    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, null, null);
+    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, .none, null, null);
     return try unifier.partitionTags(scratch, a_tags_range, b_tags_range);
 }
 
@@ -3890,6 +4015,7 @@ pub const Scratch = struct {
     // explicit unification work stack
     unify_work_stack: WorkFrame.SafeList,
     mismatch_flags: MkSafeList(bool),
+    mismatch_evidence: RawMismatchEvidence,
 
     // records - used internal by unification
     gathered_fields: RecordFieldSafeList,
@@ -3934,6 +4060,21 @@ pub const Scratch = struct {
     // so a rollback never leaves a memo entry dangling.
     opened_nominals: std.ArrayListUnmanaged(OpenedNominalMemo),
     opened_nominal_args: VarSafeList,
+    // Whether each entry of `opened_nominals` may outlive this unify call:
+    // an opening whose minted vars are all structure carries no variable
+    // state of its own, so later calls in the same generalization scope can
+    // unify against the same backing instead of minting another copy.
+    opened_nominal_persistable: std.ArrayListUnmanaged(bool),
+
+    // Memo of persistable openings across unify calls, one per (declaration,
+    // resolved arg roots at recording time), indexed for constant-time
+    // lookup. Entries are recorded only from non-speculative calls that
+    // unified, so no entry names a rolled-back var. `Check` clears the memo
+    // at every generalization boundary: vars minted inside a scope must not
+    // be reached from a later scope through the memo once they generalize.
+    persistent_openings: std.ArrayListUnmanaged(OpenedNominalMemo),
+    persistent_opening_args: VarSafeList,
+    persistent_opening_index: std.HashMapUnmanaged(u32, void, PersistentOpeningContext, std.hash_map.default_max_load_percentage),
 
     // Constraint function vars currently being unified (separate from visited_vars to match legacy mark behavior)
     constraint_visited_vars: VarSafeList,
@@ -3943,6 +4084,97 @@ pub const Scratch = struct {
         args: VarSafeList.Range,
         opened: types_mod.Var,
     };
+
+    /// One persistent-opening lookup: a declaration and its resolved arg roots.
+    pub const PersistentOpeningKey = struct {
+        decl: types_mod.NominalDecl.Idx,
+        args: []const types_mod.Var,
+    };
+
+    fn hashPersistentOpeningKey(key: PersistentOpeningKey) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, key.decl);
+        for (key.args) |arg| std.hash.autoHash(&hasher, arg);
+        return hasher.final();
+    }
+
+    fn persistentOpeningKey(self: *const Scratch, entry_index: u32) PersistentOpeningKey {
+        const entry = self.persistent_openings.items[entry_index];
+        return .{ .decl = entry.decl, .args = self.persistent_opening_args.sliceRange(entry.args) };
+    }
+
+    fn persistentOpeningKeysEql(lhs: PersistentOpeningKey, rhs: PersistentOpeningKey) bool {
+        if (lhs.decl != rhs.decl) return false;
+        if (lhs.args.len != rhs.args.len) return false;
+        for (lhs.args, rhs.args) |lhs_arg, rhs_arg| {
+            if (lhs_arg != rhs_arg) return false;
+        }
+        return true;
+    }
+
+    pub const PersistentOpeningContext = struct {
+        scratch: *const Scratch,
+
+        pub fn hash(self: PersistentOpeningContext, entry_index: u32) u64 {
+            return hashPersistentOpeningKey(self.scratch.persistentOpeningKey(entry_index));
+        }
+
+        pub fn eql(self: PersistentOpeningContext, lhs: u32, rhs: u32) bool {
+            return persistentOpeningKeysEql(self.scratch.persistentOpeningKey(lhs), self.scratch.persistentOpeningKey(rhs));
+        }
+    };
+
+    pub const PersistentOpeningKeyContext = struct {
+        scratch: *const Scratch,
+
+        pub fn hash(_: PersistentOpeningKeyContext, key: PersistentOpeningKey) u64 {
+            return hashPersistentOpeningKey(key);
+        }
+
+        pub fn eql(self: PersistentOpeningKeyContext, key: PersistentOpeningKey, entry_index: u32) bool {
+            return persistentOpeningKeysEql(key, self.scratch.persistentOpeningKey(entry_index));
+        }
+    };
+
+    /// The persistent opening recorded for a declaration at these resolved
+    /// argument roots, if any.
+    pub fn persistentOpening(self: *const Scratch, key: PersistentOpeningKey) ?types_mod.Var {
+        const entry_index = self.persistent_opening_index.getKeyAdapted(key, PersistentOpeningKeyContext{ .scratch = self }) orelse return null;
+        return self.persistent_openings.items[entry_index].opened;
+    }
+
+    /// Record a persistable opening from the current call.
+    fn recordPersistentOpening(self: *Scratch, memo: OpenedNominalMemo) std.mem.Allocator.Error!void {
+        const key: PersistentOpeningKey = .{ .decl = memo.decl, .args = self.opened_nominal_args.sliceRange(memo.args) };
+        if (self.persistent_opening_index.getKeyAdapted(key, PersistentOpeningKeyContext{ .scratch = self }) != null) return;
+        const start: u32 = @intCast(self.persistent_opening_args.len());
+        for (key.args) |arg| {
+            _ = try self.persistent_opening_args.append(self.gpa, arg);
+        }
+        errdefer self.persistent_opening_args.items.shrinkRetainingCapacity(start);
+        const entry_index: u32 = @intCast(self.persistent_openings.items.len);
+        try self.persistent_openings.append(self.gpa, .{
+            .decl = memo.decl,
+            .args = .{ .start = @enumFromInt(start), .count = @intCast(key.args.len) },
+            .opened = memo.opened,
+        });
+        errdefer _ = self.persistent_openings.pop();
+        try self.persistent_opening_index.putNoClobberContext(self.gpa, entry_index, {}, PersistentOpeningContext{ .scratch = self });
+    }
+
+    /// Move this call's persistable openings into the cross-call memo.
+    pub fn persistOpenings(self: *Scratch) std.mem.Allocator.Error!void {
+        for (self.opened_nominals.items, self.opened_nominal_persistable.items) |memo, persistable| {
+            if (persistable) try self.recordPersistentOpening(memo);
+        }
+    }
+
+    /// Forget every cross-call opening; the vars they name may generalize.
+    pub fn clearPersistentOpenings(self: *Scratch) void {
+        self.persistent_opening_index.clearRetainingCapacity();
+        self.persistent_openings.clearRetainingCapacity();
+        self.persistent_opening_args.items.clearRetainingCapacity();
+    }
 
     /// Init scratch
     pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
@@ -3956,6 +4188,7 @@ pub const Scratch = struct {
             .fresh_vars = try VarSafeList.initCapacity(gpa, 8),
             .unify_work_stack = try WorkFrame.SafeList.initCapacity(gpa, 32),
             .mismatch_flags = try MkSafeList(bool).initCapacity(gpa, 8),
+            .mismatch_evidence = .{},
             .gathered_fields = try RecordFieldSafeList.initCapacity(gpa, 32),
             .only_in_a_fields = try RecordFieldSafeList.initCapacity(gpa, 32),
             .only_in_b_fields = try RecordFieldSafeList.initCapacity(gpa, 32),
@@ -3975,6 +4208,10 @@ pub const Scratch = struct {
             .visited_vars = try VarSafeList.initCapacity(gpa, 16),
             .open_var_map = std.AutoHashMap(types_mod.Var, types_mod.Var).init(gpa),
             .opened_nominals = .empty,
+            .opened_nominal_persistable = .empty,
+            .persistent_openings = .empty,
+            .persistent_opening_args = try VarSafeList.initCapacity(gpa, 8),
+            .persistent_opening_index = .empty,
             .opened_nominal_args = try VarSafeList.initCapacity(gpa, 8),
             .constraint_visited_vars = try VarSafeList.initCapacity(gpa, 16),
         };
@@ -4006,12 +4243,17 @@ pub const Scratch = struct {
         self.open_var_map.deinit();
         self.opened_nominals.deinit(self.gpa);
         self.opened_nominal_args.deinit(self.gpa);
+        self.opened_nominal_persistable.deinit(self.gpa);
+        self.persistent_opening_index.deinit(self.gpa);
+        self.persistent_openings.deinit(self.gpa);
+        self.persistent_opening_args.deinit(self.gpa);
     }
 
     /// Reset the scratch arrays, retaining the allocated memory
     pub fn reset(self: *Scratch) void {
         self.unify_work_stack.items.clearRetainingCapacity();
         self.mismatch_flags.items.clearRetainingCapacity();
+        self.mismatch_evidence = .{};
         self.gathered_fields.items.clearRetainingCapacity();
         self.only_in_a_fields.items.clearRetainingCapacity();
         self.only_in_b_fields.items.clearRetainingCapacity();
@@ -4033,6 +4275,7 @@ pub const Scratch = struct {
         self.constraint_visited_vars.items.clearRetainingCapacity();
         self.opened_nominals.clearRetainingCapacity();
         self.opened_nominal_args.items.clearRetainingCapacity();
+        self.opened_nominal_persistable.clearRetainingCapacity();
     }
 
     // helpers //
