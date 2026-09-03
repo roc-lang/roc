@@ -3407,9 +3407,10 @@ const Lowerer = struct {
         }
         for (0..source.len) |index| {
             const tag = GuardedList.at(source, index);
+            // A tag's discriminant is its position in the union's tag row.
             schema_tags[index] = .{
                 .name = try self.allocator.dupe(u8, self.solved.lifted.names.tagLabelText(tag.name)),
-                .discriminant = self.tagIndex(ty, tag.name),
+                .discriminant = @intCast(index),
             };
         }
         try self.runtime_schemas.tag_unions.append(self.allocator, .{

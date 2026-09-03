@@ -459,6 +459,12 @@ pub const Store = struct {
         std.debug.assert(!self.savepoint_active);
     }
 
+    /// Whether a speculative solver transaction is open, so writes made now
+    /// may still be rolled back.
+    pub fn savepointActive(self: *const Self) bool {
+        return self.savepoint_active;
+    }
+
     /// Undo everything done since `savepoint` was created.
     pub fn rollbackToSavepoint(self: *Self, savepoint: *Savepoint) void {
         // Replay journaled in-place writes in reverse so each pre-existing entry

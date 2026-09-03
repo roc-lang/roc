@@ -12915,6 +12915,7 @@ fn predeclareAnnotationScheme(
         .use_last_var,
     );
     try self.judgeFieldKindsAtBoundary(env);
+    self.unify_scratch.clearPersistentOpenings();
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
     try self.deduplicateGeneralizedDispatchRequirements(scheme_var);
     try self.publishBindingScheme(scheme_var);
@@ -13286,6 +13287,7 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
             }
         }
         try self.judgeFieldKindsAtBoundary(env);
+        self.unify_scratch.clearPersistentOpenings();
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
         for (scc.defs) |member_def_idx| {
             const member_def = self.cir.store.getDef(member_def_idx);
@@ -17255,6 +17257,7 @@ const ExprCheckFrame = struct {
                 try checker.defaultLiteralsAtGeneralizationBoundary(.{ .owner = self.expr_var_raw, .interface = self.expr_var }, env);
             }
             try checker.judgeFieldKindsAtBoundary(env);
+            checker.unify_scratch.clearPersistentOpenings();
             try checker.generalizer.generalize(checker.gpa, &env.var_pool, env.rank());
             try checker.deduplicateGeneralizedDispatchRequirements(self.expr_var_raw);
             try checker.publishBindingScheme(self.expr_var_raw);
@@ -20726,6 +20729,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     try self.judgeRecordDestructBinds(env);
                     try self.defaultLiteralsAtGeneralizationBoundary(.{ .owner = decl_pattern_var, .interface = decl_pattern_var }, env);
                     try self.judgeFieldKindsAtBoundary(env);
+                    self.unify_scratch.clearPersistentOpenings();
                     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
                     try self.deduplicateGeneralizedDispatchRequirements(decl_pattern_var);
                     try self.publishBindingScheme(decl_pattern_var);
