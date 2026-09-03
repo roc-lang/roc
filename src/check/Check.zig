@@ -2241,10 +2241,10 @@ const ReturnConstraintKind = enum(u8) {
     return_expr,
     try_suffix,
 
-    fn problemContext(self: ReturnConstraintKind) problem.Context {
+    fn problemContext(self: ReturnConstraintKind, body_tail_try: ?CIR.Expr.Idx) problem.Context {
         return switch (self) {
             .return_expr => .early_return,
-            .try_suffix => .try_operator,
+            .try_suffix => .{ .try_operator = .{ .body_tail_try = body_tail_try } },
         };
     }
 };
@@ -18016,7 +18016,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 }
                 const projected_args = try self.types.appendVars(self.scratch_vars.sliceFromStart(projected_top));
                 const projected_ext = try self.fresh(env, expr_region);
-                const projected_tag = try self.types.mkTag(e.name, self.types.sliceVars(projected_args));
+                const projected_tag = try self.types.mkTag(e.name, self.scratch_vars.sliceFromStart(projected_top));
                 const projected_union = try self.freshFromContent(
                     try self.types.mkTagUnion(&[_]types_mod.Tag{projected_tag}, projected_ext),
                     env,
@@ -18335,7 +18335,21 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const instantiated = try self.instantiateBindingVar(pat_var, env, .use_last_var);
                 _ = try self.unify(expr_var, instantiated, env);
             } else {
-                _ = try self.unify(expr_var, pat_var, env);
+                // A fully checked top-level definition whose type is ground
+                // is copied at each use. Sharing its var would merge every
+                // use site into the definition's own class, so a type error
+                // at one use would poison the definition and silently accept
+                // every later use. A ground type has nothing a use could
+                // refine, so the copy loses no inference.
+                const checked_ground_def = if (mb_processing_def) |processing_def|
+                    processing_def.status == .processed and try self.varIsGround(pat_var)
+                else
+                    false;
+                const use_var = if (checked_ground_def)
+                    try self.instantiateVarOrphan(pat_var, env, env.rank(), .use_last_var)
+                else
+                    pat_var;
+                _ = try self.unify(expr_var, use_var, env);
                 if (mb_processing_def) |processing_def| {
                     try self.recordSharedSchemeUse(
                         @intFromEnum(expr_idx),
@@ -18484,6 +18498,25 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const pattern_idx = self.cir.store.patternAt(lambda.args, i);
                 arg_vars[i] = ModuleEnv.varFrom(pattern_idx);
                 try self.checkPattern(pattern_idx, pattern_ctx, env);
+            }
+
+            // A lambda in call-argument position gets its parameters seeded
+            // from the parameter type the call expects there, before the body
+            // is checked. The body then checks against known parameter types,
+            // so dispatch on a parameter resolves inside the body and its
+            // diagnostics name concrete types. The seed is a skeleton over the
+            // parameter vars related to the expected type itself inside a
+            // commit probe: a non-matching expectation is rolled back and
+            // left to the call's own argument relation, which owns the final
+            // check and its diagnostic either way. Only the call-argument
+            // channel is seeded; a stored value's contextual slot relates to
+            // an instantiated use instead.
+            if (mb_anno_func == null) {
+                if (nested_expected.contextual_type) |contextual| {
+                    if (contextual.context == .fn_call_arg) {
+                        try self.seedLambdaParamsFromExpectedFn(arg_vars, contextual.var_, contextual.context, env, expr_region);
+                    }
+                }
             }
 
             // Now, check if we have an expected function to validate against
@@ -19159,16 +19192,69 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const arg_vars = try arg_vars_alloc.alloc(Var, arg_expr_idxs.len);
             defer arg_vars_alloc.free(arg_vars);
 
-            for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
-                self.checking_call_arg = true;
-                does_fx = try self.checkExpr(arg_expr_idx, env, child_expected) or does_fx;
-                const arg_var = ModuleEnv.varFrom(arg_expr_idx);
-                arg_vars[i] = arg_var;
+            // A receiver whose type is already known has its method resolved
+            // before the arguments are checked, so each argument is checked
+            // against the parameter type the method declares for it, as a
+            // plain call's arguments are. A closure argument then has its
+            // parameters seeded before its body is checked. The constraint
+            // is built over fresh parameter vars, which the resolved method
+            // fills in; each argument is related to its parameter afterwards,
+            // in the call-argument context.
+            const resolve_method_first = !did_err and self.varResolvesToKnownType(receiver_var);
+            var eager_constraint_fn_var: ?Var = null;
+            if (resolve_method_first) {
+                for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
+                    arg_vars[i] = try self.fresh(env, self.cir.store.getExprRegion(arg_expr_idx));
+                }
+                const constraint_fn_var = try self.mkMethodCallConstraint(
+                    receiver_var,
+                    arg_vars,
+                    expr_var,
+                    method_call.method_name,
+                    env,
+                    method_call.method_name_region,
+                    expr_idx,
+                );
+                try self.checkStaticDispatchConstraints(env, false);
+                for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
+                    self.checking_call_arg = true;
+                    does_fx = try self.checkExpr(arg_expr_idx, env, child_expected.withContextualType(.{
+                        .var_ = arg_vars[i],
+                        .context = methodCallArgContext(method_call.method_name, expr_idx, i, arg_expr_idxs),
+                    })) or does_fx;
+                }
+                did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, arg_expr_idxs) or did_err;
+                // A method the drain could not find has already retired this
+                // call to a runtime error; that node must stay.
+                if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) did_err = true;
+                if (!did_err) {
+                    for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
+                        const arg_result = try self.unifyInContext(
+                            arg_vars[i],
+                            ModuleEnv.varFrom(arg_expr_idx),
+                            env,
+                            methodCallArgContext(method_call.method_name, expr_idx, i, arg_expr_idxs),
+                        );
+                        if (arg_result.isProblem()) {
+                            did_err = true;
+                            break;
+                        }
+                    }
+                    if (did_err) try self.retireCallLikeExpr(expr_idx, expr_var);
+                }
+                eager_constraint_fn_var = constraint_fn_var;
+            } else {
+                for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
+                    self.checking_call_arg = true;
+                    does_fx = try self.checkExpr(arg_expr_idx, env, child_expected) or does_fx;
+                    const arg_var = ModuleEnv.varFrom(arg_expr_idx);
+                    arg_vars[i] = arg_var;
+                }
+                did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, arg_expr_idxs) or did_err;
             }
-            did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, arg_expr_idxs) or did_err;
 
             if (!did_err) {
-                const constraint_fn_var = try self.mkMethodCallConstraint(
+                const constraint_fn_var = eager_constraint_fn_var orelse try self.mkMethodCallConstraint(
                     receiver_var,
                     arg_vars,
                     expr_var,
@@ -19403,7 +19489,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             };
 
             if (expected_return) |annotated_return| {
-                try self.checkReturnRelation(annotated_return, ret.expr, return_kind.problemContext(), env);
+                try self.checkReturnRelation(annotated_return, ret.expr, return_kind.problemContext(null), env);
             } else {
                 // Validate the lambda body type against the return value after the
                 // body is fully checked, but before the lambda generalizes.
@@ -21861,13 +21947,18 @@ fn checkMatchExpr(
         ) or does_fx;
         val_var = ModuleEnv.varFrom(first_branch.value);
 
-        // Check first branch body against expected return type
+        // Check first branch body against expected return type. For a `?`, that
+        // first branch is the unwrapped `Ok` payload, and the desugared match
+        // is not something the user wrote.
         if (expected_branch_ret) |expected_ret| {
-            const branch_ctx = problem.Context{ .match_branch = .{
-                .branch_index = 0,
-                .num_branches = @intCast(match.branches.span.len),
-                .match_expr = expr_idx,
-            } };
+            const branch_ctx: problem.Context = if (match.is_try_suffix)
+                .{ .try_operator_value = .{ .expr = expr_idx } }
+            else
+                .{ .match_branch = .{
+                    .branch_index = 0,
+                    .num_branches = @intCast(match.branches.span.len),
+                    .match_expr = expr_idx,
+                } };
             try self.checkBranchBodyAgainstExpected(first_branch.value, expected_ret, branch_acc.?, branch_ctx, env);
         }
     }
@@ -22915,6 +23006,131 @@ fn checkIteratorForLoop(
 
     does_fx = try self.checkExpr(body, env, child_expected.suppressHoistSelection()) or does_fx;
     return does_fx;
+}
+
+/// Relate a lambda's parameter vars to the function type a call expects in
+/// its position, so the body checks against known parameter types. A skeleton
+/// function over the parameter vars (with a fresh return) is unified with the
+/// expected var inside a commit probe; a mismatch rolls back and records
+/// nothing, leaving the call's argument relation to report it.
+fn seedLambdaParamsFromExpectedFn(
+    self: *Self,
+    arg_vars: []const Var,
+    expected_var: Var,
+    context: problem.Context,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!void {
+    if (!self.varResolvesToKnownType(expected_var)) return;
+    const seed_args = try self.types.appendVars(arg_vars);
+    const seed_ret = try self.fresh(env, region);
+    const seed_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+        .args = seed_args,
+        .ret = seed_ret,
+    } } }, env, region);
+
+    var commit_probe = try self.beginCommitProbe(env);
+    var committed = false;
+    defer if (!committed) commit_probe.rollback();
+    const result = try commit_probe.unifyInContext(expected_var, seed_fn_var, context);
+    if (!result.isEstablished()) return;
+    committed = true;
+    commit_probe.commit();
+}
+
+/// Whether a var already resolves to a type constructor (through aliases), so
+/// a method dispatched on it can be looked up right away.
+fn varResolvesToKnownType(self: *const Self, var_: Var) bool {
+    var current = var_;
+    var guard = types_mod.debug.IterationGuard.init("varResolvesToKnownType");
+    while (true) {
+        guard.tick();
+        switch (self.types.resolveVar(current).desc.content) {
+            .structure => return true,
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .flex, .rigid, .field_presence, .err => return false,
+        }
+    }
+}
+
+/// The problem context for relating one argument of a method call to the
+/// parameter type the resolved method declares for it.
+fn methodCallArgContext(
+    method_name: Ident.Idx,
+    call_expr: CIR.Expr.Idx,
+    arg_index: usize,
+    arg_expr_idxs: []const CIR.Expr.Idx,
+) problem.Context {
+    return .{ .fn_call_arg = .{
+        .fn_name = method_name,
+        .call_expr = call_expr,
+        .arg_index = @intCast(arg_index),
+        .num_args = @intCast(arg_expr_idxs.len),
+        .arg_var = ModuleEnv.varFrom(arg_expr_idxs[arg_index]),
+    } };
+}
+
+/// Whether a type contains no type variables at all: no flex, rigid, or
+/// presence vars, and no error content. Such a type gains nothing from being
+/// shared between a definition and its uses, since no use can refine it.
+fn varIsGround(self: *Self, root_var: Var) std.mem.Allocator.Error!bool {
+    self.var_set.clearRetainingCapacity();
+    defer self.var_set.clearRetainingCapacity();
+    const visited = &self.var_set;
+    const stack = &self.type_visit_stack;
+    const stack_base = stack.items.len;
+    defer stack.items.len = stack_base;
+    try stack.append(self.gpa, root_var);
+
+    while (stack.items.len > stack_base) {
+        const var_ = stack.pop().?;
+        const resolved = self.types.resolveVar(var_);
+        if (visited.contains(resolved.var_)) continue;
+        try visited.put(resolved.var_, {});
+
+        switch (resolved.desc.content) {
+            .flex, .rigid, .field_presence, .err => return false,
+            .alias => |alias| {
+                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                try stack.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+            },
+            .structure => |flat_type| switch (flat_type) {
+                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| {
+                    if (self.types.nominalDeclIsInvalid(nominal)) return false;
+                    try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal));
+                },
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try stack.append(self.gpa, func.ret);
+                },
+                .record => |record| {
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    for (fields.items(.presence)) |presence| {
+                        try stack.append(self.gpa, presence.typeVar());
+                        if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
+                    }
+                    try stack.append(self.gpa, record.ext);
+                },
+                .record_unbound => |fields| {
+                    const fields_slice = self.types.getRecordFieldsSlice(fields);
+                    for (fields_slice.items(.presence)) |presence| {
+                        try stack.append(self.gpa, presence.typeVar());
+                        if (presence.presenceVar()) |presence_var| try stack.append(self.gpa, presence_var);
+                    }
+                },
+                .tag_union => |tag_union| {
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.args)) |tag_args| {
+                        try stack.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                    }
+                    try stack.append(self.gpa, tag_union.ext);
+                },
+                .empty_record, .empty_tag_union => {},
+            },
+        }
+    }
+    return true;
 }
 
 fn mkMethodCallConstraint(
@@ -28177,6 +28393,85 @@ fn checkReturnRelation(
     }
 }
 
+/// The first `?` that produces the value of `expr_idx`, following tail
+/// positions through blocks and through `if` and `match` branches. For a
+/// function body, such a `?` unwraps the `Try` the body would otherwise return.
+fn tailTrySuffixExpr(self: *const Self, expr_idx: CIR.Expr.Idx) ?CIR.Expr.Idx {
+    switch (self.cir.store.getExpr(expr_idx)) {
+        .e_block => |block| return self.tailTrySuffixExpr(block.final_expr),
+        .e_if => |if_expr| {
+            for (self.cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                if (self.tailTrySuffixExpr(self.cir.store.getIfBranch(branch_idx).body)) |found| return found;
+            }
+            return self.tailTrySuffixExpr(if_expr.final_else);
+        },
+        .e_match => |match_expr| {
+            if (match_expr.is_try_suffix) return expr_idx;
+            for (self.cir.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                if (self.tailTrySuffixExpr(self.cir.store.getMatchBranch(branch_idx).value)) |found| return found;
+            }
+            return null;
+        },
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_num_from_numeral,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_str_segment,
+        .e_str,
+        .e_bytes_literal,
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
+        .e_lookup_required,
+        .e_list,
+        .e_empty_list,
+        .e_tuple,
+        .e_call,
+        .e_record,
+        .e_empty_record,
+        .e_tag,
+        .e_nominal,
+        .e_nominal_external,
+        .e_zero_argument_tag,
+        .e_closure,
+        .e_lambda,
+        .e_binop,
+        .e_unary_minus,
+        .e_unary_not,
+        .e_field_access,
+        .e_method_call,
+        .e_dispatch_call,
+        .e_interpolation,
+        .e_structural_eq,
+        .e_structural_hash,
+        .e_method_eq,
+        .e_type_method_call,
+        .e_type_dispatch_call,
+        .e_tuple_access,
+        .e_runtime_error,
+        .e_crash,
+        .e_dbg,
+        .e_expect_err,
+        .e_expect,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_derived_method,
+        .e_return,
+        .e_break,
+        .e_for,
+        .e_hosted_lambda,
+        .e_run_low_level,
+        => return null,
+    }
+}
+
 /// Process the return-flow constraints owned by this lambda. Called at the end
 /// of e_lambda to ensure return type information is unified with the body type
 /// before the function type is generalized.
@@ -28186,11 +28481,12 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx) st
     const frame = self.return_constraint_frames.items[frame_idx];
     std.debug.assert(frame.lambda == lambda_idx);
 
+    const body_tail_try = self.tailTrySuffixExpr(self.cir.store.getExpr(lambda_idx).e_lambda.body);
     for (self.return_constraints.items[frame.start..]) |constraint| {
         try self.checkReturnRelation(
             frame.body_result,
             constraint.actual_expr,
-            constraint.kind.problemContext(),
+            constraint.kind.problemContext(body_tail_try),
             env,
         );
     }
