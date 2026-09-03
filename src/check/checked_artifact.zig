@@ -3440,6 +3440,32 @@ pub const CheckedTypeStoreView = struct {
         return self.roots[index].key;
     }
 
+    /// Returns the canonical key after expanding transparent aliases at the
+    /// root. Dispatch syntax can retain an alias wrapper while the constraint
+    /// relation names its backing root; both denote the same structural codec
+    /// shape, unlike a nominal wrapper which remains part of the key.
+    pub fn structuralRootKey(self: CheckedTypeStoreView, raw_root: CheckedTypeId) canonical.CanonicalTypeKey {
+        var root = raw_root;
+        while (true) {
+            switch (self.payload(root)) {
+                .alias => |alias| root = alias.backing,
+                .pending,
+                .err,
+                .flex,
+                .rigid,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal,
+                .function,
+                .tag_union,
+                .empty_record,
+                .empty_tag_union,
+                => return self.rootKey(root),
+            }
+        }
+    }
+
     /// Exact same-store equality for published checked types. Canonical keys
     /// are the fast bucket identity, while this graph comparison is the
     /// collision authority for producer contracts that intentionally merge
@@ -17830,10 +17856,24 @@ const EvidencePass = struct {
                     // A generated body records one checked edge per source
                     // occurrence. Repeated fields with one exact checker
                     // subject share a role, and may share one prepared target,
-                    // only when every checked callable component agrees.
-                    if (!try type_view.rootExactEql(self.allocator, previous.dispatcher_ty, call.dispatcher_ty) or
-                        !try type_view.rootExactEql(self.allocator, previous.callable_ty, call.callable_ty) or
-                        !std.meta.eql(previous.resolution, call.resolution))
+                    // only when the complete callable relation agrees modulo
+                    // the fresh variable names allocated for each method
+                    // instantiation.
+                    const call_types_equal = if (call.subject_ty) |subject_ty|
+                        try type_view.rootsAlphaExactEql(
+                            self.allocator,
+                            &.{ previous.subject_ty.?, previous.dispatcher_ty, previous.callable_ty },
+                            &.{ subject_ty, call.dispatcher_ty, call.callable_ty },
+                        )
+                    else
+                        try type_view.rootsAlphaExactEql(
+                            self.allocator,
+                            &.{ previous.dispatcher_ty, previous.callable_ty },
+                            &.{ call.dispatcher_ty, call.callable_ty },
+                        );
+                    if (previous.conditional != call.conditional or
+                        !call_types_equal or
+                        !self.generatedCodecCallResolutionsEql(previous.resolution, call.resolution))
                     {
                         checkedArtifactInvariant(
                             "checked generated codec method role contained ambiguous calls",
@@ -17849,6 +17889,48 @@ const EvidencePass = struct {
                 }
             }
         }
+    }
+
+    fn generatedCodecCallResolutionsEql(
+        self: *const EvidencePass,
+        left: static_dispatch.GeneratedCodecCallResolution,
+        right: static_dispatch.GeneratedCodecCallResolution,
+    ) bool {
+        return switch (left) {
+            .pending => right == .pending,
+            .checked_error => right == .checked_error,
+            .structural => |left_id| switch (right) {
+                .structural => |right_id| left_id == right_id,
+                .pending, .checked_error, .callable => false,
+            },
+            .callable => |left_id| switch (right) {
+                .callable => |right_id| blk: {
+                    const left_node = self.evidence_nodes.items[@intFromEnum(left_id)];
+                    const right_node = self.evidence_nodes.items[@intFromEnum(right_id)];
+                    if (!std.meta.eql(left_node.target, right_node.target) or
+                        left_node.generated_codec_derivation != right_node.generated_codec_derivation)
+                    {
+                        break :blk false;
+                    }
+                    break :blk switch (left_node.nested) {
+                        .from_callable => right_node.nested == .from_callable,
+                        .resolved => |left_span| switch (right_node.nested) {
+                            .from_callable => false,
+                            .resolved => |right_span| refs: {
+                                const left_refs = self.evidence_refs.items[left_span.start .. left_span.start + left_span.len];
+                                const right_refs = self.evidence_refs.items[right_span.start .. right_span.start + right_span.len];
+                                if (left_refs.len != right_refs.len) break :refs false;
+                                for (left_refs, right_refs) |left_ref, right_ref| {
+                                    if (!std.meta.eql(left_ref, right_ref)) break :refs false;
+                                }
+                                break :refs true;
+                            },
+                        },
+                    };
+                },
+                .pending, .checked_error, .structural => false,
+            },
+        };
     }
 
     fn enumerateParams(self: *EvidencePass, root: Var, out: *std.ArrayListUnmanaged(EvidenceParam)) Allocator.Error!void {
@@ -30569,7 +30651,7 @@ pub const CheckedModuleArtifact = struct {
                     @intFromEnum(derivation.source_shape_ty) >= self.checked_types.payloadCount() or
                     @intFromEnum(derivation.source_body_shape_ty) >= self.checked_types.payloadCount() or
                     !std.meta.eql(type_view.rootKey(derivation.source_constructor_ty), type_view.rootKey(plan.callable_ty)) or
-                    !std.meta.eql(type_view.rootKey(derivation.source_shape_ty), type_view.rootKey(plan.dispatcher_ty)))
+                    !std.meta.eql(type_view.structuralRootKey(derivation.source_shape_ty), type_view.structuralRootKey(plan.dispatcher_ty)))
                 {
                     return .{
                         .kind = .plan_generated_codec_derivation_invalid,

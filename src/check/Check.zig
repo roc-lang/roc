@@ -29945,14 +29945,16 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             const backing_var = self.types.getAliasBackingVar(alias);
                             switch (try self.varSupportsDerivedParseShape(backing_var, env, region)) {
                                 .supported => {
-                                    try self.satisfyImplicitParserConstraint(
-                                        deferred_constraint.var_,
-                                        constraint,
-                                        constraint.fn_var,
-                                        env,
-                                        region,
-                                        failure_expr,
-                                    );
+                                    if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
+                                        try self.satisfyImplicitParserConstraint(
+                                            deferred_constraint.var_,
+                                            constraint,
+                                            constraint.fn_var,
+                                            env,
+                                            region,
+                                            failure_expr,
+                                        );
+                                    }
                                     continue;
                                 },
                                 .unresolved => if (!is_numeric_default_pass or try self.deferredParseHasPendingOpenLiteral(deferred_constraint, env)) {
@@ -29986,13 +29988,15 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             };
                             switch (try self.varSupportsDerivedEncodeShape(backing_var, encoding_var, env, region)) {
                                 .supported => {
-                                    try self.satisfyImplicitEncoderForConstraint(
-                                        deferred_constraint.var_,
-                                        constraint,
-                                        constraint.fn_var,
-                                        env,
-                                        region,
-                                    );
+                                    if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
+                                        try self.satisfyImplicitEncoderForConstraint(
+                                            deferred_constraint.var_,
+                                            constraint,
+                                            constraint.fn_var,
+                                            env,
+                                            region,
+                                        );
+                                    }
                                     continue;
                                 },
                                 .unresolved => if (!is_numeric_default_pass or try self.deferredEncodeHasPendingOpenLiteral(deferred_constraint, env)) {
@@ -31182,6 +31186,86 @@ fn varIsClosedUnitTagUnion(self: *Self, var_: Var) std.mem.Allocator.Error!bool 
         },
         .alias => |alias| try self.varIsClosedUnitTagUnion(self.types.getAliasBackingVar(alias)),
         .flex, .rigid, .field_presence, .err => false,
+    };
+}
+
+/// Apply the declared derived-codec tag-row closure before choosing a Dict
+/// key protocol. Otherwise an open all-unit row selects the general
+/// `*_key_start` path, closes while validating its nested codec, and reaches
+/// code generation as a closed string-rendered key that needs a different
+/// checked method set.
+fn closeDerivedCodecUnitTagDictKeyRow(
+    self: *Self,
+    var_: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| switch (structure) {
+            .tag_union => |tag_union| blk: {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                if (tags.items(.name).len == 0) break :blk false;
+                for (tags.items(.args)) |args| {
+                    if (args.len() != 0) break :blk false;
+                }
+                break :blk try self.closeDerivedCodecUnitTagDictKeyExt(tag_union.ext, env, region);
+            },
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .empty_tag_union,
+            => false,
+        },
+        .alias => |alias| try self.closeDerivedCodecUnitTagDictKeyRow(
+            self.types.getAliasBackingVar(alias),
+            env,
+            region,
+        ),
+        .flex, .rigid, .field_presence, .err => false,
+    };
+}
+
+fn closeDerivedCodecUnitTagDictKeyExt(
+    self: *Self,
+    var_: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| switch (structure) {
+            .empty_tag_union => true,
+            .tag_union => |tag_union| blk: {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                for (tags.items(.args)) |args| {
+                    if (args.len() != 0) break :blk false;
+                }
+                break :blk try self.closeDerivedCodecUnitTagDictKeyExt(tag_union.ext, env, region);
+            },
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            => false,
+        },
+        .alias => |alias| try self.closeDerivedCodecUnitTagDictKeyExt(
+            self.types.getAliasBackingVar(alias),
+            env,
+            region,
+        ),
+        .flex => blk: {
+            const empty = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
+            break :blk (try self.unify(var_, empty, env)).isEstablished();
+        },
+        .rigid, .field_presence, .err => false,
     };
 }
 
@@ -36182,7 +36266,8 @@ fn validateDerivedParseNominal(
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
-        if (try self.varSupportsStringRenderedDictKey(args.key)) {
+        const closed_unit_tag_key = try self.closeDerivedCodecUnitTagDictKeyRow(args.key, env, region);
+        if (closed_unit_tag_key or try self.varSupportsStringRenderedDictKey(args.key)) {
             switch (try self.validateParseKeyMethod(args.key, encoding_var, state_var, err_var, constraint, env, region, failure_expr)) {
                 .ok => {},
                 .unsupported, .reported_error => |result| return result,
@@ -36910,7 +36995,8 @@ fn validateDerivedEncodeNominal(
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
-        if (try self.varSupportsStringRenderedDictKey(args.key)) {
+        const closed_unit_tag_key = try self.closeDerivedCodecUnitTagDictKeyRow(args.key, env, region);
+        if (closed_unit_tag_key or try self.varSupportsStringRenderedDictKey(args.key)) {
             switch (try self.validateEncodeKeyMethod(args.key, encoding_var, state_var, err_var, constraint, env, region)) {
                 .ok => {},
                 .unsupported, .reported_error => |result| return result,

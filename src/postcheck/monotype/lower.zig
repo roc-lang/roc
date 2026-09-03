@@ -46600,7 +46600,17 @@ const BodyContext = struct {
                     break :blk try self.graphParserShapeNeedsInvalidValue(named.args[0], err_node, missing_required_field_ready, seen);
                 }
                 if (named.builtin_owner == .dict and named.args.len == 2) {
-                    if (try self.graphNodeIsUnitTagUnion(named.args[0])) break :blk true;
+                    if (self.graphJsonParseObjectKeyMethodName(named.args[0]) != null) {
+                        // A builtin scalar key is decoded directly by its
+                        // exact `parse_key_*` method.
+                    } else if (self.graphNodeIsStringRenderedDictKey(named.args[0])) {
+                        if (try self.graphNodeIsUnitTagUnion(named.args[0])) break :blk true;
+                    } else if (try self.graphParserShapeNeedsInvalidValue(
+                        named.args[0],
+                        err_node,
+                        missing_required_field_ready,
+                        seen,
+                    )) break :blk true;
                     break :blk try self.graphParserShapeNeedsInvalidValue(named.args[1], err_node, missing_required_field_ready, seen);
                 }
                 if (named.backing) |backing| {

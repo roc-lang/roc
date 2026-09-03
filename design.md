@@ -4490,6 +4490,12 @@ structural shape is selected. Parser eligibility recognizes a flexible
 variable only in the explicit tag-extension position; a bare flexible shape or
 payload remains unsupported until earlier constraints resolve it.
 
+For a dictionary key whose known row contains only zero-payload tags, parser
+and encoder derivation apply their corresponding closure before selecting the
+dictionary-key protocol. The resulting closed row uses the lossless key-string
+path; validation must not first select the general nested-codec path and then
+close the row into a different runtime category.
+
 Both sides are pinned by tests: accepted—
 test/cli/JsonTagUnionProtocol.roc (issue #10418's unannotated
 `Ok(Friendly) == Json.parse(...)` comparison closes the inferred parser row);

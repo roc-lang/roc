@@ -2456,7 +2456,7 @@ const Builder = struct {
         const derivation = view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(derivation_id)];
         if (derivation.kind != expected_kind or
             !std.meta.eql(view.checked_types.rootKey(derivation.source_constructor_ty), view.checked_types.rootKey(dispatch.callable_ty)) or
-            !std.meta.eql(view.checked_types.rootKey(derivation.source_shape_ty), view.checked_types.rootKey(dispatch.dispatcher_ty)))
+            !std.meta.eql(view.checked_types.structuralRootKey(derivation.source_shape_ty), view.checked_types.structuralRootKey(dispatch.dispatcher_ty)))
         {
             boxyPlanInvariant("stored generated codec source plan disagreed with its checked contract");
         }
