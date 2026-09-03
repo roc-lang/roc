@@ -113,6 +113,7 @@ const VarWithSnapshot = problem_mod.VarWithSnapshot;
 
 // Context types for precise error reporting
 const Context = problem_mod.Context;
+const TypeMismatchEvidence = problem_mod.TypeMismatchEvidence;
 
 /// Returns singular form if count is 1, plural form otherwise.
 /// Usage: pluralize(count, "argument", "arguments")
@@ -928,8 +929,8 @@ pub const ReportBuilder = struct {
                     .fn_args_bound_var => |ctx| self.buildIncompatibleFnArgsBoundVar(mismatch.types, ctx),
                     .method_type => |ctx| self.buildIncompatibleMethodType(mismatch.types, ctx),
                     .expect => self.buildExpect(mismatch.types),
-                    .record_access => |ctx| self.buildRecordAccess(mismatch.types, ctx),
-                    .record_update => |ctx| self.buildRecordUpdate(mismatch.types, ctx),
+                    .record_access => |ctx| self.buildRecordAccess(mismatch.types, mismatch.evidence, ctx),
+                    .record_update => |ctx| self.buildRecordUpdate(mismatch.types, mismatch.evidence, ctx),
                     .recursive_def => |ctx| self.buildRecursiveDef(mismatch.types, ctx),
                     .platform_requirement => |ctx| {
                         var report = try self.makeMismatchReport(
@@ -3467,11 +3468,16 @@ pub const ReportBuilder = struct {
     fn buildRecordAccess(
         self: *Self,
         types: TypePair,
+        evidence: TypeMismatchEvidence,
         ctx: Context.RecordAccessContext,
     ) Allocator.Error!Report {
         self.diff_fields.items.clearRetainingCapacity();
 
-        const record = try self.snapshots.gatherRecordFields(types.actual_snapshot, self.gpa, &self.diff_fields);
+        const actual_snapshot = switch (evidence) {
+            .record => |record| record.actual_snapshot,
+            .none => types.actual_snapshot,
+        };
+        const record = try self.snapshots.gatherRecordFields(actual_snapshot, self.gpa, &self.diff_fields);
 
         const region = ProblemRegion{ .simple = regionIdxFrom(types.actual_var) };
         switch (record) {
@@ -3534,12 +3540,22 @@ pub const ReportBuilder = struct {
     fn buildRecordUpdate(
         self: *Self,
         types: TypePair,
+        evidence: TypeMismatchEvidence,
         ctx: Context.RecordUpdateContext,
     ) Allocator.Error!Report {
         self.diff_fields.items.clearRetainingCapacity();
 
+        const expected_snapshot = switch (evidence) {
+            .record => |record| record.expected_snapshot,
+            .none => types.expected_snapshot,
+        };
+        const actual_snapshot = switch (evidence) {
+            .record => |record| record.actual_snapshot,
+            .none => types.actual_snapshot,
+        };
+
         // Get the record data of the type we tried to  update
-        const expected_record = try self.snapshots.gatherRecordFields(types.expected_snapshot, self.gpa, &self.diff_fields);
+        const expected_record = try self.snapshots.gatherRecordFields(expected_snapshot, self.gpa, &self.diff_fields);
         switch (expected_record) {
             .not_a_record => {
                 return try self.makeBadTypeReport(
@@ -3578,7 +3594,7 @@ pub const ReportBuilder = struct {
                 // robust full record builder
 
                 // Get the record data of the type we tried to  update
-                const actual_record = try self.snapshots.gatherRecordFields(types.actual_snapshot, self.gpa, &self.diff_fields);
+                const actual_record = try self.snapshots.gatherRecordFields(actual_snapshot, self.gpa, &self.diff_fields);
                 const actual_field = switch (actual_record) {
                     .record => |fields| blk: {
                         const slice = self.diff_fields.sliceRange(fields);
