@@ -1430,8 +1430,8 @@ const Lowerer = struct {
             }
         }
         // Workers only record references to coordinator-prepared procedures.
-        // Publish those references once every frozen-wave body has committed,
-        // preserving task and lexical discovery order.
+        // Mark those references reachable once every frozen-wave body has
+        // committed, preserving task and lexical discovery order.
         for (contexts) |*context| {
             const shard = if (context.shard) |*value|
                 value
