@@ -782,6 +782,53 @@ pub const InstGraph = struct {
         };
     }
 
+    /// Return the source-language value node a generated codec reads or
+    /// writes for one record field. This is intentionally distinct from the
+    /// runtime slot: an optional field's `ty` is the compiler-reserved tagged
+    /// presence slot, while its codec operates on the explicit `value_ty`.
+    pub fn codecFieldValueNode(self: *InstGraph, field: InstField) NodeId {
+        const value = switch (field.kind) {
+            .required => blk: {
+                if (field.value_ty != null or field.default != null) {
+                    Common.invariant("required codec field carried optional or defaulted metadata");
+                }
+                break :blk field.ty;
+            },
+            .optional => blk: {
+                if (field.default != null) Common.invariant("optional codec field carried a default identity");
+                break :blk field.value_ty orelse
+                    Common.invariant("optional codec field carried no source value node");
+            },
+            .defaulted => |default| blk: {
+                if (field.value_ty != null or field.default == null or !std.meta.eql(field.default.?, default)) {
+                    Common.invariant("defaulted codec field metadata disagreed with its field kind");
+                }
+                break :blk field.ty;
+            },
+            .undetermined => blk: {
+                if (field.default != null) Common.invariant("undetermined codec field carried a default identity");
+                break :blk field.value_ty orelse
+                    Common.invariant("undetermined codec field carried no source value node");
+            },
+            .sealed => Common.invariant("sealed record field reached graph-native codec planning"),
+        };
+        return self.find(value);
+    }
+
+    /// Return the explicit field kind seen by generated-codec planning. An
+    /// unresolved specialization-local presence cell has the declared
+    /// Monotype default of `required`; relation freeze commits that same
+    /// choice before any completed Monotype is emitted.
+    pub fn codecFieldKind(self: *InstGraph, field: InstField) ResolvedFieldKind {
+        return switch (field.kind) {
+            .required => .required,
+            .optional => .optional,
+            .defaulted => |default| .{ .defaulted = default },
+            .undetermined => self.resolvedFieldKind(field.kind) orelse .required,
+            .sealed => Common.invariant("sealed record field reached graph-native codec planning"),
+        };
+    }
+
     fn unifyFieldKinds(
         self: *InstGraph,
         left: InstFieldKind,
