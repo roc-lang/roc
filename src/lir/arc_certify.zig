@@ -1269,6 +1269,16 @@ const State = struct {
     /// Scalar discriminant locals explicitly read from a direct call result
     /// carrying outcome-conditioned ownership.
     outcome_discriminants: std.AutoHashMapUnmanaged(LIR.LocalId, ValueId),
+    /// Discriminant each tag-union container value is proven to hold on this
+    /// exact path: reading a variant's payload proves it, and a discriminant
+    /// switch arm refines it. A dismantled union's residual release dispatches
+    /// on its discriminant, and this is what makes that dispatch certifiable:
+    /// on the path that took the variant's fields, the arms for other
+    /// variants and the whole-release default are infeasible.
+    known_variants: std.AutoHashMapUnmanaged(ValueId, u16),
+    /// Scalar discriminant locals read from a tag-union container value on
+    /// this path, so a switch on one refines that container's variant.
+    variant_discriminants: std.AutoHashMapUnmanaged(LIR.LocalId, ValueId),
     /// Statically known discriminant of the current proc's top-level result
     /// along this exact path. The initial restitution capability consumes it
     /// before a terminal jump/return, so it never crosses a join summary.
@@ -1305,6 +1315,8 @@ const State = struct {
             .conditional_condition_mask = .empty,
             .claims = .empty,
             .outcome_discriminants = .empty,
+            .known_variants = .empty,
+            .variant_discriminants = .empty,
             .result_discriminant = no_dense,
             .maybe_uninitialized_unresolved = maybe_uninitialized_unresolved,
             .maybe_uninitialized_released = maybe_uninitialized_released,
@@ -1320,6 +1332,8 @@ const State = struct {
             self.conditional_condition_mask.clearRetainingCapacity();
             self.claims.clearRetainingCapacity();
             self.outcome_discriminants.clearRetainingCapacity();
+            self.known_variants.clearRetainingCapacity();
+            self.variant_discriminants.clearRetainingCapacity();
             // Recycling is an optimization; if the pool cannot grow, fall
             // through and free the buffers as usual.
             pool.append(self.allocator, self.*) catch {
@@ -1340,6 +1354,8 @@ const State = struct {
         self.conditional_condition_mask.deinit(self.allocator);
         self.claims.deinit(self.allocator);
         self.outcome_discriminants.deinit(self.allocator);
+        self.known_variants.deinit(self.allocator);
+        self.variant_discriminants.deinit(self.allocator);
         self.maybe_uninitialized_unresolved.deinit(self.allocator);
         self.maybe_uninitialized_released.deinit(self.allocator);
     }
@@ -1368,6 +1384,10 @@ const State = struct {
         errdefer claims.deinit(self.allocator);
         var outcome_discriminants = try self.outcome_discriminants.clone(self.allocator);
         errdefer outcome_discriminants.deinit(self.allocator);
+        var known_variants = try self.known_variants.clone(self.allocator);
+        errdefer known_variants.deinit(self.allocator);
+        var variant_discriminants = try self.variant_discriminants.clone(self.allocator);
+        errdefer variant_discriminants.deinit(self.allocator);
         var maybe_uninitialized_unresolved = try self.maybe_uninitialized_unresolved.clone(self.allocator);
         errdefer maybe_uninitialized_unresolved.deinit(self.allocator);
         const maybe_uninitialized_released = try self.maybe_uninitialized_released.clone(self.allocator);
@@ -1382,6 +1402,8 @@ const State = struct {
             .conditional_condition_mask = conditional_condition_mask,
             .claims = claims,
             .outcome_discriminants = outcome_discriminants,
+            .known_variants = known_variants,
+            .variant_discriminants = variant_discriminants,
             .result_discriminant = self.result_discriminant,
             .maybe_uninitialized_unresolved = maybe_uninitialized_unresolved,
             .maybe_uninitialized_released = maybe_uninitialized_released,
@@ -1416,6 +1438,16 @@ const State = struct {
             self.outcome_discriminants.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
         }
 
+        self.known_variants.clearRetainingCapacity();
+        try self.known_variants.ensureTotalCapacity(self.allocator, source.known_variants.count());
+        var variant_it = source.known_variants.iterator();
+        while (variant_it.next()) |entry| self.known_variants.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+
+        self.variant_discriminants.clearRetainingCapacity();
+        try self.variant_discriminants.ensureTotalCapacity(self.allocator, source.variant_discriminants.count());
+        var variant_disc_it = source.variant_discriminants.iterator();
+        while (variant_disc_it.next()) |entry| self.variant_discriminants.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+
         try self.maybe_uninitialized_unresolved.resize(
             self.allocator,
             source.maybe_uninitialized_unresolved.capacity(),
@@ -1449,6 +1481,9 @@ const State = struct {
         "maybe_uninitialized_released",
         "claims",
         "outcome_discriminants",
+        "known_variants",
+        "variant_discriminants",
+        "any_negative",
         "local_dense",
         "pool",
         "result_discriminant",
@@ -1722,7 +1757,15 @@ const LocalSummary = struct {
     /// For owned locals: fields of the value already claimed by field takes.
     /// Set identically on every member of the alias set.
     claims: u64 = 0,
+    /// Discriminant the value is proven to hold on every represented path, or
+    /// `no_variant`. Joins meet it: paths that disagree forget the variant
+    /// rather than walking separately. That loses nothing a residual dispatch
+    /// needs, because a path that took a variant's fields carries claims, and
+    /// claims already keep such paths in their own group.
+    known_variant: u16 = no_variant,
 };
+
+const no_variant: u16 = std.math.maxInt(u16);
 
 const LocalClass = enum(u8) {
     unbound,
@@ -2587,6 +2630,9 @@ const Certifier = struct {
             }
             summary.maybe_uninitialized_unresolved = state.maybeUninitializedIsUnresolved(dense);
             summary.maybe_uninitialized_released = state.maybeUninitializedMayBeReleased(dense);
+            if (summary.class != .unbound) {
+                if (state.known_variants.get(value)) |known| summary.known_variant = known;
+            }
             self.summary_scratch.appendAssumeCapacity(summary);
         }
 
@@ -2857,6 +2903,7 @@ const Certifier = struct {
             hasher.update(std.mem.asBytes(&entry.condition));
             hasher.update(std.mem.asBytes(&entry.condition_mask));
             hasher.update(std.mem.asBytes(&entry.claims));
+            hasher.update(std.mem.asBytes(&entry.known_variant));
         }
         return hasher.final();
     }
@@ -2901,6 +2948,7 @@ const Certifier = struct {
             };
             if (entry.abi_live) self.values.items[value].always_live = true;
             if (entry.claims != 0) try state.setClaims(value, entry.claims);
+            if (entry.known_variant != no_variant) try state.known_variants.put(self.allocator, value, entry.known_variant);
         }
 
         for (summary, 0..) |entry, dense| {
@@ -3239,6 +3287,10 @@ const Certifier = struct {
         for (g, 0..) |*entry, dense| {
             if (!entry.maybe_uninitialized_released and summary[dense].maybe_uninitialized_released) {
                 entry.maybe_uninitialized_released = true;
+                changed = true;
+            }
+            if (entry.known_variant != no_variant and entry.known_variant != summary[dense].known_variant) {
+                entry.known_variant = no_variant;
                 changed = true;
             }
             if (entry.class == .unbound) continue;
@@ -4525,6 +4577,9 @@ const Certifier = struct {
             // back into every runtime presence subset.
             summary.maybe_uninitialized_unresolved = relevant and condition_unresolved and !declared_by_target;
             summary.maybe_uninitialized_released = relevant and condition_released and !declared_by_target;
+            if (summary.class != .unbound) {
+                if (state.known_variants.get(state.valueAtDense(dense))) |known| summary.known_variant = known;
+            }
             self.summary_scratch.appendAssumeCapacity(summary);
         }
 
@@ -4798,24 +4853,31 @@ const Certifier = struct {
                             {
                                 try state.outcome_discriminants.put(self.allocator, assign.target, source_value);
                             }
+                            _ = state.variant_discriminants.remove(assign.target);
+                            if (source_value != no_value) {
+                                try state.variant_discriminants.put(self.allocator, assign.target, source_value);
+                            }
                         },
                         .field => |op| try self.bindPayloadRead(
                             &state,
                             assign.target,
                             op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
+                            null,
                         ),
                         .tag_payload => |op| try self.bindPayloadRead(
                             &state,
                             assign.target,
                             op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
+                            op.tag_discriminant,
                         ),
                         .tag_payload_struct => |op| try self.bindPayloadRead(
                             &state,
                             assign.target,
                             op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
+                            op.tag_discriminant,
                         ),
                         .list_reinterpret => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
                         .nominal => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
@@ -5102,11 +5164,26 @@ const Certifier = struct {
                     _ = try self.requireLive(&state, switch_stmt.cond);
                     const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
                     const outcome_result = state.outcome_discriminants.get(switch_stmt.cond);
+                    // A switch on a container's discriminant: arms for other
+                    // variants are infeasible once the variant is proven, and
+                    // an arm proves its variant where nothing did before.
+                    const variant_container = state.variant_discriminants.get(switch_stmt.cond);
+                    const known_variant: ?u16 = if (variant_container) |container| state.known_variants.get(container) else null;
+                    var known_is_listed = false;
                     for (0..GuardedList.borrowLen(branches)) |branch_index| {
                         const branch = GuardedList.at(branches, branch_index);
+                        if (known_variant) |known| {
+                            if (branch.value != known) continue;
+                            known_is_listed = true;
+                        }
                         var branch_state = try state.clone();
                         errdefer branch_state.deinit();
                         branch_state.outcome_discriminants.clearRetainingCapacity();
+                        if (variant_container) |container| {
+                            if (known_variant == null and branch.value <= std.math.maxInt(u16)) {
+                                try branch_state.known_variants.put(self.allocator, container, @intCast(branch.value));
+                            }
+                        }
                         if (outcome_result) |result| {
                             if (self.callOutcomeMask(result, branch.value)) |mask| {
                                 try self.restoreCallOutcome(&branch_state, result, mask);
@@ -5114,15 +5191,17 @@ const Certifier = struct {
                         }
                         try work.append(self.allocator, .{ .segment = .{ .cursor = branch.body, .state = branch_state, .origin_join = segment.origin_join } });
                     }
-                    var default_state = try state.clone();
-                    errdefer default_state.deinit();
-                    default_state.outcome_discriminants.clearRetainingCapacity();
-                    if (outcome_result) |result| {
-                        if (self.defaultCallOutcomeMask(result, branches)) |mask| {
-                            try self.restoreCallOutcome(&default_state, result, mask);
+                    if (!known_is_listed) {
+                        var default_state = try state.clone();
+                        errdefer default_state.deinit();
+                        default_state.outcome_discriminants.clearRetainingCapacity();
+                        if (outcome_result) |result| {
+                            if (self.defaultCallOutcomeMask(result, branches)) |mask| {
+                                try self.restoreCallOutcome(&default_state, result, mask);
+                            }
                         }
+                        try work.append(self.allocator, .{ .segment = .{ .cursor = switch_stmt.default_branch, .state = default_state, .origin_join = segment.origin_join } });
                     }
-                    try work.append(self.allocator, .{ .segment = .{ .cursor = switch_stmt.default_branch, .state = default_state, .origin_join = segment.origin_join } });
                     return;
                 },
                 .switch_initialized_payload => |switch_stmt| {
@@ -5343,12 +5422,31 @@ const Certifier = struct {
         }
     }
 
-    fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId, projection: u64) CertifyError!void {
+    fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId, projection: u64, tag_discriminant: ?u16) CertifyError!void {
         if (!self.isRc(target) and self.isRc(source) and self.isInlineStructRepresentation(source)) {
             _ = try self.requireStructRepresentation(state, source);
             return;
         }
         const source_value = try self.requireLive(state, source);
+        // Reading a variant's payload proves the container holds that variant
+        // on this path; anything else is already undefined.
+        if (tag_discriminant) |discriminant| {
+            if (source_value != no_value and self.isRc(source)) {
+                const source_layout = self.layouts.getLayout(self.store.getLocal(self.values.items[source_value].origin).layout_idx);
+                if (source_layout.tag == .tag_union) {
+                    if (state.known_variants.get(source_value)) |known| {
+                        if (known != discriminant) {
+                            return self.fail(
+                                "payload read of discriminant {d} on a value proven to hold discriminant {d}",
+                                .{ discriminant, known },
+                            );
+                        }
+                    } else {
+                        try state.known_variants.put(self.allocator, source_value, discriminant);
+                    }
+                }
+            }
+        }
         if (!self.isRc(target)) return;
         if (source_value != no_value) try self.requireFieldUntaken(state, source_value, source, target, projection);
         const value = if (source_value == no_value)

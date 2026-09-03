@@ -4045,8 +4045,15 @@ const Inserter = struct {
     // case that follows its completed decision.
 
     /// The single alias-to-unit resolution used by every transfer site.
+    /// The local whose ownership resource an occurrence of `local` moves. A
+    /// borrowed complete projection keys its root's unit; a take binding
+    /// through that same projection owns the stored unit it took and keys
+    /// itself, so the root's residual shell and the taken field never share
+    /// a resource.
     fn unitOf(self: *const Inserter, local: LIR.LocalId) LIR.LocalId {
-        if (self.dismantles.projectionUnitOf(local)) |root| return root;
+        if (self.dismantles.projectionUnitOf(local)) |root| {
+            if (self.isBindingBorrowed(local)) return root;
+        }
         return self.solution.unitLocalOf(local);
     }
 
@@ -7016,6 +7023,68 @@ const Inserter = struct {
     /// the whole-struct helper would have.
     fn dismantleContainer(self: *Inserter, local: LIR.LocalId, container: arc_dismantle.Container, residual_mask: u64, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         if ((residual_mask & ~container.full_mask) != 0) arcInvariant("ARC residual release exceeded its committed aggregate field domain");
+        if (container.payload_view) |view| return try self.dismantleUnion(local, container, view, residual_mask, next);
+        return try self.releaseResidualFields(local, local, container, residual_mask, next);
+    }
+
+    /// Release a dismantled tag union. The death point cannot name the
+    /// variant statically, so the residual release dispatches at runtime:
+    /// the discriminant is read fresh, the taken variant's arm releases its
+    /// residual fields through the payload view the takes went through, and
+    /// the default arm holds the ordinary whole release for every variant the
+    /// takes never addressed. The view is assigned on every path with a
+    /// residual to release, since only its takes leave one. Where the death
+    /// point sits inside the matched arm, the discriminant is a known
+    /// constant there and the dispatch folds away. A path that took nothing
+    /// still holds the intact unit, which one whole release covers exactly.
+    fn dismantleUnion(
+        self: *Inserter,
+        local: LIR.LocalId,
+        container: arc_dismantle.Container,
+        view: arc_dismantle.PayloadView,
+        residual_mask: u64,
+        next: LIR.CFStmtId,
+    ) ResourceError!LIR.CFStmtId {
+        const whole = try self.store.addCFStmt(.{ .decref = .{
+            .value = local,
+            .rc = self.rcHelperForLocal(.decref, local),
+            .atomicity = self.rcAtomicity(local),
+            .next = next,
+        } });
+        if (residual_mask == container.full_mask) return whole;
+
+        const arm = try self.releaseResidualFields(local, view.view, container, residual_mask, next);
+        const discriminant = try self.store.addLocal(.{ .layout_idx = view.discriminant_layout });
+        try self.dismantle_temps.append(self.emission_allocator, discriminant);
+        const branches = try self.store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{
+            .{ .value = view.tag_discriminant, .body = arm },
+        });
+        const dispatch = try self.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = discriminant,
+            .branches = branches,
+            .default_branch = whole,
+            .default_is_cold = false,
+            .continuation = next,
+        } });
+        return try self.store.addCFStmt(.{ .assign_ref = .{
+            .target = discriminant,
+            .op = .{ .discriminant = .{ .source = local } },
+            .next = dispatch,
+        } });
+    }
+
+    /// Read each residual refcounted field of `fields_source` into a
+    /// temporary and release it. `local` names the container whose
+    /// atomicity covers the stored payloads; for a tag union it differs from
+    /// the payload view the fields are read through.
+    fn releaseResidualFields(
+        self: *Inserter,
+        local: LIR.LocalId,
+        fields_source: LIR.LocalId,
+        container: arc_dismantle.Container,
+        residual_mask: u64,
+        next: LIR.CFStmtId,
+    ) ResourceError!LIR.CFStmtId {
         const atomicity = self.rcAtomicity(local);
         var tail = next;
         var index = container.fields.len;
@@ -7039,7 +7108,7 @@ const Inserter = struct {
             tail = try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = temp,
                 .op = .{ .field = .{
-                    .source = local,
+                    .source = fields_source,
                     .field_idx = @intCast(field.field_idx),
                 } },
                 .next = tail,
@@ -10334,6 +10403,60 @@ test "RC divergent field takes normalize exact residual places on each switch ed
     try f.expectRc(first_read, 0, 0, 0);
     try f.expectRc(second_read, 0, 0, 0);
     try f.expectRc(pair, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 2), f.countAllRc());
+}
+
+test "RC tag union dismantles through its payload view when the payload dies field by field" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const tag_pair = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.pair_str,
+    });
+    const first = try f.local(.str);
+    const second = try f.local(.str);
+    const pair = try f.local(f.pair_str);
+    const tag_value = try f.local(tag_pair);
+    const disc = try f.local(.u8);
+    const view = try f.local(f.pair_str);
+    const first_read = try f.local(.str);
+    const second_read = try f.local(.str);
+    const first_sink = try f.local(.i64);
+    const second_sink = try f.local(.i64);
+    const result = try f.local(.i64);
+
+    // match tag_value { Pair(view) => { call(view.0); call(view.1) }, _ => {} }
+    const ret = try f.ret(result);
+    const second_call = try f.assignCall(second_sink, &.{second_read}, ret);
+    const first_call = try f.assignCall(first_sink, &.{first_read}, second_call);
+    const read_second = try f.assignRefField(second_read, view, 1, first_call);
+    const read_first = try f.assignRefField(first_read, view, 0, read_second);
+    const view_read = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = view,
+        .op = .{ .tag_payload_struct = .{ .source = tag_value, .variant_index = 1, .tag_discriminant = 1 } },
+        .next = read_first,
+    } });
+    const default_body = try f.assignI64(result, 0, ret);
+    const switch_stmt = try f.switchStmt(disc, view_read, default_body, ret);
+    const disc_read = try f.assignDiscriminant(disc, tag_value, switch_stmt);
+    const tag_assign = try f.assignTag(tag_value, 1, pair, disc_read);
+    const assign_pair = try f.assignStruct(pair, &.{ first, second }, tag_assign);
+    const assign_second = try f.assignStr(second, "second", assign_pair);
+    const assign_result = try f.assignI64(result, 7, assign_second);
+    const body = try f.assignStr(first, "first", assign_result);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+
+    // Both strings move out of the payload view into their calls without a
+    // retain: the view is the struct through which the union dismantles.
+    // The union is never released whole on that path; its death dispatches
+    // on a fresh discriminant read whose matched arm has nothing left to
+    // release, while the default arm and the no-payload path keep the whole
+    // release.
+    try f.expectRc(first_read, 0, 0, 0);
+    try f.expectRc(second_read, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 0), f.countRc(tag_value, .incref));
+    try testing.expectEqual(@as(usize, 2), f.countRc(tag_value, .decref));
     try testing.expectEqual(@as(usize, 2), f.countAllRc());
 }
 
