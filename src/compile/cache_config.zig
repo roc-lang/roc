@@ -162,6 +162,12 @@ pub const Constants = struct {
     ///     records the source region of the annotated name.
     /// 72: Checked binding schemes serialize generated-codec relations that
     ///     downstream specializations must revalidate.
+    /// 73: Constraint-callable dispatch-plan references are gone and resolved
+    ///     value uses record checked recursive references.
+    /// 74: Scheme uses record their substitution; schemes record their
+    ///     quantified variables and each evidence parameter its slot.
+    /// 75: Evidence parameters record their constraint callable type.
+    /// 76: Procedure templates record their root evidence.
     pub const CACHE_VERSION = 76;
 };
 

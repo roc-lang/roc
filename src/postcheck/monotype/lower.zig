@@ -801,9 +801,10 @@ const SpecEvidence = union(enum) {
     checked_error,
 };
 
-/// The checker's structural decision, retaining the exact checked evidence
-/// record when one exists. Generated codecs use that record's stable contract
-/// reference instead of reconstructing their internal method instantiations.
+/// A structural derivation for one requirement. A derivation the site
+/// recorded retains the checked entry, whose generated-codec contract names
+/// the exact internal method instantiations; a derivation selected while
+/// deriving a requirement from a receiver cell carries no checked entry.
 const SpecStructuralEvidence = struct {
     derivation: static_dispatch.StructuralDerivation,
     checked: ?struct {
@@ -829,11 +830,13 @@ const NestedSpecEvidence = union(enum) {
     synthesize,
 };
 
-/// Whether checked evidence is being materialized for Monotype body lowering
-/// or only to close a specialization request's type interface. A local method's
-/// checked declaration is sufficient for specialization-interface relation
-/// replay; Monotype body uses must additionally carry the exact BodyDraft local
-/// capture context.
+/// Whether evidence is being derived for Monotype body lowering or only to
+/// close a specialization request's type interface. A local method's checked
+/// declaration is sufficient for specialization-interface relation replay;
+/// Monotype body uses must additionally carry the exact BodyDraft local
+/// capture context. Either purpose relates each selected target's callable
+/// to its constraint in the live graph: those relations are part of the
+/// request's interface, not a side effect of lowering.
 const EvidenceMaterializationPurpose = enum {
     body_lowering,
     specialization_interface,
@@ -850,14 +853,14 @@ const SubstSlot = union(enum) {
 
 /// The substitution a request applies to a scheme: one slot per quantified
 /// variable, in the scheme's `scheme_vars` order. A specialization is the
-/// scheme plus this vector, and every dispatch obligation's evidence is
+/// scheme plus this vector, and every dispatch requirement's evidence is
 /// derived from the slot its receiver occupies.
 const SpecSubstitution = []const SubstSlot;
 
-/// A callee scheme's obligation schema: the module that owns the scheme, its
+/// A callee scheme's requirement schema: the module that owns the scheme, its
 /// quantified variables in slot order, and its evidence parameters in
-/// canonical order.
-const ObligationSchema = struct {
+/// scheme_vars order.
+const SchemeRequirements = struct {
     view: ModuleView,
     /// The scheme's root type; null for a scheme with no callable root (a
     /// value without a template body).
@@ -875,8 +878,8 @@ const SealedSubstSlot = union(enum) {
 
 const SealedSubstitution = []const SealedSubstSlot;
 
-/// The obligation schema of a procedure template's scheme.
-fn templateSchemaIn(view: ModuleView, template: *const checked.CheckedProcedureTemplate) ObligationSchema {
+/// The requirement schema of a procedure template's scheme.
+fn templateSchemaIn(view: ModuleView, template: *const checked.CheckedProcedureTemplate) SchemeRequirements {
     return .{
         .view = view,
         .root = template.checked_fn_root,
@@ -885,7 +888,7 @@ fn templateSchemaIn(view: ModuleView, template: *const checked.CheckedProcedureT
     };
 }
 
-/// A checked plan's recorded entries for a target's obligations, with the
+/// A checked plan's recorded entries for a target's requirements, with the
 /// module whose tables those entries index.
 const EvidenceContract = struct {
     view: ModuleView,
@@ -921,10 +924,10 @@ const EvidenceChain = struct {
     vector: []const SpecEvidence = &.{},
     /// The scheme this frame's vector answers for, and the substitution the
     /// vector was derived from. A body lowered inside this frame forwards an
-    /// obligation on a still-open cell to the frame entry that owns that
+    /// requirement on a still-open cell to the frame entry that owns that
     /// cell. Restored compile-time functions carry their retained vector
     /// only.
-    schema: ?ObligationSchema = null,
+    schema: ?SchemeRequirements = null,
     subst: SpecSubstitution = &.{},
     parent: ?*const EvidenceChain = null,
 
@@ -954,11 +957,11 @@ fn rootEvidence(owner: names.ProcTemplate, vector: []const SpecEvidence) Evidenc
     };
 }
 
-/// The root frame of a template specialization: its obligation vector
+/// The root frame of a template specialization: its requirement vector
 /// together with the substitution and schema it was derived from.
 fn rootEvidenceWithSubstitution(
     owner: names.ProcTemplate,
-    schema: ObligationSchema,
+    schema: SchemeRequirements,
     edge: EdgeEvidence,
 ) EvidenceChain {
     return .{
@@ -1007,6 +1010,10 @@ fn enterEvidenceScope(
         .owner = owner,
         .lexical = expected_parent,
     }) orelse Common.invariant("local procedure evidence omitted its checked lexical parent");
+    const scheme_vars = view.templates.scopeSchemeVars(&scope_record);
+    if (edge.subst.len != scheme_vars.len) {
+        Common.invariant("local procedure evidence substitution length differed from its scope's quantified variables");
+    }
     const parent = try builder.evidence_arena.allocator().create(EvidenceChain);
     parent.* = lexical_parent;
     return .{
@@ -1015,7 +1022,7 @@ fn enterEvidenceScope(
         .schema = .{
             .view = view,
             .root = scope_record.scheme_root,
-            .scheme_vars = view.templates.scopeSchemeVars(&scope_record),
+            .scheme_vars = scheme_vars,
             .params = view.templates.evidence_params_pool[params_start .. params_start + params_len],
         },
         .subst = edge.subst,
@@ -12223,6 +12230,7 @@ const SealedTemplateSpec = struct {
 fn sealSubstitutionWithSealer(allocator: Allocator, sealer: anytype, subst: SpecSubstitution) Allocator.Error!SealedSubstitution {
     if (subst.len == 0) return &.{};
     const out = try allocator.alloc(SealedSubstSlot, subst.len);
+    errdefer allocator.free(out);
     for (subst, out) |slot, *sealed| {
         sealed.* = switch (slot) {
             .checked_error => .checked_error,
@@ -15978,19 +15986,6 @@ const BodyContext = struct {
     /// final seal imports that newer closure independently through the same map.
     /// Architecture checks restrict this escape hatch to the few operations
     /// whose durable identities must be established before the ordered commit.
-    /// Relocate a graph-sealed substitution into the coordinator's store.
-    fn commitSealedSubstitutionFromGraph(self: *BodyContext, subst: SealedSubstitution) Allocator.Error!SealedSubstitution {
-        if (subst.len == 0) return &.{};
-        const out = try self.builder.evidence_arena.allocator().alloc(SealedSubstSlot, subst.len);
-        for (subst, out) |slot, *committed| {
-            committed.* = switch (slot) {
-                .checked_error => .checked_error,
-                .ty => |ty| .{ .ty = try self.commitGraphType(ty) },
-            };
-        }
-        return out;
-    }
-
     fn commitGraphType(self: *BodyContext, graph_ty: Type.TypeId) Allocator.Error!Type.TypeId {
         if (self.typeStore() == &self.builder.program.types) return graph_ty;
         const relocation = self.draft.ensureCommittedTypeRelocation(self.graph, self.builder.program);
@@ -31849,7 +31844,18 @@ const BodyContext = struct {
         const coordinator_request_fn_ty = try self.commitGraphType(request_fn_ty);
         const sealed_subst = (try self.sealSubstitution(spec.subst)) orelse
             Common.invariant("eagerly completed template request left its substitution open");
-        const coordinator_subst = try self.commitSealedSubstitutionFromGraph(sealed_subst);
+        // Sealed in the graph's own store; every slot commits to the program
+        // store before the substitution leaves this graph.
+        const coordinator_subst: SealedSubstitution = if (sealed_subst.len == 0) &.{} else blk: {
+            const committed = try self.builder.evidence_arena.allocator().alloc(SealedSubstSlot, sealed_subst.len);
+            for (sealed_subst, committed) |slot, *out| {
+                out.* = switch (slot) {
+                    .checked_error => .checked_error,
+                    .ty => |ty| .{ .ty = try self.commitGraphType(ty) },
+                };
+            }
+            break :blk committed;
+        };
         // Iterator-inline completion consumes the callee's solved private
         // representation, so the body must lower now rather than queue.
         try self.builder.resolveDeferredTemplateSpecAtType(
@@ -37157,11 +37163,12 @@ const BodyContext = struct {
                 defer scheme_ctx.deinit();
                 const scheme_root_node = try scheme_ctx.instNode(scope.scheme_root);
                 try relateFunctionRequestInterface(self.graph, scheme_root_node, request_fn_node);
-                const subst = try self.substitutionFromSchemeVars(&scheme_ctx, self.view.templates.scopeSchemeVars(&scope));
+                const scheme_vars = self.view.templates.scopeSchemeVars(&scope);
+                const subst = try self.substitutionFromSchemeVars(&scheme_ctx, scheme_vars);
                 break :blk EdgeEvidence{
                     .subst = subst,
                     .vector = try self.deriveEvidenceVector(
-                        .{ .view = self.view, .root = scope.scheme_root, .scheme_vars = self.view.templates.scopeSchemeVars(&scope), .params = params },
+                        .{ .view = self.view, .root = scope.scheme_root, .scheme_vars = scheme_vars, .params = params },
                         subst,
                         self.view,
                         self.view.static_dispatch_plans.evidence_refs[start .. start + len],
@@ -37593,6 +37600,9 @@ const BodyContext = struct {
             const subst = (try self.dispatchTargetSubstitution(plan)) orelse
                 Common.invariant("closed direct procedure call had no checked substitution");
             const template = lookup.view.templates.get(procedure.template.template);
+            if (subst.len != template.scheme_vars.len) {
+                Common.invariant("closed direct procedure call substitution length differed from its scheme");
+            }
             const edge: EdgeEvidence = .{
                 .subst = subst,
                 .vector = try self.deriveEvidenceVector(
@@ -38828,11 +38838,11 @@ const BodyContext = struct {
         return self.evidenceForSite(self.view, expr, try self.useSiteSchema(expr), purpose, null);
     }
 
-    /// The obligation schema of the scheme a resolved value reference
+    /// The requirement schema of the scheme a resolved value reference
     /// instantiates: the referenced procedure template's, the local
     /// procedure's declaration scope's, or the const's evaluation entry
     /// template's.
-    fn useSiteSchema(self: *BodyContext, expr: checked.CheckedExprId) Allocator.Error!ObligationSchema {
+    fn useSiteSchema(self: *BodyContext, expr: checked.CheckedExprId) Allocator.Error!SchemeRequirements {
         const raw_expr = @intFromEnum(expr);
         if (raw_expr >= self.view.resolved_refs.by_checked_expr.len) return emptySchema(self.view);
         const ref_id = self.view.resolved_refs.by_checked_expr[raw_expr] orelse return emptySchema(self.view);
@@ -38847,13 +38857,13 @@ const BodyContext = struct {
         };
     }
 
-    fn emptySchema(view: ModuleView) ObligationSchema {
+    fn emptySchema(view: ModuleView) SchemeRequirements {
         return .{ .view = view, .root = null, .scheme_vars = &.{}, .params = &.{} };
     }
 
     /// The schema of a generalized-local dispatch scope; a local procedure
-    /// without a scope has no obligations and no quantified variables.
-    fn scopeSchema(_: *BodyContext, view: ModuleView, maybe_scope: ?checked.DispatchScopeId) ObligationSchema {
+    /// without a scope has no requirements and no quantified variables.
+    fn scopeSchema(_: *BodyContext, view: ModuleView, maybe_scope: ?checked.DispatchScopeId) SchemeRequirements {
         const scope_id = maybe_scope orelse return emptySchema(view);
         const raw_scope = @intFromEnum(scope_id);
         if (raw_scope >= view.templates.dispatch_scopes.len) {
@@ -38868,7 +38878,7 @@ const BodyContext = struct {
         };
     }
 
-    fn procedureUseSchema(self: *BodyContext, proc: checked.ProcedureUseTemplate) ObligationSchema {
+    fn procedureUseSchema(self: *BodyContext, proc: checked.ProcedureUseTemplate) SchemeRequirements {
         if (self.builder.callableEvalForProcedureUse(proc)) |callable_eval| {
             // A callable-eval binding lowers through its root's entry wrapper,
             // whose scheme is the binding's own.
@@ -38884,7 +38894,7 @@ const BodyContext = struct {
         return self.templateSchema(self.builder.templateRefForProcedureUse(proc));
     }
 
-    fn templateSchema(self: *BodyContext, template_ref: names.ProcTemplate) ObligationSchema {
+    fn templateSchema(self: *BodyContext, template_ref: names.ProcTemplate) SchemeRequirements {
         const view = self.builder.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
         return templateSchemaIn(view, &template);
@@ -38892,7 +38902,7 @@ const BodyContext = struct {
 
     /// The schema of the entry template a const use evaluates through; a
     /// stored or unimplemented const lowers no template body.
-    fn constUseSchema(self: *BodyContext, const_use: checked.ConstUseTemplate) ObligationSchema {
+    fn constUseSchema(self: *BodyContext, const_use: checked.ConstUseTemplate) SchemeRequirements {
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
         const template = store_view.const_templates.get(const_use.const_ref);
         return switch (template.state) {
@@ -38908,7 +38918,7 @@ const BodyContext = struct {
         self: *BodyContext,
         site_view: ModuleView,
         expr: checked.CheckedExprId,
-        schema: ObligationSchema,
+        schema: SchemeRequirements,
         purpose: EvidenceMaterializationPurpose,
         request_node: ?NodeId,
     ) Allocator.Error!EdgeEvidence {
@@ -38924,8 +38934,10 @@ const BodyContext = struct {
         const subst = if (tys.len == schema.scheme_vars.len)
             try self.substitutionFromCheckedTypes(site_view, tys)
         else if (tys.len == 0)
-            // The use shares the scheme without instantiating it: every
-            // quantified variable stands for itself.
+            // Checking recorded no instantiation at this use, so nothing was
+            // copied: the scheme's variables are all shared with the use
+            // (a monomorphic value's still-open variables), and every slot is
+            // the scheme variable's own cell.
             try self.substitutionFromCheckedTypes(schema.view, schema.scheme_vars)
         else
             Common.invariant("checked site substitution length differed from its scheme's quantified variables");
@@ -38940,7 +38952,7 @@ const BodyContext = struct {
     /// to: the root instantiates in a context for the scheme's module, the
     /// request binds every quantified variable the root reaches, and the
     /// slots are read back from that context.
-    fn substitutionAtRequest(self: *BodyContext, schema: ObligationSchema, request_node: NodeId) Allocator.Error!SpecSubstitution {
+    fn substitutionAtRequest(self: *BodyContext, schema: SchemeRequirements, request_node: NodeId) Allocator.Error!SpecSubstitution {
         if (schema.scheme_vars.len == 0) return &.{};
         const root = schema.root orelse Common.invariant("scheme without a root type received a request substitution");
         var scheme_ctx = try BodyContext.initWithMethodScope(
@@ -38992,7 +39004,7 @@ const BodyContext = struct {
     /// request and its evidence derived from that substitution.
     fn deriveEdgeAtRequest(
         self: *BodyContext,
-        schema: ObligationSchema,
+        schema: SchemeRequirements,
         request_node: NodeId,
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error!EdgeEvidence {
@@ -39058,7 +39070,7 @@ const BodyContext = struct {
     /// (in the root, in constraint callables, and at every edge inside the
     /// body) is that cell. A rejected slot binds nothing; an instantiation
     /// that reaches it is erroneous checked data.
-    fn seedSubstitution(self: *BodyContext, schema: ObligationSchema, subst: SpecSubstitution) Allocator.Error!void {
+    fn seedSubstitution(self: *BodyContext, schema: SchemeRequirements, subst: SpecSubstitution) Allocator.Error!void {
         if (subst.len != schema.scheme_vars.len) {
             Common.invariant("specialization substitution length differed from its scheme's quantified variables");
         }
@@ -39110,13 +39122,13 @@ const BodyContext = struct {
         return slots;
     }
 
-    /// Evidence for every obligation of a scheme under a substitution. A
+    /// Evidence for every requirement of a scheme under a substitution. A
     /// checked site's own entries supply the structural contracts and the
     /// checker's rejection and unreachability verdicts; every method target is
     /// selected from the substituted receiver.
     fn deriveEvidenceVector(
         self: *BodyContext,
-        schema: ObligationSchema,
+        schema: SchemeRequirements,
         subst: SpecSubstitution,
         site_view: ModuleView,
         site_refs: ?[]const static_dispatch.CheckedEvidence,
@@ -39124,7 +39136,7 @@ const BodyContext = struct {
     ) Allocator.Error![]const SpecEvidence {
         if (schema.params.len == 0) return &.{};
         if (site_refs) |refs| {
-            if (refs.len != schema.params.len) Common.invariant("checked site evidence length differed from its scheme's obligations");
+            if (refs.len != schema.params.len) Common.invariant("checked site evidence length differed from its scheme's requirements");
         }
         const arena = self.builder.evidence_arena.allocator();
         const out = try arena.alloc(SpecEvidence, schema.params.len);
@@ -39132,7 +39144,7 @@ const BodyContext = struct {
         defer self.allocator.free(derived);
         @memset(derived, false);
         for (schema.params, 0..) |param, k| {
-            if (param.slot >= subst.len) Common.invariant("obligation receiver slot was outside the request substitution");
+            if (param.slot >= subst.len) Common.invariant("requirement receiver slot was outside the request substitution");
             const site_ref: ?static_dispatch.CheckedEvidence = if (site_refs) |refs| refs[k] else null;
             if (site_ref) |ref| switch (ref.resolution) {
                 .structural => |evidence| {
@@ -39159,21 +39171,17 @@ const BodyContext = struct {
         }
 
         // The scheme's constraint callables instantiate over the request's
-        // slots here, so relating a selected target to its constraint binds
-        // every quantified variable only that callable reaches. Each such
-        // binding can resolve another obligation's receiver, so the
-        // derivation runs to a fixpoint before any receiver is judged open.
-        var scheme_ctx = try BodyContext.initWithMethodScope(
-            self.allocator,
-            self.builder,
-            schema.view,
-            self.method_scope,
-            self.owner_template,
-            self.graph,
-            self.draft,
-        );
-        defer scheme_ctx.deinit();
-        try scheme_ctx.seedSubstitution(schema, subst);
+        // slots in `scheme_ctx`, so relating a selected target to its
+        // constraint binds every quantified variable only that callable
+        // reaches. Each such binding can resolve another requirement's
+        // receiver, so the derivation runs to a fixpoint before any receiver
+        // is judged open. A requirement the site recorded as structural,
+        // unreachable, or rejected relates no target callable: a structural
+        // derivation's callable mentions only its receiver, which the slot
+        // already binds. The context is created by the first target relation,
+        // since an edge whose requirements the site recorded needs none.
+        var scheme_ctx: ?BodyContext = null;
+        defer if (scheme_ctx) |*ctx| ctx.deinit();
         var progress = true;
         while (progress) {
             progress = false;
@@ -39185,7 +39193,21 @@ const BodyContext = struct {
                 derived[k] = true;
                 progress = true;
                 switch (out[k]) {
-                    .target => |target| try self.relateTargetToConstraint(target, &scheme_ctx, param),
+                    .target => |target| {
+                        if (scheme_ctx == null) {
+                            scheme_ctx = try BodyContext.initWithMethodScope(
+                                self.allocator,
+                                self.builder,
+                                schema.view,
+                                self.method_scope,
+                                self.owner_template,
+                                self.graph,
+                                self.draft,
+                            );
+                            try scheme_ctx.?.seedSubstitution(schema, subst);
+                        }
+                        try self.relateTargetToConstraint(target, &scheme_ctx.?, param);
+                    },
                     .structural, .unreachable_value, .checked_error => {},
                 }
             }
@@ -39193,7 +39215,7 @@ const BodyContext = struct {
 
         for (schema.params, 0..) |param, k| {
             if (derived[k]) continue;
-            out[k] = try self.deriveOpenObligation(schema.view, param, subst[param.slot].node, purpose);
+            out[k] = try self.deriveOpenRequirement(schema.view, param, subst[param.slot].node, purpose);
         }
         return out;
     }
@@ -39215,26 +39237,27 @@ const BodyContext = struct {
         defer target_ctx.deinit();
         const target_node = try target_ctx.instNode(lookup.target.callable_ty);
         const constraint_node = try scheme_ctx.instNode(param.callable_ty);
-        try relateFunctionRequestInterface(self.graph, target_node, constraint_node);
+        try self.relateEvidenceTargetRootToRequest(target_node, constraint_node);
     }
 
-    /// The obligation on a receiver cell that no target relation resolved: the
-    /// enclosing specialization's obligation when the cell is one of its own
+    /// The requirement on a receiver cell that no target relation resolved: the
+    /// enclosing specialization's requirement when the cell is one of its own
     /// quantified variables, the checker's literal default for a defaulted
     /// receiver (derived on a detached cell so the request stays open until
     /// a caller constrains it), or the structural or vacuous evidence a
     /// shape without a method owner admits.
-    fn deriveOpenObligation(
+    fn deriveOpenRequirement(
         self: *BodyContext,
         view: ModuleView,
         param: static_dispatch.EvidenceParamRecord,
         node: NodeId,
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error!SpecEvidence {
-        if (self.forwardedObligation(node, param.method)) |forwarded| return forwarded;
+        if (self.forwardedRequirement(node, param.method)) |forwarded| return forwarded;
         const default_phase: ?checked.NumericDefaultPhase = switch (self.graph.content(node)) {
+            .redirect => unreachable,
             .unresolved => |variable| variable.numeric_default_phase,
-            .redirect, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => null,
+            .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => null,
         };
         if (default_phase) |phase| {
             if (checked.literal_defaulting.defaultTargetForPhase(phase)) |target| {
@@ -39251,29 +39274,30 @@ const BodyContext = struct {
 
     /// The enclosing frame entry that already answers `method` for the
     /// cell `node` shares with a quantified variable of an enclosing scheme:
-    /// an obligation on a still-open cell inside a body is the enclosing
-    /// specialization's obligation on that same cell.
-    fn forwardedObligation(self: *BodyContext, node: NodeId, method: names.MethodNameId) ?SpecEvidence {
+    /// an requirement on a still-open cell inside a body is the enclosing
+    /// specialization's requirement on that same cell.
+    fn forwardedRequirement(self: *BodyContext, node: NodeId, method: names.MethodNameId) ?SpecEvidence {
         var frame: ?*const EvidenceChain = &self.evidence;
         while (frame) |current| : (frame = current.parent) {
             const schema = current.schema orelse continue;
+            if (current.subst.len != schema.scheme_vars.len or current.vector.len != schema.params.len) {
+                Common.invariant("evidence frame substitution or vector length differed from its scheme");
+            }
             for (schema.params, 0..) |param, k| {
                 if (param.method != method) continue;
-                if (param.slot >= current.subst.len) continue;
                 const slot = switch (current.subst[param.slot]) {
                     .node => |slot_node| slot_node,
                     .checked_error => continue,
                 };
                 if (!self.graph.sameClass(slot, node)) continue;
-                if (k >= current.vector.len) continue;
                 return current.vector[k];
             }
         }
         return null;
     }
 
-    /// The obligation-target contract a checked dispatch plan recorded for
-    /// its target's own obligations: a direct plan's resolved nested
+    /// The requirement-target contract a checked dispatch plan recorded for
+    /// its target's own requirements: a direct plan's resolved nested
     /// entries. Every other edge derives the target's evidence from the
     /// callable alone.
     fn dispatchTargetContract(self: *BodyContext, plan: static_dispatch.StaticDispatchCallPlan) ?EvidenceContract {
@@ -39304,13 +39328,15 @@ const BodyContext = struct {
         };
         const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
         const table = self.view.static_dispatch_plans;
-        return try self.substitutionFromCheckedTypes(
-            self.view,
-            table.site_substitutions[node.subst.start .. node.subst.start + node.subst.len],
-        );
+        const start: usize = node.subst.start;
+        const len: usize = node.subst.len;
+        if (start > table.site_substitutions.len or len > table.site_substitutions.len - start) {
+            Common.invariant("direct dispatch target substitution range was outside its checked module");
+        }
+        return try self.substitutionFromCheckedTypes(self.view, table.site_substitutions[start .. start + len]);
     }
 
-    /// The obligation contract a checked iterator dispatch call recorded for
+    /// The requirement contract a checked iterator dispatch call recorded for
     /// its target, mirroring `dispatchTargetContract`.
     fn iteratorCallContract(self: *BodyContext, call: static_dispatch.IteratorDispatchCall) ?EvidenceContract {
         return switch (call.resolution) {
@@ -39934,10 +39960,9 @@ const BodyContext = struct {
         return null;
     }
 
-    /// Instantiate the exact checked procedure root whose evidence paths are
-    /// stored in CheckedProcedureTemplate.
-    /// Apply a checked target root to its live call request after any
-    /// checker-authored evidence paths have retained their component nodes.
+    /// Apply a checked target root to its live call request: exactly, unless
+    /// the request carries a generated private iterator representation, which
+    /// only its public interface relates.
     fn relateEvidenceTargetRootToRequest(
         self: *BodyContext,
         root_node: NodeId,
@@ -40016,7 +40041,7 @@ const BodyContext = struct {
     fn deriveTargetEdge(
         self: *BodyContext,
         target_ctx: *BodyContext,
-        schema: ObligationSchema,
+        schema: SchemeRequirements,
         contract: ?EvidenceContract,
     ) Allocator.Error!EdgeEvidence {
         const subst = try self.substitutionFromSchemeVars(target_ctx, schema.scheme_vars);
@@ -43312,7 +43337,7 @@ const BodyContext = struct {
     const CheckedGeneratedCodecCallee = struct {
         lookup: MethodLookup,
         callable_node: NodeId,
-        /// The contract's recorded entries for the target's obligations,
+        /// The contract's recorded entries for the target's requirements,
         /// consumed as structural-contract provenance.
         contract: EvidenceContract,
     };

@@ -2945,11 +2945,11 @@ A compiler-generated edge has no checked instantiation, so Monotype reads the
 scheme's substitution from the request: the scheme root instantiates in a
 context for the scheme's module, the request interface binds every quantified
 variable the root reaches, and the remaining variables are bound by the
-obligation fixpoint described under Static Dispatch In Monotype (each selected
+requirement fixpoint described under Static Dispatch In Monotype (each selected
 target's callable is related to its constraint callable, which is why every
 evidence parameter carries the constraint's callable type). A receiver that
 stays open after the fixpoint is the enclosing specialization's own quantified
-variable (its obligation forwards), a literal-defaulted variable (its evidence
+variable (its requirement forwards), a literal-defaulted variable (its evidence
 derives on a detached default cell, so the request stays open until a caller
 constrains it), or an ownerless shape (structural or vacuous evidence). For
 runtime-dictionary requirements the checked entry remains a forwarded
@@ -5921,10 +5921,10 @@ Other solved-graph mutations:
   deferred static-dispatch worklist. Retirement reads the explicit structural
   origin and checked scheme-use substitution produced by those operations;
   there is no rank rewrite, structural ownership probe, or graph restamp.
-- `retireStructurallyPublishedTypeSchemeRequirements`
-  (`unifyEquivalentGeneralizedCallables` committed probe)—policy: Pending
+- structural-origin retirement (`retiredRequirementCallableUnified`,
+  `unifyEquivalentGeneralizedCallables` committed probe)—policy: Pending
   Dispatch Requirements In Type Schemes (above). A copied requirement whose
-  creation relation is attached to its published receiver is that relation:
+  creation relation is attached to its interface-reachable receiver is that relation:
   its callable is unified with the creation callable through an ordinary
   committed probe before the copy retires, so the use's copies of the
   callable's argument and result variables stay bound to the relation that
@@ -7831,7 +7831,8 @@ or dispatch scope); each evidence parameter names the slot its dispatcher
 occupies. Checking persists every scheme edge: an ordinary instantiation
 records the (pristine var, fresh var) pair of every quantified variable it
 copied (an orphan copy of an annotation or expected type is not a use of any
-scheme and records nothing), and the checked module stores the edge's
+scheme: it records no edge of its own and leaves every pending record slot to
+the instantiation that owns it), and the checked module stores the edge's
 substitution—one checked
 type per slot—keyed by the use expression, next to the edge's resolved
 requirements. A monomorphic edge to an in-flight recursive value or method
@@ -7839,7 +7840,7 @@ target records the exact shared scheme root and no copy pairs; its
 substitution is the identity, every slot standing for the scheme's own
 variable. A specialization is the scheme instantiated under one substitution:
 Monotype seeds the callee's context with the substitution's live cells before
-instantiating the root, so every interior type and every obligation of the
+instantiating the root, so every interior type and every requirement of the
 body is determined by the slots. The evidence vector is derived from the
 substitution at each edge (the receiver in slot `k` selects the target; the
 edge's own checked entries supply only structural contracts and rejected or

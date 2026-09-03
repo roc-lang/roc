@@ -2249,12 +2249,8 @@ pub const StaticDispatchPlanTable = struct {
         return .{ .start = found.start, .len = found.len };
     }
 
-    /// The substitution recorded for the scheme instantiated at `expr`: one
-    /// checked type per quantified variable of that scheme, in the scheme's
-    /// `scheme_vars` order. Null when no checked instantiation edge was
-    /// recorded for the expression.
     /// The chain-free root evidence of a procedure template: its own
-    /// obligations resolved without a caller.
+    /// requirements resolved without a caller.
     pub fn templateRootEvidence(self: *const StaticDispatchPlanTable, template: canonical.CheckedProcedureTemplateId) []const CheckedEvidence {
         const raw = @intFromEnum(template);
         if (raw >= self.template_root_evidence.len) return &.{};
@@ -2262,6 +2258,10 @@ pub const StaticDispatchPlanTable = struct {
         return self.evidence_refs[span.start .. span.start + span.len];
     }
 
+    /// The substitution recorded for the scheme used at `expr`: one checked
+    /// type per quantified variable of that scheme, in the scheme's
+    /// `scheme_vars` order. Null when the expression has no site entry at
+    /// all; empty when its entry recorded no instantiation.
     pub fn siteSubstitution(self: *const StaticDispatchPlanTable, expr: CheckedExprId) ?[]const CheckedTypeId {
         const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence, @intFromEnum(expr), siteEvidenceOrder) orelse return null;
         return self.site_substitutions[found.subst_start .. found.subst_start + found.subst_len];

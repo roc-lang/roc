@@ -6222,13 +6222,32 @@ fn instantiateVarOrphan(
         .rigid_behavior = .fresh_rigid,
         .rank_behavior = .ignore_rank,
     };
-    // An orphan copy is not a use of the scheme: it records no scheme-use
-    // edge, so the expression being checked keeps only the record of the
-    // scheme it references.
+    return self.instantiateOrphanCopy(var_to_instantiate, &instantiate_ctx, env, region_behavior);
+}
+
+/// An orphan copy is not a use of any scheme: it records no scheme-use
+/// edge of its own and leaves every pending record slot (the value-use
+/// source, the stored-value use, the dispatch target site) to the
+/// instantiation that owns it.
+fn instantiateOrphanCopy(
+    self: *Self,
+    var_to_instantiate: Var,
+    instantiate_ctx: *Instantiator,
+    env: *Env,
+    region_behavior: InstantiateRegionBehavior,
+) std.mem.Allocator.Error!Var {
     const saved_instantiation_source_expr = self.instantiation_source_expr;
+    const saved_pending_nested_function_use = self.pending_nested_function_use;
+    const saved_evidence_target_site = self.evidence_target_site;
     self.instantiation_source_expr = null;
-    defer self.instantiation_source_expr = saved_instantiation_source_expr;
-    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false);
+    self.pending_nested_function_use = null;
+    self.evidence_target_site = null;
+    defer {
+        self.instantiation_source_expr = saved_instantiation_source_expr;
+        self.pending_nested_function_use = saved_pending_nested_function_use;
+        self.evidence_target_site = saved_evidence_target_site;
+    }
+    return self.instantiateVarHelp(var_to_instantiate, instantiate_ctx, env, region_behavior, false);
 }
 
 /// Like `instantiateVarOrphan`, but rigids in the copy become fresh FLEX
@@ -6253,13 +6272,7 @@ fn instantiateVarOrphanFlexed(
         .rigid_behavior = .fresh_flex,
         .rank_behavior = .ignore_rank,
     };
-    // An orphan copy is not a use of the scheme: it records no scheme-use
-    // edge, so the expression being checked keeps only the record of the
-    // scheme it references.
-    const saved_instantiation_source_expr = self.instantiation_source_expr;
-    self.instantiation_source_expr = null;
-    defer self.instantiation_source_expr = saved_instantiation_source_expr;
-    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false);
+    return self.instantiateOrphanCopy(var_to_instantiate, &instantiate_ctx, env, region_behavior);
 }
 
 /// Instantiate a variable, substituting any encountered rigids with
@@ -12891,7 +12904,7 @@ fn predeclareAnnotationScheme(
     );
     try self.judgeFieldKindsAtBoundary(env);
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
-    try self.deduplicateGeneralizedDispatchRequirements(scheme_var);
+    try self.deduplicateGeneralizedDispatchRequirements(scheme_var, env);
     try self.publishBindingScheme(scheme_var);
     env.var_pool.popRank();
 
@@ -13266,7 +13279,7 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
         for (scc.defs) |member_def_idx| {
             const member_def = self.cir.store.getDef(member_def_idx);
             const expr_var = ModuleEnv.varFrom(member_def.expr);
-            try self.deduplicateGeneralizedDispatchRequirements(expr_var);
+            try self.deduplicateGeneralizedDispatchRequirements(expr_var, env);
             try self.publishBindingScheme(expr_var);
             try self.bindBindingSchemeVar(expr_var, ModuleEnv.varFrom(member_def.pattern));
             try self.bindBindingSchemeVar(expr_var, ModuleEnv.varFrom(member_def_idx));
@@ -13275,7 +13288,7 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
             }
         }
         self.retireNonGeneralizedTypeSchemes(member_roots);
-        try self.retireStructurallyPublishedTypeSchemeRequirements(member_roots, env.rank());
+        try self.retireStructurallyPublishedTypeSchemeRequirements(member_roots, env);
         try self.judgeAmbiguityCandidatesAtGeneralizationMultiRoot(member_roots);
         env.var_pool.popRank();
     }
@@ -13650,11 +13663,20 @@ fn replayPredeclaredSchemeUse(
             .rigid => |rigid| rigid.constraints,
             .alias, .field_presence, .structure, .err => StaticDispatchConstraint.SafeList.Range.empty(),
         };
-        if (old_constraints.len() > 0) {
+        // Every copied quantified variable is paired: the pairs are the
+        // replayed use's substitution. The scheme-side var is judged, since
+        // the replay's fresh copy may already be solved.
+        const old_is_quantified = switch (old_resolved.desc.content) {
+            .flex, .rigid => true,
+            .alias, .field_presence, .structure, .err => false,
+        };
+        if (old_is_quantified) {
             try self.scratch_evidence_pairs.append(self.gpa, .{
                 .old_var = @intFromEnum(old_resolved.var_),
                 .fresh_var = @intFromEnum(fresh_resolved.var_),
             });
+        }
+        if (old_constraints.len() > 0) {
             for (self.types.sliceStaticDispatchConstraints(old_constraints)) |old_constraint| {
                 const old_fn_root = self.types.resolveVar(old_constraint.fn_var).var_;
                 const fresh_fn_var = self.var_map.get(old_fn_root) orelse continue;
@@ -17233,12 +17255,12 @@ const ExprCheckFrame = struct {
             try checker.judgeFieldKindsAtBoundary(env);
             try checker.generalizer.generalize(checker.gpa, &env.var_pool, env.rank());
             try checker.captureEscapedSchemeDispatchRequirements(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }}, env);
-            try checker.deduplicateGeneralizedDispatchRequirements(self.expr_var_raw);
+            try checker.deduplicateGeneralizedDispatchRequirements(self.expr_var_raw, env);
             try checker.publishBindingScheme(self.expr_var_raw);
             checker.retireNonGeneralizedTypeSchemes(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }});
             try checker.retireStructurallyPublishedTypeSchemeRequirements(
                 &.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }},
-                env.rank(),
+                env,
             );
             // The scheme's vars froze at generalized rank: judge this def's
             // dispatch-constrained receivers now, while the judgment is a
@@ -20607,13 +20629,13 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     try self.judgeFieldKindsAtBoundary(env);
                     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
                     try self.captureEscapedSchemeDispatchRequirements(&.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }}, env);
-                    try self.deduplicateGeneralizedDispatchRequirements(decl_pattern_var);
+                    try self.deduplicateGeneralizedDispatchRequirements(decl_pattern_var, env);
                     try self.publishBindingScheme(decl_pattern_var);
                     try self.bindBindingSchemeVar(decl_pattern_var, decl_expr_var);
                     self.retireNonGeneralizedTypeSchemes(&.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }});
                     try self.retireStructurallyPublishedTypeSchemeRequirements(
                         &.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }},
-                        env.rank(),
+                        env,
                     );
                     env.var_pool.popRank();
                 }
@@ -24170,8 +24192,9 @@ const Probe = struct {
 
     /// Close the probe scope KEEPING everything it did: the type-store
     /// speculation is committed and the appended regions / per-instantiation
-    /// dispatchers stay (they describe vars that now survive). Only `CommitProbe`
-    /// commits; pure-predicate probes always roll back.
+    /// dispatchers stay (they describe vars that now survive). Only
+    /// `CommitProbe` commits, through the real unification wrapper;
+    /// pure-predicate probes always roll back.
     fn commit(self: *Probe) void {
         std.debug.assert(self.check.probe_depth > 0);
         self.check.types.commitSavepoint(&self.savepoint);
@@ -26546,6 +26569,7 @@ fn dispatchConstraintOriginFlag(origin: StaticDispatchConstraint.Origin) bool {
 fn deduplicateGeneralizedDispatchRequirements(
     self: *Self,
     scheme_var: Var,
+    env: *Env,
 ) Allocator.Error!void {
     const identity_vars = try canonical_type_keys.identityVarsFromVarIgnoringConstraints(
         self.gpa,
@@ -26604,7 +26628,11 @@ fn deduplicateGeneralizedDispatchRequirements(
                 entry.value_ptr.* = constraint.fn_var;
                 continue;
             }
-            if (try self.unifyEquivalentGeneralizedCallables(entry.value_ptr.*, constraint.fn_var)) {
+            if (try self.unifyEquivalentGeneralizedCallables(entry.value_ptr.*, constraint.fn_var, env)) {
+                // The merged callable's own identities anchor the receivers
+                // it reaches: a relation on one of those receivers may vary
+                // per use of the callable exactly as a public variable's may.
+                const merged_start = pending_receivers.items.len;
                 try canonical_type_keys.appendIdentityVarsFromVar(
                     self.gpa,
                     self.types,
@@ -26612,6 +26640,9 @@ fn deduplicateGeneralizedDispatchRequirements(
                     entry.value_ptr.*,
                     &pending_receivers,
                 );
+                for (pending_receivers.items[merged_start..]) |merged_identity| {
+                    try anchors.put(self.types.resolveVar(merged_identity).var_, {});
+                }
             }
         }
 
@@ -26678,7 +26709,7 @@ fn deduplicateGeneralizedDispatchRequirements(
         const entry = seen.getOrPutAssumeCapacity(key);
         if (entry.found_existing) {
             const same_callable = self.types.resolveVar(entry.value_ptr.*).var_ == self.types.resolveVar(requirement.constraint.fn_var).var_ or
-                try self.unifyEquivalentGeneralizedCallables(entry.value_ptr.*, requirement.constraint.fn_var);
+                try self.unifyEquivalentGeneralizedCallables(entry.value_ptr.*, requirement.constraint.fn_var, env);
             if (same_callable) continue;
         } else {
             entry.value_ptr.* = requirement.constraint.fn_var;
@@ -26692,10 +26723,11 @@ fn deduplicateGeneralizedDispatchRequirements(
 /// Establish two same-shape generalized callables as one relation. Returns
 /// false, leaving the store untouched, when the unifier cannot prove them
 /// equal (the shape digest was a collision).
-fn unifyEquivalentGeneralizedCallables(self: *Self, retained_fn_var: Var, duplicate_fn_var: Var) Allocator.Error!bool {
+fn unifyEquivalentGeneralizedCallables(self: *Self, retained_fn_var: Var, duplicate_fn_var: Var, env: *Env) Allocator.Error!bool {
     if (self.types.resolveVar(retained_fn_var).var_ == self.types.resolveVar(duplicate_fn_var).var_) return false;
-    var probe = try self.beginProbe(null);
-    if (try self.probeUnifyWithoutRecordingProblems(retained_fn_var, duplicate_fn_var)) {
+    var probe = try self.beginCommitProbe(env);
+    const result = try probe.unify(retained_fn_var, duplicate_fn_var);
+    if (!result.isProblem()) {
         probe.commit();
         return true;
     }
@@ -26763,10 +26795,10 @@ fn requirementHasPublishedStructuralOrigin(
 /// Whether a structurally published requirement's callable is the same
 /// relation as its creation callable, unifying the two when they are still
 /// distinct roots.
-fn retiredRequirementCallableUnified(self: *Self, requirement: SchemeDispatchRequirement) Allocator.Error!bool {
+fn retiredRequirementCallableUnified(self: *Self, requirement: SchemeDispatchRequirement, env: *Env) Allocator.Error!bool {
     const creation_fn_var = requirement.structural_origin.constraint_fn_var;
     if (self.types.resolveVar(creation_fn_var).var_ == self.types.resolveVar(requirement.constraint.fn_var).var_) return true;
-    return try self.unifyEquivalentGeneralizedCallables(creation_fn_var, requirement.constraint.fn_var);
+    return try self.unifyEquivalentGeneralizedCallables(creation_fn_var, requirement.constraint.fn_var, env);
 }
 
 /// A requirement's recorded creation relation is already attached to its
@@ -26779,8 +26811,9 @@ fn retiredRequirementCallableUnified(self: *Self, requirement: SchemeDispatchReq
 fn retireStructurallyPublishedTypeSchemeRequirements(
     self: *Self,
     roots: []const BoundaryRoot,
-    boundary_rank: Rank,
+    env: *Env,
 ) Allocator.Error!void {
+    const boundary_rank = env.rank();
     if (self.type_schemes.items.len == 0) return;
 
     var published_vars = std.AutoHashMap(Var, void).init(self.gpa);
@@ -26814,10 +26847,15 @@ fn retireStructurallyPublishedTypeSchemeRequirements(
             continue;
         }
 
+        // The scheme list is re-indexed on every access: the committed
+        // unification below appends to the store, and `type_schemes` is
+        // never assumed stable across it.
         var write: usize = 0;
-        for (scheme.dispatch_requirements.items) |requirement| {
+        var read: usize = 0;
+        while (read < self.type_schemes.items[scheme_idx].dispatch_requirements.items.len) : (read += 1) {
+            const requirement = self.type_schemes.items[scheme_idx].dispatch_requirements.items[read];
             if (requirement.deferred_generated_codec) {
-                scheme.dispatch_requirements.items[write] = requirement;
+                self.type_schemes.items[scheme_idx].dispatch_requirements.items[write] = requirement;
                 write += 1;
                 continue;
             }
@@ -26831,11 +26869,11 @@ fn retireStructurallyPublishedTypeSchemeRequirements(
             // result variables, and the copy retires without losing them. A
             // callable the unifier cannot establish as equal stays an
             // explicit requirement.
-            if (structurally_published and try self.retiredRequirementCallableUnified(requirement)) continue;
-            scheme.dispatch_requirements.items[write] = requirement;
+            if (structurally_published and try self.retiredRequirementCallableUnified(requirement, env)) continue;
+            self.type_schemes.items[scheme_idx].dispatch_requirements.items[write] = requirement;
             write += 1;
         }
-        scheme.dispatch_requirements.shrinkRetainingCapacity(write);
+        self.type_schemes.items[scheme_idx].dispatch_requirements.shrinkRetainingCapacity(write);
         if (write == 0) {
             self.removeTypeSchemeAt(scheme_idx);
         } else {
@@ -26953,8 +26991,9 @@ fn retireNonGeneralizedTypeSchemes(self: *Self, roots: []const BoundaryRoot) voi
 /// while their receiver belongs to an outer rank. A generated codec relation
 /// also needs it when any part of its concrete receiver escapes, because the
 /// relation is deliberately validated only after source checking has finished.
-/// Captured candidates are removed immediately, so later boundaries never
-/// rescan completed sites.
+/// Captured and dropped candidates are removed immediately, so later
+/// boundaries never rescan completed sites; only rank-undecided candidates
+/// stay owned until the capture after generalization.
 fn captureSchemeDispatchRequirements(
     self: *Self,
     roots: []const BoundaryRoot,
@@ -27229,7 +27268,8 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
 /// scheme that contributes a transitive requirement under this boundary's
 /// still-active owner; capturing after the fixpoint is the lifecycle
 /// counterpart to the capture before defaulting—no solver work follows on
-/// either exit path, so the owner is quiescent when this returns.
+/// either exit path, so when this returns the owner holds only the
+/// rank-undecided candidates that the post-generalization capture decides.
 fn quiesceSchemeRequirementsAtBoundary(
     self: *Self,
     roots: []const BoundaryRoot,
