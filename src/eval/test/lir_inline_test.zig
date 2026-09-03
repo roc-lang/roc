@@ -5016,6 +5016,229 @@ test "nested iterator results retain the callee-authored representation" {
     }
 }
 
+/// Whether every dispatch plan for `method` in the lowered module (at least
+/// one) is `direct_parametric` (true) or every one is `direct_closed`
+/// (false); mixed or non-direct plans fail the test.
+fn directDispatchPlanIsParametric(
+    resources: *const helpers.ParsedResources,
+    method: []const u8,
+) TestError!bool {
+    var found: ?bool = null;
+    for (resources.checked_artifact.static_dispatch_plans.plans) |plan| {
+        if (!std.mem.eql(u8, resources.checked_artifact.canonical_names.methodNameText(plan.method), method)) continue;
+        const parametric = switch (plan.resolution) {
+            .direct_parametric => true,
+            .direct_closed => false,
+            .direct_pending,
+            .evidence_dependent,
+            .structural,
+            .checked_error,
+            .@"unreachable",
+            => {
+                std.debug.print("dispatch plan for {s} is not direct: {s}\n", .{ method, @tagName(plan.resolution) });
+                return error.TestUnexpectedResult;
+            },
+        };
+        if (found) |previous| {
+            if (previous != parametric) {
+                std.debug.print("dispatch plans for {s} classify differently\n", .{method});
+                return error.TestUnexpectedResult;
+            }
+        }
+        found = parametric;
+    }
+    return found orelse error.TestUnexpectedResult;
+}
+
+test "polarity: a method row tail is a closed direct plan only when no enclosing scheme quantifies it" {
+    // polarity_phase_two.md W3. `wrapped`'s annotated error row is implicitly
+    // open, so every call instantiates it with a defaultable flex tail. The
+    // dispatch in `wrap` shares that tail with `wrap`'s own return row: it is
+    // an identity variable of the enclosing template, so the plan stays
+    // `direct_parametric` whether or not a caller widens it (the first two
+    // cases) and a named extension is a rigid (the third). A tail the body
+    // matches away is quantified by nothing and is `direct_closed`, sealed to
+    // its row default exactly as it was before polarity. A direct dispatch
+    // inside a generalized local (its receiver is concrete; a dispatch on the
+    // local's own parameter would be evidence-dependent) is quantified by the
+    // local's scheme (scope-chain arm), and a recursive method's
+    // self-dispatch shares its tail with the enclosing template's return row:
+    // the surviving plan-side clone of that tail maps back to the template
+    // root through the store's identity origins (which clone survives is
+    // pinned by the checked_artifact.zig unit test "direct dispatch
+    // classification follows instantiation clones to the scheme that
+    // quantifies them").
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { name: []const u8, source: []const u8, parametric: bool }{
+        .{ .name = "widened caller", .parametric = true, .source =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\wrap : Rows -> Try(Str, [Unavailable])
+        \\wrap = |rows| rows.wrapped()
+        \\
+        \\use : Rows -> Try(Str, [Unavailable, Other])
+        \\use = |rows| {
+        \\    s = wrap(rows)?
+        \\    Ok(s)
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    s = match use(Rows.{}) {
+        \\        Ok(v) => v
+        \\        Err(_) => "err"
+        \\    }
+        \\    dbg s
+        \\    s
+        \\}
+        },
+        .{ .name = "own-row caller", .parametric = true, .source =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\wrap : Rows -> Try(Str, [Unavailable])
+        \\wrap = |rows| rows.wrapped()
+        \\
+        \\use : Rows -> Try(Str, [Unavailable])
+        \\use = |rows| {
+        \\    s = wrap(rows)?
+        \\    Ok(s)
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    s = match use(Rows.{}) {
+        \\        Ok(v) => v
+        \\        Err(_) => "err"
+        \\    }
+        \\    dbg s
+        \\    s
+        \\}
+        },
+        .{ .name = "named extension", .parametric = true, .source =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable, Missing, ..others])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\wrap : Rows -> Try(Str, [Unavailable, Missing, ..others])
+        \\wrap = |rows| rows.wrapped()
+        \\
+        \\use : Rows -> Try(Str, [Unavailable, Missing, Other])
+        \\use = |rows| {
+        \\    s = wrap(rows)?
+        \\    Ok(s)
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    s = match use(Rows.{}) {
+        \\        Ok(v) => v
+        \\        Err(_) => "err"
+        \\    }
+        \\    dbg s
+        \\    s
+        \\}
+        },
+        .{ .name = "body-local tail", .parametric = false, .source =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\describe : Rows -> Str
+        \\describe = |rows| {
+        \\    wrapped = rows.wrapped()
+        \\    match wrapped {
+        \\        Ok(s) => s
+        \\        Err(_) => "err"
+        \\    }
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    s = describe(Rows.{})
+        \\    dbg s
+        \\    s
+        \\}
+        },
+        .{ .name = "nested generalized local", .parametric = true, .source =
+        \\Rows := {}.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |_| Ok("x")
+        \\}
+        \\
+        \\use : Rows -> Try(Str, [Unavailable, Other])
+        \\use = |rows| {
+        \\    helper = |r| {
+        \\        rows2 : Rows
+        \\        rows2 = r
+        \\        rows2.wrapped()
+        \\    }
+        \\    s = helper(rows)?
+        \\    Ok(s)
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    s = match use(Rows.{}) {
+        \\        Ok(v) => v
+        \\        Err(_) => "err"
+        \\    }
+        \\    dbg s
+        \\    s
+        \\}
+        },
+        .{ .name = "recursive method", .parametric = true, .source =
+        \\Rows := { n : U64 }.{
+        \\    wrapped : Rows -> Try(Str, [Unavailable])
+        \\    wrapped = |rows| if rows.n == 0 Ok("x") else Rows.{ n: rows.n - 1 }.wrapped()
+        \\}
+        \\
+        \\use : Rows -> Try(Str, [Unavailable, Other])
+        \\use = |rows| {
+        \\    s = rows.wrapped()?
+        \\    Ok(s)
+        \\}
+        \\
+        \\main : Str
+        \\main = {
+        \\    s = match use(Rows.{ n: 2 }) {
+        \\        Ok(v) => v
+        \\        Err(_) => "err"
+        \\    }
+        \\    dbg s
+        \\    s
+        \\}
+        },
+    };
+
+    for (cases) |case| {
+        var optimized = try lowerModule(allocator, case.source, .wrappers);
+        defer optimized.deinit(allocator);
+
+        const parametric = try directDispatchPlanIsParametric(&optimized.resources, "wrapped");
+        if (parametric != case.parametric) {
+            std.debug.print("direct plan classification differed for {s}: expected parametric={}\n", .{ case.name, case.parametric });
+            return error.TestUnexpectedResult;
+        }
+
+        var run = try runLoweredWithHostEvents(allocator, &optimized.lowered);
+        defer run.deinit(allocator);
+        try std.testing.expectEqual(eval.RuntimeHostEnv.Termination.returned, run.termination);
+        try std.testing.expectEqual(@as(usize, 1), run.events.len);
+        switch (run.events[0]) {
+            .dbg => |msg| try std.testing.expectEqualStrings("\"x\"", msg),
+            .expect_failed, .crashed, .effect => return error.TestUnexpectedResult,
+        }
+    }
+}
+
 test "completed iterator method specs refresh their public lookup keys" {
     const allocator = std.testing.allocator;
     const single_source =

@@ -2028,6 +2028,52 @@ identity instance changes checked meaning. Each root stores whether an identity
 is reachable, computed by the producer that constructs or projects it.
 Consumers use that metadata instead of repeatedly traversing the graph.
 
+Three notions of variable identity coexist over that graph, and they are
+deliberately different questions; each is documented here so they cannot
+drift silently:
+
+- DIGEST IDENTITY (`rootContainsIdentityVariables`): does any flex or rigid
+  reach the root at all? Publication marks every variable, a defaultable row
+  tail included, as an identity variable. This decides whether a root may be
+  shared by digest, whether substitution can reuse a root unchanged (the
+  closed-root fast path), and which roots the payload identity walk pairs
+  slot by slot with a platform requirement.
+- COMPILE-TIME-ROOT CONCRETENESS (`checkedTypeIsConcreteCompileTimeRoot`):
+  may a value of this type be evaluated at check time? Any flex answers no,
+  a rigid answers no in the value graph and yes only as a declaration
+  template's formal; a defaultable tail is still a variable here.
+- SPECIALIZATION INDEPENDENCE (`callableIdentityIsSpecializationIndependent`,
+  the direct-dispatch classification): does the callable need an input from
+  the enclosing specialization? A defaultable, unconstrained flex row tail
+  that no enclosing scheme quantifies has exactly one instantiation and does
+  not; every other variable does. Boxy and glue already read such a tail as
+  closed (`boxy/plan.zig` `tagUnionExtensionIsExplicitlyClosed`, `glue.zig`
+  and `checked_artifact_layout_resolver.zig` tag-union conversion, the
+  hosted `Try` adapter's `checkedTypeIsClosedTagRow`, and—on row tails
+  only—Monotype's hosted-generic scan `checkedTypeHasVariable`, which also
+  treats a numeric-default variable as closed where this classification does
+  not), so this classification agrees with the representation consumers
+  rather than with the digest.
+  Monotype's sealed-cell guard (`checkedTypeSealsWithoutSpecialization`)
+  asks the same question from the lowering side: a sealed cell may pair
+  with a checked type whose only variables are such tails. Both sides make
+  the variable decision through one helper,
+  `CheckedTypePayload.variableSealsToRowDefault`, so they agree by
+  construction; the guard trusts its producers for the quantification half.
+
+Because substituting an identity-bearing root reserves distinct roots for the
+variables it leaves unsubstituted, a specialized dispatch callable and its
+enclosing template root name one variable by different ids. The build-only
+`CheckedTypeStore.identity_origins` records the identity instance each
+substitution-cloned variable was minted from, and `identityOrigin` follows
+that record (through nested clones) so the specialization question compares
+origins, never raw clone ids. Every variable root filled through the
+synthetic path must declare an origin—its clone source, or itself when it
+is a fresh instance such as an imported projection—and `identityOrigin`
+refuses one that declares none, so a forgotten origin fails loudly instead
+of reading as an unquantified tail. Serialized stores carry no origins: no
+post-check consumer asks the question.
+
 Type substitution preserves this graph discipline. A substitution of a closed
 root is the original root, because no formal can occur in it. A real
 substitution is memoized by its complete source/formal/actual input and interns
@@ -7775,7 +7821,14 @@ its plan:
 - `direct_closed(direct_call)`—checking proved the concrete target, projected
   its exact target-instantiated callable, proved that callable and its nested
   evidence independent of the enclosing specialization, and recorded the
-  target's explicit runtime category.
+  target's explicit runtime category. A checked flex row tail that carries a
+  row default, no numeric default, and no constraints, and that the
+  enclosing template does not quantify (it is not an identity variable of
+  the template's root, its where-clause signatures, or a nested generalized
+  scope), has exactly one instantiation—its row default—and does not make a
+  direct plan parametric; the closed path seals it to that default
+  (`lowerCheckedTypeVariable`). A tail the enclosing template quantifies is
+  parametric, as any other identity variable.
 - `direct_parametric(direct_call)`—checking proved the same exact target, but
   the callable or its nested evidence still consumes an explicit enclosing
   specialization identity.

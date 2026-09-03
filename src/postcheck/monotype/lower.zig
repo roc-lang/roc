@@ -18845,8 +18845,8 @@ const BodyContext = struct {
         checked_ty: checked.CheckedTypeId,
         mono_ty: Type.TypeId,
     ) Allocator.Error!void {
-        if (!self.checkedTypeIsClosed(checked_ty)) {
-            Common.invariant("sealed Monotype cell was paired with an identity-bearing checked type");
+        if (!try self.checkedTypeSealsWithoutSpecialization(checked_ty)) {
+            Common.invariant("sealed Monotype cell was paired with a checked type that needs a specialization input");
         }
         const lowered = try self.lowerType(checked_ty);
         if (!self.sameType(lowered, mono_ty)) {
@@ -31840,6 +31840,87 @@ const BodyContext = struct {
             Common.invariant("checked type closure query referenced a missing root");
         }
         return !self.view.types.roots[raw].contains_identity_variables;
+    }
+
+    /// Whether lowering `ty` takes no input from the enclosing specialization:
+    /// it is closed by digest, or every variable it reaches seals to its row
+    /// default (`CheckedTypePayload.variableSealsToRowDefault`, the same
+    /// variable decision the checked artifact's direct-dispatch classification
+    /// makes). This is the sealing half of the `direct_closed` rule (design.md
+    /// "Static Dispatch In Monotype").
+    ///
+    /// Trust boundary: the quantification half is not checked here. It is
+    /// guaranteed by the two sealed-cell producers—`lowerPatternStatement`
+    /// through `closedDirectGraphFreeResultType`, whose cell only a
+    /// `direct_closed` plan's result fills, and `lowerShapeFreePatternAtCell`
+    /// fed by that same cell—together with digest-closed types, which reach
+    /// no variable at all. A producer pairing a sealed cell with a tail some
+    /// enclosing scheme quantifies is a misclassification upstream; this
+    /// guard does not detect it.
+    fn checkedTypeSealsWithoutSpecialization(
+        self: *BodyContext,
+        ty: checked.CheckedTypeId,
+    ) Allocator.Error!bool {
+        if (self.checkedTypeIsClosed(ty)) return true;
+        var visited = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
+        defer visited.deinit();
+        return try self.checkedTypeSealsWithoutSpecializationInner(ty, &visited);
+    }
+
+    fn checkedTypeSealsWithoutSpecializationInner(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        visited: *collections.DenseMap(checked.CheckedTypeId, void),
+    ) Allocator.Error!bool {
+        if ((try visited.getOrPut(checked_ty)).found_existing) return true;
+
+        const payload = checkedPayload(self.view, checked_ty);
+        return switch (payload) {
+            .pending => Common.invariant("pending checked type reached Monotype sealing scan"),
+            .err, .empty_record, .empty_tag_union => true,
+            .flex, .rigid => payload.variableSealsToRowDefault(),
+            .alias => |alias| (try self.checkedTypeSpanSealsWithoutSpecialization(alias.args, visited)) and
+                try self.checkedTypeSealsWithoutSpecializationInner(alias.backing, visited),
+            .record_unbound => |fields| try self.checkedRecordFieldsSealWithoutSpecialization(fields, visited),
+            .record => |record| (try self.checkedRecordFieldsSealWithoutSpecialization(record.fields, visited)) and
+                try self.checkedTypeSealsWithoutSpecializationInner(record.ext, visited),
+            .tuple => |items| try self.checkedTypeSpanSealsWithoutSpecialization(items, visited),
+            .nominal => |nominal| (try self.checkedTypeSpanSealsWithoutSpecialization(nominal.args, visited)) and
+                try self.checkedTypeSpanSealsWithoutSpecialization(nominal.padding_field_types, visited),
+            .function => |function| (try self.checkedTypeSpanSealsWithoutSpecialization(function.args, visited)) and
+                try self.checkedTypeSealsWithoutSpecializationInner(function.ret, visited),
+            .tag_union => |tag_union| blk: {
+                for (tag_union.tags) |tag| {
+                    if (!try self.checkedTypeSpanSealsWithoutSpecialization(tag.argsSlice(self.view.types), visited)) break :blk false;
+                }
+                break :blk try self.checkedTypeSealsWithoutSpecializationInner(tag_union.ext, visited);
+            },
+        };
+    }
+
+    fn checkedTypeSpanSealsWithoutSpecialization(
+        self: *BodyContext,
+        checked_tys: []const checked.CheckedTypeId,
+        visited: *collections.DenseMap(checked.CheckedTypeId, void),
+    ) Allocator.Error!bool {
+        for (checked_tys) |ty| {
+            if (!try self.checkedTypeSealsWithoutSpecializationInner(ty, visited)) return false;
+        }
+        return true;
+    }
+
+    fn checkedRecordFieldsSealWithoutSpecialization(
+        self: *BodyContext,
+        fields: []const checked.CheckedRecordField,
+        visited: *collections.DenseMap(checked.CheckedTypeId, void),
+    ) Allocator.Error!bool {
+        for (fields) |field| {
+            if (!try self.checkedTypeSealsWithoutSpecializationInner(field.ty, visited)) return false;
+            if (field.kind.undeterminedVariable()) |variable| {
+                if (!try self.checkedTypeSealsWithoutSpecializationInner(variable, visited)) return false;
+            }
+        }
+        return true;
     }
 
     fn lowerLookupExprAtNode(
