@@ -4435,8 +4435,7 @@ const Builder = struct {
         var ctx = try BodyContext.init(self.allocator, self, view, template_ref, graph, &draft);
         defer ctx.deinit();
         ctx.evidence = rootEvidence(template_ref, partial.vector);
-        return (try ctx.rootEdgeEvidenceForPurpose(view, template, purpose)) orelse
-            Common.invariant("procedure specialization did not receive its complete checked evidence vector");
+        return try ctx.rootEdgeEvidenceForPurpose(view, template_ref, template, purpose);
     }
 
     fn lowerTemplateWithMono(
@@ -32108,46 +32107,32 @@ const BodyContext = struct {
         );
     }
 
-    /// Checked root-edge evidence for a compile-time root's
-    /// template (site evidence keyed by the root's body expression),
-    /// materialized. `template` bounds the expected param count.
-    fn rootEdgeEvidenceByExpr(
+    /// The edge of a template's root: its own quantified variables (no
+    /// caller binds them) with the chain-free root evidence checking
+    /// recorded for the template as contract provenance.
+    fn rootEdgeEvidence(
         self: *BodyContext,
         view: ModuleView,
-        root_expr: checked.CheckedExprId,
+        template_ref: names.ProcTemplate,
         template: checked.CheckedProcedureTemplate,
-    ) Allocator.Error!?EdgeEvidence {
-        return self.rootEdgeEvidenceByExprForPurpose(
-            view,
-            root_expr,
-            template,
-            .body_lowering,
-        );
-    }
-
-    fn rootEdgeEvidenceByExprForPurpose(
-        self: *BodyContext,
-        view: ModuleView,
-        root_expr: checked.CheckedExprId,
-        template: checked.CheckedProcedureTemplate,
-        purpose: EvidenceMaterializationPurpose,
-    ) Allocator.Error!?EdgeEvidence {
-        if (view.static_dispatch_plans.siteSubstitution(root_expr) == null) return null;
-        return try self.evidenceForSite(view, root_expr, templateSchemaIn(view, &template), purpose, null);
+    ) Allocator.Error!EdgeEvidence {
+        return self.rootEdgeEvidenceForPurpose(view, template_ref, template, .body_lowering);
     }
 
     fn rootEdgeEvidenceForPurpose(
         self: *BodyContext,
         view: ModuleView,
+        template_ref: names.ProcTemplate,
         template: checked.CheckedProcedureTemplate,
         purpose: EvidenceMaterializationPurpose,
-    ) Allocator.Error!?EdgeEvidence {
-        const root_expr = switch (template.body) {
-            .entry_wrapper => |wrapper_id| view.compile_time_roots.root(view.entry_wrappers.get(wrapper_id).root).expr,
-            .checked_body => |body_id| view.bodies.body(body_id).root_expr,
-            .intrinsic_wrapper, .unimplemented => return null,
+    ) Allocator.Error!EdgeEvidence {
+        const schema = templateSchemaIn(view, &template);
+        const subst = try self.substitutionFromCheckedTypes(view, schema.scheme_vars);
+        const refs = view.static_dispatch_plans.templateRootEvidence(template_ref.template);
+        return .{
+            .subst = subst,
+            .vector = try self.deriveEvidenceVector(schema, subst, view, refs, purpose),
         };
-        return try self.rootEdgeEvidenceByExprForPurpose(view, root_expr, template, purpose);
     }
 
     fn lowerConstEvalTemplateUse(
@@ -32193,17 +32178,13 @@ const BodyContext = struct {
         try body_ctx.inheritActiveConstBinding(self);
         body_ctx.evidence = rootEvidence(eval.entry_template, self.restore_evidence.vector);
         if (self.restore_evidence.vector.len < entry_template.evidence_params.len) {
-            const eval_root = store_view.compile_time_roots.root(body.root);
-            if (try self.rootEdgeEvidenceByExpr(store_view, eval_root.expr, entry_template)) |root_evidence| {
-                body_ctx.evidence = rootEvidenceWithSubstitution(
-                    eval.entry_template,
-                    templateSchemaIn(store_view, &entry_template),
-                    root_evidence,
-                );
-                try body_ctx.seedSubstitution(body_ctx.evidence.schema.?, root_evidence.subst);
-            } else {
-                Common.invariant("compile-time evaluation template did not contain its checked root evidence");
-            }
+            const root_evidence = try self.rootEdgeEvidence(store_view, eval.entry_template, entry_template);
+            body_ctx.evidence = rootEvidenceWithSubstitution(
+                eval.entry_template,
+                templateSchemaIn(store_view, &entry_template),
+                root_evidence,
+            );
+            try body_ctx.seedSubstitution(body_ctx.evidence.schema.?, root_evidence.subst);
         }
         defer body_ctx.deinit();
         body_ctx.source_region_override = source_region_override;

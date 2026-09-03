@@ -2941,14 +2941,17 @@ edge records a symbolic dispatch-plan reference for Monotype to re-execute,
 and Monotype never
 instantiates a dispatch plan outside the specialization that owns it.
 
-A compiler-generated edge has no checked instantiation, so it derives a hidden
-dispatcher from the target's checked scheme: the requester instantiates the
-scheme root in the target's own instantiation context, relates it to the
-request, reads the scheme-side dispatcher variable in that context, and, when
-the relation leaves it open, commits its checked literal default there—the
-same rule that seals an unpinned literal leaf. Non-defaultable nested
-constraint requirements are marked use-site-only and must arrive as checked
-use-site evidence; they cannot be synthesized from a template. For
+A compiler-generated edge has no checked instantiation, so Monotype reads the
+scheme's substitution from the request: the scheme root instantiates in a
+context for the scheme's module, the request interface binds every quantified
+variable the root reaches, and the remaining variables are bound by the
+obligation fixpoint described under Static Dispatch In Monotype (each selected
+target's callable is related to its constraint callable, which is why every
+evidence parameter carries the constraint's callable type). A receiver that
+stays open after the fixpoint is the enclosing specialization's own quantified
+variable (its obligation forwards), a literal-defaulted variable (its evidence
+derives on a detached default cell, so the request stays open until a caller
+constrains it), or an ownerless shape (structural or vacuous evidence). For
 runtime-dictionary requirements the checked entry remains a forwarded
 constraint slot: Boxy consumes its explicit slot and callable type in checked
 dictionary order.
@@ -7805,19 +7808,28 @@ share one evidence parameter: the runtime target is selected by dispatcher and
 method, while each dispatch plan checks and instantiates that target against its
 own callable relation.
 
-**Edges supply evidence.** Checking persists every constrained-scheme edge.
-An ordinary instantiation records the (pristine var, fresh var) pairs of its
-constrained vars. A monomorphic edge to an in-flight recursive value or method
-target records the exact shared scheme root and no copy pairs. Checking
-resolves each edge's requirements—against the enclosing callable's own
-evidence params (producing `constraint(k)` again), against concrete types
-(producing `direct` targets through exact registry lookups), through the
-monomorphic default rule, or structurally—and stores the result as site
-evidence keyed by the use expression. Monotype lowering materializes a
-specialization's evidence vector at each call edge and passes it to the callee
-specialization; a plan resolved `constraint(k)` reads entry `k` of the
-innermost vector (walking lexical parents for nested local functions by
-`depth`).
+**Edges supply substitutions.** A scheme's quantified variables are its
+identity variables in canonical order (`scheme_vars` on the checked template
+or dispatch scope); each evidence parameter names the slot its dispatcher
+occupies. Checking persists every scheme edge: an ordinary instantiation
+records the (pristine var, fresh var) pair of every quantified variable it
+copied, and the checked module stores the edge's substitution—one checked
+type per slot—keyed by the use expression, next to the edge's resolved
+requirements. A monomorphic edge to an in-flight recursive value or method
+target records the exact shared scheme root and no copy pairs; its
+substitution is the identity, every slot standing for the scheme's own
+variable. A specialization is the scheme instantiated under one substitution:
+Monotype seeds the callee's context with the substitution's live cells before
+instantiating the root, so every interior type and every obligation of the
+body is determined by the slots. The evidence vector is derived from the
+substitution at each edge (the receiver in slot `k` selects the target; the
+edge's own checked entries supply only structural contracts and rejected or
+unreachable verdicts) and passed to the callee specialization; a plan resolved
+`constraint(k)` reads entry `k` of the innermost vector (walking lexical
+parents for nested local functions by `depth`). A direct plan's evidence node
+records the target's substitution the same way, so a direct target
+specializes under the exact substitution checking applied rather than under a
+re-derived one.
 
 **The default rule.** A constrained var no edge can pin follows exactly the
 rule Monotype uses to materialize unresolved variables: numeral literals and
@@ -7873,15 +7885,30 @@ This frontier applies only when every receiver constraint is a copied `where`
 contract; any concrete-use constraint on the same receiver requires resolution
 at the current call.
 
-**Compiler-generated edges.** Structural derivations and builtin helpers call
-methods on component types with no checked instantiation record. For these,
-each checked evidence param also carries the label-addressed PATH from its scheme's
-callable to the dispatcher's first occurrence (argument positions, type
-arguments, row labels—labels rather than positions, because Monotype sorts
-rows). Monotype resolves such a target's requirements by walking those paths
-over the concrete monomorphic callable at the consumption site, recursively:
-component owners consume the registry's explicit callable-or-structural result;
-ownerless shapes take the structural implementations.
+**Compiler-generated edges.** Structural derivations, builtin helpers, and
+restored compile-time function values call or specialize schemes with no
+checked instantiation record. For these the substitution is read from the
+request: the scheme root instantiates in a context for the scheme's module,
+the request interface is related to it, and the slots are read back. The
+obligations are then derived to a fixpoint: a receiver whose cell has a method
+owner selects its target through the exact registry lookup, and that target's
+callable is related to the constraint's callable type (recorded on every
+evidence parameter) instantiated over the substitution, which binds the
+quantified variables only that callable reaches—the receivers of later
+obligations. A receiver still open after the fixpoint forwards to the
+enclosing frame's obligation on the cell it shares with an enclosing quantified
+variable, derives on a detached literal-default cell, or resolves structurally
+or vacuously for an ownerless shape. Because target relations and literal
+defaults are deterministic, the substitution is a function of the request
+interface; the specialization identity of a checked callable and its request
+type therefore already names the substitution.
+
+Each checked evidence param also carries the label-addressed PATH from its
+scheme's callable to the dispatcher's first occurrence (argument positions,
+type arguments, row labels—labels rather than positions, because Monotype
+sorts rows). Boxy dictionary planning projects dispatcher components over
+concrete callables through these paths, and the CheckedModule boundary
+validates them.
 
 Evidence paths describe the normalized logical type, never checked-store row
 topology. Record and tag extension chains, including transparent aliases along
@@ -7896,10 +7923,10 @@ path resolves over its template's checked callable type before Monotype may
 consume it.
 
 Exact registry lookups—`(MethodOwner, MethodNameId)`—happen during
-checking, and during path synthesis for compiler-generated
-edges. The registry only ever answers exact lookups after the owner is known
-from checked type content; no stage asks "which owners could match this
-constraint?".
+checking, and during obligation derivation for compiler-generated edges. The
+registry only ever answers exact lookups after the owner is known from checked
+type content or from a live cell's content; no stage asks "which owners could
+match this constraint?".
 
 ### Iterator `for`
 

@@ -1726,6 +1726,12 @@ pub const StaticDispatchPlanTable = struct {
     site_evidence: []SiteEvidenceEntry = &.{},
     /// Flat pool backing `SiteEvidenceEntry` substitution ranges.
     site_substitutions: []const CheckedTypeId = &.{},
+    /// Per procedure template (indexed like the template table), the
+    /// chain-free evidence of the template's root edge: how each of its own
+    /// obligations resolves when nothing instantiates it (a compile-time
+    /// root, a platform requirement, a const-eval entry). A range into
+    /// `evidence_refs`.
+    template_root_evidence: []const artifact_serialize.Span = &.{},
     /// Exact generated-codec contracts emitted by checking.
     generated_codec_derivations: []GeneratedCodecDerivation = &.{},
     /// Shared flat pool backing `GeneratedCodecDerivation.calls`.
@@ -1748,13 +1754,14 @@ pub const StaticDispatchPlanTable = struct {
         evidence_refs: SerializedSlice(CheckedEvidence) = .{},
         site_evidence: SerializedSlice(SiteEvidenceEntry) = .{},
         site_substitutions: SerializedSlice(CheckedTypeId) = .{},
+        template_root_evidence: SerializedSlice(artifact_serialize.Span) = .{},
         generated_codec_derivations: SerializedSlice(GeneratedCodecDerivation) = .{},
         generated_codec_calls: SerializedSlice(GeneratedCodecCall) = .{},
 
         comptime {
-            // 18 side lists → 18 base-pointer fixups on deserialize, never a
+            // 19 side lists → 19 base-pointer fixups on deserialize, never a
             // function of how many plans/operands the table holds.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 18);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 19);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(StaticDispatchPlanTable, @This());
@@ -2246,6 +2253,15 @@ pub const StaticDispatchPlanTable = struct {
     /// checked type per quantified variable of that scheme, in the scheme's
     /// `scheme_vars` order. Null when no checked instantiation edge was
     /// recorded for the expression.
+    /// The chain-free root evidence of a procedure template: its own
+    /// obligations resolved without a caller.
+    pub fn templateRootEvidence(self: *const StaticDispatchPlanTable, template: canonical.CheckedProcedureTemplateId) []const CheckedEvidence {
+        const raw = @intFromEnum(template);
+        if (raw >= self.template_root_evidence.len) return &.{};
+        const span = self.template_root_evidence[raw];
+        return self.evidence_refs[span.start .. span.start + span.len];
+    }
+
     pub fn siteSubstitution(self: *const StaticDispatchPlanTable, expr: CheckedExprId) ?[]const CheckedTypeId {
         const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence, @intFromEnum(expr), siteEvidenceOrder) orelse return null;
         return self.site_substitutions[found.subst_start .. found.subst_start + found.subst_len];
@@ -2274,6 +2290,7 @@ pub const StaticDispatchPlanTable = struct {
         allocator.free(self.evidence_refs);
         allocator.free(self.site_evidence);
         allocator.free(@constCast(self.site_substitutions));
+        allocator.free(@constCast(self.template_root_evidence));
         allocator.free(self.generated_codec_derivations);
         allocator.free(self.generated_codec_calls);
         self.* = .{};
@@ -2767,7 +2784,7 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
     // The fixup count is fixed by the number of serialized base pointers, never
     // by how much data each pool holds. The two tables below differ in operand
     // count by three orders of magnitude yet relocate identically.
-    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".fields.len == 18);
+    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".fields.len == 19);
 
     inline for (.{ @as(u32, 4), @as(u32, 4000) }) |operand_count| {
         const operands = try gpa.alloc(StaticDispatchOperand, operand_count);

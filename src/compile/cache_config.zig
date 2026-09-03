@@ -162,7 +162,7 @@ pub const Constants = struct {
     ///     records the source region of the annotated name.
     /// 72: Checked binding schemes serialize generated-codec relations that
     ///     downstream specializations must revalidate.
-    pub const CACHE_VERSION = 75;
+    pub const CACHE_VERSION = 76;
 };
 
 /// Configuration for the Roc cache system.

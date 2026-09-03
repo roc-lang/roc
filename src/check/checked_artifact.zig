@@ -17083,38 +17083,6 @@ const EvidencePass = struct {
             out.* = try self.appendEvidenceRefs(entries.items);
         }
 
-        // Root edges are their templates' only callers (nothing instantiates
-        // a compile-time root). Resolve each pattern'd root's evidence now—
-        // the chain is empty, so every obligation lands on a chain-free
-        // resolution (concrete target, mono-default owner, structural,
-        // vacuous)—published as site evidence keyed by the root's body
-        // expression for the drain and const-eval entries to consume.
-        for (self.compile_time_roots.roots) |root| {
-            const source_pattern = root.source_pattern orelse continue;
-            const scheme_var = ModuleEnv.varFrom(source_pattern);
-            params.clearRetainingCapacity();
-            try self.enumerateParams(scheme_var, &params);
-            if (params.items.len == 0) continue;
-            const site_key = @intFromEnum(root.expr);
-            if (self.site_seen.contains(site_key)) continue;
-            var entries = std.ArrayListUnmanaged(static_dispatch.CheckedEvidence).empty;
-            defer entries.deinit(self.allocator);
-            try entries.ensureTotalCapacity(self.allocator, params.items.len);
-            for (params.items) |param| {
-                entries.appendAssumeCapacity((try self.evidenceForVar(param, param.dispatcher_var, param.constraint.fn_var, true)).?);
-            }
-            const span = try self.appendEvidenceRefs(entries.items);
-            const subst = try self.appendSiteSubstitution(scheme_var, &.{});
-            try self.site_seen.put(site_key, {});
-            try self.site_evidence.append(self.allocator, .{
-                .key = site_key,
-                .start = span.start,
-                .len = span.len,
-                .subst_start = subst.start,
-                .subst_len = subst.len,
-            });
-        }
-
         // A platform requirement invokes an app procedure without a source
         // expression use site in the eventual platform module. Resolve that
         // root edge here, while the app checker's solved requirement variable
@@ -17190,6 +17158,7 @@ const EvidencePass = struct {
         self.plan_table.evidence_refs = try self.evidence_refs.toOwnedSlice(self.allocator);
         self.plan_table.site_evidence = try self.site_evidence.toOwnedSlice(self.allocator);
         self.plan_table.site_substitutions = try self.site_substitutions.toOwnedSlice(self.allocator);
+        self.plan_table.template_root_evidence = try self.allocator.dupe(artifact_serialize.Span, self.template_root_evidence);
     }
 
     /// The solver root of the scheme a compile-time root evaluates: the
@@ -29488,7 +29457,7 @@ pub const CheckedModuleArtifact = struct {
             // independent of stored data size. The optional-field body tables
             // add three pointers beyond the current-main count, and the
             // record-unset label pool one more.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 215);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 216);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -29697,7 +29666,7 @@ pub const CheckedModuleArtifact = struct {
     // callable relation or only the shared method target.
     // Version 76 combines the version-75 artifact with retained callable
     // evidence provenance used by pathless specialization.
-    const serialized_layout_version: u32 = 79;
+    const serialized_layout_version: u32 = 80;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -35909,8 +35878,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xC8, 0x95, 0x1F, 0xDF, 0xC3, 0x29, 0x2C, 0x04, 0xD6, 0x97, 0x8B, 0x8F, 0x53, 0x38, 0x92, 0xF8,
-        0x83, 0x29, 0xD4, 0xA1, 0xAB, 0xD8, 0x0A, 0x46, 0xC9, 0xF6, 0xEA, 0x71, 0xC3, 0x69, 0x96, 0x63,
+        0xA3, 0xAA, 0x77, 0x51, 0x12, 0xC0, 0x4F, 0xB9, 0xCD, 0x20, 0x19, 0xEC, 0xCB, 0xC9, 0x25, 0x7F,
+        0x52, 0x8F, 0xA5, 0x3A, 0xC3, 0x61, 0x47, 0xCA, 0xA6, 0xFD, 0x9E, 0x89, 0x04, 0x3D, 0x3C, 0x66,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

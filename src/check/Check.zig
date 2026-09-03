@@ -6222,6 +6222,12 @@ fn instantiateVarOrphan(
         .rigid_behavior = .fresh_rigid,
         .rank_behavior = .ignore_rank,
     };
+    // An orphan copy is not a use of the scheme: it records no scheme-use
+    // edge, so the expression being checked keeps only the record of the
+    // scheme it references.
+    const saved_instantiation_source_expr = self.instantiation_source_expr;
+    self.instantiation_source_expr = null;
+    defer self.instantiation_source_expr = saved_instantiation_source_expr;
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false);
 }
 
@@ -6247,6 +6253,12 @@ fn instantiateVarOrphanFlexed(
         .rigid_behavior = .fresh_flex,
         .rank_behavior = .ignore_rank,
     };
+    // An orphan copy is not a use of the scheme: it records no scheme-use
+    // edge, so the expression being checked keeps only the record of the
+    // scheme it references.
+    const saved_instantiation_source_expr = self.instantiation_source_expr;
+    self.instantiation_source_expr = null;
+    defer self.instantiation_source_expr = saved_instantiation_source_expr;
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false);
 }
 
@@ -13250,6 +13262,7 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
         }
         try self.judgeFieldKindsAtBoundary(env);
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+        try self.captureEscapedSchemeDispatchRequirements(member_roots, env);
         for (scc.defs) |member_def_idx| {
             const member_def = self.cir.store.getDef(member_def_idx);
             const expr_var = ModuleEnv.varFrom(member_def.expr);
@@ -17219,6 +17232,7 @@ const ExprCheckFrame = struct {
             }
             try checker.judgeFieldKindsAtBoundary(env);
             try checker.generalizer.generalize(checker.gpa, &env.var_pool, env.rank());
+            try checker.captureEscapedSchemeDispatchRequirements(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }}, env);
             try checker.deduplicateGeneralizedDispatchRequirements(self.expr_var_raw);
             try checker.publishBindingScheme(self.expr_var_raw);
             checker.retireNonGeneralizedTypeSchemes(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }});
@@ -20592,6 +20606,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     try self.defaultLiteralsAtGeneralizationBoundary(.{ .owner = decl_pattern_var, .interface = decl_pattern_var }, env);
                     try self.judgeFieldKindsAtBoundary(env);
                     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+                    try self.captureEscapedSchemeDispatchRequirements(&.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }}, env);
                     try self.deduplicateGeneralizedDispatchRequirements(decl_pattern_var);
                     try self.publishBindingScheme(decl_pattern_var);
                     try self.bindBindingSchemeVar(decl_pattern_var, decl_expr_var);
@@ -26745,6 +26760,15 @@ fn requirementHasPublishedStructuralOrigin(
     return false;
 }
 
+/// Whether a structurally published requirement's callable is the same
+/// relation as its creation callable, unifying the two when they are still
+/// distinct roots.
+fn retiredRequirementCallableUnified(self: *Self, requirement: SchemeDispatchRequirement) Allocator.Error!bool {
+    const creation_fn_var = requirement.structural_origin.constraint_fn_var;
+    if (self.types.resolveVar(creation_fn_var).var_ == self.types.resolveVar(requirement.constraint.fn_var).var_) return true;
+    return try self.unifyEquivalentGeneralizedCallables(creation_fn_var, requirement.constraint.fn_var);
+}
+
 /// A requirement's recorded creation relation is already attached to its
 /// receiver. Once a boundary publishes both the side-table scheme root and
 /// that generalized receiver, the structural constraint plus the checked
@@ -26801,7 +26825,13 @@ fn retireStructurallyPublishedTypeSchemeRequirements(
                 requirement,
                 &published_vars,
             );
-            if (structurally_published) continue;
+            // The copy and its creation relation are one relation on one
+            // published receiver, so their callables unify: every use of the
+            // copied scheme then shares the creation callable's argument and
+            // result variables, and the copy retires without losing them. A
+            // callable the unifier cannot establish as equal stays an
+            // explicit requirement.
+            if (structurally_published and try self.retiredRequirementCallableUnified(requirement)) continue;
             scheme.dispatch_requirements.items[write] = requirement;
             write += 1;
         }
@@ -26943,6 +26973,14 @@ fn captureSchemeDispatchRequirements(
     for (roots) |root| {
         var owner_indices = (self.scheme_requirement_candidate_indices_by_owner.fetchRemove(root.owner) orelse continue).value;
         defer owner_indices.deinit(self.gpa);
+        // Candidates whose receiver still carries this boundary's rank are
+        // undecided until generalization adjusts ranks: a receiver created
+        // here that unified with an enclosing-scope variable escapes only
+        // then. They stay owned by this root for the capture that runs
+        // after generalization, where an escaped receiver is captured and a
+        // quantified one carries its own constraint.
+        var undecided = std.ArrayListUnmanaged(u32).empty;
+        errdefer undecided.deinit(self.gpa);
         var interface_reachable_collected = false;
         for (owner_indices.items) |candidate_idx| {
             const candidate = self.scheme_requirement_candidates.items[candidate_idx];
@@ -26982,7 +27020,13 @@ fn captureSchemeDispatchRequirements(
                 if (receiver.desc.content != .flex) break :blk false;
                 if (receiver.desc.rank == .generalized) break :blk false;
                 break :blk switch (candidate.source) {
-                    .creation => @intFromEnum(receiver.desc.rank) < @intFromEnum(rank),
+                    .creation => created: {
+                        if (receiver.desc.rank == rank) {
+                            try undecided.append(self.gpa, candidate_idx);
+                            break :created false;
+                        }
+                        break :created @intFromEnum(receiver.desc.rank) < @intFromEnum(rank);
+                    },
                     // A copied relation is detached from its receiver descriptor.
                     // Its structural origin is retained separately so publication
                     // can prove when checked evidence makes this copy redundant.
@@ -27007,10 +27051,28 @@ fn captureSchemeDispatchRequirements(
                 .structural_origin = candidate.structural_origin,
             });
         }
+        if (undecided.items.len == 0) {
+            undecided.deinit(self.gpa);
+        } else {
+            try self.scheme_requirement_candidate_indices_by_owner.putNoClobber(self.gpa, root.owner, undecided);
+        }
     }
     if (self.scheme_requirement_candidate_indices_by_owner.count() == 0) {
         self.scheme_requirement_candidates.clearRetainingCapacity();
     }
+}
+
+/// `captureSchemeDispatchRequirements` after generalization adjusted ranks:
+/// every candidate the pre-generalization capture left undecided now has
+/// either an escaped receiver (captured) or a quantified one (dropped: the
+/// variable carries its own constraint into every instantiation).
+fn captureEscapedSchemeDispatchRequirements(
+    self: *Self,
+    roots: []const BoundaryRoot,
+    env: *Env,
+) Allocator.Error!void {
+    try self.captureSchemeDispatchRequirements(roots, env);
+    self.assertSchemeRequirementBoundaryQuiescent(roots);
 }
 
 fn addSchemeDispatchRequirementsToBoundaryReachability(
@@ -27037,6 +27099,22 @@ fn assertSchemeRequirementBoundaryQuiescent(self: *const Self, roots: []const Bo
     if (builtin.mode != .Debug) return;
     for (roots) |root| {
         std.debug.assert(!self.scheme_requirement_candidate_indices_by_owner.contains(root.owner));
+    }
+}
+
+/// Before generalization a boundary is quiescent when only rank-undecided
+/// creation candidates remain for its roots.
+fn assertSchemeRequirementBoundaryDecided(self: *const Self, roots: []const BoundaryRoot, env: *const Env) void {
+    if (builtin.mode != .Debug) return;
+    const rank = env.rank();
+    for (roots) |root| {
+        const owner_indices = self.scheme_requirement_candidate_indices_by_owner.get(root.owner) orelse continue;
+        for (owner_indices.items) |candidate_idx| {
+            const candidate = self.scheme_requirement_candidates.items[candidate_idx];
+            const receiver = self.types.resolveVar(candidate.receiver_var);
+            std.debug.assert(candidate.source == .creation);
+            std.debug.assert(receiver.desc.content == .flex and receiver.desc.rank == rank);
+        }
     }
 }
 
@@ -27159,7 +27237,7 @@ fn quiesceSchemeRequirementsAtBoundary(
 ) std.mem.Allocator.Error!void {
     try self.checkGroundedSchemeRequirementsAtBoundary(env);
     try self.captureSchemeDispatchRequirements(roots, env);
-    self.assertSchemeRequirementBoundaryQuiescent(roots);
+    self.assertSchemeRequirementBoundaryDecided(roots, env);
 }
 
 /// A copied explicit requirement stays out of the hot deferred queue while its
