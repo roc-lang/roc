@@ -72,7 +72,7 @@ NO CHANGE
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "my_number"))
-		(e-call (constraint-fn-var 248)
+		(e-call (constraint-fn-var 250)
 			(e-lookup-local
 				(p-assign (ident "add_one")))
 			(e-num (value "42")))

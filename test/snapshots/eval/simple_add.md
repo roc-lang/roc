@@ -85,7 +85,7 @@ NO CHANGE
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 256)
+				(e-call (constraint-fn-var 258)
 					(e-lookup-local
 						(p-assign (ident "addU8")))
 					(e-num (value "1"))
@@ -95,7 +95,7 @@ NO CHANGE
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 288)
+				(e-call (constraint-fn-var 292)
 					(e-lookup-local
 						(p-assign (ident "addU8")))
 					(e-num (value "0"))

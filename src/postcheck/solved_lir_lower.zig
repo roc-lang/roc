@@ -158,12 +158,15 @@ pub const Options = struct {
 /// Scheduling outcomes for solved-LIR body shards. These counts deliberately
 /// exclude elapsed time so tests and diagnostics do not depend on OS scheduling.
 /// Serial lowering leaves every field zero. After a successful parallel run,
-/// `tasks_submitted == tasks_committed + tasks_retried_serial`.
+/// `tasks_submitted == tasks_committed + tasks_retried_serial` and
+/// `tasks_submitted == workspace_initializations + workspace_reuses`.
 pub const ParallelMetrics = struct {
     task_waves: u64 = 0,
     tasks_submitted: u64 = 0,
     tasks_committed: u64 = 0,
     tasks_retried_serial: u64 = 0,
+    workspace_initializations: u64 = 0,
+    workspace_reuses: u64 = 0,
 };
 
 /// Lower Lambda Solved directly into LIR.
@@ -218,28 +221,16 @@ const CaptureSpanId = struct {
     }
 };
 
+/// A capture span identifies its captures structurally (source, start and
+/// length) rather than as a dense index, so it is a hashable key.
+const CaptureSpanKey = CaptureSpanId;
+
 fn specializationIdentityCaptureStart(span: CaptureSpanId) u32 {
     return switch (span.source) {
         .solved => span.start,
         .own => 0,
     };
 }
-
-const CaptureTypeKey = struct {
-    source: CaptureSpanSource,
-    start: u32,
-    len: u32,
-    solved_fn_ty: SolvedType.TypeVarId,
-
-    fn from(span: CaptureSpanId, solved_fn_ty: SolvedType.TypeVarId) CaptureTypeKey {
-        return .{
-            .source = span.source,
-            .start = span.start,
-            .len = span.len,
-            .solved_fn_ty = solved_fn_ty,
-        };
-    }
-};
 
 const ErasedReturnReuse = union(enum) {
     none,
@@ -337,26 +328,6 @@ const FnSpecContext = struct {
     }
 };
 
-const CaptureTypeMap = std.HashMap(CaptureTypeKey, Type.TypeId, CaptureSpanContext, std.hash_map.default_max_load_percentage);
-
-const CaptureSpanContext = struct {
-    pub fn hash(_: CaptureSpanContext, span: CaptureTypeKey) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        std.hash.autoHash(&hasher, span.source);
-        std.hash.autoHash(&hasher, span.start);
-        std.hash.autoHash(&hasher, span.len);
-        std.hash.autoHash(&hasher, @intFromEnum(span.solved_fn_ty));
-        return hasher.final();
-    }
-
-    pub fn eql(_: CaptureSpanContext, lhs: CaptureTypeKey, rhs: CaptureTypeKey) bool {
-        return lhs.source == rhs.source and
-            lhs.start == rhs.start and
-            lhs.len == rhs.len and
-            lhs.solved_fn_ty == rhs.solved_fn_ty;
-    }
-};
-
 const FnEntry = struct {
     spec: FnSpec,
     symbol: Common.Symbol,
@@ -405,6 +376,8 @@ const FnBodyTaskContext = struct {
     coordinator: *Lowerer,
     fn_id: Type.FnId,
     shard: ?CompletedFnBodyShard = null,
+    workspace_initialized: bool = false,
+    workspace_reused: bool = false,
     retry_serial: bool = false,
     failed: bool = false,
     completed: bool = false,
@@ -536,7 +509,10 @@ const Lowerer = struct {
     /// Source-level names recorded by body workers for coordinator interning.
     worker_local_names: std.ArrayList(PendingLocalName),
     source_symbols: std.AutoHashMap(Common.Symbol, Lifted.FnId),
-    capture_types: CaptureTypeMap,
+    /// Lowered capture record of every capture span seen so far. A capture
+    /// record depends only on its captures, so one record serves every
+    /// function type that carries the same span.
+    capture_types: std.AutoHashMap(CaptureSpanKey, Type.TypeId),
     captures: collections.DenseMap(Lifted.LocalId, CaptureBinding),
     recursive_value_locals: collections.DenseMap(Lifted.LocalId, void),
     recursive_value_capture_ids: collections.DenseMap(check.CheckedModule.CaptureId, void),
@@ -605,8 +581,54 @@ const Lowerer = struct {
     worker_callback: bool = false,
     worker_requires_serial_retry: bool = false,
     worker_discovered_fns: std.ArrayList(Type.FnId),
+    /// Persistent scratch is indexed by executor lane, whose callbacks are
+    /// exclusive. Escaping body shards never borrow storage from these entries.
+    worker_workspaces: []?FnBodyWorkspace,
 
     const ProcLocalSet = std.AutoArrayHashMapUnmanaged(u32, void);
+
+    const FnBodyWorkspace = struct {
+        allocator: std.mem.Allocator,
+        inline_scope_rebases: std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId),
+        captures: collections.DenseMap(Lifted.LocalId, CaptureBinding),
+        local_map: collections.DenseMap(Lifted.LocalId, LIR.LocalId),
+        typed_local_map: std.AutoHashMap(TypedLiftedLocal, LIR.LocalId),
+        local_types: collections.DenseMap(LIR.LocalId, Type.TypeId),
+        loop_stack: std.ArrayList(LoopContext),
+        join_stack: std.ArrayList(JoinContext),
+        return_forwarding_locals: collections.DenseMap(LIR.LocalId, void),
+        erased_owner_states: std.ArrayList(ErasedOwnerState),
+        erased_call_owner_uses: std.ArrayList(ErasedCallOwnerUse),
+
+        fn init(allocator: std.mem.Allocator) FnBodyWorkspace {
+            return .{
+                .allocator = allocator,
+                .inline_scope_rebases = std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId).init(allocator),
+                .captures = collections.DenseMap(Lifted.LocalId, CaptureBinding).init(allocator),
+                .local_map = collections.DenseMap(Lifted.LocalId, LIR.LocalId).init(allocator),
+                .typed_local_map = std.AutoHashMap(TypedLiftedLocal, LIR.LocalId).init(allocator),
+                .local_types = collections.DenseMap(LIR.LocalId, Type.TypeId).init(allocator),
+                .loop_stack = .empty,
+                .join_stack = .empty,
+                .return_forwarding_locals = collections.DenseMap(LIR.LocalId, void).init(allocator),
+                .erased_owner_states = .empty,
+                .erased_call_owner_uses = .empty,
+            };
+        }
+
+        fn deinit(self: *FnBodyWorkspace) void {
+            self.erased_call_owner_uses.deinit(self.allocator);
+            self.erased_owner_states.deinit(self.allocator);
+            self.return_forwarding_locals.deinit();
+            self.join_stack.deinit(self.allocator);
+            self.loop_stack.deinit(self.allocator);
+            self.local_types.deinit();
+            self.typed_local_map.deinit();
+            self.local_map.deinit();
+            self.captures.deinit();
+            self.inline_scope_rebases.deinit();
+        }
+    };
 
     const InlineScopeRebaseKey = struct {
         source: Lifted.InlineScopeId,
@@ -681,6 +703,11 @@ const Lowerer = struct {
         errdefer recursive_value_capture_ids.deinit();
         try Lowerer.collectRecursiveValueLocals(&solved.lifted, &recursive_value_locals, &recursive_value_capture_ids);
 
+        const workspace_count = if (options.post_check_executor) |executor| executor.worker_count else 0;
+        const worker_workspaces = try allocator.alloc(?FnBodyWorkspace, workspace_count);
+        errdefer allocator.free(worker_workspaces);
+        @memset(worker_workspaces, null);
+
         return .{
             .allocator = allocator,
             .solved = solved,
@@ -709,7 +736,7 @@ const Lowerer = struct {
             .folded_map_matches = .empty,
             .worker_local_names = .empty,
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
-            .capture_types = CaptureTypeMap.initContext(allocator, .{}),
+            .capture_types = std.AutoHashMap(CaptureSpanKey, Type.TypeId).init(allocator),
             .captures = collections.DenseMap(Lifted.LocalId, CaptureBinding).init(allocator),
             .recursive_value_locals = recursive_value_locals,
             .recursive_value_capture_ids = recursive_value_capture_ids,
@@ -742,10 +769,20 @@ const Lowerer = struct {
             .erased_owner_states = .empty,
             .erased_call_owner_uses = .empty,
             .worker_discovered_fns = .empty,
+            .worker_workspaces = worker_workspaces,
         };
     }
 
+    fn deinitWorkerWorkspaces(self: *Lowerer) void {
+        for (self.worker_workspaces) |*workspace| {
+            if (workspace.*) |*initialized| initialized.deinit();
+        }
+        self.allocator.free(self.worker_workspaces);
+        self.worker_workspaces = &.{};
+    }
+
     fn deinit(self: *Lowerer) void {
+        self.deinitWorkerWorkspaces();
         self.worker_discovered_fns.deinit(self.allocator);
         self.worker_local_names.deinit(self.allocator);
         self.inline_scope_rebases.deinit();
@@ -798,6 +835,7 @@ const Lowerer = struct {
             .lir_result = self.result,
             .runtime_schemas = self.runtime_schemas,
         };
+        self.deinitWorkerWorkspaces();
         self.worker_discovered_fns.deinit(self.allocator);
         self.worker_local_names.deinit(self.allocator);
         self.inline_scope_rebases.deinit();
@@ -1004,6 +1042,7 @@ const Lowerer = struct {
     fn initFnBodyWorker(
         coordinator: *Lowerer,
         allocator: std.mem.Allocator,
+        workspace: *FnBodyWorkspace,
     ) Common.LowerError!Lowerer {
         var store = try coordinator.result.store.cloneForBodyShard(allocator);
         errdefer store.deinit();
@@ -1012,31 +1051,31 @@ const Lowerer = struct {
         worker.allocator = allocator;
         worker.post_check_executor = null;
         worker.result.store = store;
-        worker.inline_scope_rebases = std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId).init(allocator);
+        worker.inline_scope_rebases = workspace.inline_scope_rebases;
         worker.folded_map_matches = .empty;
         worker.worker_local_names = .empty;
-        worker.captures = collections.DenseMap(Lifted.LocalId, CaptureBinding).init(allocator);
-        worker.local_map = collections.DenseMap(Lifted.LocalId, LIR.LocalId).init(allocator);
-        worker.typed_local_map = std.AutoHashMap(TypedLiftedLocal, LIR.LocalId).init(allocator);
-        worker.local_types = collections.DenseMap(LIR.LocalId, Type.TypeId).init(allocator);
+        worker.captures = workspace.captures;
+        worker.local_map = workspace.local_map;
+        worker.typed_local_map = workspace.typed_local_map;
+        worker.local_types = workspace.local_types;
         // The worker gate rejects compile-time sites. Existing entries are
         // immutable lookups; a miss requests serial retry before mutation.
         worker.comptime_site_map = coordinator.comptime_site_map;
         worker.next_join_point = 0;
-        worker.loop_stack = .empty;
-        worker.join_stack = .empty;
+        worker.loop_stack = workspace.loop_stack;
+        worker.join_stack = workspace.join_stack;
         worker.current_ret_ty = null;
         worker.current_proc_locals = null;
         worker.current_fn = null;
         worker.current_proc = null;
         worker.current_erased_reuse = null;
         worker.current_return_target = null;
-        worker.return_forwarding_locals = collections.DenseMap(LIR.LocalId, void).init(allocator);
+        worker.return_forwarding_locals = workspace.return_forwarding_locals;
         worker.return_forwarding_ambiguous = false;
         worker.return_forwarding_repeatable_depth = 0;
         worker.erased_owner_state_prefix = coordinator.erased_owner_states.items;
-        worker.erased_owner_states = .empty;
-        worker.erased_call_owner_uses = .empty;
+        worker.erased_owner_states = workspace.erased_owner_states;
+        worker.erased_call_owner_uses = workspace.erased_call_owner_uses;
         worker.debug_materialized_out = null;
         worker.worker_callback = true;
         worker.worker_requires_serial_retry = false;
@@ -1044,31 +1083,55 @@ const Lowerer = struct {
         return worker;
     }
 
-    fn deinitFnBodyWorker(self: *Lowerer, deinit_store: bool) void {
+    fn deinitFnBodyWorker(self: *Lowerer, workspace: *FnBodyWorkspace, deinit_store: bool) void {
         self.worker_discovered_fns.deinit(self.allocator);
         self.worker_local_names.deinit(self.allocator);
         self.folded_map_matches.deinit(self.allocator);
-        self.return_forwarding_locals.deinit();
-        self.erased_call_owner_uses.deinit(self.allocator);
-        self.erased_owner_states.deinit(self.allocator);
-        self.join_stack.deinit(self.allocator);
-        self.loop_stack.deinit(self.allocator);
-        self.typed_local_map.deinit();
-        self.local_types.deinit();
-        self.local_map.deinit();
-        self.captures.deinit();
-        self.inline_scope_rebases.deinit();
+        self.inline_scope_rebases.clearRetainingCapacity();
+        self.captures.clearRetainingCapacity();
+        self.local_map.clearRetainingCapacity();
+        self.typed_local_map.clearRetainingCapacity();
+        self.local_types.clearRetainingCapacity();
+        self.loop_stack.clearRetainingCapacity();
+        self.join_stack.clearRetainingCapacity();
+        self.return_forwarding_locals.clearRetainingCapacity();
+        self.erased_owner_states.clearRetainingCapacity();
+        self.erased_call_owner_uses.clearRetainingCapacity();
+        workspace.inline_scope_rebases = self.inline_scope_rebases;
+        workspace.captures = self.captures;
+        workspace.local_map = self.local_map;
+        workspace.typed_local_map = self.typed_local_map;
+        workspace.local_types = self.local_types;
+        workspace.loop_stack = self.loop_stack;
+        workspace.join_stack = self.join_stack;
+        workspace.return_forwarding_locals = self.return_forwarding_locals;
+        workspace.erased_owner_states = self.erased_owner_states;
+        workspace.erased_call_owner_uses = self.erased_call_owner_uses;
         if (deinit_store) self.result.store.deinit();
     }
 
     fn runFnBodyTask(context_opaque: *anyopaque, executor_worker: base.post_check_task_executor.Worker) ?*anyopaque {
         const context: *FnBodyTaskContext = @ptrCast(@alignCast(context_opaque));
-        var worker = Lowerer.initFnBodyWorker(context.coordinator, executor_worker.allocator) catch {
+        if (executor_worker.id >= context.coordinator.worker_workspaces.len) {
+            Common.invariant("Solved-LIR executor worker id exceeded workspace count");
+        }
+        const workspace_slot = &context.coordinator.worker_workspaces[executor_worker.id];
+        if (workspace_slot.* == null) {
+            workspace_slot.* = FnBodyWorkspace.init(executor_worker.allocator);
+            context.workspace_initialized = true;
+        } else {
+            if (!std.meta.eql(workspace_slot.*.?.allocator, executor_worker.allocator)) {
+                Common.invariant("Solved-LIR executor changed a persistent lane allocator");
+            }
+            context.workspace_reused = true;
+        }
+        const workspace = &workspace_slot.*.?;
+        var worker = Lowerer.initFnBodyWorker(context.coordinator, executor_worker.allocator, workspace) catch {
             context.failed = true;
             return context;
         };
         var store_owned_by_worker = true;
-        defer worker.deinitFnBodyWorker(store_owned_by_worker);
+        defer worker.deinitFnBodyWorker(workspace, store_owned_by_worker);
 
         const prefix = worker.result.store.captureBodyPrefix();
         const fn_index = @intFromEnum(context.fn_id);
@@ -1144,48 +1207,60 @@ const Lowerer = struct {
         var initializer_queue_index: usize = 0;
         while (fn_queue_index < self.fn_reach_queue.items.len or initializer_queue_index < self.static_initializer_queue.items.len) {
             while (fn_queue_index < self.fn_reach_queue.items.len) {
-                const executor = self.post_check_executor;
-                const worker_count = if (executor) |value| value.worker_count else 1;
-                if (executor == null or worker_count <= 1) {
-                    const fn_id = self.fn_reach_queue.items[fn_queue_index];
-                    fn_queue_index += 1;
+                // Prepare the complete currently-reachable epoch before lowering
+                // any of its bodies. This keeps coordinator identity allocation
+                // independent of worker count and batching.
+                const epoch_end = self.fn_reach_queue.items.len;
+                for (self.fn_reach_queue.items[fn_queue_index..epoch_end]) |fn_id| {
                     const fn_index = @intFromEnum(fn_id);
                     if (self.fn_written.items[fn_index]) continue;
-                    _ = try self.lowerFnSpec(fn_id, self.fn_specs.items[fn_index]);
-                    continue;
+                    _ = try self.prepareFnBodyForWorker(fn_id);
                 }
 
-                var batch: std.ArrayList(Type.FnId) = .empty;
-                defer batch.deinit(self.allocator);
-                while (fn_queue_index < self.fn_reach_queue.items.len and batch.items.len < worker_count) {
-                    const fn_id = self.fn_reach_queue.items[fn_queue_index];
-                    const fn_index = @intFromEnum(fn_id);
-                    if (self.fn_written.items[fn_index]) {
+                while (fn_queue_index < epoch_end) {
+                    const executor = self.post_check_executor;
+                    const worker_count = if (executor) |value| value.worker_count else 1;
+                    if (executor == null or worker_count <= 1) {
+                        const fn_id = self.fn_reach_queue.items[fn_queue_index];
                         fn_queue_index += 1;
-                        continue;
-                    }
-                    const source_fn = self.solved.lifted.getFn(self.fn_specs.items[fn_index].source);
-                    if (source_fn.body == .hosted) {
-                        if (batch.items.len != 0) break;
-                        fn_queue_index += 1;
+                        const fn_index = @intFromEnum(fn_id);
+                        if (self.fn_written.items[fn_index]) continue;
                         _ = try self.lowerFnSpec(fn_id, self.fn_specs.items[fn_index]);
                         continue;
                     }
-                    if (!self.canLowerFnBodyOnWorker(fn_id)) {
-                        if (batch.items.len != 0) break;
+
+                    var batch: std.ArrayList(Type.FnId) = .empty;
+                    defer batch.deinit(self.allocator);
+                    while (fn_queue_index < epoch_end and batch.items.len < worker_count) {
+                        const fn_id = self.fn_reach_queue.items[fn_queue_index];
+                        const fn_index = @intFromEnum(fn_id);
+                        if (self.fn_written.items[fn_index]) {
+                            fn_queue_index += 1;
+                            continue;
+                        }
+                        const source_fn = self.solved.lifted.getFn(self.fn_specs.items[fn_index].source);
+                        if (source_fn.body == .hosted) {
+                            if (batch.items.len != 0) break;
+                            fn_queue_index += 1;
+                            _ = try self.lowerFnSpec(fn_id, self.fn_specs.items[fn_index]);
+                            continue;
+                        }
+                        if (!self.canLowerFnBodyOnWorker(fn_id)) {
+                            if (batch.items.len != 0) break;
+                            fn_queue_index += 1;
+                            _ = try self.lowerFnSpec(fn_id, self.fn_specs.items[fn_index]);
+                            continue;
+                        }
+                        try batch.append(self.allocator, fn_id);
                         fn_queue_index += 1;
-                        _ = try self.lowerFnSpec(fn_id, self.fn_specs.items[fn_index]);
-                        continue;
                     }
-                    try batch.append(self.allocator, fn_id);
-                    fn_queue_index += 1;
-                }
-                if (batch.items.len == 0) continue;
-                if (batch.items.len == 1) {
-                    const fn_id = batch.items[0];
-                    _ = try self.lowerFnSpec(fn_id, self.fn_specs.items[@intFromEnum(fn_id)]);
-                } else {
-                    try self.lowerFnBodyBatch(executor.?, batch.items);
+                    if (batch.items.len == 0) continue;
+                    if (batch.items.len == 1) {
+                        const fn_id = batch.items[0];
+                        _ = try self.lowerFnSpec(fn_id, self.fn_specs.items[@intFromEnum(fn_id)]);
+                    } else {
+                        try self.lowerFnBodyBatch(executor.?, batch.items);
+                    }
                 }
             }
             if (initializer_queue_index < self.static_initializer_queue.items.len) {
@@ -1194,6 +1269,17 @@ const Lowerer = struct {
                 try self.lowerStaticInitializer(initializer);
             }
         }
+    }
+
+    fn canLowerFnBodyOnWorker(self: *const Lowerer, fn_id: Type.FnId) bool {
+        const spec = self.fn_specs.items[@intFromEnum(fn_id)];
+        if (spec.abi != .finite or spec.captures.len != 0 or spec.return_reuse.enabled()) return false;
+        const source_fn = self.solved.lifted.getFn(spec.source);
+        const body = switch (source_fn.body) {
+            .roc => |body| body,
+            .hosted => return false,
+        };
+        return self.isWorkerBodyExpr(body, 0);
     }
 
     fn lowerFnBodyBatch(
@@ -1273,17 +1359,38 @@ const Lowerer = struct {
         for (contexts) |context| {
             if (!context.completed) Common.invariant("Solved-LIR executor omitted a task completion");
         }
-
-        for (contexts) |*context| {
-            if (context.failed) return error.OutOfMemory;
-            if (context.retry_serial) {
-                if (self.parallel_metrics) |metrics| {
-                    metrics.tasks_retried_serial = metrics.tasks_retried_serial +| 1;
+        if (self.parallel_metrics) |metrics| {
+            for (contexts) |context| {
+                if (context.workspace_initialized) {
+                    metrics.workspace_initializations = metrics.workspace_initializations +| 1;
                 }
+                if (context.workspace_reused) {
+                    metrics.workspace_reuses = metrics.workspace_reuses +| 1;
+                }
+            }
+        }
+
+        var retry_batch_serially = false;
+        for (contexts) |context| {
+            if (context.failed) return error.OutOfMemory;
+            retry_batch_serially = retry_batch_serially or context.retry_serial;
+        }
+        if (retry_batch_serially) {
+            // Every shard captured the same frozen coordinator prefix. Mixing a
+            // serial retry with shard commits would invalidate later prefixes
+            // and change reachability order, so discard the complete speculative
+            // wave and replay it serially in submission order.
+            if (self.parallel_metrics) |metrics| {
+                metrics.tasks_retried_serial = metrics.tasks_retried_serial +| @as(u64, @intCast(contexts.len));
+            }
+            for (contexts) |context| {
                 const fn_index = @intFromEnum(context.fn_id);
                 _ = try self.lowerFnSpec(context.fn_id, self.fn_specs.items[fn_index]);
-                continue;
             }
+            return;
+        }
+
+        for (contexts) |*context| {
             const shard = if (context.shard) |*value|
                 value
             else
@@ -1293,12 +1400,23 @@ const Lowerer = struct {
                 metrics.tasks_committed = metrics.tasks_committed +| 1;
             }
         }
+        // Workers only record references to coordinator-prepared procedures.
+        // Mark those references reachable once every frozen-wave body has
+        // committed, preserving task and lexical discovery order.
+        for (contexts) |*context| {
+            const shard = if (context.shard) |*value|
+                value
+            else
+                Common.invariant("Solved-LIR committed task lost its body shard");
+            for (shard.discovered_fns) |fn_id| {
+                _ = try self.markReachableFn(fn_id);
+            }
+        }
     }
 
-    /// The first solved-LIR worker slice accepts only closed, body-local
-    /// expression shapes. This syntactic gate keeps every operation that can
-    /// discover or intern coordinator-owned state on the serial path.
-    fn canLowerFnBodyOnWorker(self: *const Lowerer, fn_id: Type.FnId) bool {
+    /// Prepare every coordinator-owned identity needed by a worker body, then
+    /// certify that body against the worker's lookup-only lowering boundary.
+    fn prepareFnBodyForWorker(self: *Lowerer, fn_id: Type.FnId) Common.LowerError!bool {
         const spec = self.fn_specs.items[@intFromEnum(fn_id)];
         if (spec.abi != .finite or spec.captures.len != 0 or spec.return_reuse.enabled()) return false;
         const source_fn = self.solved.lifted.getFn(spec.source);
@@ -1306,10 +1424,12 @@ const Lowerer = struct {
             .roc => |body| body,
             .hosted => return false,
         };
-        return self.isBodyLocalExpr(body, 0);
+        if (!self.isWorkerBodyExpr(body, 0)) return false;
+        try self.prepareWorkerBodyCalls(body, 0);
+        return true;
     }
 
-    fn isBodyLocalExpr(self: *const Lowerer, expr_id: Lifted.ExprId, depth: usize) bool {
+    fn isWorkerBodyExpr(self: *const Lowerer, expr_id: Lifted.ExprId, depth: usize) bool {
         if (depth >= 256) return false;
         const next_depth = depth + 1;
         const data = self.solved.lifted.getExpr(expr_id).data;
@@ -1325,47 +1445,61 @@ const Lowerer = struct {
             .uninitialized,
             => true,
             .list, .tuple => |span| for (view.exprSpan(span)) |item| {
-                if (!self.isBodyLocalExpr(item, next_depth)) break false;
+                if (!self.isWorkerBodyExpr(item, next_depth)) break false;
             } else true,
             .record => |span| for (view.fieldExprSpan(span)) |field| {
-                if (!self.isBodyLocalExpr(field.value, next_depth)) break false;
+                if (!self.isWorkerBodyExpr(field.value, next_depth)) break false;
             } else true,
             .record_update => |update| blk: {
-                if (!self.isBodyLocalExpr(update.base, next_depth)) break :blk false;
+                if (!self.isWorkerBodyExpr(update.base, next_depth)) break :blk false;
                 for (view.fieldExprSpan(update.fields)) |field| {
-                    if (!self.isBodyLocalExpr(field.value, next_depth)) break :blk false;
+                    if (!self.isWorkerBodyExpr(field.value, next_depth)) break :blk false;
                 }
                 break :blk true;
             },
             .tag => |tag| for (view.exprSpan(tag.payloads)) |payload| {
-                if (!self.isBodyLocalExpr(payload, next_depth)) break false;
+                if (!self.isWorkerBodyExpr(payload, next_depth)) break false;
             } else true,
-            .nominal => |inner| self.isBodyLocalExpr(inner, next_depth),
+            .nominal => |inner| self.isWorkerBodyExpr(inner, next_depth),
             .let_ => |let_| let_.comptime_site == null and
-                self.isBodyLocalExpr(let_.value, next_depth) and
-                self.isBodyLocalExpr(let_.rest, next_depth),
-            .field_access => |access| self.isBodyLocalExpr(access.receiver, next_depth),
-            .tuple_access => |access| self.isBodyLocalExpr(access.tuple, next_depth),
+                self.isWorkerBodyExpr(let_.value, next_depth) and
+                self.isWorkerBodyExpr(let_.rest, next_depth),
+            .field_access => |access| self.isWorkerBodyExpr(access.receiver, next_depth),
+            .tuple_access => |access| self.isWorkerBodyExpr(access.tuple, next_depth),
             .if_ => |if_| blk: {
                 for (view.ifBranchSpan(if_.branches)) |branch| {
-                    if (!self.isBodyLocalExpr(branch.cond, next_depth) or
-                        !self.isBodyLocalExpr(branch.body, next_depth))
+                    if (!self.isWorkerBodyExpr(branch.cond, next_depth) or
+                        !self.isWorkerBodyExpr(branch.body, next_depth))
                     {
                         break :blk false;
                     }
                 }
-                break :blk self.isBodyLocalExpr(if_.final_else, next_depth);
+                break :blk self.isWorkerBodyExpr(if_.final_else, next_depth);
             },
-            .if_initialized_payload => |if_| self.isBodyLocalExpr(if_.cond, next_depth) and
-                self.isBodyLocalExpr(if_.initialized, next_depth) and
-                self.isBodyLocalExpr(if_.uninitialized, next_depth),
+            .if_initialized_payload => |if_| self.isWorkerBodyExpr(if_.cond, next_depth) and
+                self.isWorkerBodyExpr(if_.initialized, next_depth) and
+                self.isWorkerBodyExpr(if_.uninitialized, next_depth),
             .block => |block| blk: {
                 for (view.stmtSpan(block.statements)) |stmt_id| {
-                    if (!self.isBodyLocalStmt(stmt_id, next_depth)) break :blk false;
+                    if (!self.isWorkerBodyStmt(stmt_id, next_depth)) break :blk false;
                 }
-                break :blk self.isBodyLocalExpr(block.final_expr, next_depth);
+                break :blk self.isWorkerBodyExpr(block.final_expr, next_depth);
             },
-            .return_ => |return_| self.isBodyLocalExpr(return_.value, next_depth),
+            .return_ => |return_| self.isWorkerBodyExpr(return_.value, next_depth),
+            .call_proc => |call| blk: {
+                if (call.captures.len != 0) break :blk false;
+                const callee = switch (Lifted.directCallee(call)) {
+                    .local => |local| local,
+                    .imported => break :blk false,
+                };
+                const callee_fn = self.solved.lifted.getFn(callee);
+                if (self.solved.lifted.typedLocalSpan(callee_fn.captures).len != 0) break :blk false;
+                if (!call.is_cold and self.inline_plan.bodyForFn(callee) != null) break :blk false;
+                for (view.exprSpan(call.args)) |arg| {
+                    if (!self.isWorkerBodyExpr(arg, next_depth)) break :blk false;
+                }
+                break :blk true;
+            },
             .str_lit,
             .bytes_lit,
             .static_data_candidate,
@@ -1374,7 +1508,6 @@ const Lowerer = struct {
             .fn_def,
             .fn_ref,
             .call_value,
-            .call_proc,
             .low_level,
             .structural_eq,
             .structural_hash,
@@ -1397,25 +1530,139 @@ const Lowerer = struct {
         };
     }
 
-    fn isBodyLocalStmt(self: *const Lowerer, stmt_id: Lifted.StmtId, depth: usize) bool {
+    fn isWorkerBodyStmt(self: *const Lowerer, stmt_id: Lifted.StmtId, depth: usize) bool {
         if (depth >= 256) return false;
         const next_depth = depth + 1;
         return switch (self.solved.lifted.getStmt(stmt_id)) {
             .uninitialized => true,
             .let_ => |let_| let_.comptime_site == null and
                 !let_.recursive and
-                self.isBodyLocalExpr(let_.value, next_depth),
-            .expr => |expr| self.isBodyLocalExpr(expr, next_depth),
-            .return_ => |return_| self.isBodyLocalExpr(return_.value, next_depth),
+                self.isWorkerBodyExpr(let_.value, next_depth),
+            .expr => |expr| self.isWorkerBodyExpr(expr, next_depth),
+            .return_ => |return_| self.isWorkerBodyExpr(return_.value, next_depth),
             .expect, .dbg, .crash => false,
         };
     }
 
-    fn commitFnBodyShard(self: *Lowerer, shard: *CompletedFnBodyShard) Common.LowerError!void {
-        for (shard.discovered_fns) |fn_id| {
-            _ = try self.markReachableFn(fn_id);
+    /// Intern direct-call specializations and finalize their ABI metadata before
+    /// the worker wave freezes coordinator state. Reachability remains deferred
+    /// until the successfully lowered caller shard commits.
+    fn prepareWorkerBodyCalls(
+        self: *Lowerer,
+        expr_id: Lifted.ExprId,
+        depth: usize,
+    ) Common.LowerError!void {
+        if (depth >= 256) Common.invariant("worker body preparation exceeded its certified depth");
+        const next_depth = depth + 1;
+        const data = self.solved.lifted.getExpr(expr_id).data;
+        const view = self.solved.lifted.view();
+        switch (data) {
+            .list, .tuple => |span| for (view.exprSpan(span)) |item| {
+                try self.prepareWorkerBodyCalls(item, next_depth);
+            },
+            .record => |span| for (view.fieldExprSpan(span)) |field| {
+                try self.prepareWorkerBodyCalls(field.value, next_depth);
+            },
+            .record_update => |update| {
+                try self.prepareWorkerBodyCalls(update.base, next_depth);
+                for (view.fieldExprSpan(update.fields)) |field| {
+                    try self.prepareWorkerBodyCalls(field.value, next_depth);
+                }
+            },
+            .tag => |tag| for (view.exprSpan(tag.payloads)) |payload| {
+                try self.prepareWorkerBodyCalls(payload, next_depth);
+            },
+            .nominal => |inner| try self.prepareWorkerBodyCalls(inner, next_depth),
+            .let_ => |let_| {
+                try self.prepareWorkerBodyCalls(let_.value, next_depth);
+                try self.prepareWorkerBodyCalls(let_.rest, next_depth);
+            },
+            .field_access => |access| try self.prepareWorkerBodyCalls(access.receiver, next_depth),
+            .tuple_access => |access| try self.prepareWorkerBodyCalls(access.tuple, next_depth),
+            .if_ => |if_| {
+                for (view.ifBranchSpan(if_.branches)) |branch| {
+                    try self.prepareWorkerBodyCalls(branch.cond, next_depth);
+                    try self.prepareWorkerBodyCalls(branch.body, next_depth);
+                }
+                try self.prepareWorkerBodyCalls(if_.final_else, next_depth);
+            },
+            .if_initialized_payload => |if_| {
+                try self.prepareWorkerBodyCalls(if_.cond, next_depth);
+                try self.prepareWorkerBodyCalls(if_.initialized, next_depth);
+                try self.prepareWorkerBodyCalls(if_.uninitialized, next_depth);
+            },
+            .block => |block| {
+                for (view.stmtSpan(block.statements)) |stmt_id| {
+                    try self.prepareWorkerBodyStmtCalls(stmt_id, next_depth);
+                }
+                try self.prepareWorkerBodyCalls(block.final_expr, next_depth);
+            },
+            .return_ => |return_| try self.prepareWorkerBodyCalls(return_.value, next_depth),
+            .call_proc => |call| {
+                const callee = switch (Lifted.directCallee(call)) {
+                    .local => |local| local,
+                    .imported => Common.invariant("certified worker body contained an imported direct call"),
+                };
+                const callee_fn_id = try self.ensureOwnFnSpec(callee, .finite);
+                _ = try self.procPlaceholder(callee_fn_id);
+                for (view.exprSpan(call.args)) |arg| {
+                    try self.prepareWorkerBodyCalls(arg, next_depth);
+                }
+            },
+            .local,
+            .unit,
+            .@"unreachable",
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .uninitialized,
+            => {},
+            .str_lit,
+            .bytes_lit,
+            .static_data_candidate,
+            .lambda,
+            .def_ref,
+            .fn_def,
+            .fn_ref,
+            .call_value,
+            .low_level,
+            .structural_eq,
+            .structural_hash,
+            .match_,
+            .uninitialized_payload,
+            .try_sequence,
+            .try_record_sequence,
+            .loop_,
+            .break_,
+            .continue_,
+            .join_point,
+            .jump,
+            .crash,
+            .comptime_branch_taken,
+            .comptime_exhaustiveness_failed,
+            .dbg,
+            .expect_err,
+            .expect,
+            => Common.invariant("certified worker body contained an unsupported expression"),
         }
+    }
 
+    fn prepareWorkerBodyStmtCalls(
+        self: *Lowerer,
+        stmt_id: Lifted.StmtId,
+        depth: usize,
+    ) Common.LowerError!void {
+        switch (self.solved.lifted.getStmt(stmt_id)) {
+            .uninitialized => {},
+            .let_ => |let_| try self.prepareWorkerBodyCalls(let_.value, depth),
+            .expr => |expr| try self.prepareWorkerBodyCalls(expr, depth),
+            .return_ => |return_| try self.prepareWorkerBodyCalls(return_.value, depth),
+            .expect, .dbg, .crash => Common.invariant("certified worker body contained an unsupported statement"),
+        }
+    }
+
+    fn commitFnBodyShard(self: *Lowerer, shard: *CompletedFnBodyShard) Common.LowerError!void {
         const body_local_count = shard.store.locals.len();
         try self.erased_owner_states.ensureUnusedCapacity(self.allocator, body_local_count);
         const appended = self.result.store.appendBodyShard(
@@ -1705,7 +1952,7 @@ const Lowerer = struct {
             .solved_fn_ty = root_fn_ty,
             .abi = abi,
             .captures = captures,
-            .capture_ty = if (capture_items.len == 0) null else try self.captureRecordType(captures, root_fn_ty),
+            .capture_ty = if (capture_items.len == 0) null else try self.captureRecordType(captures),
             .return_reuse = return_reuse,
         };
         if (self.worker_callback) {
@@ -1758,11 +2005,10 @@ const Lowerer = struct {
         const index = @intFromEnum(fn_id);
         if (index >= self.fn_entries.items.len) Common.invariant("direct LIR reachability referenced a missing function spec");
         if (self.worker_callback) {
-            // The first worker slice is body-local only. Calls can append
-            // global ABI and reachability side tables even when their proc
-            // placeholder already exists, so keep call-bearing bodies on the
-            // coordinator until those tables have their own shard boundary.
-            return self.requireSerialWorkerRetry();
+            const proc = self.fn_entries.items[index].proc orelse
+                return self.requireSerialWorkerRetry();
+            try self.noteWorkerDiscoveredFn(fn_id);
+            return proc;
         }
         const proc = try self.procPlaceholder(fn_id);
         if (!self.fn_reachable.items[index]) {
@@ -2156,13 +2402,8 @@ const Lowerer = struct {
         return false;
     }
 
-    fn captureRecordType(
-        self: *Lowerer,
-        captures: CaptureSpanId,
-        solved_fn_ty: SolvedType.TypeVarId,
-    ) Common.LowerError!Type.TypeId {
-        const id = CaptureTypeKey.from(captures, self.solved.types.root(solved_fn_ty));
-        if (self.capture_types.get(id)) |existing| return existing;
+    fn captureRecordType(self: *Lowerer, captures: CaptureSpanId) Common.LowerError!Type.TypeId {
+        if (self.capture_types.get(captures)) |existing| return existing;
         if (self.worker_callback) return self.requireSerialWorkerRetry();
 
         const capture_items = self.captureSpan(captures);
@@ -2180,7 +2421,7 @@ const Lowerer = struct {
             };
         }
         const ty = try self.types.add(.{ .capture_record = try self.types.addCaptureFields(fields) });
-        try self.capture_types.put(id, ty);
+        try self.capture_types.put(captures, ty);
         return ty;
     }
 

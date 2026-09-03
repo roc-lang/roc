@@ -1055,7 +1055,22 @@ pub const Store = struct {
     pub fn appendVars(self: *Self, s: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
         const trace = tracy.traceNamed(@src(), "typesStore.appendVars");
         defer trace.end();
+        // A source slice that lives inside this same list (a `sliceVars`
+        // result) would dangle if the append reallocated the list, so callers
+        // must copy such a slice out first. Debug builds check that here.
+        if (builtin.mode == .Debug and self.sliceAliasesVars(s)) {
+            std.debug.panic("appendVars: source slice aliases the var list it is appended to", .{});
+        }
         return try self.vars.appendSlice(self.gpa, s);
+    }
+
+    fn sliceAliasesVars(self: *const Self, s: []const Var) bool {
+        if (s.len == 0) return false;
+        const items = self.vars.items.items;
+        const items_start = @intFromPtr(items.ptr);
+        const items_end = items_start + items.len * @sizeOf(Var);
+        const source_start = @intFromPtr(s.ptr);
+        return source_start >= items_start and source_start < items_end;
     }
 
     /// Append a record field to the backing list, returning the idx

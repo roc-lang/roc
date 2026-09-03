@@ -484,6 +484,7 @@ const TypeAnno = CIR.TypeAnno;
 const Annotation = CIR.Annotation;
 const WhereClause = CIR.WhereClause;
 const Diagnostic = CIR.Diagnostic;
+const DependencyGraph = @import("DependencyGraph.zig");
 const RecordField = CIR.RecordField;
 
 /// Struct to track fields that have been seen before during canonicalization
@@ -4740,7 +4741,6 @@ pub fn canonicalizeFile(
     try DefaultCycles.checkDefaultCycles(self.env, self.env.gpa);
 
     // Compute dependency-based evaluation order using SCC analysis
-    const DependencyGraph = @import("DependencyGraph.zig");
     var graph = try DependencyGraph.buildDependencyGraph(
         self.env,
         self.env.all_defs,
@@ -4785,7 +4785,6 @@ fn poisonRecursiveNonFunctionDefs(
         region: Region,
     };
 
-    const DependencyGraph = @import("DependencyGraph.zig");
     var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
     defer binders.deinit(self.env.gpa);
     var binder_scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
@@ -5212,6 +5211,9 @@ fn canonicalizeStmtDecl(
     // If this declaration successfully defined an exposed value, remove it from exposed_ident_texts
     // and add the node index to exposed_items
     const pattern = self.parse_ir.store.getPattern(decl.pattern);
+    if (pattern != .ident) {
+        try self.recordExposedDestructuredNames(def_idx);
+    }
     if (pattern == .ident) {
         const token_region = self.parse_ir.tokens.resolve(@intCast(pattern.ident.ident_tok));
         const ident_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
@@ -5227,6 +5229,35 @@ fn canonicalizeStmtDecl(
             try self.env.setExposedValueNodeIndexById(idx, def_idx_u32);
         }
 
+        _ = self.exposed_ident_texts.remove(ident_text);
+    }
+}
+
+/// Whether a module's exposed items may name values bound by top-level
+/// destructures. A plain module's exposed values are reached only through
+/// value lookups, which accept a binder pattern as the target; an app's
+/// provided entrypoints and a platform's provided and hosted entries are
+/// consumed as defs.
+fn destructuredNamesAreExposable(self: *const Self) bool {
+    return self.env.module_kind == .module;
+}
+
+/// Bookkeep each exposed name a destructuring def binds the way a plainly
+/// named def is: it becomes an exposed item pointing at the name's binder
+/// pattern and leaves the pending exposed set.
+fn recordExposedDestructuredNames(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
+    if (!self.destructuredNamesAreExposable()) return;
+    var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binders.deinit(self.env.gpa);
+    var binder_scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binder_scratch.deinit(self.env.gpa);
+    const def = self.env.store.getDef(def_idx);
+    try DependencyGraph.appendPatternBinders(self.env, def.pattern, &binders, &binder_scratch, self.env.gpa);
+    for (binders.items) |binder| {
+        const ident = defPatternIdent(&self.env.store, binder) orelse continue;
+        const ident_text = self.env.getIdent(ident);
+        if (!self.exposed_ident_texts.contains(ident_text)) continue;
+        try self.env.setExposedValueNodeIndexById(ident, @intFromEnum(binder));
         _ = self.exposed_ident_texts.remove(ident_text);
     }
 }
@@ -6096,6 +6127,11 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
     // Check each definition to see if it corresponds to an exposed item.
     // We check exposed_idents which only contains items from the exposing clause,
     // not associated items like "Color.as_str" which are registered separately.
+    var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binders.deinit(self.env.gpa);
+    var binder_scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binder_scratch.deinit(self.env.gpa);
+
     for (defs_slice) |def_idx| {
         const def = self.env.store.getDef(def_idx);
         const pattern = self.env.store.getPattern(def.pattern);
@@ -6105,6 +6141,21 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
             if (self.exposed_idents.contains(pattern.assign.ident)) {
                 try self.env.store.addScratchDef(def_idx);
                 try self.env.setExposedValueNodeIndexById(pattern.assign.ident, @intFromEnum(def_idx));
+            }
+            continue;
+        }
+
+        // A destructuring def in a plain module exposes each exposed name it
+        // binds. The exposed item points at the name's binder pattern: its var
+        // is the name's type, and the checked artifact publishes the name's
+        // extraction root under it.
+        if (!self.destructuredNamesAreExposable()) continue;
+        binders.clearRetainingCapacity();
+        try DependencyGraph.appendPatternBinders(self.env, def.pattern, &binders, &binder_scratch, self.env.gpa);
+        for (binders.items) |binder| {
+            const ident = defPatternIdent(&self.env.store, binder) orelse continue;
+            if (self.exposed_idents.contains(ident)) {
+                try self.env.setExposedValueNodeIndexById(ident, @intFromEnum(binder));
             }
         }
     }
@@ -8579,6 +8630,105 @@ fn addTryReturnErr(
         } });
 }
 
+/// Warn about every `?` that produces the value a function returns. `expr_idx`
+/// is a function body or a `return` operand; its tail positions are followed
+/// through blocks and through `if` and `match` branches, and each `?` reached
+/// that way applies to the function's return value.
+fn warnTrailingTrySuffix(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!void {
+    switch (self.env.store.getExpr(expr_idx)) {
+        .e_block => |block| try self.warnTrailingTrySuffix(block.final_expr),
+        .e_if => |if_expr| {
+            for (self.env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                try self.warnTrailingTrySuffix(self.env.store.getIfBranch(branch_idx).body);
+            }
+            try self.warnTrailingTrySuffix(if_expr.final_else);
+        },
+        .e_match => |match_expr| {
+            if (match_expr.is_try_suffix) {
+                try self.env.pushDiagnostic(Diagnostic{ .trailing_try_suffix = .{
+                    .region = self.trySuffixOperatorRegion(expr_idx),
+                } });
+            } else {
+                for (self.env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                    try self.warnTrailingTrySuffix(self.env.store.getMatchBranch(branch_idx).value);
+                }
+            }
+        },
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_num_from_numeral,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_str_segment,
+        .e_str,
+        .e_bytes_literal,
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
+        .e_lookup_required,
+        .e_list,
+        .e_empty_list,
+        .e_tuple,
+        .e_call,
+        .e_record,
+        .e_empty_record,
+        .e_tag,
+        .e_nominal,
+        .e_nominal_external,
+        .e_zero_argument_tag,
+        .e_closure,
+        .e_lambda,
+        .e_binop,
+        .e_unary_minus,
+        .e_unary_not,
+        .e_field_access,
+        .e_method_call,
+        .e_dispatch_call,
+        .e_interpolation,
+        .e_structural_eq,
+        .e_structural_hash,
+        .e_method_eq,
+        .e_type_method_call,
+        .e_type_dispatch_call,
+        .e_tuple_access,
+        .e_runtime_error,
+        .e_crash,
+        .e_dbg,
+        .e_expect_err,
+        .e_expect,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_derived_method,
+        .e_return,
+        .e_break,
+        .e_for,
+        .e_hosted_lambda,
+        .e_run_low_level,
+        => {},
+    }
+}
+
+/// The region to highlight for a `?` desugared into `expr_idx`: just the `?`
+/// itself when the expression's source ends with it (the suffix form), and the
+/// whole expression otherwise (the `lhs ? handler` form).
+fn trySuffixOperatorRegion(self: *const Self, expr_idx: Expr.Idx) Region {
+    const region = self.env.store.getExprRegion(expr_idx);
+    const source = self.env.getSource(region);
+    if (source.len > 0 and source[source.len - 1] == '?') {
+        return Region{
+            .start = .{ .offset = region.end.offset - 1 },
+            .end = region.end,
+        };
+    }
+    return region;
+}
+
 fn addTryMatch(
     self: *Self,
     cond: Expr.Idx,
@@ -9760,6 +9910,7 @@ fn canonicalizeStandaloneBlockStatement(
         .@"return" => |return_stmt| {
             const region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region);
             const expr = try self.canonicalizeExprOrMalformed(return_stmt.expr);
+            try self.warnTrailingTrySuffix(expr.idx);
             const stmt_idx = if (self.enclosing_lambda) |lambda_idx|
                 try self.env.addStatement(Statement{ .s_return = .{
                     .expr = expr.idx,
@@ -12001,6 +12152,7 @@ fn runExprKernel(
             const result_start = child_slots.items.len - 1;
             const expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
             child_slots.shrinkRetainingCapacity(state.block.result_start);
+            try self.warnTrailingTrySuffix(expr.idx);
             if (state.final_expr) {
                 const return_expr_idx = if (self.enclosing_lambda) |lambda_idx|
                     try self.env.addExpr(Expr{ .e_return = .{
@@ -12450,6 +12602,7 @@ fn runExprKernel(
                 continue :expr_kernel_loop .dispatch;
             };
 
+            try self.warnTrailingTrySuffix(can_inner.idx);
             const return_expr = if (self.enclosing_lambda) |lambda_idx|
                 try self.env.addExpr(Expr{ .e_return = .{
                     .expr = can_inner.idx,
@@ -13230,6 +13383,7 @@ fn runExprKernel(
             }
 
             self.scratch_free_vars.clearFrom(state.body_free_vars_start);
+            try self.warnTrailingTrySuffix(can_body.idx);
             self.env.store.updateLambdaBody(state.lambda_idx, can_body.idx);
 
             const captures_slice = self.scratch_captures.sliceFromStart(state.captures_top);

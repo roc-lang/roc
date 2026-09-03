@@ -3377,6 +3377,145 @@ test "commitGraph keeps distinct-field recursive struct payloads apart" {
     try testing.expectEqual(@as(usize, variant_count), store.getTagUnionInfo(store.getLayout(commit.root_idx)).variants.len);
 }
 
+test "commitGraph interns a recursive layout identically regardless of how its cycle is shared" {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    // One union that boxes itself.
+    var self_loop = LayoutGraph{};
+    defer self_loop.deinit(testing.allocator);
+    const loop_union = try self_loop.reserveNode(testing.allocator);
+    const loop_box = try self_loop.reserveNode(testing.allocator);
+    self_loop.setNode(loop_box, .{ .box = .{ .local = loop_union } });
+    const loop_refs = try self_loop.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = loop_box } });
+    self_loop.setNode(loop_union, .{ .tag_union = loop_refs });
+    var loop_commit = try store.commitGraph(&self_loop, .{ .local = loop_union });
+    defer loop_commit.deinit(testing.allocator);
+
+    // Two copies of that union boxing each other: the same unfolding, spelled
+    // as a two-node cycle.
+    var pair = LayoutGraph{};
+    defer pair.deinit(testing.allocator);
+    const first_union = try pair.reserveNode(testing.allocator);
+    const first_box = try pair.reserveNode(testing.allocator);
+    const second_union = try pair.reserveNode(testing.allocator);
+    const second_box = try pair.reserveNode(testing.allocator);
+    pair.setNode(first_box, .{ .box = .{ .local = second_union } });
+    pair.setNode(second_box, .{ .box = .{ .local = first_union } });
+    const first_refs = try pair.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = first_box } });
+    const second_refs = try pair.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = second_box } });
+    pair.setNode(first_union, .{ .tag_union = first_refs });
+    pair.setNode(second_union, .{ .tag_union = second_refs });
+    var pair_commit = try store.commitGraph(&pair, .{ .local = second_union });
+    defer pair_commit.deinit(testing.allocator);
+
+    try testing.expectEqual(loop_commit.root_idx, pair_commit.root_idx);
+    try testing.expectEqual(loop_commit.root_idx, pair_commit.value_layouts[@intFromEnum(first_union)]);
+    try testing.expectEqual(loop_commit.value_layouts[@intFromEnum(loop_box)], pair_commit.value_layouts[@intFromEnum(first_box)]);
+    try testing.expectEqual(loop_commit.value_layouts[@intFromEnum(loop_box)], pair_commit.value_layouts[@intFromEnum(second_box)]);
+}
+
+test "commitGraph keeps distinguishable nodes of one cycle distinct" {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    // `a` and `b` box each other, but only `b` carries a `u8` payload.
+    var graph = LayoutGraph{};
+    defer graph.deinit(testing.allocator);
+    const a = try graph.reserveNode(testing.allocator);
+    const a_box = try graph.reserveNode(testing.allocator);
+    const b = try graph.reserveNode(testing.allocator);
+    const b_box = try graph.reserveNode(testing.allocator);
+    graph.setNode(a_box, .{ .box = .{ .local = b } });
+    graph.setNode(b_box, .{ .box = .{ .local = a } });
+    const a_refs = try graph.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = a_box } });
+    const b_refs = try graph.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .u8 }, .{ .local = b_box } });
+    graph.setNode(a, .{ .tag_union = a_refs });
+    graph.setNode(b, .{ .tag_union = b_refs });
+    var commit = try store.commitGraph(&graph, .{ .local = a });
+    defer commit.deinit(testing.allocator);
+
+    try testing.expect(commit.value_layouts[@intFromEnum(a)] != commit.value_layouts[@intFromEnum(b)]);
+
+    // Entering the same cycle at `b` reuses both interned layouts.
+    var from_b = LayoutGraph{};
+    defer from_b.deinit(testing.allocator);
+    const b2 = try from_b.reserveNode(testing.allocator);
+    const b2_box = try from_b.reserveNode(testing.allocator);
+    const a2 = try from_b.reserveNode(testing.allocator);
+    const a2_box = try from_b.reserveNode(testing.allocator);
+    from_b.setNode(b2_box, .{ .box = .{ .local = a2 } });
+    from_b.setNode(a2_box, .{ .box = .{ .local = b2 } });
+    const b2_refs = try from_b.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .u8 }, .{ .local = b2_box } });
+    const a2_refs = try from_b.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = a2_box } });
+    from_b.setNode(b2, .{ .tag_union = b2_refs });
+    from_b.setNode(a2, .{ .tag_union = a2_refs });
+    var commit_b = try store.commitGraph(&from_b, .{ .local = b2 });
+    defer commit_b.deinit(testing.allocator);
+
+    try testing.expectEqual(commit.value_layouts[@intFromEnum(b)], commit_b.root_idx);
+    try testing.expectEqual(commit.value_layouts[@intFromEnum(a)], commit_b.value_layouts[@intFromEnum(a2)]);
+}
+
+test "commitGraph collapses interchangeable copies of a recursive closure layout (issue #11072)" {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    // `copies` unions, each holding one capture-record variant per union
+    // that boxes that union: every union, capture record and box is
+    // interchangeable with its peers, so the whole graph is one small
+    // recursive layout spelled out `copies` times.
+    const copies = 6;
+    var graph = LayoutGraph{};
+    defer graph.deinit(testing.allocator);
+    var unions: [copies]GraphNodeId = undefined;
+    var boxes: [copies]GraphNodeId = undefined;
+    for (0..copies) |i| {
+        unions[i] = try graph.reserveNode(testing.allocator);
+        boxes[i] = try graph.reserveNode(testing.allocator);
+        graph.setNode(boxes[i], .{ .box = .{ .local = unions[i] } });
+    }
+    var first_capture: ?GraphNodeId = null;
+    for (0..copies) |i| {
+        var refs: [copies + 1]GraphRef = undefined;
+        refs[0] = .{ .canonical = .zst };
+        for (0..copies) |j| {
+            const capture = try graph.reserveNode(testing.allocator);
+            if (first_capture == null) first_capture = capture;
+            const fields = try graph.appendFields(testing.allocator, &[_]graph_mod.Field{
+                .{ .index = 0, .child = .{ .canonical = .u64 } },
+                .{ .index = 1, .child = .{ .local = boxes[j] } },
+            });
+            graph.setNode(capture, .{ .struct_ = fields });
+            refs[j + 1] = .{ .local = capture };
+        }
+        graph.setNode(unions[i], .{ .tag_union = try graph.appendRefs(testing.allocator, &refs) });
+    }
+    var commit = try store.commitGraph(&graph, .{ .local = unions[0] });
+    defer commit.deinit(testing.allocator);
+
+    for (1..copies) |i| {
+        try testing.expectEqual(commit.root_idx, commit.value_layouts[@intFromEnum(unions[i])]);
+        try testing.expectEqual(commit.value_layouts[@intFromEnum(boxes[0])], commit.value_layouts[@intFromEnum(boxes[i])]);
+    }
+    const root = store.getLayout(commit.root_idx);
+    try testing.expectEqual(LayoutTag.tag_union, root.tag);
+    const info = store.getTagUnionInfo(root);
+    try testing.expectEqual(@as(usize, copies + 1), info.variants.len);
+    const capture_layout = info.variants.get(1).payload_layout;
+    for (2..copies + 1) |variant| {
+        try testing.expectEqual(capture_layout, info.variants.get(variant).payload_layout);
+    }
+    try testing.expectEqual(capture_layout, commit.value_layouts[@intFromEnum(first_capture.?)]);
+
+    // The store remembers one union, one box and one capture record, not
+    // one of each per copy.
+    try testing.expectEqual(@as(usize, 3), store.interned_recursive_graphs.count());
+}
+
 test "commitGraph resolves locally built container children inside struct fields" {
     const testing = std.testing;
     var store = try Store.init(testing.allocator, .u64);
