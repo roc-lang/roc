@@ -3237,9 +3237,7 @@ pub const SyntaxChecker = struct {
         }
 
         try self.appendAnnotationActions(module_env, start_offset, end_offset, &actions);
-        if (try self.buildExpectTestAction(module_env, start_offset, end_offset)) |action| {
-            try actions.append(self.allocator, action);
-        }
+        try self.appendExpectTestActions(module_env, start_offset, end_offset, &actions);
 
         return CodeActionsResult{
             .actions = try actions.toOwnedSlice(self.allocator),
@@ -3312,37 +3310,49 @@ pub const SyntaxChecker = struct {
         return left.region.start.offset < right.region.start.offset;
     }
 
-    /// Build the action that writes an `expect` calling a top-level function,
-    /// or null when the range names no function one can be written for.
-    fn buildExpectTestAction(
+    /// Add one action per top-level function in the range that a test can be
+    /// written for, in source order.
+    ///
+    /// A range covering several functions has no one right answer, for the
+    /// same reason an annotation over several bindings does not: nothing about
+    /// the range says which function was meant. Every function the range
+    /// reaches is offered, named, and the reader picks.
+    ///
+    /// A cursor, which is how the request usually arrives, touches one
+    /// function and so still produces at most one action.
+    fn appendExpectTestActions(
         self: *SyntaxChecker,
         module_env: *ModuleEnv,
         start_offset: u32,
         end_offset: u32,
-    ) Allocator.Error!?CodeAction {
-        const definition = cir_queries.findTopLevelDefinitionAtOffset(module_env, start_offset, end_offset) orelse return null;
+        actions: *std.ArrayList(CodeAction),
+    ) Allocator.Error!void {
+        var definitions = try cir_queries.collectTopLevelDefinitionsInRange(module_env, start_offset, end_offset, self.allocator);
+        defer definitions.deinit(self.allocator);
 
-        const new_text = try code_action.renderExpectTest(
-            self.allocator,
-            module_env,
-            definition.name,
-            ModuleEnv.varFrom(definition.pattern),
-        ) orelse return null;
-        errdefer self.allocator.free(new_text);
+        for (definitions.items) |definition| {
+            const new_text = try code_action.renderExpectTest(
+                self.allocator,
+                module_env,
+                definition.name,
+                ModuleEnv.varFrom(definition.pattern),
+            ) orelse continue;
+            errdefer self.allocator.free(new_text);
 
-        const title = try std.fmt.allocPrint(self.allocator, "Generate an expect test for '{s}'", .{definition.name});
+            const title = try std.fmt.allocPrint(self.allocator, "Generate an expect test for '{s}'", .{definition.name});
 
-        return CodeAction{
-            .title = title,
-            .kind = refactor_rewrite_kind,
-            .range = .{
-                .start_line = definition.end.line,
-                .start_col = definition.end.character,
-                .end_line = definition.end.line,
-                .end_col = definition.end.character,
-            },
-            .new_text = new_text,
-        };
+            try actions.append(self.allocator, .{
+                .title = title,
+                .kind = refactor_rewrite_kind,
+                .range = .{
+                    .start_line = definition.end.line,
+                    .start_col = definition.end.character,
+                    .end_line = definition.end.line,
+                    .end_col = definition.end.character,
+                },
+                .new_text = new_text,
+            });
+        }
     }
 
     /// Every place a symbol is written, split the way LSP asks for it.

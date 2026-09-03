@@ -346,6 +346,7 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "code actions offer nothing for a document that does not compile", .run = codeActionsOfferNothingWithoutTypes },
     .{ .name = "code actions offer one annotation per binding a selection reaches", .run = codeActionsOfferOnePerBinding },
     .{ .name = "code actions leave a trailing comment on its own line", .run = codeActionsKeepTrailingComment },
+    .{ .name = "code actions offer one test per function a selection reaches", .run = codeActionsOfferOneTestPerFunction },
     .{ .name = "the name on an annotation is a usable starting point", .run = annotationNameResolvesLikeAnyOccurrence },
     .{ .name = "positions are UTF-16 code units, not bytes", .run = positionsUseUtf16CodeUnits },
     .{ .name = "rename refuses a declaration that is not a plain name", .run = renameRefusesNonIsolatedDeclaration },
@@ -5915,4 +5916,83 @@ pub fn codeActionsKeepTrailingComment() integration_spec.SpecError!void {
         38,
         "\n\n## TODO Replace these placeholder values with a case worth checking.\nexpect greet(\"\") == \"\"",
     );
+}
+
+/// Verifies a selection covering several functions offers one test each.
+///
+/// Reported by review on #11069. `findTopLevelDefinitionAtOffset` returned the
+/// first function the range overlapped and only that one got a generated-test
+/// action; a selection spanning `first` and `second` offered a test for
+/// `first` alone, with no way to ask for `second`'s instead.
+pub fn codeActionsOfferOneTestPerFunction() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "code_action_several_functions.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\first : Str -> Str
+        \\first = |name| name
+        \\
+        \\second : Str -> Str
+        \\second = |name| name
+        \\
+        \\main = second(first("roc"))
+    , .{platform_path});
+    defer allocator.free(source);
+
+    // From `first`'s annotation on line 2 down through `second`'s value on
+    // line 6, so both definitions fall inside the range.
+    const request = try codeActionRequest(allocator, 2, fixture.uri, 2, 0, 6, 0);
+    defer allocator.free(request);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{request});
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const actions = try response.result();
+
+    // Both functions the range reaches are offered, neither is chosen for the
+    // reader, and each test follows its own definition.
+    const first_test = try codeActionByPrefix(actions, "Generate an expect test for 'first'") orelse return error.TestUnexpectedResult;
+    try expectInsertionAt(
+        try codeActionEdit(first_test, fixture.uri),
+        3,
+        19,
+        "\n\n## TODO Replace these placeholder values with a case worth checking.\nexpect first(\"\") == \"\"",
+    );
+
+    const second_test = try codeActionByPrefix(actions, "Generate an expect test for 'second'") orelse return error.TestUnexpectedResult;
+    try expectInsertionAt(
+        try codeActionEdit(second_test, fixture.uri),
+        6,
+        20,
+        "\n\n## TODO Replace these placeholder values with a case worth checking.\nexpect second(\"\") == \"\"",
+    );
+
+    // A cursor on one function still answers with that one alone.
+    const narrow = try codeActionRequest(allocator, 3, fixture.uri, 3, 2, 3, 2);
+    defer allocator.free(narrow);
+    const narrow_responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{narrow});
+    defer {
+        for (narrow_responses) |body| allocator.free(body);
+        allocator.free(narrow_responses);
+    }
+    var narrow_response = try responseById(allocator, narrow_responses, 3);
+    defer narrow_response.deinit();
+    const narrow_actions = try narrow_response.result();
+    try std.testing.expect((try codeActionByPrefix(narrow_actions, "Generate an expect test for 'first'")) != null);
+    try std.testing.expect((try codeActionByPrefix(narrow_actions, "Generate an expect test for 'second'")) == null);
 }

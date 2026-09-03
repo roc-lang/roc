@@ -1408,7 +1408,8 @@ pub const TopLevelDefinition = struct {
     end: LspPosition,
 };
 
-/// Find the top-level definition whose source covers part of a byte range.
+/// Find every top-level definition whose source covers part of a byte range,
+/// in source order.
 ///
 /// Only plain `assign` bindings whose source spells exactly the bound name
 /// qualify. The name is what generated code calls the definition by, so a
@@ -1418,11 +1419,15 @@ pub const TopLevelDefinition = struct {
 /// Definitions nested inside a block are not searched. A generated `expect`
 /// sits at the top level of the module, where a name bound inside a block
 /// cannot be reached.
-pub fn findTopLevelDefinitionAtOffset(
+pub fn collectTopLevelDefinitionsInRange(
     module_env: *ModuleEnv,
     start_offset: u32,
     end_offset: u32,
-) ?TopLevelDefinition {
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!std.ArrayList(TopLevelDefinition) {
+    var results: std.ArrayList(TopLevelDefinition) = .empty;
+    errdefer results.deinit(allocator);
+
     const source = module_env.common.source;
     const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
     for (defs_slice) |def_idx| {
@@ -1447,13 +1452,13 @@ pub fn findTopLevelDefinitionAtOffset(
         var insertion_region = body_region;
         insertion_region.end.offset = lineEndAfter(source, body_region.end.offset);
         const body_range = regionToRange(module_env, insertion_region) orelse continue;
-        return .{
+        try results.append(allocator, .{
             .pattern = def.pattern,
             .name = name,
             .end = .{ .line = body_range.end_line, .character = body_range.end_col },
-        };
+        });
     }
-    return null;
+    return results;
 }
 
 /// Collect the places that declare `target_pattern`.
