@@ -1440,6 +1440,10 @@ pub const EvidencePathStep = dispatch_evidence.PathStep;
 pub const EvidenceParamRecord = struct {
     method: canonical.MethodNameId,
     dispatcher_ty: CheckedTypeId,
+    /// The constraint's callable type in the owning scheme: the interface
+    /// the selected target must satisfy. Relating a target to it binds the
+    /// scheme's quantified variables that only this callable reaches.
+    callable_ty: CheckedTypeId,
     /// Index of the dispatcher in the owning scheme's quantified-variable
     /// vector (`CheckedProcedureTemplate.scheme_vars` or
     /// `DispatchRefScope.scheme_vars`): the substitution entry this

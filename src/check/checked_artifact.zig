@@ -17090,7 +17090,8 @@ const EvidencePass = struct {
         // vacuous)—published as site evidence keyed by the root's body
         // expression for the drain and const-eval entries to consume.
         for (self.compile_time_roots.roots) |root| {
-            const scheme_var = rootSchemeVar(root) orelse continue;
+            const source_pattern = root.source_pattern orelse continue;
+            const scheme_var = ModuleEnv.varFrom(source_pattern);
             params.clearRetainingCapacity();
             try self.enumerateParams(scheme_var, &params);
             if (params.items.len == 0) continue;
@@ -17296,11 +17297,12 @@ const EvidencePass = struct {
             .entry_wrapper => |wrapper_id| {
                 const wrapper = self.entry_wrappers.get(wrapper_id);
                 const root = self.compile_time_roots.root(wrapper.root);
-                if (rootSchemeVar(root)) |scheme_var| {
-                    try self.enumerateParams(scheme_var, params);
+                if (root.source_pattern) |source_pattern| {
+                    try self.enumerateParams(ModuleEnv.varFrom(source_pattern), params);
                 }
-                // Expression roots (REPL lines, eval snippets) have no scheme
-                // and no callers, so their obligations are chain-free.
+                // Constant roots resolve every obligation inside their own
+                // body; expression roots (REPL lines, eval snippets) have no
+                // callers. Both are chain-free.
             },
             .checked_body, .intrinsic_wrapper, .unimplemented => {},
         }
@@ -17517,6 +17519,8 @@ const EvidencePass = struct {
                 .method = try self.names.internMethodIdent(idents, param.constraint.fn_name),
                 .dispatcher_ty = self.checked_types.rootForSourceVar(self.module, param.dispatcher_var) orelse
                     checkedArtifactInvariant("checked evidence parameter dispatcher type was not published", .{}),
+                .callable_ty = self.checked_types.rootForSourceVar(self.module, param.constraint.fn_var) orelse
+                    checkedArtifactInvariant("checked evidence parameter callable type was not published", .{}),
                 .slot = self.schemeVarSlot(param.dispatcher_var),
                 .runtime_dictionary = source == .constraint_callable or param.constraint.origin.literalKind() == null,
                 .structural = self.structuralKindForMethodIdent(param.constraint.fn_name),
@@ -18691,8 +18695,8 @@ const EvidencePass = struct {
 test "procedure evidence schema positively classifies callable paths and pathless requirements" {
     var path_steps = [_]static_dispatch.EvidencePathStep{ undefined, undefined };
     var params = [_]static_dispatch.EvidenceParamRecord{
-        .{ .method = @enumFromInt(1), .dispatcher_ty = @enumFromInt(1), .slot = 0, .runtime_dictionary = true, .structural = .encoder, .path = .{ .start = 0, .len = 1 } },
-        .{ .method = @enumFromInt(2), .dispatcher_ty = @enumFromInt(2), .slot = 1, .runtime_dictionary = true, .path = .{ .start = 1, .len = 1 } },
+        .{ .method = @enumFromInt(1), .dispatcher_ty = @enumFromInt(1), .callable_ty = @enumFromInt(3), .slot = 0, .runtime_dictionary = true, .structural = .encoder, .path = .{ .start = 0, .len = 1 } },
+        .{ .method = @enumFromInt(2), .dispatcher_ty = @enumFromInt(2), .callable_ty = @enumFromInt(4), .slot = 1, .runtime_dictionary = true, .path = .{ .start = 1, .len = 1 } },
     };
     const table = CheckedProcedureTemplateTable{
         .evidence_params_pool = params[0..],
@@ -29693,7 +29697,7 @@ pub const CheckedModuleArtifact = struct {
     // callable relation or only the shared method target.
     // Version 76 combines the version-75 artifact with retained callable
     // evidence provenance used by pathless specialization.
-    const serialized_layout_version: u32 = 78;
+    const serialized_layout_version: u32 = 79;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -35905,8 +35909,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x04, 0x77, 0xEE, 0x56, 0xB8, 0xCB, 0xF5, 0x97, 0x5E, 0xFC, 0xD6, 0x4B, 0xF4, 0xEE, 0xA0, 0x7F,
-        0xFB, 0x4A, 0x68, 0xC4, 0x31, 0xA9, 0x28, 0xB4, 0xBB, 0x0C, 0x5F, 0x04, 0x45, 0xBA, 0xA5, 0x81,
+        0xC8, 0x95, 0x1F, 0xDF, 0xC3, 0x29, 0x2C, 0x04, 0xD6, 0x97, 0x8B, 0x8F, 0x53, 0x38, 0x92, 0xF8,
+        0x83, 0x29, 0xD4, 0xA1, 0xAB, 0xD8, 0x0A, 0x46, 0xC9, 0xF6, 0xEA, 0x71, 0xC3, 0x69, 0x96, 0x63,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
