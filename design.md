@@ -6619,6 +6619,34 @@ independent of worker scheduling without locking coordinator state. Root kinds
 that reserve durable identities or write directly to the final program remain
 serial barriers until they have the same sealed-draft boundary.
 
+Post-check timing keeps two distinct measures for this boundary. Monotype wall
+time is the elapsed coordinator interval, including worker waits and ordered
+commit. Aggregate worker work is the sum of executor callback intervals and can
+exceed wall time when callbacks overlap; it is diagnostic work, not another
+sequential phase. Coordinator post-batch work separately measures validation,
+serial fallback, discard, and ordered commit after each executor barrier. Task,
+lane, retry, and discard counts explain the relationship without using
+scheduling-dependent values for compiler behavior.
+
+Boxy follows a different post-check pipeline and reports its planning and
+lowering wall phases directly rather than projecting Monotype categories onto
+work it does not perform.
+
+Solved-to-LIR lowering uses the same ownership rule at a narrower boundary.
+Only closed procedure bodies whose syntax is proven body-local enter an
+executor batch. Each callback reads a frozen coordinator prefix and writes a
+private LIR store suffix; calls, captures, compile-time sites, static data,
+dynamic inline scopes, and other globally interned state remain serial
+barriers. Source local names are returned with the suffix and interned by the
+coordinator, preserving serial string identity without making the string store
+concurrent. After the full batch returns, the coordinator appends the suffixes
+in function-worklist order and relocates every body-local statement, local,
+span, branch, join, pattern, and metadata reference. This keeps procedure and
+store identity independent of completion order while allowing the supported
+body traversal itself to run without locks. Widening the parallel subset
+requires a corresponding immutable or shard-owned boundary for each newly
+admitted global side table, not ad hoc worker mutation.
+
 Instantiation graph node ids are dense, append-only indexes for the lifetime of
 the graph. Per-node optional attributes such as a row root's current extension
 and a generated-private request's source interface are therefore dense parallel
