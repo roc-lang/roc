@@ -396,6 +396,7 @@ const InlineAnalyzer = struct {
             },
             .tag => |tag| self.exprSpanReadsOnlyArgs(tag.payloads, args),
             .static_data_candidate => |candidate| self.exprReadsOnlyArgs(candidate.runtime_expr, args),
+            .typed_boundary => |boundary| self.exprReadsOnlyArgs(boundary.value, args),
             .nominal,
             .dbg,
             .expect,
@@ -508,6 +509,7 @@ const InlineAnalyzer = struct {
                 return true;
             },
             .tag => |tag| try self.visitSpanCallees(tag.payloads, loop_depth),
+            .typed_boundary => |boundary| try self.visitBodyCallees(boundary.value, loop_depth),
             .static_data_candidate => |candidate| try self.visitBodyCallees(candidate.runtime_expr, loop_depth),
             .nominal,
             .dbg,
