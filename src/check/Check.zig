@@ -26629,10 +26629,6 @@ fn deduplicateGeneralizedDispatchRequirements(
                 continue;
             }
             if (try self.unifyEquivalentGeneralizedCallables(entry.value_ptr.*, constraint.fn_var, env)) {
-                // The merged callable's own identities anchor the receivers
-                // it reaches: a relation on one of those receivers may vary
-                // per use of the callable exactly as a public variable's may.
-                const merged_start = pending_receivers.items.len;
                 try canonical_type_keys.appendIdentityVarsFromVar(
                     self.gpa,
                     self.types,
@@ -26640,9 +26636,6 @@ fn deduplicateGeneralizedDispatchRequirements(
                     entry.value_ptr.*,
                     &pending_receivers,
                 );
-                for (pending_receivers.items[merged_start..]) |merged_identity| {
-                    try anchors.put(self.types.resolveVar(merged_identity).var_, {});
-                }
             }
         }
 
