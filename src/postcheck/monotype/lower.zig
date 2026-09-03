@@ -2246,6 +2246,12 @@ const TemplateReservation = struct {
 /// reserves the identity and queues the body for the scheduler's wave drain.
 const TemplateBodyScheduling = enum { immediate, queued };
 
+/// Keep more ready jobs in each executor run than there are worker lanes.
+/// Dynamic lane reuse smooths procedure-size skew and amortizes each frozen
+/// coordinator barrier without changing dispatch-order commit. Four bounds
+/// the completed shards retained until each batch reaches its commit barrier.
+const parallel_spec_jobs_per_lane: usize = 4;
+
 /// One reserved specialization whose body has not lowered yet, in the
 /// deterministic scheduler FIFO. Every field is durable for the builder's
 /// lifetime: evidence lives in the evidence arena, the requested type is
@@ -2446,9 +2452,9 @@ const SpecJobWorkspace = struct {
     }
 };
 
-/// Lowering-owned persistent state for one executor worker. It is scoped to a
-/// Monotype batch rather than executor opaque state, so no `Program` relocation
-/// capability survives the batch completion barrier.
+/// Lowering-owned persistent state for one executor worker across the complete
+/// Monotype run. Executor barriers end task-result ownership, while the
+/// workspace retains cumulative relocation state for later tasks on its lane.
 pub const SpecJobWorkerState = struct {
     worker_id: SpecJobWorkerId,
     allocator: Allocator,
@@ -2621,6 +2627,23 @@ const SpecJobTaskContext = struct {
     retry_serial: bool = false,
     completed: bool = false,
     worker_work_ns: u64 = 0,
+};
+
+/// Reusable caller-owned scheduler storage. Executor runs are synchronous, so
+/// no callback retains these task descriptors after a batch completes.
+const SpecJobTaskBuffers = struct {
+    prepared: []PreparedSpecJob = &.{},
+    contexts: []SpecJobTaskContext = &.{},
+    tasks: []base.post_check_task_executor.Task = &.{},
+    completions: []base.post_check_task_executor.Completion = &.{},
+
+    fn deinit(self: *SpecJobTaskBuffers, allocator: Allocator) void {
+        if (self.completions.len != 0) allocator.free(self.completions);
+        if (self.tasks.len != 0) allocator.free(self.tasks);
+        if (self.contexts.len != 0) allocator.free(self.contexts);
+        if (self.prepared.len != 0) allocator.free(self.prepared);
+        self.* = .{};
+    }
 };
 
 /// Caller-owned root task storage lets unordered executor completion be
@@ -2973,6 +2996,7 @@ const Builder = struct {
     /// Fixed worker-indexed ownership for executor-backed ordinary jobs.
     spec_job_parallel_workers: []?SpecJobWorkerState = &.{},
     spec_job_parallel_commit_domains: []SpecJobCommitDomain = &.{},
+    spec_job_task_buffers: SpecJobTaskBuffers = .{},
     spec_store: specialize.SpecBuilder,
     lowered_templates: collections.DenseMap(Ast.FnId, LoweredTemplate),
     /// Nested-fn specialization records keyed by function id; the durable
@@ -3211,6 +3235,7 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
+        self.spec_job_task_buffers.deinit(self.allocator);
         for (self.spec_job_parallel_workers) |*worker| {
             if (worker.*) |*initialized| initialized.deinit();
         }
@@ -4904,14 +4929,12 @@ const Builder = struct {
         }
 
         try self.ensureParallelSpecJobState(executor.worker_count);
-        const prepared = try self.allocator.alloc(PreparedSpecJob, executor.worker_count);
-        defer self.allocator.free(prepared);
-        const contexts = try self.allocator.alloc(SpecJobTaskContext, executor.worker_count);
-        defer self.allocator.free(contexts);
-        const tasks = try self.allocator.alloc(base.post_check_task_executor.Task, executor.worker_count);
-        defer self.allocator.free(tasks);
-        const completions = try self.allocator.alloc(base.post_check_task_executor.Completion, executor.worker_count);
-        defer self.allocator.free(completions);
+        const batch_capacity = executor.worker_count *| parallel_spec_jobs_per_lane;
+        const buffers = try self.ensureSpecJobTaskBuffers(batch_capacity);
+        const prepared = buffers.prepared;
+        const contexts = buffers.contexts;
+        const tasks = buffers.tasks;
+        const completions = buffers.completions;
 
         const inputs = SpecJobWorkerInputs{
             .modules = self.modules,
@@ -4948,7 +4971,7 @@ const Builder = struct {
             }
 
             var batch_len: usize = 0;
-            while (batch_len < executor.worker_count and
+            while (batch_len < batch_capacity and
                 self.pending_spec_jobs_head < self.pending_spec_jobs.items.len)
             {
                 const job = self.pending_spec_jobs.items[self.pending_spec_jobs_head];
@@ -5347,6 +5370,38 @@ const Builder = struct {
         for (domains) |*domain| domain.* = SpecJobCommitDomain.init(self.allocator);
         self.spec_job_parallel_workers = workers;
         self.spec_job_parallel_commit_domains = domains;
+    }
+
+    fn ensureSpecJobTaskBuffers(
+        self: *Builder,
+        batch_capacity: usize,
+    ) Allocator.Error!*SpecJobTaskBuffers {
+        const buffers = &self.spec_job_task_buffers;
+        if (buffers.prepared.len != 0) {
+            if (buffers.prepared.len != batch_capacity or
+                buffers.contexts.len != batch_capacity or
+                buffers.tasks.len != batch_capacity or
+                buffers.completions.len != batch_capacity)
+            {
+                Common.compilerBug("Monotype specialization task buffer capacity changed");
+            }
+            return buffers;
+        }
+        if (buffers.contexts.len != 0 or
+            buffers.tasks.len != 0 or
+            buffers.completions.len != 0)
+        {
+            Common.compilerBug("Monotype specialization task buffers were only partially initialized");
+        }
+
+        var initialized: SpecJobTaskBuffers = .{};
+        errdefer initialized.deinit(self.allocator);
+        initialized.prepared = try self.allocator.alloc(PreparedSpecJob, batch_capacity);
+        initialized.contexts = try self.allocator.alloc(SpecJobTaskContext, batch_capacity);
+        initialized.tasks = try self.allocator.alloc(base.post_check_task_executor.Task, batch_capacity);
+        initialized.completions = try self.allocator.alloc(base.post_check_task_executor.Completion, batch_capacity);
+        buffers.* = initialized;
+        return buffers;
     }
 
     fn specJobCommitDomainFor(self: *Builder, worker_id: SpecJobWorkerId) *SpecJobCommitDomain {
