@@ -249,6 +249,21 @@ pub const ConstFnCallableInstantiation = struct {
     callable_ty: checked_ids.CheckedTypeId,
 };
 
+/// Exact checked structural edge retained by a stored function. Codec
+/// derivations need the generated-contract identity when their runtime
+/// function is restored after compile-time evaluation.
+pub const ConstFnStructuralEvidence = struct {
+    derivation: static_dispatch.StructuralDerivation,
+    checked: ?struct {
+        view: names.CheckedModuleDigest,
+        dispatcher_key: names.CanonicalTypeKey,
+        dispatcher_ty: checked_ids.CheckedTypeId,
+        callable_key: names.CanonicalTypeKey,
+        callable_ty: checked_ids.CheckedTypeId,
+        generated_codec_derivation: ?static_dispatch.GeneratedCodecDerivationId,
+    } = null,
+};
+
 /// Dispatch evidence selected for a stored compile-time function value. Target
 /// module identities make every checked id explicitly relative to its owning
 /// checked module when the function is restored in another compilation.
@@ -261,7 +276,7 @@ pub const ConstFnEvidence = union(enum(u8)) {
         instantiation: ?ConstFnCallableInstantiation,
         nested: ConstFnNestedEvidence,
     },
-    structural: static_dispatch.StructuralDerivation,
+    structural: ConstFnStructuralEvidence,
     constraint_callable: struct {
         view: names.CheckedModuleDigest,
         callable_key: names.CanonicalTypeKey,
@@ -1240,7 +1255,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
             },
             .nested = .{ .resolved = .{ .count = 1, .subtree_len = 1 } },
         } },
-        .{ .structural = .equality },
+        .{ .structural = .{ .derivation = .equality } },
         .checked_error,
     };
     const evidence_frames = [_]ConstFnEvidenceFrame{
@@ -1313,7 +1328,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     const loaded_nested = loaded_target.nested.resolved;
     try std.testing.expectEqual(@as(u32, 1), loaded_nested.count);
     try std.testing.expectEqual(@as(u32, 1), loaded_nested.subtree_len);
-    try std.testing.expectEqual(ConstFnEvidence{ .structural = .equality }, loaded_fn.evidence[1]);
+    try std.testing.expectEqual(ConstFnEvidence{ .structural = .{ .derivation = .equality } }, loaded_fn.evidence[1]);
     try std.testing.expectEqual(ConstFnEvidence.checked_error, loaded_fn.evidence[2]);
     try std.testing.expectEqualSlices(ConstFnEvidenceFrame, &evidence_frames, loaded_fn.evidence_frames);
     try std.testing.expectEqual(@as(?u32, 1), loaded_fn.evidence_frame_head);

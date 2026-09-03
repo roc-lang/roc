@@ -3159,6 +3159,55 @@ encoding and state types for exactly the methods needed by that shape:
 - named nominal values call that nominal type's explicit method. If the method
   is missing, checking reports the missing static-dispatch requirement.
 
+`StaticDispatchPlanTable.generated_codec_derivations` stores each parser/encoder
+derivation as an explicit generated-codec contract. It records every generated
+call's method, concrete dispatcher and callable types, optional subject role,
+whether the edge is unconditional or a checker-validated conditional
+capability, and exact resolution to either checked callable evidence or another
+generated-codec contract. A
+structural dispatch plan and any stored generated runtime name that contract by
+identity. Boxy and Monotype consume the identity directly; they must not find a
+derivation by comparing runtime types or resolve one of its calls by looking up
+the method name in a registry.
+
+Monotype instantiates a generated-codec contract once at the codec boundary.
+While the specialization graph is mutable, codec preparation relates the
+contract's source and frozen constructor roles to that boundary, instantiates
+both its public value shape and its explicitly checker-authored generated-body
+shape so every nested subject ID remains related to its specialized shape cell,
+reserves the exact callees, and records the method identity and checker-authored
+role with each prepared call. A declaration-backed nominal has a distinct body
+shape; anonymous shapes use the public shape for both roles. Repeated
+exact subjects share one such role slot; Phase A deduplicates by that contract
+identity instead of comparing graph shapes. Freezing installs the selected role
+in a content-addressed prepared-call index. A subject-bearing entry uses the
+cached full Monotype digest of Phase A's related shape cell as its bucket,
+while a shape-independent entry has one reusable address. Exact equality
+inside one digest bucket protects correctness from digest collisions without
+scanning unrelated calls. Two distinct checker roles for one exact Monotype
+shape must name the same prepared target, otherwise freezing reports an
+invariant violation rather than choosing one. Phase B performs no method
+lookup and its structural comparison is bounded to the normally-single-entry
+digest bucket. After relation freeze, generated bodies may consume only that
+frozen prepared-call plan. They do not repeat method lookup, synthesize another
+specialization request, or interpret the shape to recover a call absent from
+`StaticDispatchPlanTable.generated_codec_derivations`. Debug compiler builds
+audit that every producer-required call was consumed and that repeated roles
+have exactly equal checked type graphs. A parent structural-call edge and its
+nested derivation independently snapshot one checker relation, so their debug
+audit requires equal checked root keys plus full graph equality under a bijective
+renaming of flex and rigid identities shared across both relation roots;
+variable sharing, constraints, defaults, and every non-variable payload remain
+exact. Conditional capabilities are
+omitted from the consumption requirement unless the specialization selects
+their generated-code path. A format procedure's specialization identity names
+the complete derivation boundary and instantiated constructor, not the
+individual call edge that first reached it. Equivalent checked call edges
+therefore share one specialization, while the ordinary request type and checked
+evidence still distinguish genuinely different targets. The grounding call
+index remains only activation and debug metadata. These audits and their
+consumption bits are absent from release compiler builds.
+
 If a format does not support a shape, checking reports the missing method as a
 static-dispatch error. Unsupported shapes are not represented as runtime parse
 or encode failures. Runtime failures are reserved for input/output conditions
@@ -3693,13 +3742,16 @@ checked identity, while lift-generated keys already name the target's lifted
 slot and remain exact. After that boundary, capture recomputation accepts only
 lifted keys; it never retries a lookup in another identity namespace.
 
-Optional tag reachability uses a recursive abstract value tree. A struct field
-or tag payload carries the complete nested `ValueInfo` output for the value
-stored there, and every `set_local` join merges that complete tree. The
-pass may remove a switch edge only from this producer-complete fixed point; it
-must not flatten nested values to their top-level tag set, because an iterator
-successor can change a tag nested below both a step payload and the loop-carried
-state record.
+Optional tag reachability uses a finite abstract LIR-construction graph. Each
+analyzed LIR local records the LIR constructor sites that can produce it; a
+struct-field read or tag-payload read follows those sites to the locals stored
+there, and whole-value joins merge their finite constructor-site sets. The pass
+may remove a switch edge only from this producer-complete fixed point. It must
+neither flatten nested constructor outputs to their top-level tag set nor copy
+child tag-reachability data into a recursively unfolded tree:
+an iterator successor can change a tag nested below both a step payload and the
+loop-carried state record, while recursive values and shared constructor DAGs
+must keep analysis state bounded by the finite LIR graph.
 
 `SolvedLirLower` computes the logical Lambda Mono callable, capture, procedure,
 and function-free type decisions while directly consuming Lambda Solved syntax.
@@ -4018,18 +4070,83 @@ Minted iterator backings keep finite callable slots inline. Only
 forced-dynamic backings take this explicit erased-callable boundary. The direct
 LIR lowerer dumbly consumes the solved result: finite callables become generated
 tag-union values; erased callables become packed erased-callable values and
-indirect calls. It does not apply iterator depth policy or repair callable
+indirect calls. It does not invent iterator selection or repair callable
 variant sets.
 
 #### SpecConstr And Loop Scalarization
 
-Monotype Lifted SpecConstr is a general call-pattern specialization pass. It
-runs only when `InlineMode` is not `.none`. It consumes explicit lifted
-constructor and callable values and creates workers whose arguments are the
-parts the callee immediately observes.
+Monotype Lifted SpecConstr is a general constructor- and callable-shape pass.
+In optimizing inline modes it performs call-pattern discovery, creates workers
+whose arguments are the parts the callee immediately observes, normalizes
+function bodies, and projects unused loop results.
 
-Iterator and stream loops are important clients. After wrapper inlining exposes
-a known iterator constructor, SpecConstr can:
+`.none` mode runs only the pass's bounded, demand-directed iterator-fusion
+clone. It clones only function bodies containing a checker-stamped iterator
+producer, and within those bodies it decomposes only loop state whose type owns
+generated-private iterator topology; unrelated procedures and aggregate loops
+remain outside SpecConstr. Direct-call inlining is admitted by the checker's
+exact `IteratorProcedureId` stamp and remains admitted transitively only inside
+that producer pipeline. A callable step is admitted only after ordinary
+known-value flow reads it from a generated-private iterator backing whose exact
+topology identifies the step field. A checker-stamped `forced_dynamic` iterator
+representation is an opaque boundary to this reduced pass: partial fusion must
+not duplicate its erased-callable packing. This path does not discover general
+call patterns, reserve specialization workers, project loop exits, or run
+general solved-call inline analysis. It shares SpecConstr's
+representation-identity checks, recursion measure, and cumulative code-growth
+budget.
+
+An iterator helper's independently specialized Monotype result root can differ
+from the call-site result root even when the call proves their language-level
+relation. Inlining must not erase that evidence. SpecConstr therefore wraps an
+exposed producer result in an explicit `typed_boundary`: its child keeps the
+callee-authored type and the wrapper keeps the call-site type. Lambda Solved
+unifies the two slots exactly as the removed call did, Lambda Mono preserves the
+boundary node, and direct LIR lowering performs the ordinary typed assignment.
+SpecConstr also retains the producer's structural value beside that runtime
+expression. A field read or match can consume a known record or tag through the
+structural view without materializing it; an opaque use materializes the exact
+typed boundary. Together with the scoped pre-ARC LIR rewrites described below,
+this removes the iterator record and the immediately matched
+`One`/`Skip`/`Done` value before code generation while preserving every
+representation decision for paths that really observe the value.
+
+Body exposure is bounded by the existing source-body admission and cumulative
+65,536-unit growth budget. The active inline stack is an explicit termination
+proof: an acyclic call needs no constructor-size measure, while recursive
+re-entry is admitted only when both frames have exact constructor sizes and the
+new size is strictly smaller. Exhausting either bound retains the ordinary call.
+The clone stamps each normalized function with `iterator_fusion_scope`; Lambda
+Solved retains the lifted function table and direct LIR lowering copies that
+provenance onto the corresponding procedure. LIR and the backends do not
+identify iterators or reconstruct this decision.
+
+For `.none` plus lambda-set specialization, pre-ARC LIR consumes that explicit
+scope with three exact structural rewrites. First, an internal Roc-ABI procedure
+is inlined only when the reachable call inventory proves one direct call, no
+root or first-class escape, and therefore no reachable code growth. Second, a
+one-use forwarding join sinks its consumer only when reachable incoming-edge
+counts prove exclusivity, the outer join is nonrecursive, and the forwarded
+layout contains no reference-counted storage; moving owning continuations needs
+explicit path-ownership data and is not admitted. Third, literal tag edges may
+bypass a join whose body immediately matches that tag. Complete fusion moves
+all arms; partial fusion retains the original path and clones only arms
+whose locally defined values are ownership-neutral. Join scalarization then
+removes aggregate fixed points when every initializer, field read, and tag
+payload read is explicit. Every mutation plan requires disjoint statement
+roles before it changes the graph. These passes visit only stamped procedures, so ordinary dev
+code pays neither their analysis cost nor their structural changes.
+
+The clone propagates constructor values through ordinary bindings and solves
+loop fixed points over their leaves. As a result, `.none` mode does not rebuild
+the successor iterator record and callable on each back edge when the producer
+shape is statically known. Iterator construction outside the loop remains an
+ordinary value operation, and a forced-dynamic iterator retains its explicit
+erased-callable dispatch. No stage recognizes iterator behavior from source
+names, field spelling, generic loop shape, or backend output.
+
+Iterator and stream loops are important clients. Once explicit producer topology
+and ordinary value flow expose a known iterator constructor, SpecConstr can:
 
 - split known record, tuple, tag, nominal, and callable arguments into leaves;
 - redirect matching direct calls to specialized workers;
@@ -4441,6 +4558,12 @@ structural shape is selected. Parser eligibility recognizes a flexible
 variable only in the explicit tag-extension position; a bare flexible shape or
 payload remains unsupported until earlier constraints resolve it.
 
+For a dictionary key whose known row contains only zero-payload tags, parser
+and encoder derivation apply their corresponding closure before selecting the
+dictionary-key protocol. The resulting closed row uses the lossless key-string
+path; validation must not first select the general nested-codec path and then
+close the row into a different runtime category.
+
 Both sides are pinned by tests: accepted—
 test/cli/JsonTagUnionProtocol.roc (issue #10418's unannotated
 `Ok(Friendly) == Json.parse(...)` comparison closes the inferred parser row);
@@ -4513,30 +4636,44 @@ test/cli/JsonNestedNominalContract.roc (both reads at one row, at a row wider
 than the shape demands, and at two different rows).
 
 Input formats contribute only errors that arise from reading their syntax and
-values. They do not implement a missing-required-field callback. Monotype
-specialization repeats the declared shape rule when a parser constraint was
-generalized before its concrete dispatcher was known: it constrains the
-instantiated callable's open error extension to include
-`MissingRequiredField(Str)` before materializing the callable monotype. This is
-required even when an enclosing generic function consumes and maps every parse
-error, because the generated parser runtime still constructs the missing-field
-branch. Lowering then consumes that solved error row and directly constructs
-`MissingRequiredField(field_name)` when generated record-finalization observes
-an absent required field; absence of that tag from the checked monotype is an
-invariant violation, not a condition lowering may recover from.
+values. They do not implement a missing-required-field callback. After source
+types settle, checking finalizes the generated parser contract for every body
+that owns a required-field path. If the format has an `invalid_value` method
+compatible with the exact encoding, state, and parser error types, one
+commit-probe records that fully checked call as a CONDITIONAL contract
+capability. Failure of that optional probe is rolled back completely: a parser
+whose error row retains `MissingRequiredField(Str)` never calls the method, so
+an absent or incompatible declaration is irrelevant. If the precise tag is not
+available at the source boundary, the same method is mandatory and ordinary
+static-dispatch checking reports its absence or incompatible type.
+
+Monotype specialization repeats only the checker-declared error relation when
+a parser constraint was generalized before its concrete dispatcher was known:
+it constrains an open instantiated callable error extension to include
+`MissingRequiredField(Str)`. A specialization boundary that is already closed
+without the tag selects the contract's conditional `invalid_value` slot and
+maps the generated missing-field path through that exact checked callable.
+There is no method lookup, recovery, or unchecked call after the checked
+boundary. An open-row parser directly constructs
+`MissingRequiredField(field_name)`; a closed-row parser emits one direct call
+to the selected `invalid_value` specialization. This remains correct when an
+enclosing generic function consumes and maps every parse error.
 
 Both sides are pinned by tests: accepted—
 test/cli/ParserRequiredFieldError.roc (a non-JSON derived parser reports the
-generic error with the missing field name), and
+generic error with the missing field name and the precise-tag path ignores an
+incompatible, unused `invalid_value` declaration),
 test/cli/JsonParseErrorComposition.roc (JSON scalar parsing has only
 `InvalidJson(Str)`, while a required-record parser composes in
 `MissingRequiredField(Str)`),
 test/cli/JsonParseGenericWrapperErrors.roc (a generalized wrapper may consume
-the parser errors without losing the concrete record's required-field error),
+the parser errors and a closed specialization consumes the checked conditional
+mapping capability),
 and test/cli/ParserCustomNominalField.roc (a custom nominal parser's narrower
 error row injects into its containing record row); rejected—
 test/cli/ParserMissingRequiredFieldError.roc (a required-record parser cannot
-use a closed format error row that omits `MissingRequiredField(Str)`).
+use a closed format error row that omits `MissingRequiredField(Str)` when the
+format supplies no checked `invalid_value` capability).
 
 ### Builtin Str Interpolation Part Compatibility
 
@@ -5001,6 +5138,13 @@ complete):
   Monotype output. Downstream (LIR layout, ARC, match
   compilation, interpreter, backends) the slot is an ORDINARY structural
   tag union—no new concepts anywhere below Monotype lowering.
+- Generated codecs traverse the source-value axis, not the runtime-slot axis.
+  An `InstField` with kind `optional` must therefore carry `value_ty`, and codec
+  planning reads that exact node; required and defaulted fields use their inline
+  `ty`. There is no `value_ty orelse ty` rule: a missing optional value node or
+  optional metadata on a required/defaulted field is an invariant violation.
+  The tagged presence slot is consumed only where generated parser/encoder code
+  explicitly reads, constructs, or tests record storage.
 - Boxy planning consumes the checked row's explicit field kind directly.
   Required and defaulted children use their inline representation; optional
   children use a memoized `[#Missing, #Present(payload)]` representation and
@@ -5865,6 +6009,14 @@ Other solved-graph mutations:
   Required-Field Error Composition (above). A structural probe of derived
   record fields gates ordinary unification of the parser's shared error row
   with `[MissingRequiredField(Str), ..]`.
+- `tryValidateOptionalInvalidValueMethod`—policy: Derived Parser
+  Required-Field Error Composition (above). Once source types settle, one
+  commit-probe instantiates and relates the format's optional `invalid_value`
+  capability at the exact parser boundary. Full success records the checked
+  conditional call; absence or mismatch rolls back every type, evidence, and
+  worklist mutation. `JsonParseGenericWrapperErrors.roc` pins the committed
+  side, while `ParserRequiredFieldError.roc` pins rollback by declaring an
+  incompatible unused method and still reporting the precise generated tag.
 - `constrainDerivedParserErrorRowIncludes`—policy: Derived Parser
   Required-Field Error Composition (above). A custom parser method's
   instantiated error extension is closed, then its concrete tags gate ordinary
@@ -6618,6 +6770,40 @@ program identities strictly in request order. This keeps global identity
 independent of worker scheduling without locking coordinator state. Root kinds
 that reserve durable identities or write directly to the final program remain
 serial barriers until they have the same sealed-draft boundary.
+
+Post-check timing keeps two distinct measures for this boundary. Monotype wall
+time is the elapsed coordinator interval, including worker waits and ordered
+commit. Aggregate worker work is the sum of executor callback intervals and can
+exceed wall time when callbacks overlap; it is diagnostic work, not another
+sequential phase. Coordinator post-batch work separately measures validation,
+serial fallback, discard, and ordered commit after each executor barrier. Task,
+lane, retry, and discard counts explain the relationship without using
+scheduling-dependent values for compiler behavior.
+
+Boxy follows a different post-check pipeline and reports its planning and
+lowering wall phases directly rather than projecting Monotype categories onto
+work it does not perform.
+
+Solved-to-LIR lowering uses the same ownership rule at a narrower boundary.
+Only closed procedure bodies whose syntax is proven body-local enter an
+executor batch. Each callback reads a frozen coordinator prefix and writes a
+private LIR store suffix; calls, captures, compile-time sites, static data,
+dynamic inline scopes, and other globally interned state remain serial
+barriers. Source local names are returned with the suffix and interned by the
+coordinator, preserving serial string identity without making the string store
+concurrent. After the full batch returns, the coordinator appends the suffixes
+in function-worklist order and relocates every body-local statement, local,
+span, branch, join, pattern, and metadata reference. This keeps procedure and
+store identity independent of completion order while allowing the supported
+body traversal itself to run without locks. Widening the parallel subset
+requires a corresponding immutable or shard-owned boundary for each newly
+admitted global side table, not ad hoc worker mutation.
+
+A typed boundary is worker-admissible exactly when its child is
+worker-admissible. Its source and destination types and layouts belong to the
+frozen coordinator prefix, and the ordinary typed assignment it emits belongs
+entirely to the private LIR suffix; the boundary introduces no additional
+global identity or side table.
 
 Instantiation graph node ids are dense, append-only indexes for the lifetime of
 the graph. Per-node optional attributes such as a row root's current extension
@@ -7763,6 +7949,23 @@ defaultable arithmetic operators default to `Dec`, quote and interpolation
 literals default to `Str`, and every requirement on such a var resolves against
 the default owner during checking. Structural-capable requirements on other
 unpinnable vars resolve structurally; the rest are statically unreachable.
+
+The checker pinning-frontier judgment appends each selected receiver and
+`DefaultTarget` to `default_materializations`. Its compatibility fixpoint
+consumes those `DefaultMaterialization` entries before the checked-module
+boundary, instantiates the selected owner's method scheme, and
+unifies every independent callable relation exactly. The default owner is
+selected once per receiver; creation-site constraints retain their source and
+copied scheme constraints retain their exact per-edge callable and use-site
+identity, including detached requirements. `CheckedModule` construction
+consumes each `dispatch_target` evidence slot or `rejected_static_dispatches`
+entry and never repeats the compatibility decision.
+
+Requirements instantiated from a candidate method target are conditional on
+that exact parent edge being selected. If checking rejects the parent, its
+derivation descendants become inactive without marking their callable classes
+rejected; an independently live relation that later shares one of those classes
+therefore remains valid and must still be checked on its own edge.
 
 Generalized rank is not evidence that an edge can pin a constrained var. A
 body-required `where` constraint may remain unresolved only while its receiver
@@ -10562,7 +10765,15 @@ ownership places. The place graph is solved to a fixpoint, so a nested read
 chain such as tag payload to struct field keeps the root aggregate's unit key.
 If the final read result binds owned, that read moves the unit only when the
 root unit is present and the ownership place has no later RC-bearing use on
-that path; otherwise it retains exactly as an ordinary read would. This use
+that path; otherwise it retains exactly as an ordinary read would. An operand
+belongs to the place exactly when its solved liveness leader is the place's
+unit local: the unit local itself and every binding the solver anchored on it
+as a borrow (pure aliases, complete and partial field or tag payload reads,
+lent call results, and their transitive borrows), all of which read the stored
+allocation without holding a unit of their own. Owned bindings hold their own
+retained unit and are their own leaders, so their later uses never keep the
+place live; binding an owned pure alias of a member does count as a use,
+because that bind retains through the place. This use
 query is definition-sensitive: a `set_local` that writes the root ends the
 current place definition after its value operand is read. Uses reached through
 the following jump belong to the newly written join value and cannot keep the
@@ -10592,11 +10803,26 @@ distinct refcounted field and that a fully dead representation lists every such
 field. It does not compare a partial list to its field-claim state: claims
 settle lazily when field reads are consumed and are shared by an alias set, so
 they are not a path-local snapshot of one binding. The later consumption and
-terminal balance checks independently prove those transfers. A borrowed result
+terminal balance checks independently prove those transfers. An RC-bearing field or
+tag payload read does consult those claims: reading a field whose stored unit a
+take on that path has already spent (settled, or pending settlement from an
+aggregate move) fails certification unless an intact surplus unit still keeps
+the field live, because the field's bytes no longer denote a unit the value
+holds. A borrowed result
 keeps the root unit key until a later consuming operation makes the same
 path-sensitive decision. This applies to ordinary owned locals and to owned
 join parameters; join parameters are not themselves assigned one global place
 origin because each incoming edge defines the join cell independently.
+
+When the root is read again only on the restoring outcomes of a direct call
+that receives the read result, the read still moves the root unit and registers
+that unit as the root-unit receipt of the call's outcome refinement. The call
+site consumes that receipt before it re-plans the refinement: the receipt makes
+the outcome convention mandatory for its position exactly as a field receipt
+does, the restoring outcomes return the root's unit, and a call that cannot
+admit the convention while holding a root-unit receipt is an ARC invariant
+violation rather than an unconditional consumption of a unit the root is read
+through again.
 
 Ownership-complete root transfer and committed struct-field transfer are two
 exact alternatives at one read, not cumulative decisions. If the root unit
@@ -10639,7 +10865,13 @@ where the field cannot have been taken yet—a take where it may already be
 gone would double-consume its unit on that path. A borrow of the field, and
 any whole use of the container, must likewise run where no take can have
 happened: after a take, the container's bytes for that field can alias the
-taker's mutation rather than the original value. An explicit outcome field
+taker's mutation rather than the original value. A borrowing read binds a
+name that keeps reading the field's stored unit without holding a unit of its
+own, and so does every binding the solver anchors as a borrow through that
+name (its pure aliases, its own field and payload reads, and call results
+lent from it). Every operand mention of any of those bindings is therefore a
+borrow observation of the field at that statement, so a take the mention
+could follow is rejected exactly like a borrowing read placed there. An explicit outcome field
 receipt changes the matching edge state from taken back to available before
 that edge is walked; this is the only transition that can clear a
 `may-taken` bit. Merges meet pointwise, and a loop poisons its own takes: a
@@ -11311,6 +11543,18 @@ live range, register assignment, spill slot, and every transition between the
 two; architecture-specific code generators own only the one
 floating-point/vector register-allocation mask and instruction encoding. They
 do not own a second local-location map or independently move LIR local values.
+
+Stable does not mean distinct. Before emitting a procedure, `LirCodeGen` walks
+its exact control-flow graph and inventories every definition and indirect
+write. A one-definition `assign_ref.local` may adopt its source's authoritative
+location only when both locals have the same runtime representation and the
+source is immutable. Multiply-defined locals, join parameters, uninitialized
+poisoning, output-pointer writes, control-flow capture writes, and aggregate
+stores therefore retain independent locations. This lets immutable alias
+chains emit no load/store copies without allowing a later source mutation to
+change an earlier snapshot. Floating-point values that require per-binding NaN
+normalization and vector values retain independent locations. The proof never
+uses emission order, last-use guesses, or an adjacent-instruction peephole.
 
 Floating-point and vector locations draw from the same register-allocation mask:
 XMM registers alias on x86-64 and V registers alias on AArch64. Vector locals

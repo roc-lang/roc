@@ -435,6 +435,14 @@ pub const Diagnostic = union(enum) {
     infinite_loop_never_exits: struct {
         region: Region,
     },
+    /// A `?` applied to the value a function returns: the final expression of
+    /// the function body (looking through blocks, `if` branches, and `match`
+    /// branches) or the operand of a `return`. Such a `?` unwraps the `Try` the
+    /// function was about to return, which only type-checks for a nested `Try`
+    /// and is almost always a mistake.
+    trailing_try_suffix: struct {
+        region: Region,
+    },
     return_outside_fn: struct {
         region: Region,
         context: ReturnContext,
@@ -561,6 +569,7 @@ pub const Diagnostic = union(enum) {
             .underscore_in_type_declaration => |d| d.region,
             .break_outside_loop => |d| d.region,
             .infinite_loop_never_exits => |d| d.region,
+            .trailing_try_suffix => |d| d.region,
             .return_outside_fn => |d| d.region,
             .mutually_recursive_type_aliases => |d| d.region,
             .deprecated_number_suffix => |d| d.region,

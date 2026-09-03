@@ -181,13 +181,13 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-call (constraint-fn-var 316)
+			(e-call (constraint-fn-var 318)
 				(e-lookup-local
 					(p-assign (ident "applyTwice")))
 				(e-lambda
 					(args
 						(p-assign (ident "x")))
-					(e-dispatch-call (method "plus") (constraint-fn-var 314)
+					(e-dispatch-call (method "plus") (constraint-fn-var 316)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
