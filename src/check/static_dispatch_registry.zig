@@ -1396,6 +1396,11 @@ pub const EvidenceNode = struct {
     generated_codec_derivation: ?GeneratedCodecDerivationId = null,
     instantiation: EvidenceTargetInstantiation,
     nested: EvidenceNested = .{ .resolved = .{} },
+    /// Range into `StaticDispatchPlanTable.site_substitutions`: the checked
+    /// type each quantified variable of the target's scheme was copied to at
+    /// this edge, in the target scheme's `scheme_vars` order. Empty for a
+    /// monomorphic target.
+    subst: artifact_serialize.Span = .{},
 };
 
 /// Public `SiteEvidenceEntry` declaration.
@@ -1409,6 +1414,11 @@ pub const SiteEvidenceEntry = extern struct {
     key: u32,
     start: u32,
     len: u32,
+    /// Range into `StaticDispatchPlanTable.site_substitutions`: the checked
+    /// type each quantified variable of the instantiated scheme was copied to
+    /// at this site, in the scheme's `scheme_vars` order.
+    subst_start: u32 = 0,
+    subst_len: u32 = 0,
 };
 
 /// Public `EvidencePathStep` declaration: one semantic step from a type to a
@@ -1430,6 +1440,11 @@ pub const EvidencePathStep = dispatch_evidence.PathStep;
 pub const EvidenceParamRecord = struct {
     method: canonical.MethodNameId,
     dispatcher_ty: CheckedTypeId,
+    /// Index of the dispatcher in the owning scheme's quantified-variable
+    /// vector (`CheckedProcedureTemplate.scheme_vars` or
+    /// `DispatchRefScope.scheme_vars`): the substitution entry this
+    /// obligation's receiver is read from.
+    slot: u32,
     /// Whether this parameter becomes a runtime method dictionary. Literal
     /// defaulting evidence remains an ABI input for descriptor selection but
     /// does not carry method implementations at runtime.
@@ -1705,6 +1720,8 @@ pub const StaticDispatchPlanTable = struct {
     evidence_refs: []CheckedEvidence = &.{},
     /// Checked-expr-keyed evidence for instantiation sites, sorted by key.
     site_evidence: []SiteEvidenceEntry = &.{},
+    /// Flat pool backing `SiteEvidenceEntry` substitution ranges.
+    site_substitutions: []const CheckedTypeId = &.{},
     /// Exact generated-codec contracts emitted by checking.
     generated_codec_derivations: []GeneratedCodecDerivation = &.{},
     /// Shared flat pool backing `GeneratedCodecDerivation.calls`.
@@ -1726,13 +1743,14 @@ pub const StaticDispatchPlanTable = struct {
         evidence_nodes: SerializedSlice(EvidenceNode) = .{},
         evidence_refs: SerializedSlice(CheckedEvidence) = .{},
         site_evidence: SerializedSlice(SiteEvidenceEntry) = .{},
+        site_substitutions: SerializedSlice(CheckedTypeId) = .{},
         generated_codec_derivations: SerializedSlice(GeneratedCodecDerivation) = .{},
         generated_codec_calls: SerializedSlice(GeneratedCodecCall) = .{},
 
         comptime {
-            // 17 side lists → 17 base-pointer fixups on deserialize, never a
+            // 18 side lists → 18 base-pointer fixups on deserialize, never a
             // function of how many plans/operands the table holds.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 17);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 18);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(StaticDispatchPlanTable, @This());
@@ -2220,6 +2238,15 @@ pub const StaticDispatchPlanTable = struct {
         return .{ .start = found.start, .len = found.len };
     }
 
+    /// The substitution recorded for the scheme instantiated at `expr`: one
+    /// checked type per quantified variable of that scheme, in the scheme's
+    /// `scheme_vars` order. Null when no checked instantiation edge was
+    /// recorded for the expression.
+    pub fn siteSubstitution(self: *const StaticDispatchPlanTable, expr: CheckedExprId) ?[]const CheckedTypeId {
+        const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence, @intFromEnum(expr), siteEvidenceOrder) orelse return null;
+        return self.site_substitutions[found.subst_start .. found.subst_start + found.subst_len];
+    }
+
     /// Build-time-only teardown: frees the heap-owned slices. A frozen
     /// (deserialized) table's slices alias the artifact's single backing buffer and are
     /// NEVER freed here—the artifact's `deinitInternal` frees the buffer wholesale and
@@ -2242,6 +2269,7 @@ pub const StaticDispatchPlanTable = struct {
         allocator.free(self.evidence_nodes);
         allocator.free(self.evidence_refs);
         allocator.free(self.site_evidence);
+        allocator.free(@constCast(self.site_substitutions));
         allocator.free(self.generated_codec_derivations);
         allocator.free(self.generated_codec_calls);
         self.* = .{};
@@ -2735,7 +2763,7 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
     // The fixup count is fixed by the number of serialized base pointers, never
     // by how much data each pool holds. The two tables below differ in operand
     // count by three orders of magnitude yet relocate identically.
-    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".fields.len == 17);
+    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".fields.len == 18);
 
     inline for (.{ @as(u32, 4), @as(u32, 4000) }) |operand_count| {
         const operands = try gpa.alloc(StaticDispatchOperand, operand_count);

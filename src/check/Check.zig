@@ -6365,16 +6365,25 @@ fn instantiateVarHelp(
             // is itself constrained) is keyed by the instantiated constraint fn
             // var at discharge time, and publication reaches that key through
             // these pairs.
+            // Every copied quantified variable is paired, constrained or not:
+            // the pairs are the instantiation's substitution, and a
+            // specialization is the scheme plus that substitution.
             const fresh_constraints_len = switch (fresh_resolved.desc.content) {
                 .flex => |flex| flex.constraints.len(),
                 .rigid => |rigid| rigid.constraints.len(),
                 .alias, .field_presence, .structure, .err => 0,
             };
-            if (fresh_constraints_len > 0) {
+            const fresh_is_quantified = switch (fresh_resolved.desc.content) {
+                .flex, .rigid => true,
+                .alias, .field_presence, .structure, .err => false,
+            };
+            if (fresh_is_quantified) {
                 try self.scratch_evidence_pairs.append(self.gpa, .{
                     .old_var = @intFromEnum(x.key_ptr.*),
                     .fresh_var = @intFromEnum(fresh_var),
                 });
+            }
+            if (fresh_constraints_len > 0) {
                 const old_resolved = self.types.resolveVar(x.key_ptr.*);
                 const old_constraints_range = switch (old_resolved.desc.content) {
                     .flex => |flex| flex.constraints,

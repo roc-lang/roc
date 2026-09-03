@@ -16308,6 +16308,9 @@ pub const DispatchRefScope = struct {
     checked_expr: CheckedExprId,
     /// The scope's ordered dispatch requirements in the shared params pool.
     evidence_params: artifact_serialize.Span = .{},
+    /// The scope scheme's quantified variables in canonical identity order (a
+    /// range into `CheckedProcedureTemplateTable.scheme_vars_pool`).
+    scheme_vars: artifact_serialize.Span = .{},
 };
 
 /// Stable identity of a generalized-local dispatch scope within a checked
@@ -16813,6 +16816,11 @@ const EvidencePass = struct {
     site_evidence: std.ArrayList(static_dispatch.SiteEvidenceEntry),
     evidence_params_pool: std.ArrayList(static_dispatch.EvidenceParamRecord),
     evidence_param_paths: std.ArrayList(static_dispatch.EvidencePathStep),
+    scheme_vars_pool: std.ArrayList(CheckedTypeId),
+    site_substitutions: std.ArrayList(CheckedTypeId),
+    /// Solver variables of the scheme whose params are being appended, in
+    /// slot order, so each param resolves to its slot.
+    scheme_var_scratch: std.ArrayListUnmanaged(Var) = .empty,
 
     enum_scratch: dispatch_evidence.Scratch,
     /// Stable copies of enumerated semantic paths. Evidence resolution may
@@ -16895,6 +16903,8 @@ const EvidencePass = struct {
             .site_evidence = .empty,
             .evidence_params_pool = .empty,
             .evidence_param_paths = .empty,
+            .scheme_vars_pool = .empty,
+            .site_substitutions = .empty,
             .enum_scratch = .{},
             .enumerated_path_arena = std.heap.ArenaAllocator.init(allocator),
             .scope_params = collections.DenseMap(DispatchScopeId, []EvidenceParam).init(allocator),
@@ -16921,6 +16931,9 @@ const EvidencePass = struct {
         self.site_evidence.deinit(self.allocator);
         self.evidence_params_pool.deinit(self.allocator);
         self.evidence_param_paths.deinit(self.allocator);
+        self.scheme_vars_pool.deinit(self.allocator);
+        self.site_substitutions.deinit(self.allocator);
+        self.scheme_var_scratch.deinit(self.allocator);
         self.enum_scratch.deinit(self.allocator);
         self.enumerated_path_arena.deinit();
         var scope_lists = self.scope_params.valueIterator();
@@ -16957,15 +16970,18 @@ const EvidencePass = struct {
         // schema rather than depend on visitation order.
         for (self.templates.templates) |*template| {
             try self.enumerateTemplateParams(template.*, &template_defs, &params);
+            template.scheme_vars = try self.appendSchemeVars(self.templateSchemeVar(template.*, &template_defs));
             template.evidence_params = try self.appendEvidenceParams(params.items);
         }
         for (self.templates.dispatch_scopes, 0..) |*scope, raw_scope| {
             const scope_id: DispatchScopeId = @enumFromInt(@as(u32, @intCast(raw_scope)));
             const scope_params = try self.paramsForScope(scope_id, scope.scheme_var);
+            scope.scheme_vars = try self.appendSchemeVars(scope.scheme_var);
             scope.evidence_params = try self.appendEvidenceParams(scope_params);
         }
         self.templates.evidence_params_pool = try self.evidence_params_pool.toOwnedSlice(self.allocator);
         self.templates.evidence_param_paths = try self.evidence_param_paths.toOwnedSlice(self.allocator);
+        self.templates.scheme_vars_pool = try self.scheme_vars_pool.toOwnedSlice(self.allocator);
 
         for (self.templates.templates, 0..) |*template, template_index| {
             try self.enumerateTemplateParams(template.*, &template_defs, &params);
@@ -17087,8 +17103,15 @@ const EvidencePass = struct {
                 entries.appendAssumeCapacity((try self.evidenceForVar(param, param.dispatcher_var, param.constraint.fn_var, true)).?);
             }
             const span = try self.appendEvidenceRefs(entries.items);
+            const subst = try self.appendSiteSubstitution(ModuleEnv.varFrom(source_pattern), &.{});
             try self.site_seen.put(site_key, {});
-            try self.site_evidence.append(self.allocator, .{ .key = site_key, .start = span.start, .len = span.len });
+            try self.site_evidence.append(self.allocator, .{
+                .key = site_key,
+                .start = span.start,
+                .len = span.len,
+                .subst_start = subst.start,
+                .subst_len = subst.len,
+            });
         }
 
         // A platform requirement invokes an app procedure without a source
@@ -17135,10 +17158,16 @@ const EvidencePass = struct {
                 const deferred = self.deferred_use_sites.items[i];
                 if (self.site_seen.contains(deferred.site_key)) continue;
                 self.current_chain = &.{};
-                const span = (try self.evidenceRefsForRecord(deferred.record_idx, true)).?;
-                if (span.len == 0) continue;
+                const spans = (try self.evidenceRefsForRecord(deferred.record_idx, true)).?;
+                if (spans.refs.len == 0 and spans.subst.len == 0) continue;
                 try self.site_seen.put(deferred.site_key, {});
-                try self.site_evidence.append(self.allocator, .{ .key = deferred.site_key, .start = span.start, .len = span.len });
+                try self.site_evidence.append(self.allocator, .{
+                    .key = deferred.site_key,
+                    .start = spans.refs.start,
+                    .len = spans.refs.len,
+                    .subst_start = spans.subst.start,
+                    .subst_len = spans.subst.len,
+                });
             }
         }
 
@@ -17159,6 +17188,88 @@ const EvidencePass = struct {
         self.plan_table.evidence_nodes = try self.evidence_nodes.toOwnedSlice(self.allocator);
         self.plan_table.evidence_refs = try self.evidence_refs.toOwnedSlice(self.allocator);
         self.plan_table.site_evidence = try self.site_evidence.toOwnedSlice(self.allocator);
+        self.plan_table.site_substitutions = try self.site_substitutions.toOwnedSlice(self.allocator);
+    }
+
+    /// The solver root of a template's scheme: its definition's type, or the
+    /// source pattern of the compile-time root an entry wrapper evaluates.
+    /// Intrinsic and hosted wrappers and expression roots have no scheme.
+    fn templateSchemeVar(
+        self: *EvidencePass,
+        template: CheckedProcedureTemplate,
+        template_defs: *const std.AutoHashMap(u32, CIR.Def.Idx),
+    ) ?Var {
+        if (template_defs.get(@intFromEnum(template.template_id))) |def_idx| return ModuleEnv.varFrom(def_idx);
+        return switch (template.body) {
+            .entry_wrapper => |wrapper_id| blk: {
+                const wrapper = self.entry_wrappers.get(wrapper_id);
+                const root = self.compile_time_roots.root(wrapper.root);
+                break :blk if (root.source_pattern) |source_pattern| ModuleEnv.varFrom(source_pattern) else null;
+            },
+            .checked_body, .intrinsic_wrapper, .unimplemented => null,
+        };
+    }
+
+    /// Publish a scheme's quantified variables in canonical identity order and
+    /// retain their solver roots in `scheme_var_scratch` for slot lookup by the
+    /// params appended next.
+    fn appendSchemeVars(self: *EvidencePass, scheme_var: ?Var) Allocator.Error!artifact_serialize.Span {
+        self.scheme_var_scratch.clearRetainingCapacity();
+        const start: u32 = @intCast(self.scheme_vars_pool.items.len);
+        const root = scheme_var orelse return .{ .start = start, .len = 0 };
+        const identity_vars = try canonical_type_keys.identityVarsFromVar(
+            self.allocator,
+            self.module.typeStoreConst(),
+            self.module.moduleEnvConst(),
+            root,
+        );
+        defer self.allocator.free(identity_vars);
+        try self.scheme_var_scratch.ensureTotalCapacity(self.allocator, identity_vars.len);
+        try self.scheme_vars_pool.ensureUnusedCapacity(self.allocator, identity_vars.len);
+        for (identity_vars) |identity_var| {
+            const resolved = self.types.resolveVar(identity_var).var_;
+            self.scheme_var_scratch.appendAssumeCapacity(resolved);
+            self.scheme_vars_pool.appendAssumeCapacity(self.checked_types.rootForSourceVar(self.module, resolved) orelse
+                checkedArtifactInvariant("scheme quantified variable type was not published", .{}));
+        }
+        return .{ .start = start, .len = @intCast(identity_vars.len) };
+    }
+
+    /// The slot of `dispatcher_var` in the scheme whose variables
+    /// `appendSchemeVars` retained last.
+    fn schemeVarSlot(self: *EvidencePass, dispatcher_var: Var) u32 {
+        const root = self.types.resolveVar(dispatcher_var).var_;
+        for (self.scheme_var_scratch.items, 0..) |scheme_var, slot| {
+            if (scheme_var == root) return @intCast(slot);
+        }
+        checkedArtifactInvariant("evidence parameter dispatcher was not a quantified variable of its scheme", .{});
+    }
+
+    /// The substitution one instantiation record applied to a scheme: for
+    /// each quantified variable of `scheme_root` (in slot order) the checked
+    /// type of its copy at that edge, or of the variable itself when the edge
+    /// shared it.
+    fn appendSiteSubstitution(
+        self: *EvidencePass,
+        scheme_root: Var,
+        pairs: []const ModuleEnv.SchemeUsePair,
+    ) Allocator.Error!artifact_serialize.Span {
+        const identity_vars = try canonical_type_keys.identityVarsFromVar(
+            self.allocator,
+            self.module.typeStoreConst(),
+            self.module.moduleEnvConst(),
+            scheme_root,
+        );
+        defer self.allocator.free(identity_vars);
+        const start: u32 = @intCast(self.site_substitutions.items.len);
+        try self.site_substitutions.ensureUnusedCapacity(self.allocator, identity_vars.len);
+        for (identity_vars) |identity_var| {
+            const root = self.types.resolveVar(identity_var).var_;
+            const edge_var = self.pairForResolved(pairs, root) orelse root;
+            self.site_substitutions.appendAssumeCapacity(self.checked_types.rootForSourceVar(self.module, edge_var) orelse
+                checkedArtifactInvariant("instantiated scheme variable type was not published", .{}));
+        }
+        return .{ .start = start, .len = @intCast(identity_vars.len) };
     }
 
     fn enumerateTemplateParams(
@@ -17399,6 +17510,7 @@ const EvidencePass = struct {
                 .method = try self.names.internMethodIdent(idents, param.constraint.fn_name),
                 .dispatcher_ty = self.checked_types.rootForSourceVar(self.module, param.dispatcher_var) orelse
                     checkedArtifactInvariant("checked evidence parameter dispatcher type was not published", .{}),
+                .slot = self.schemeVarSlot(param.dispatcher_var),
                 .runtime_dictionary = source == .constraint_callable or param.constraint.origin.literalKind() == null,
                 .structural = self.structuralKindForMethodIdent(param.constraint.fn_name),
                 .source = source,
@@ -18056,7 +18168,7 @@ const EvidencePass = struct {
             const nested = (try self.evidenceRefsForRecord(idx, true)).?;
             if (procedure_schema == .requires_record) {
                 const target_view = self.procedureEvidenceView(target);
-                if (nested.len != target_view.template.evidence_params.len) {
+                if (nested.refs.len != target_view.template.evidence_params.len) {
                     checkedArtifactInvariant("recorded procedure target evidence length differed from its declared params", .{});
                 }
             }
@@ -18065,7 +18177,8 @@ const EvidencePass = struct {
                 .dispatcher_ty = dispatcher_ty,
                 .generated_codec_derivation = generated_codec_derivation,
                 .instantiation = .{ .callable = instantiated_callable_ty },
-                .nested = .{ .resolved = nested },
+                .nested = .{ .resolved = nested.refs },
+                .subst = nested.subst,
             });
             try self.node_by_record.put(idx, node_id);
             return node_id;
@@ -18114,6 +18227,9 @@ const EvidencePass = struct {
         std.hash.autoHash(&hasher, candidate.dispatcher_ty);
         std.hash.autoHash(&hasher, candidate.generated_codec_derivation);
         std.hash.autoHash(&hasher, candidate.instantiation);
+        for (self.site_substitutions.items[candidate.subst.start .. candidate.subst.start + candidate.subst.len]) |ty| {
+            std.hash.autoHash(&hasher, ty);
+        }
         switch (candidate.nested) {
             .from_callable => std.hash.autoHash(&hasher, @as(u8, 0)),
             .resolved => |span| {
@@ -18148,6 +18264,9 @@ const EvidencePass = struct {
             left.dispatcher_ty != right.dispatcher_ty or
             left.generated_codec_derivation != right.generated_codec_derivation or
             !std.meta.eql(left.instantiation, right.instantiation)) return false;
+        const left_subst = self.site_substitutions.items[left.subst.start .. left.subst.start + left.subst.len];
+        const right_subst = self.site_substitutions.items[right.subst.start .. right.subst.start + right.subst.len];
+        if (!std.mem.eql(CheckedTypeId, left_subst, right_subst)) return false;
         return switch (left.nested) {
             .from_callable => right.nested == .from_callable,
             .resolved => |left_span| switch (right.nested) {
@@ -18165,9 +18284,15 @@ const EvidencePass = struct {
         };
     }
 
+    const RecordSiteSpans = struct {
+        refs: artifact_serialize.Span,
+        subst: artifact_serialize.Span,
+    };
+
     /// Resolve one scheme-use record's obligations (in the scheme's canonical
-    /// order) into a contiguous `evidence_refs` range.
-    fn evidenceRefsForRecord(self: *EvidencePass, record_idx: u32, commit_unpinned: bool) Allocator.Error!?artifact_serialize.Span {
+    /// order) into a contiguous `evidence_refs` range, and record the
+    /// substitution the instantiation applied to the scheme.
+    fn evidenceRefsForRecord(self: *EvidencePass, record_idx: u32, commit_unpinned: bool) Allocator.Error!?RecordSiteSpans {
         const module_env = self.module.moduleEnvConst();
         const record = module_env.scheme_uses.items.items[record_idx];
         const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
@@ -18185,7 +18310,10 @@ const EvidencePass = struct {
             entries.appendAssumeCapacity(evidence);
         }
 
-        return @as(?artifact_serialize.Span, try self.appendEvidenceRefs(entries.items));
+        return .{
+            .refs = try self.appendEvidenceRefs(entries.items),
+            .subst = try self.appendSiteSubstitution(@enumFromInt(record.scheme_root), pairs),
+        };
     }
 
     fn evidenceForRecordParam(
@@ -18424,8 +18552,15 @@ const EvidencePass = struct {
                 entries.appendAssumeCapacity(evidence);
             }
             const span = try self.appendEvidenceRefs(entries.items);
+            const subst = try self.appendSiteSubstitution(scope.scheme_var, &.{});
             try self.site_seen.put(site_key, {});
-            try self.site_evidence.append(self.allocator, .{ .key = site_key, .start = span.start, .len = span.len });
+            try self.site_evidence.append(self.allocator, .{
+                .key = site_key,
+                .start = span.start,
+                .len = span.len,
+                .subst_start = subst.start,
+                .subst_len = subst.len,
+            });
         }
 
         // References that do not become specialization edges intentionally
@@ -18447,12 +18582,18 @@ const EvidencePass = struct {
 
         const record = self.module.moduleEnvConst().scheme_uses.items.items[record_idx];
         const shared = record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.shared_value_use);
-        const span = (try self.evidenceRefsForRecord(record_idx, !shared)) orelse {
+        const spans = (try self.evidenceRefsForRecord(record_idx, !shared)) orelse {
             try self.deferred_use_sites.append(self.allocator, .{ .record_idx = record_idx, .site_key = site_key });
             return;
         };
         try self.site_seen.put(site_key, {});
-        try self.site_evidence.append(self.allocator, .{ .key = site_key, .start = span.start, .len = span.len });
+        try self.site_evidence.append(self.allocator, .{
+            .key = site_key,
+            .start = spans.refs.start,
+            .len = spans.refs.len,
+            .subst_start = spans.subst.start,
+            .subst_len = spans.subst.len,
+        });
     }
 
     /// Publish the complete construction recipe for a generalized nested
@@ -18529,8 +18670,8 @@ const EvidencePass = struct {
 test "procedure evidence schema positively classifies callable paths and pathless requirements" {
     var path_steps = [_]static_dispatch.EvidencePathStep{ undefined, undefined };
     var params = [_]static_dispatch.EvidenceParamRecord{
-        .{ .method = @enumFromInt(1), .dispatcher_ty = @enumFromInt(1), .runtime_dictionary = true, .structural = .encoder, .path = .{ .start = 0, .len = 1 } },
-        .{ .method = @enumFromInt(2), .dispatcher_ty = @enumFromInt(2), .runtime_dictionary = true, .path = .{ .start = 1, .len = 1 } },
+        .{ .method = @enumFromInt(1), .dispatcher_ty = @enumFromInt(1), .slot = 0, .runtime_dictionary = true, .structural = .encoder, .path = .{ .start = 0, .len = 1 } },
+        .{ .method = @enumFromInt(2), .dispatcher_ty = @enumFromInt(2), .slot = 1, .runtime_dictionary = true, .path = .{ .start = 1, .len = 1 } },
     };
     const table = CheckedProcedureTemplateTable{
         .evidence_params_pool = params[0..],
@@ -19414,6 +19555,11 @@ pub const CheckedProcedureTemplate = struct {
     /// `CheckedProcedureTemplateTable.evidence_params_pool`). Every
     /// specialization of this template receives one evidence entry per param.
     evidence_params: artifact_serialize.Span = .{},
+    /// The scheme's quantified variables in canonical identity order (a range
+    /// into `CheckedProcedureTemplateTable.scheme_vars_pool`). A
+    /// specialization of this template is the template plus one monomorphic
+    /// type per entry; every obligation's receiver is one of these entries.
+    scheme_vars: artifact_serialize.Span = .{},
 };
 
 fn checkedTypeIsClosedTagRow(
@@ -19577,6 +19723,8 @@ pub const CheckedProcedureTemplateTable = struct {
     evidence_params_pool: []static_dispatch.EvidenceParamRecord = &.{},
     /// Flat pool backing each evidence param's `path` span.
     evidence_param_paths: []static_dispatch.EvidencePathStep = &.{},
+    /// Flat pool backing template and scope `scheme_vars` ranges.
+    scheme_vars_pool: []CheckedTypeId = &.{},
     /// Scope of each `StaticDispatchPlanTable.dispatch_relation_refs` entry.
     dispatch_ref_scopes: []DispatchScope = &.{},
     /// Relation semantics of each
@@ -19595,6 +19743,7 @@ pub const CheckedProcedureTemplateTable = struct {
         by_def: SerializedSlice(static_dispatch.ProcedureTemplateLookupEntry) = .{},
         evidence_params_pool: SerializedSlice(static_dispatch.EvidenceParamRecord) = .{},
         evidence_param_paths: SerializedSlice(static_dispatch.EvidencePathStep) = .{},
+        scheme_vars_pool: SerializedSlice(CheckedTypeId) = .{},
         dispatch_ref_scopes: SerializedSlice(DispatchScope) = .{},
         dispatch_relation_kinds: SerializedSlice(DispatchRelationKind) = .{},
         dispatch_scopes: SerializedSlice(DispatchRefScope) = .{},
@@ -19840,6 +19989,7 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator.free(self.templates);
         allocator.free(self.evidence_params_pool);
         allocator.free(self.evidence_param_paths);
+        allocator.free(self.scheme_vars_pool);
         allocator.free(self.dispatch_ref_scopes);
         allocator.free(self.dispatch_relation_kinds);
         allocator.free(self.dispatch_scopes);
@@ -19849,6 +19999,17 @@ pub const CheckedProcedureTemplateTable = struct {
     }
 
     /// The template's evidence params, in canonical order.
+    /// The quantified variables of a template's scheme, in slot order.
+    pub fn templateSchemeVars(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const CheckedTypeId {
+        return self.scheme_vars_pool[template.scheme_vars.start .. template.scheme_vars.start + template.scheme_vars.len];
+    }
+
+    /// The quantified variables of a generalized-local scope's scheme, in
+    /// slot order.
+    pub fn scopeSchemeVars(self: *const CheckedProcedureTemplateTable, scope: *const DispatchRefScope) []const CheckedTypeId {
+        return self.scheme_vars_pool[scope.scheme_vars.start .. scope.scheme_vars.start + scope.scheme_vars.len];
+    }
+
     pub fn evidenceParams(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const static_dispatch.EvidenceParamRecord {
         return self.evidence_params_pool[template.evidence_params.start .. template.evidence_params.start + template.evidence_params.len];
     }
@@ -29025,6 +29186,9 @@ pub const DispatchEvidenceFailure = struct {
         evidence_ref_node_out_of_bounds,
         site_evidence_key_out_of_bounds,
         site_evidence_refs_out_of_bounds,
+        site_substitution_out_of_bounds,
+        scheme_vars_out_of_bounds,
+        evidence_param_slot_out_of_bounds,
         site_evidence_keys_unsorted,
         template_plan_ref_out_of_bounds,
         template_direct_plan_ref_out_of_bounds,
@@ -29299,7 +29463,7 @@ pub const CheckedModuleArtifact = struct {
             // independent of stored data size. The optional-field body tables
             // add three pointers beyond the current-main count, and the
             // record-unset label pool one more.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 213);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 215);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -29508,7 +29672,7 @@ pub const CheckedModuleArtifact = struct {
     // callable relation or only the shared method target.
     // Version 76 combines the version-75 artifact with retained callable
     // evidence provenance used by pathless specialization.
-    const serialized_layout_version: u32 = 77;
+    const serialized_layout_version: u32 = 78;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -30075,6 +30239,9 @@ pub const CheckedModuleArtifact = struct {
             if (@as(u64, entry.start) + entry.len > table.evidence_refs.len) {
                 return .{ .kind = .site_evidence_refs_out_of_bounds, .index = @intCast(i) };
             }
+            if (@as(u64, entry.subst_start) + entry.subst_len > table.site_substitutions.len) {
+                return .{ .kind = .site_substitution_out_of_bounds, .index = @intCast(i) };
+            }
             if (i > 0 and table.site_evidence[i - 1].key >= entry.key) {
                 return .{ .kind = .site_evidence_keys_unsorted, .index = @intCast(i) };
             }
@@ -30117,6 +30284,17 @@ pub const CheckedModuleArtifact = struct {
             }
             if (template.direct_dispatch_plans.len + template.dispatch_relations.len != template.static_dispatch_plans.len) {
                 return .{ .kind = .template_dispatch_partition_mismatch, .index = @intCast(i) };
+            }
+            if (@as(u64, template.scheme_vars.start) + template.scheme_vars.len > templates.scheme_vars_pool.len) {
+                return .{ .kind = .scheme_vars_out_of_bounds, .index = @intCast(i) };
+            }
+            for (templates.evidenceParams(&template)) |param| {
+                if (param.slot >= template.scheme_vars.len) {
+                    return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(i), .method = param.method };
+                }
+                if (templates.scheme_vars_pool[template.scheme_vars.start + param.slot] != param.dispatcher_ty) {
+                    return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(i), .method = param.method };
+                }
             }
             const all_refs = table.template_refs[template.static_dispatch_plans.start .. template.static_dispatch_plans.start + template.static_dispatch_plans.len];
             const direct_refs = table.direct_template_refs[template.direct_dispatch_plans.start .. template.direct_dispatch_plans.start + template.direct_dispatch_plans.len];
@@ -30304,8 +30482,18 @@ pub const CheckedModuleArtifact = struct {
                 }
             }
         }
-        for (templates.dispatch_scopes) |scope| {
+        for (templates.dispatch_scopes, 0..) |scope, scope_index| {
+            if (@as(u64, scope.scheme_vars.start) + scope.scheme_vars.len > templates.scheme_vars_pool.len) {
+                return .{ .kind = .scheme_vars_out_of_bounds, .index = @intCast(scope_index) };
+            }
             const params = templates.evidence_params_pool[scope.evidence_params.start .. scope.evidence_params.start + scope.evidence_params.len];
+            for (params) |param| {
+                if (param.slot >= scope.scheme_vars.len or
+                    templates.scheme_vars_pool[scope.scheme_vars.start + param.slot] != param.dispatcher_ty)
+                {
+                    return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(scope_index), .method = param.method };
+                }
+            }
             for (params, 0..) |param, param_offset| {
                 const path = templates.evidenceParamPath(param);
                 const source_root = switch (param.source) {
@@ -35696,8 +35884,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x42, 0x08, 0xFE, 0x13, 0x77, 0xF9, 0x10, 0xEF, 0x7F, 0xBF, 0xCF, 0xD9, 0x9A, 0x05, 0x10, 0x7E,
-        0x8B, 0x6F, 0x50, 0x17, 0x2D, 0x2B, 0x04, 0x37, 0xD2, 0x20, 0x7B, 0x27, 0x04, 0xB0, 0xBC, 0x1A,
+        0x04, 0x77, 0xEE, 0x56, 0xB8, 0xCB, 0xF5, 0x97, 0x5E, 0xFC, 0xD6, 0x4B, 0xF4, 0xEE, 0xA0, 0x7F,
+        0xFB, 0x4A, 0x68, 0xC4, 0x31, 0xA9, 0x28, 0xB4, 0xBB, 0x0C, 0x5F, 0x04, 0x45, 0xBA, 0xA5, 0x81,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
