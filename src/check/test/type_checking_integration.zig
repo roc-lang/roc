@@ -9047,6 +9047,73 @@ test "check type - polarity - derivation leaves a rigid tag-row extension reject
     try checkTypesModule(source, .fail_first, "Missing Method");
 }
 
+test "check type - polarity - derived encoder closes a Missing row reached through an alias marker" {
+    // The alias declaration stores a polarity marker as the ext of its
+    // `[Missing]`, and instantiating `Shape` for `user`'s annotation resolves
+    // that marker to a fresh flex, so the row is open when the encoder
+    // derivation reaches it. The encoder recognizes the optional-field
+    // convention only on an exactly closed `[Missing]`
+    // (missingTryInfoFromNominal), so left open the field is `missing
+    // method`; the derivation closes the row first.
+    const source =
+        \\Shape : { name : Str, nick : Try(Str, [Missing]) }
+        \\
+        \\user : Shape
+        \\user = { name: "a", nick: Err(Missing) }
+        \\
+        \\out = Json.to_str(user)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - polarity - derived parser accepts a Missing row reached through an alias marker" {
+    // The same alias marker, instantiated for the parser's result type, so
+    // the `[Missing]` row is open at the derivation site. This row does not
+    // depend on closeTagRowsForDerivation: parser eligibility already
+    // accepts an open `[Missing, ..flex]` as the wildcard optional field
+    // (unboundTryInfoFromNominal), and pinWildcardOptionalParseField would
+    // pin it to `[Missing]` during validation if the walker had not already
+    // closed it at constraint resolution. Pinned here for the alias-marker
+    // path itself, which is the shape of issue 10121's `Shape`.
+    const source =
+        \\Shape : { name : Str, nick : Try(Str, [Missing]) }
+        \\
+        \\parse_user : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\parse_user = |s| Json.parse(s)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try({ name: Str, nick: Try(Str, [Missing]) }, [InvalidJson(Str), MissingRequiredField(Str)])");
+}
+
+test "check type - polarity - derived encoder closes a Null row reached through an alias marker" {
+    // The nullable-field convention shares the closed-row requirement: the
+    // encoder accepts `Try(_, [Null])` only on an exactly closed `[Null]`
+    // (nullTryInfoFromNominal), so the alias marker's fresh flex must
+    // collapse before the field is judged.
+    const source =
+        \\Shape : { name : Str, nick : Try(Str, [Null]) }
+        \\
+        \\user : Shape
+        \\user = { name: "a", nick: Err(Null) }
+        \\
+        \\out = Json.to_str(user)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - polarity - derived parser closes a Null row reached through an alias marker" {
+    // Parser eligibility likewise recognizes `Try(_, [Null])` only on an
+    // exactly closed `[Null]`; unlike `[Missing]`, an open `[Null, ..flex]`
+    // has no wildcard-optional fallback, so left open the field is `missing
+    // method`.
+    const source =
+        \\Shape : { name : Str, nick : Try(Str, [Null]) }
+        \\
+        \\parse_user : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\parse_user = |s| Json.parse(s)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try({ name: Str, nick: Try(Str, [Null]) }, [InvalidJson(Str), MissingRequiredField(Str)])");
+}
+
 test "check type - polarity - input is inferred as closed" {
     const source =
         \\mk_my_tag = |MyTag as a| a
