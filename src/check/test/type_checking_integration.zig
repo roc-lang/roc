@@ -2803,6 +2803,80 @@ test "check type - tag union - tag typo" {
         \\
         \\A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists. Add `Greeen` to the tag union in the annotation.
         \\
+        \\**Hint:** Maybe `Greeen` should be `Green`?
+        \\
+        \\
+    );
+}
+
+test "check type - tag union - tag typo hint on an inline output union" {
+    // The absent-ext path: the annotation's own union lists the candidates
+    // the hint is chosen from.
+    const source =
+        \\to_color : Str -> [Red, Green, Blue]
+        \\to_color = |_| Greeen
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**Tag Not In Annotation**
+        \\This definition can produce the tag `Greeen` but the annotated tag union does not list it.
+        \\```roc
+        \\to_color : Str -> [Red, Green, Blue]
+        \\```
+        \\                  ^^^^^^^^^^^^^^^^^^
+        \\
+        \\A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists. Add `Greeen` to the tag union in the annotation.
+        \\
+        \\**Hint:** Maybe `Greeen` should be `Green`?
+        \\
+        \\
+    );
+}
+
+test "check type - tag union - tag typo hint on an explicit open ext" {
+    // An anonymous `..` in an output position is generated like absence, so
+    // it carries the same hint. On a value binding it never warns redundant,
+    // so this is the audit's only problem.
+    const source =
+        \\color : [Red, Green, Blue, ..]
+        \\color = Greeen
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**Tag Not In Annotation**
+        \\This definition can produce the tag `Greeen` but the annotated tag union does not list it.
+        \\```roc
+        \\color : [Red, Green, Blue, ..]
+        \\```
+        \\        ^^^^^^^^^^^^^^^^^^^^^^
+        \\
+        \\A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists. Add `Greeen` to the tag union in the annotation.
+        \\
+        \\**Hint:** Maybe `Greeen` should be `Green`?
+        \\
+        \\
+    );
+}
+
+test "check type - tag union - no tag typo hint without a close match" {
+    // `Purple` is not within typo distance of any listed tag, so the report
+    // ends without a hint.
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Color : [Red, Green, Blue]
+        \\
+        \\color : Color
+        \\color = Purple
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**Tag Not In Annotation**
+        \\This definition can produce the tag `Purple` but the annotated tag union does not list it.
+        \\```roc
+        \\color : Color
+        \\```
+        \\        ^^^^^
+        \\
+        \\A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists. Add `Purple` to the tag union in the annotation.
+        \\
         \\
     );
 }
