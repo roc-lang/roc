@@ -997,7 +997,6 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "[\"failed: Nope2\"]" },
     },
-||||||| parent of f960312864 (Add regression test for nested custom codecs)
     .{
         // https://github.com/roc-lang/roc/issues/11063
         //
@@ -1068,7 +1067,6 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "\"xnull\"" },
     },
-||||||| parent of 5fe51671c3 (Add regression test for issue 11064)
     .{
         // https://github.com/roc-lang/roc/issues/11064
         .name = "issue 11064: unannotated imported field reader runs from every match arm calling it",
