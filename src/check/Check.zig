@@ -752,6 +752,10 @@ instantiation_is_immediate_callee: bool = false,
 /// method var was created by the rolled-back type-store work.
 dispatch_target_instantiations: std.ArrayListUnmanaged(DispatchTargetInstantiation) = .empty,
 dispatch_target_instantiation_by_fn_var: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+/// Raw body constraint callable -> its `where_method_use` record. Deferred
+/// constraint fixpoints revisit the same raw body-dispatch use; this index makes them reuse
+/// the recorded signature copy in constant time.
+where_method_use_record_by_fn_var: std.AutoHashMapUnmanaged(Var, u32) = .empty,
 /// Explicit derivation edges for constraints copied while instantiating a
 /// selected method target. This distinguishes target-owned recursive
 /// obligations from unrelated caller constraints merely grounded by the same
@@ -1167,7 +1171,7 @@ const SchemeRequirementCandidate = struct {
 };
 
 /// One generalization-boundary root. `owner` is the stable source var used by
-/// checker side tables; `interface` is the solved type published by the
+/// checker side tables; `interface` is the solved type recorded at the
 /// boundary. Keeping the pair in one value prevents call sites from silently
 /// swapping two parallel slices.
 const BoundaryRoot = struct {
@@ -2563,6 +2567,17 @@ fn initAssumePrepared(
         _ = try types.markVarStaticDispatchRejected(rejected.fnVar());
     }
 
+    var rehydrated_where_method_uses: std.AutoHashMapUnmanaged(Var, u32) = .empty;
+    errdefer rehydrated_where_method_uses.deinit(gpa);
+    for (cir.scheme_uses.items.items, 0..) |record, record_idx| {
+        if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) continue;
+        const entry = try rehydrated_where_method_uses.getOrPut(gpa, @enumFromInt(record.slot_data));
+        if (entry.found_existing) {
+            std.debug.panic("body constraint callable has multiple where-method use records", .{});
+        }
+        entry.value_ptr.* = @intCast(record_idx);
+    }
+
     const self: Self = .{
         .gpa = gpa,
         .types = types,
@@ -2716,6 +2731,7 @@ fn initAssumePrepared(
         .function_effect_dependency_frame_starts = .empty,
         .function_effect_resolution = collections.DenseMap(Var, FunctionEffectResolution).init(gpa),
         .probe_var_pool_lens = .empty,
+        .where_method_use_record_by_fn_var = rehydrated_where_method_uses,
     };
 
     return self;
@@ -2869,6 +2885,7 @@ pub fn deinit(self: *Self) void {
     self.default_materializations.deinit(self.gpa);
     self.dispatch_target_instantiations.deinit(self.gpa);
     self.dispatch_target_instantiation_by_fn_var.deinit(self.gpa);
+    self.where_method_use_record_by_fn_var.deinit(self.gpa);
     self.dispatch_derivations.deinit(self.gpa);
     self.dispatch_derivation_by_child_fn_var.deinit(self.gpa);
     self.scratch_embed_active_pairs.deinit(self.gpa);
@@ -5018,7 +5035,6 @@ fn runUnify(self: *Self, a: Var, b: Var, env: *Env, opts: unifier.Options) std.m
     if (result.isAccepted()) {
         try self.recordAbsorbedDefaults(construction_var, a, b);
     }
-
     // Set regions and add to the current rank all variables created during unification.
     //
     // We assign all fresh variables the region of `b` (the "actual" type), since `a` is
@@ -6565,9 +6581,9 @@ fn instantiateVar(
 /// being checked (a body use) or already generalized (a requirement on the
 /// rigid re-checked at a later boundary). Copying a generalized receiver
 /// would mint a fresh flex carrying its constraints, which re-defers them
-/// onto the rigid and never settles. Obligations at the enclosing scheme's
-/// instantiation sites close the same markers (`PolarityVarBehavior.close`),
-/// bounding implementations by the listed tags.
+/// onto the rigid and never settles. Enclosing-scheme instantiations close the
+/// same markers (`PolarityVarBehavior.close`), bounding implementations by the
+/// listed tags.
 fn instantiateWhereMethodForUse(self: *Self, signature_var: Var, env: *Env, region: Region) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -6595,6 +6611,75 @@ fn instantiateWhereMethodForUse(self: *Self, signature_var: Var, env: *Env, regi
         self.setRegionAt(copied.*, region);
     }
     return use_var;
+}
+
+/// Persist the explicit callable relation for one per-use where-method
+/// instantiation. The instantiator copied structure while sharing every leaf,
+/// so its complete map proves the body dispatch callable's relation to the
+/// pristine signature; checked-artifact construction must never try to recover
+/// that relation by method name.
+fn recordWhereMethodUse(
+    self: *Self,
+    signature_var: Var,
+    constraint: StaticDispatchConstraint,
+) std.mem.Allocator.Error!void {
+    self.scratch_evidence_pairs.clearRetainingCapacity();
+    try self.scratch_evidence_pairs.ensureTotalCapacity(self.gpa, self.var_map.count());
+    var pair_iter = self.var_map.iterator();
+    while (pair_iter.next()) |entry| {
+        self.scratch_evidence_pairs.appendAssumeCapacity(.{
+            .old_var = @intFromEnum(entry.key_ptr.*),
+            .fresh_var = @intFromEnum(entry.value_ptr.*),
+        });
+    }
+    if (self.scratch_evidence_pairs.items.len == 0) {
+        std.debug.panic("where-method use instantiation produced no callable copy", .{});
+    }
+    try self.canonicalizeSchemeUsePairs(&self.scratch_evidence_pairs);
+    if (self.where_method_use_record_by_fn_var.contains(constraint.fn_var)) {
+        std.debug.panic("body constraint callable already has a where-method use record", .{});
+    }
+    try self.where_method_use_record_by_fn_var.ensureUnusedCapacity(self.gpa, 1);
+    const record_index: u32 = @intCast(self.cir.scheme_uses.items.items.len);
+    try self.cir.recordSchemeUse(
+        if (constraintIntroExpr(constraint)) |expr| @intFromEnum(expr) else 0,
+        .where_method_use,
+        @intFromEnum(constraint.fn_var),
+        signature_var,
+        self.scratch_evidence_pairs.items,
+    );
+    self.where_method_use_record_by_fn_var.putAssumeCapacityNoClobber(constraint.fn_var, record_index);
+    self.scratch_evidence_pairs.clearRetainingCapacity();
+}
+
+/// Return the already-minted copy for a body dispatch revisited by the
+/// constraint fixpoint. One raw body callable denotes one body-dispatch use, so a
+/// revisit must reuse its recorded copy rather than append a second edge.
+fn existingWhereMethodUse(
+    self: *Self,
+    signature_var: Var,
+    constraint_fn_var: Var,
+) ?Var {
+    const record_idx = self.where_method_use_record_by_fn_var.get(constraint_fn_var) orelse return null;
+    const record = self.cir.scheme_uses.items.items[record_idx];
+    if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
+        record.slot_data != @intFromEnum(constraint_fn_var))
+    {
+        std.debug.panic("where-method use index named the wrong scheme-use record", .{});
+    }
+    if (self.types.resolveVar(@as(Var, @enumFromInt(record.scheme_root))).var_ !=
+        self.types.resolveVar(signature_var).var_)
+    {
+        std.debug.panic("body constraint callable was matched to two where-method signatures", .{});
+    }
+    const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+    const signature_root = self.types.resolveVar(signature_var).var_;
+    for (pairs) |pair| {
+        if (self.types.resolveVar(@as(Var, @enumFromInt(pair.old_var))).var_ == signature_root) {
+            return @enumFromInt(pair.fresh_var);
+        }
+    }
+    std.debug.panic("where-method use record omitted its signature callable copy", .{});
 }
 
 /// Instantiate a type declaration's var for use in a type annotation,
@@ -13786,8 +13871,13 @@ fn predeclareAnnotationScheme(
 
     try env.var_pool.pushRank();
     const saved_predeclaring = self.predeclaring_annotation;
+    const saved_active_scheme_root = self.active_scheme_root;
     self.predeclaring_annotation = true;
-    defer self.predeclaring_annotation = saved_predeclaring;
+    self.active_scheme_root = ModuleEnv.varFrom(annotation_idx);
+    defer {
+        self.predeclaring_annotation = saved_predeclaring;
+        self.active_scheme_root = saved_active_scheme_root;
+    }
     try self.generateAnnotationType(annotation_idx, env);
     const scheme_var = try self.instantiateVarOrphan(
         ModuleEnv.varFrom(annotation_idx),
@@ -14060,7 +14150,9 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
     // check; members that generalize install their own owners in `checkDef`.
     const saved_active_scheme_root = self.active_scheme_root;
     self.active_scheme_root = null;
-    defer self.active_scheme_root = saved_active_scheme_root;
+    defer {
+        self.active_scheme_root = saved_active_scheme_root;
+    }
 
     // A singleton value def never generalizes, so its obligations resolve at
     // the base rank (after checkDef); everything else's boundary is the RHS
@@ -25929,7 +26021,13 @@ const Probe = struct {
         self.check.pending_tuple_accesses.shrinkRetainingCapacity(self.pending_tuple_accesses_len);
         // Scheme-use evidence recorded during the probe can reference fresh
         // vars the savepoint rollback just discarded.
-        self.check.cir.scheme_uses.items.shrinkRetainingCapacity(self.scheme_uses_len);
+        while (self.check.cir.scheme_uses.items.items.len > self.scheme_uses_len) {
+            const removed = self.check.cir.scheme_uses.items.pop().?;
+            if (removed.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
+                const did_remove = self.check.where_method_use_record_by_fn_var.remove(@enumFromInt(removed.slot_data));
+                std.debug.assert(did_remove);
+            }
+        }
         self.check.cir.scheme_use_pairs.items.shrinkRetainingCapacity(self.scheme_use_pairs_len);
         self.check.cir.generated_codec_derivations.items.shrinkRetainingCapacity(self.generated_codec_derivations_len);
         self.check.cir.generated_codec_calls.items.shrinkRetainingCapacity(self.generated_codec_calls_len);
@@ -26652,6 +26750,10 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
             // definition's), so it has no fresh pairs to seed; the walk
             // reaches the shared body through the ordinary reference edge.
             .shared_value_use, .recursive_dispatch_target, .recursive_reference => {},
+            // A where-method use carries a complete structural copy map, but
+            // only to relate callable identities during checked-artifact construction.
+            // It has no child dispatch requirements and is not an edge in the default walk.
+            .where_method_use => {},
         }
     }
     for (self.dispatch_target_instantiations.items, 0..) |instantiation, index| {
@@ -32018,11 +32120,26 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // at a boundary) is not a use: it stays the identity
                         // relation it always was, or every pass would mint a
                         // fresh copy and the drain would never settle.
-                        const same_root = self.types.resolveVar(rigid_var).var_ == self.types.resolveVar(constraint.fn_var).var_;
-                        const use_fn_var = if (same_root)
+                        const signature_resolved = self.types.resolveVar(rigid_var);
+                        const same_root = signature_resolved.var_ == self.types.resolveVar(constraint.fn_var).var_;
+                        // A whole-method hole (`a.render : _`) has no signature
+                        // structure to copy: its shape is inferred from the
+                        // body's uses and shared by all of them.
+                        const signature_is_hole = signature_resolved.desc.content == .flex;
+                        const use_fn_var = if (same_root or signature_is_hole)
                             rigid_var
-                        else
-                            try self.instantiateWhereMethodForUse(rigid_var, env, self.getRegionAt(constraint.fn_var));
+                        else blk: {
+                            if (self.existingWhereMethodUse(rigid_var, constraint.fn_var)) |existing| {
+                                break :blk existing;
+                            }
+                            const instantiated = try self.instantiateWhereMethodForUse(
+                                rigid_var,
+                                env,
+                                self.getRegionAt(constraint.fn_var),
+                            );
+                            try self.recordWhereMethodUse(rigid_var, constraint);
+                            break :blk instantiated;
+                        };
 
                         // Unify the actual function var against the inferred var
                         //

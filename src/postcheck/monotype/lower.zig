@@ -41884,7 +41884,7 @@ const BodyContext = struct {
                             .target = target.target,
                             .instantiation = null,
                             .local_proc_context = target.local_proc_context,
-                            .nested = .synthesize,
+                            .nested = self.dependentCallableNestedEvidence(constraint, target),
                         };
                         break :independent .{ .target = independent_target };
                     },
@@ -42293,6 +42293,67 @@ const BodyContext = struct {
         return null;
     }
 
+    /// Select the nested-evidence half of an evidence-slot reuse. Ordinary
+    /// independent rank-1 callables must derive nested evidence from their own
+    /// callable relation. A recorded where-method use may keep the slot's
+    /// resolved vector: its checker instantiation copied only signature
+    /// structure, sharing every evidence-bearing non-marker leaf.
+    fn targetProcedureEvidenceSchema(
+        self: *BodyContext,
+        target: *const SpecEvidenceTarget,
+    ) static_dispatch.ProcedureEvidenceSchema {
+        const params = switch (target.target.kind) {
+            .procedure => |procedure| blk: {
+                const template = target.view.templates.get(procedure.template.template);
+                break :blk target.view.templates.evidenceParams(&template);
+            },
+            .local_proc => |local| self.scopeSchema(target.view, local.dispatch_scope).params,
+            .structural => Common.invariant("structural evidence target reached callable nested-evidence classification"),
+        };
+        return static_dispatch.procedureEvidenceSchema(
+            params,
+            target.view.templates.evidence_param_paths,
+        );
+    }
+
+    const DependentCallableEvidenceError = error{RequiresRecordSynthesis};
+
+    fn dependentCallableNestedEvidenceForSchema(
+        dependent: anytype,
+        nested: NestedSpecEvidence,
+        schema: static_dispatch.ProcedureEvidenceSchema,
+    ) DependentCallableEvidenceError!NestedSpecEvidence {
+        if (dependent.reuse_slot_nested_evidence and !dependent.independent_callable) {
+            Common.invariant("checked dispatch requested slot nested evidence without an independent callable");
+        }
+        if (dependent.independent_callable and !dependent.reuse_slot_nested_evidence) {
+            if (schema == .requires_record) return error.RequiresRecordSynthesis;
+            return .synthesize;
+        }
+        return nested;
+    }
+
+    fn dependentCallableNestedEvidenceChecked(
+        self: *BodyContext,
+        dependent: anytype,
+        target: *const SpecEvidenceTarget,
+    ) DependentCallableEvidenceError!NestedSpecEvidence {
+        const schema = if (dependent.independent_callable and !dependent.reuse_slot_nested_evidence)
+            self.targetProcedureEvidenceSchema(target)
+        else
+            static_dispatch.ProcedureEvidenceSchema.none;
+        return dependentCallableNestedEvidenceForSchema(dependent, target.nested, schema);
+    }
+
+    fn dependentCallableNestedEvidence(
+        self: *BodyContext,
+        dependent: anytype,
+        target: *const SpecEvidenceTarget,
+    ) NestedSpecEvidence {
+        return self.dependentCallableNestedEvidenceChecked(dependent, target) catch
+            Common.invariant("independent dispatch callable attempted to synthesize SchemeUseRecord-supplied nested evidence");
+    }
+
     /// The requirement-target contract a checked dispatch plan recorded for
     /// its target's own requirements: a direct plan's resolved nested
     /// entries. Every other edge derives the target's evidence from the
@@ -42333,8 +42394,7 @@ const BodyContext = struct {
                     .target => |target| target,
                     .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => Common.invariant("dispatch target evidence was not a callable target"),
                 };
-                if (dependent.independent_callable) break :blk .derive;
-                break :blk switch (target.nested) {
+                break :blk switch (self.dependentCallableNestedEvidence(dependent, target)) {
                     .resolved => |resolved| .{ .materialized_contract = resolved },
                     .synthesize => .derive,
                 };
@@ -42398,8 +42458,7 @@ const BodyContext = struct {
                     .target => |target| target,
                     .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => Common.invariant("iterator target evidence was not a callable target"),
                 };
-                if (dependent.independent_callable) break :blk .derive;
-                break :blk switch (target.nested) {
+                break :blk switch (self.dependentCallableNestedEvidence(dependent, target)) {
                     .resolved => |resolved| .{ .materialized_contract = resolved },
                     .synthesize => .derive,
                 };
@@ -56464,6 +56523,48 @@ fn numeralTargetFromPrimitive(primitive: Type.Primitive) exact_numeral.Target {
         .bool, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => Common.invariant("non-numeric Monotype primitive has no numeral target"),
         inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => |p| @field(exact_numeral.Target, @tagName(p)),
     };
+}
+
+test "independent callable reuse preserves requires-record nested evidence and synthesis rejects it" {
+    const resolved_entries = [_]SpecEvidence{.unreachable_value};
+    const nested = NestedSpecEvidence{ .resolved = &resolved_entries };
+    const reuse = static_dispatch.ConstraintEvidenceRef{
+        .index = .{ .depth = 0, .index = 0 },
+        .independent_callable = true,
+        .reuse_slot_nested_evidence = true,
+    };
+    const reused = try BodyContext.dependentCallableNestedEvidenceForSchema(
+        reuse,
+        nested,
+        .requires_record,
+    );
+    switch (reused) {
+        .resolved => |resolved| {
+            try std.testing.expectEqual(@as(usize, 1), resolved.len);
+            try std.testing.expect(resolved.ptr == resolved_entries[0..].ptr);
+        },
+        .synthesize => return error.TestUnexpectedResult,
+    }
+
+    const synthesize = static_dispatch.ConstraintEvidenceRef{
+        .index = .{ .depth = 0, .index = 0 },
+        .independent_callable = true,
+        .reuse_slot_nested_evidence = false,
+    };
+    try std.testing.expectError(
+        error.RequiresRecordSynthesis,
+        BodyContext.dependentCallableNestedEvidenceForSchema(
+            synthesize,
+            nested,
+            .requires_record,
+        ),
+    );
+    const callable_derived = try BodyContext.dependentCallableNestedEvidenceForSchema(
+        synthesize,
+        nested,
+        .from_callable,
+    );
+    try std.testing.expect(callable_derived == .synthesize);
 }
 
 test "queued specialization skips a body claimed immediately before dispatch" {

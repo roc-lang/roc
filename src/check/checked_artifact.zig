@@ -4883,10 +4883,12 @@ pub const CheckedTypeStore = struct {
 
         // Evidence nodes retain exact checked callable instantiations. Publish
         // every fresh type participating in a recorded scheme use, including
-        // the constraint function that identifies a selected dispatch target.
+        // the constraint function that identifies a selected dispatch target
+        // or a per-use where-method callable.
         for (module_env.scheme_uses.items.items) |record| {
             if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.dispatch_target) or
-                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.recursive_dispatch_target))
+                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.recursive_dispatch_target) or
+                record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use))
             {
                 _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @enumFromInt(record.slot_data));
             }
@@ -17626,7 +17628,7 @@ fn sealCheckedProcedureTemplateRefs(
                     @enumFromInt(record.scheme_root),
                     {},
                 ),
-                .nested_function_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference => {},
+                .nested_function_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference, .where_method_use => {},
             }
         }
 
@@ -17979,6 +17981,15 @@ const EvidencePass = struct {
     /// union-find roots are deliberately not used because two distinct checked
     /// edges may later acquire equal types.
     generated_codec_by_source: std.AutoHashMap(u64, static_dispatch.GeneratedCodecDerivationId),
+    /// where_method_use record index by the body dispatch's raw fn var.
+    /// The record explicitly maps that callable to its pristine signature.
+    where_method_use_by_fn_var: std.AutoHashMap(u32, u32),
+    /// The same records by the settled root of that raw fn var. Generalized
+    /// requirement deduplication unifies same-shape callables through a
+    /// committed probe, so a plan may name a callable that is in one class
+    /// with a recorded body use without being its raw key; the class is the
+    /// equality authority after that probe. First record per root wins.
+    where_method_use_by_fn_root: std.AutoHashMap(Var, u32),
     /// Source node by checked expr (reverse of `exprIdForSource`).
     source_by_checked_expr: std.AutoHashMap(u32, u32),
     /// Generalized local VALUE decls (non-lambda exprs, e.g. an `if` choosing
@@ -18079,6 +18090,8 @@ const EvidencePass = struct {
             .schemas_by_root = collections.DenseMap(Var, SchemeSchema).init(allocator),
             .identity_writer = canonical_type_keys.TypeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst()),
             .generated_codec_by_source = std.AutoHashMap(u64, static_dispatch.GeneratedCodecDerivationId).init(allocator),
+            .where_method_use_by_fn_var = std.AutoHashMap(u32, u32).init(allocator),
+            .where_method_use_by_fn_root = std.AutoHashMap(Var, u32).init(allocator),
             .source_by_checked_expr = std.AutoHashMap(u32, u32).init(allocator),
             .local_value_scheme_by_var = std.AutoHashMap(u32, u32).init(allocator),
             .value_use_record_by_pattern = std.AutoHashMap(u32, u32).init(allocator),
@@ -18111,6 +18124,8 @@ const EvidencePass = struct {
         self.value_use_by_node.deinit();
         self.target_by_fn_var.deinit();
         self.generated_codec_by_source.deinit();
+        self.where_method_use_by_fn_var.deinit();
+        self.where_method_use_by_fn_root.deinit();
         self.source_by_checked_expr.deinit();
         self.local_value_scheme_by_var.deinit();
         self.value_use_record_by_pattern.deinit();
@@ -18534,6 +18549,20 @@ const EvidencePass = struct {
                         checkedArtifactInvariant("duplicate raw dispatch-target evidence identity", .{});
                     }
                     entry.value_ptr.* = @intCast(i);
+                },
+                .where_method_use => {
+                    // `slot_data` is the raw body constraint callable. It is
+                    // deliberately not resolved through union-find: two body
+                    // uses may settle to the same callable shape while still
+                    // owning distinct per-use signature copies.
+                    const entry = try self.where_method_use_by_fn_var.getOrPut(record.slot_data);
+                    if (entry.found_existing) {
+                        checkedArtifactInvariant("duplicate raw where-method-use callable identity", .{});
+                    }
+                    entry.value_ptr.* = @intCast(i);
+                    const root = self.types.resolveVar(@as(Var, @enumFromInt(record.slot_data))).var_;
+                    const root_entry = try self.where_method_use_by_fn_root.getOrPut(root);
+                    if (!root_entry.found_existing) root_entry.value_ptr.* = @intCast(i);
                 },
                 .nested_function_use, .recursive_reference => {},
             }
@@ -19008,6 +19037,16 @@ const EvidencePass = struct {
             method == idents.from_interpolation;
     }
 
+    /// How a checked plan's callable relates to the evidence slot it resolves
+    /// through. Only `exact` shares the slot's callable identity; the other two
+    /// own an independent callable instantiation and differ in where their
+    /// nested evidence comes from.
+    const CallableRelation = enum {
+        exact,
+        independent_synthesize,
+        independent_reuse_slot_nested,
+    };
+
     /// The canonical `(depth, index)` of one method target in the chain,
     /// searching innermost-out. Independent same-name callable relations share
     /// the target slot, while their checked plans retain the per-call shape.
@@ -19019,13 +19058,13 @@ const EvidencePass = struct {
         constraint_fn_var: ?Var,
     ) Allocator.Error!?struct {
         index: static_dispatch.EvidenceChainIndex,
-        exact_callable: bool,
+        callable_relation: CallableRelation,
     } {
         for (chain, 0..) |params, depth| {
             if (try self.paramIndexFor(params, dispatcher_root, method, constraint_fn_var)) |match| {
                 return .{
                     .index = .{ .depth = @intCast(depth), .index = @intCast(match.index) },
-                    .exact_callable = match.exact_callable,
+                    .callable_relation = match.callable_relation,
                 };
             }
         }
@@ -19100,7 +19139,7 @@ const EvidencePass = struct {
         constraint_fn_var: ?Var,
     ) Allocator.Error!?struct {
         index: u32,
-        exact_callable: bool,
+        callable_relation: CallableRelation,
     } {
         const idents = self.module.identStoreConst();
         const constraint_fn_root = if (constraint_fn_var) |fn_var|
@@ -19118,12 +19157,43 @@ const EvidencePass = struct {
             if (constraint_fn_root) |fn_root| {
                 if (self.types.resolveVar(param.constraint.fn_var).var_ != fn_root) continue;
             }
-            return .{ .index = @intCast(k), .exact_callable = true };
+            return .{ .index = @intCast(k), .callable_relation = .exact };
         }
         return if (same_method_fallback) |index|
-            .{ .index = index, .exact_callable = false }
+            .{ .index = index, .callable_relation = self.fallbackCallableRelation(params[index], constraint_fn_var) }
         else
             null;
+    }
+
+    /// A same-name fallback names an independent callable. When that callable
+    /// is (in one settled class with) a per-use where-method signature copy
+    /// (`SchemeUseRecord.where_method_use`) whose pristine signature is the
+    /// slot's own callable, the plan may reuse the slot's checked
+    /// nested-evidence vector: every non-marker leaf of the copy is the
+    /// signature's own variable (`Instantiator.share_leaves`). Otherwise the
+    /// plan synthesizes nested evidence from its own callable.
+    fn fallbackCallableRelation(self: *EvidencePass, candidate: EvidenceParam, constraint_fn_var: ?Var) CallableRelation {
+        const fn_var = constraint_fn_var orelse return .independent_synthesize;
+        const fn_root = self.types.resolveVar(fn_var).var_;
+        const record_idx = self.where_method_use_by_fn_var.get(@intFromEnum(fn_var)) orelse
+            self.where_method_use_by_fn_root.get(fn_root) orelse
+            return .independent_synthesize;
+        const module_env = self.module.moduleEnvConst();
+        const record = module_env.scheme_uses.items.items[record_idx];
+        if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
+            self.types.resolveVar(@as(Var, @enumFromInt(record.slot_data))).var_ != fn_root)
+        {
+            checkedArtifactInvariant("where-method-use index named the wrong scheme-use record", .{});
+        }
+        const signature_root = self.types.resolveVar(@as(Var, @enumFromInt(record.scheme_root))).var_;
+        const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+        const copied_callable = self.pairForResolved(pairs, signature_root) orelse
+            checkedArtifactInvariant("where-method-use record omitted its signature callable copy", .{});
+        if (self.types.resolveVar(copied_callable).var_ != fn_root) {
+            checkedArtifactInvariant("where-method-use callable copy did not resolve to its body constraint", .{});
+        }
+        if (self.types.resolveVar(candidate.constraint.fn_var).var_ == signature_root) return .independent_reuse_slot_nested;
+        return .independent_synthesize;
     }
 
     fn resolvePlan(self: *EvidencePass, plan_id: static_dispatch.StaticDispatchPlanId, chain: []const []const EvidenceParam, commit_unpinned: bool) Allocator.Error!void {
@@ -19357,9 +19427,11 @@ const EvidencePass = struct {
         commit_unpinned: bool,
     ) Allocator.Error!?static_dispatch.CheckedCallResolution {
         if (try self.chainParamIndex(chain, dispatcher_root, method, constraint_fn_var)) |match| {
+            const independent_callable = match.callable_relation != .exact;
             return .{ .evidence_dependent = .{
                 .index = match.index,
-                .independent_callable = !match.exact_callable,
+                .independent_callable = independent_callable,
+                .reuse_slot_nested_evidence = match.callable_relation == .independent_reuse_slot_nested,
             } };
         }
 
@@ -19518,11 +19590,7 @@ const EvidencePass = struct {
         };
     }
 
-    const ProcedureEvidenceSchema = enum {
-        none,
-        from_callable,
-        requires_record,
-    };
+    const ProcedureEvidenceSchema = static_dispatch.ProcedureEvidenceSchema;
 
     const ProcedureEvidenceView = struct {
         table: *const CheckedProcedureTemplateTable,
@@ -19570,16 +19638,7 @@ const EvidencePass = struct {
         params: []const static_dispatch.EvidenceParamRecord,
         paths: []const static_dispatch.EvidencePathStep,
     ) ProcedureEvidenceSchema {
-        if (params.len == 0) return .none;
-        for (params) |param| {
-            const path = paths[param.path.start .. param.path.start + param.path.len];
-            switch (param.source) {
-                .scheme_callable => {},
-                .explicit_default => if (path.len != 0) return .requires_record,
-                .scheme_requirement, .constraint_callable, .use_site_only, .erased_row_remainder => return .requires_record,
-            }
-        }
-        return .from_callable;
+        return static_dispatch.procedureEvidenceSchema(params, paths);
     }
 
     fn procedureEvidenceSchema(self: *EvidencePass, target: static_dispatch.MethodTarget) ProcedureEvidenceSchema {
@@ -19797,6 +19856,9 @@ const EvidencePass = struct {
     fn evidenceRefsForRecord(self: *EvidencePass, record_idx: u32, commit_unpinned: bool) Allocator.Error!?RecordSiteSpans {
         const module_env = self.module.moduleEnvConst();
         const record = module_env.scheme_uses.items.items[record_idx];
+        if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
+            checkedArtifactInvariant("where-method callable relation reached scheme-use evidence emission", .{});
+        }
         const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
 
         var params = std.ArrayListUnmanaged(EvidenceParam).empty;
@@ -19869,6 +19931,7 @@ const EvidencePass = struct {
                     .scheme_param = dependent.scheme_param,
                     .index = dependent.index,
                     .independent_callable = dependent.independent_callable,
+                    .reuse_slot_nested_evidence = dependent.reuse_slot_nested_evidence,
                 } },
                 .structural => |kind| blk: {
                     const callable_var = fresh_fn_var orelse param.constraint.fn_var;
@@ -20087,6 +20150,9 @@ const EvidencePass = struct {
         if (self.site_seen.contains(site_key)) return;
 
         const record = self.module.moduleEnvConst().scheme_uses.items.items[record_idx];
+        if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
+            checkedArtifactInvariant("where-method callable relation reached a scheme-use evidence site", .{});
+        }
         // A value use and a nested-function use can share one node (a
         // referenced value stored in expression position); the value use
         // owns the site's evidence regardless of which record checking
@@ -20099,7 +20165,6 @@ const EvidencePass = struct {
 
         self.current_chain = chain;
         defer self.current_chain = &.{};
-
         const shared = record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.shared_value_use);
         const spans = (try self.evidenceRefsForRecord(record_idx, !shared)) orelse {
             try self.deferred_use_sites.append(self.allocator, .{ .record_idx = record_idx, .site_key = site_key });
@@ -23911,7 +23976,7 @@ fn specializeResolvedStaticDispatchPlanCallables(
     var chains = try EnclosingDispatchSiteChains.init(allocator, plans.plans.len, plans.iterator_for_plans.len);
     defer chains.deinit();
 
-    for (templates.templates, 0..) |template, template_index| {
+    for (templates.templates.items, 0..) |template, template_index| {
         try appendEnclosingDispatchSites(
             &chains,
             plans,
@@ -31463,6 +31528,7 @@ pub const DispatchEvidenceFailure = struct {
         generated_codec_call_unfinalized,
         generated_codec_call_evidence_invalid,
         generated_codec_call_nested_derivation_invalid,
+        dependent_nested_reuse_without_independent_callable,
         evidence_node_nested_refs_out_of_bounds,
         evidence_ref_node_out_of_bounds,
         evidence_scheme_param_invalid,
@@ -32023,7 +32089,10 @@ pub const CheckedModuleArtifact = struct {
     // Version 98 uses 256-bit SHA-256 type and evidence content hashes.
     // Version 99 stores packed fixed-product lists with an optional scalar
     // encoding and their padding-free product width.
-    const serialized_layout_version: u32 = 99;
+    // Version 100 distinguishes independent callable plans that reuse the
+    // evidence slot's producer-resolved nested vector from those that must
+    // synthesize nested evidence from their own callable.
+    const serialized_layout_version: u32 = 100;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -32534,10 +32603,20 @@ pub const CheckedModuleArtifact = struct {
                         .method = plan.method,
                     };
                 },
-                .evidence_dependent => |dependent| if (dependent.scheme_param) |param_index| {
-                    const pool = self.checked_procedure_templates.evidence_params_pool;
-                    if (param_index >= pool.len or pool[param_index].source != .scheme_requirement or pool[param_index].method != plan.method)
-                        return .{ .kind = .evidence_scheme_param_invalid, .index = @intCast(i) };
+                .evidence_dependent => |dependent| {
+                    if (dependent.reuse_slot_nested_evidence and !dependent.independent_callable) {
+                        return .{
+                            .kind = .dependent_nested_reuse_without_independent_callable,
+                            .expr = plan.expr,
+                            .index = @intCast(i),
+                            .method = plan.method,
+                        };
+                    }
+                    if (dependent.scheme_param) |param_index| {
+                        const pool = self.checked_procedure_templates.evidence_params_pool;
+                        if (param_index >= pool.len or pool[param_index].source != .scheme_requirement or pool[param_index].method != plan.method)
+                            return .{ .kind = .evidence_scheme_param_invalid, .index = @intCast(i) };
+                    }
                 },
                 .structural, .checked_error, .@"unreachable" => {},
             }
@@ -32697,7 +32776,15 @@ pub const CheckedModuleArtifact = struct {
                         .method = call.method,
                     },
                     .checked_error, .@"unreachable" => continue,
-                    .evidence_dependent => {},
+                    .evidence_dependent => |dependent| if (dependent.reuse_slot_nested_evidence and
+                        !dependent.independent_callable)
+                    {
+                        return .{
+                            .kind = .dependent_nested_reuse_without_independent_callable,
+                            .index = @intCast(i),
+                            .method = call.method,
+                        };
+                    },
                 }
 
                 if (@intFromEnum(call.callable_ty) >= self.checked_types.payloads.items.len) {
@@ -32743,10 +32830,18 @@ pub const CheckedModuleArtifact = struct {
                 .direct => |node| if (@intFromEnum(node) >= table.evidence_nodes.len) {
                     return .{ .kind = .evidence_ref_node_out_of_bounds, .index = @intCast(i) };
                 },
-                .constraint => |constraint| if (constraint.scheme_param) |param_index| {
-                    const pool = self.checked_procedure_templates.evidence_params_pool;
-                    if (param_index >= pool.len or pool[param_index].source != .scheme_requirement)
-                        return .{ .kind = .evidence_scheme_param_invalid, .index = @intCast(i) };
+                .constraint => |constraint| {
+                    if (constraint.reuse_slot_nested_evidence and !constraint.independent_callable) {
+                        return .{
+                            .kind = .dependent_nested_reuse_without_independent_callable,
+                            .index = @intCast(i),
+                        };
+                    }
+                    if (constraint.scheme_param) |param_index| {
+                        const pool = self.checked_procedure_templates.evidence_params_pool;
+                        if (param_index >= pool.len or pool[param_index].source != .scheme_requirement)
+                            return .{ .kind = .evidence_scheme_param_invalid, .index = @intCast(i) };
+                    }
                 },
                 .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
             }

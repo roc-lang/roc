@@ -2714,7 +2714,7 @@ pub const InstGraph = struct {
                 .unresolved => |variable| {
                     if (variable.numeric_default_phase != null) continue;
                     const row_default = variable.row_default orelse continue;
-                    self.setContent(node, switch (row_default) {
+                    try self.setContent(node, switch (row_default) {
                         .empty_record => .empty_record,
                         .empty_tag_union => .empty_tag_union,
                     });
@@ -7675,7 +7675,7 @@ test "grounding row defaults reaches a record field's defaultable tail inside a 
     fields[2] = .{ .name = rest_name, .ty = shape, .default = null };
     const record_ext = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_record) });
     const record = try graph.newNode(.{ .record = .{ .fields = fields, .ext = record_ext } });
-    graph.setContent(shape, .{ .list = record });
+    try graph.setContent(shape, .{ .list = record });
 
     try std.testing.expect(!try graph.typeIsResolved(shape));
     // Grounding is a relation-production operation: on a frozen graph it is

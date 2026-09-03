@@ -200,7 +200,10 @@ pub const Constants = struct {
     /// 93: Tag unions in annotation output positions are implicitly open
     ///     (polarity): extensionless unions there carry an anonymous rigid
     ///     extension, and alias declaration bodies store a deferral marker.
-    pub const CACHE_VERSION = 93;
+    /// 94: Scheme-use records distinguish per-use where-method signature
+    ///     copies from evidence-bearing instantiations, and checked dispatch
+    ///     plans retain independent-callable/nested-evidence-reuse flags.
+    pub const CACHE_VERSION = 94;
 };
 
 /// Configuration for the Roc cache system.

@@ -5646,19 +5646,25 @@ that use may match the result exhaustively (closing its own copy) or widen it
 every other leaf, the receiver rigid included, stays the same variable
 whatever its rank (`Instantiator.share_leaves`): the signature belongs to
 the enclosing scheme, whether it is still being checked or already
-generalized and re-checked against a requirement at a later boundary. An
-OBLIGATION — an instantiation of the enclosing scheme at a call site or an
-import — closes the same markers (`PolarityVarBehavior.close`), so an
+generalized and re-checked against a requirement at a later boundary. A call-site
+or import instantiation of the enclosing scheme closes the same markers
+(`PolarityVarBehavior.close`), so an
 implementation is bounded by the listed tags: it may return a subset, never
 more, and its arguments must match as written. A where-alias declaration's
 signatures are copied into a referencing annotation with their markers
 intact (`.preserve`). Lowering note: a body use that WIDENS its copy is
 specialized by Monotype at the wider row when the implementation's own
-result row is open — the artifact's plan carries the use's copy as its
-callable and the implementation's scheme is instantiated against it (today
-through `paramIndexFor`'s same-name fallback; `polarity_phase_two.md` W6a
-makes that plan deliberate through a `SchemeUseRecord` slot). An
-implementation whose published result row is CLOSED (its body returns a
+result row is open. `instantiateWhereMethodForUse` records an exact raw
+`SchemeUseRecord.where_method_use`, keyed by the body's constraint callable,
+relating the per-use copy to its pristine signature callable; checked-artifact
+construction reads that record and never recovers the relation by method
+name or by searching the solved equivalence class. When generalized
+requirement deduplication drops a same-shape duplicate it first unifies the
+duplicate's callable with the retained one (a committed probe, see
+`deduplicateGeneralizedDispatchRequirements` in the Rewrite Inventory), so
+an omitted callable class IS the retained class and no separate witness is
+recorded. An
+implementation whose checked scheme result row is CLOSED (its body returns a
 closed-source value: a top-level constant, an input-position parameter, a
 nominal field) cannot yet serve a widened use; W6b adds a result-row
 widening adapter at the template boundary, generalizing the hosted `Try`
@@ -5666,8 +5672,8 @@ adapter, which re-tags only the direct result row and a `Try`'s rows.
 Decided 2026-09-03: per-use opening applies at EVERY output position of
 the signature, not only the positions the adapter can re-tag; for a marker
 in any other output position (inside a `List`, a record field, a tuple, a
-tag payload, a non-`Try` nominal) that a body use widened, the obligation
-reports a problem when the resolved implementation's row at that marker
+tag payload, a non-`Try` nominal) that a body use widened, the checked scheme
+instantiation reports a problem when the resolved implementation's row at that marker
 is closed, before unifying the implementation with the signature — a
 check-time rejection that names the implementation and is lifted as the
 coercion generator grows. Open implementations at nested positions are
