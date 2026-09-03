@@ -970,4 +970,31 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "42" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/11060
+        .name = "issue 11060: interpolated Str.inspect of a caller-pinned error from a recursive accumulator",
+        .source_kind = .module,
+        .source =
+        \\only_bad = |made|
+        \\    made.fold([], |acc, item| match item {
+        \\        Bad(bad) => acc.append(bad)
+        \\        Good(_) => acc
+        \\    })
+        \\
+        \\make = |start, file|
+        \\    match start(file) {
+        \\        Ok(handle) => Good(handle)
+        \\        Err(e) => Bad("failed: ${Str.inspect(e)}")
+        \\    }
+        \\
+        \\batch = |start, remaining, acc|
+        \\    match remaining {
+        \\        [] => acc
+        \\        [file, .. as rest] => batch(start, rest, acc.append(make(start, file)))
+        \\    }
+        \\
+        \\main = only_bad(batch(|_file| Err(Nope2), ["x"], []))
+        ,
+        .expected = .{ .inspect_str = "[\"failed: Nope2\"]" },
+    },
 };
