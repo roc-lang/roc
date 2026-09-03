@@ -127,7 +127,7 @@ f = |value| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> {} where [a.convert : Error]")))
+		(patt (type "a -> {} where [a.convert : a, Str -> U64]")))
 	(expressions
-		(expr (type "a -> {} where [a.convert : Error]"))))
+		(expr (type "a -> {} where [a.convert : a, Str -> U64]"))))
 ~~~

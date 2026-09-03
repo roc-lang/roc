@@ -19,7 +19,7 @@ This not method is being called on a value whose type doesn't have that method.
 
 The value's type, which does not have a method named not, is:
 
-    [C(a), ..] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+    [C(a)] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
 # TOKENS
 ~~~zig
@@ -44,5 +44,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[C(Dec), ..]"))
+(expr (type "[C(Dec)]"))
 ~~~

@@ -30,7 +30,7 @@ message_loop! = |init_state, step_fn!|
         },
     )
 
-next : a -> Try([Step(a), ..], _)
+next : a -> Try([Step(a)], _)
 next = |state| Ok(Step(state))
 
 main! = |_args| {

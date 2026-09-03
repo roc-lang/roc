@@ -28,5 +28,5 @@ Page(msg) := [
 page_view : Page(Str)
 page_view = Page.text("x")
 
-main! : List(Str) => Try({}, [Exit(I32), ..])
+main! : List(Str) => Try({}, [Exit(I32)])
 main! = |_args| Ok({})

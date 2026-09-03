@@ -29,7 +29,7 @@ This plus method is being called on a value whose type doesn't have that method.
 
 The value's type, which does not have a method named plus, is:
 
-    [One, Two, ..]
+    [One, Two]
 
 ── ✗ missing method ──────────────────────── list_destructure_variations.md:2:11
 
@@ -41,7 +41,7 @@ that method.
 
 The value's type, which does not have a method named from_numeral, is:
 
-    [One, Two, ..]
+    [One, Two]
 
 ── ✗ missing method ──────────────────────── list_destructure_variations.md:6:31
 
@@ -53,7 +53,7 @@ that method.
 
 The value's type, which does not have a method named from_numeral, is:
 
-    [One, Two, ..]
+    [One, Two]
 
 ── ✗ missing method ──────────────────────── list_destructure_variations.md:7:30
 
@@ -64,7 +64,7 @@ This plus method is being called on a value whose type doesn't have that method.
 
 The value's type, which does not have a method named plus, is:
 
-    [One, Two, ..]
+    [One, Two]
 
 # TOKENS
 ~~~zig
@@ -200,5 +200,5 @@ match list {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[One, Two, ..]"))
+(expr (type "[One, Two]"))
 ~~~

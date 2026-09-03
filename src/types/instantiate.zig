@@ -26,6 +26,7 @@ const Tag = types_mod.Tag;
 const NominalType = types_mod.NominalType;
 const Tuple = types_mod.Tuple;
 const Rank = types_mod.Rank;
+const Polarity = types_mod.Polarity;
 const Ident = base.Ident;
 
 /// The explicit declaration-backed opening operation (issue #9983): make a
@@ -189,6 +190,10 @@ const FuncFrame = struct {
     func: Func,
     kind: enum { pure, effectful, unbound },
     vars_base: u32,
+    /// The polarity surrounding this function. Argument positions negate it;
+    /// the return (and effect-dep) positions restore it. Re-asserted before
+    /// every child request so suspension cannot leave a stale value.
+    saved_polarity: Polarity,
 };
 
 /// Source runs are held as whole ranges, never as an unpacked start index:
@@ -253,6 +258,42 @@ pub const Instantiator = struct {
     /// structural spine so the walk reaches every generalized descendant;
     /// monomorphic flex/rigid leaves remain shared.
     copy_scheme_structure: bool = false,
+    /// Share every leaf (flex, rigid, field presence, error) whatever its
+    /// rank, copying only structure and resolving polarity markers. This is
+    /// the shape of a where-method signature's per-use instantiation: the
+    /// signature's other variables belong to the enclosing scheme (live
+    /// during the body check, generalized at a later requirement re-check)
+    /// and must stay the same variables; only the deferred rows are fresh.
+    share_leaves: bool = false,
+
+    /// The `Ident.Idx` of `types.polarity_var_text` in `idents`, when the
+    /// caller wants polarity-deferred tag union extensions recognized. Rigids
+    /// with this name never reach `rigid_behavior`; they are resolved per
+    /// `polarity_var_behavior`. When null, polarity vars are treated as
+    /// ordinary rigids (only sound for stores that cannot contain them).
+    polarity_var_ident: ?Ident.Idx = null,
+    /// The `Ident.Idx` of the anonymous open extension rigid (`#others`, what
+    /// a written `..` produces in an input position). Exempt from
+    /// `.substitute_rigids`' unknown-rigid assertion: an anonymous extension
+    /// is never a declaration parameter, so it is never in a substitution map
+    /// and copies as a fresh rigid there.
+    anonymous_ext_ident: ?Ident.Idx = null,
+    /// When set, every polarity var this instantiation resolves OPEN (a fresh
+    /// flex ext) is appended here, so the caller can record it for the
+    /// post-body audit of implicitly opened rows (`Check.auditImplicitOpenExts`).
+    /// An entry learns the tags of the union it extends when that union's
+    /// copy is finished (`OpenedMarkerExt.listed_tags`).
+    opened_marker_exts: ?*std.ArrayListUnmanaged(OpenedMarkerExt) = null,
+    /// How to resolve polarity vars (see `PolarityVarBehavior`). `.close`
+    /// reproduces the written (closed) row and is the safe default.
+    polarity_var_behavior: PolarityVarBehavior = .close,
+    /// The polarity of the position currently being instantiated. Starts at
+    /// the polarity of the instantiation root (callers using
+    /// `.resolve_by_polarity` set it) and is negated for function argument
+    /// positions as the walk descends — each func frame saves the
+    /// surrounding polarity and re-asserts the stage-appropriate value
+    /// before every child it requests.
+    current_polarity: Polarity = .pos,
 
     /// Controls whether to respect rank when deciding what to instantiate
     pub const RankBehavior = enum {
@@ -282,6 +323,47 @@ pub const Instantiator = struct {
         /// In this mode, rigids present in the provided map are substituted,
         /// and any other rigids are instantiated as fresh rigid variables.
         substitute_rigids_fresh: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+    };
+
+    /// How to instantiate polarity vars: the marker rigids (named
+    /// `types.polarity_var_text`) that alias declarations store as the ext of
+    /// extensionless tag unions to defer the open-vs-closed decision to the
+    /// use site (see the doc comment on `types.polarity_var_text`).
+    pub const PolarityVarBehavior = enum {
+        /// Resolve every polarity var to a closed (`[]`) extension: the
+        /// written meaning of an extensionless tag union, and the behavior
+        /// for positions with no meaningful polarity (eg nominal declaration
+        /// bodies, numeric suffix targets).
+        close,
+        /// Copy each polarity var as a fresh rigid with the same name, keeping
+        /// the decision deferred. Used when the copy is itself a declaration
+        /// template (eg an orphan scheme copy), where the use-site polarity is
+        /// still unknown.
+        preserve,
+        /// Resolve each polarity var by the polarity of the position it
+        /// occupies: open (a fresh unnamed flex, exactly what an implicitly
+        /// opened output-position union gets) in positive/output positions,
+        /// closed (`[]`) in negative/input positions. The walk starts at
+        /// `current_polarity` and negates through function argument
+        /// positions, so polarity composes correctly through functions
+        /// embedded in alias bodies.
+        resolve_by_polarity,
+        /// Like `resolve_by_polarity` for negative positions (closed), but a
+        /// marker in a positive position is copied as a fresh marker: the copy
+        /// is itself a deferred signature whose own uses decide (a where-alias
+        /// declaration's method signature copied into a referencing
+        /// annotation, or an alias body embedded in one).
+        defer_open,
+    };
+
+    /// A polarity marker this instantiation resolved open: the fresh flex
+    /// ext it became, and the tags the copied union lists next to it. The
+    /// tags are attached when the union's copy is finished, the one point
+    /// where the ext and the union's tags meet; a marker is always a union's
+    /// ext, so `listed_tags` is null only for a copy that never reached one.
+    pub const OpenedMarkerExt = struct {
+        ext: Var,
+        listed_tags: ?Tag.SafeMultiList.Range = null,
     };
 
     const Self = @This();
@@ -391,13 +473,24 @@ pub const Instantiator = struct {
         // Ordinary instantiation shares every non-generalized var. A binding
         // explicitly classified as a scheme instead copies non-generalized
         // structural nodes so generalized leaves at arbitrary depth remain
-        // reachable, while preserving the identity of monomorphic leaves.
+        // reachable, while preserving the identity of monomorphic leaves. A
+        // polarity marker is never shared: it stands for "decided by this
+        // instantiation" whatever its rank (a where-method signature is
+        // instantiated per body use before the enclosing scheme generalizes).
+        const is_polarity_marker = self.polarity_var_ident != null and
+            resolved.desc.content == .rigid and
+            resolved.desc.content.rigid.name.eql(self.polarity_var_ident.?);
+        const is_leaf = switch (resolved.desc.content) {
+            .alias, .structure => false,
+            .flex, .rigid, .field_presence, .err => true,
+        };
+        if (!force_root_copy and self.share_leaves and is_leaf and !is_polarity_marker) {
+            try machine.value_stack.append(self.store.gpa, resolved_var);
+            return true;
+        }
         if (!force_root_copy and self.rank_behavior == .respect_rank and resolved.desc.rank != .generalized) {
-            const copy_structure = self.copy_scheme_structure and switch (resolved.desc.content) {
-                .alias, .structure => true,
-                .flex, .rigid, .field_presence, .err => false,
-            };
-            if (!copy_structure) {
+            const copy_structure = self.copy_scheme_structure and !is_leaf;
+            if (!copy_structure and !is_polarity_marker) {
                 try machine.value_stack.append(self.store.gpa, resolved_var);
                 return true;
             }
@@ -414,6 +507,36 @@ pub const Instantiator = struct {
         const empty_tag_union_is_default = resolved.desc.flags.empty_tag_union_is_default;
         switch (resolved.desc.content) {
             .rigid => |rigid| {
+                // Polarity vars (the deferred open-vs-closed tag union
+                // extensions of alias declaration bodies) are resolved before
+                // any rigid behavior applies: they are compiler-internal and
+                // must never be substituted, flexed, or kept rigid by the
+                // caller's rigid policy.
+                if (self.polarity_var_ident) |polarity_ident| {
+                    if (rigid.name.eql(polarity_ident)) {
+                        const opened = self.polarity_var_behavior == .resolve_by_polarity and self.current_polarity == .pos;
+                        const marker_content: Content = switch (self.polarity_var_behavior) {
+                            .close => .{ .structure = .empty_tag_union },
+                            .preserve => .{ .rigid = Rigid.init(rigid.name) },
+                            .resolve_by_polarity => switch (self.current_polarity) {
+                                .pos => .{ .flex = Flex.init() },
+                                .neg => .{ .structure = .empty_tag_union },
+                            },
+                            .defer_open => switch (self.current_polarity) {
+                                .pos => .{ .rigid = Rigid.init(rigid.name) },
+                                .neg => .{ .structure = .empty_tag_union },
+                            },
+                        };
+                        const marker_var = try self.store.freshFromContentWithRank(marker_content, self.current_rank);
+                        if (opened) {
+                            if (self.opened_marker_exts) |sink| try sink.append(self.store.gpa, .{ .ext = marker_var });
+                        }
+                        try self.var_map.put(resolved_var, marker_var);
+                        try machine.value_stack.append(self.store.gpa, marker_var);
+                        return true;
+                    }
+                }
+
                 // If this var is rigid, then create a new var depending on the
                 // provided behavior
                 const fresh_type: enum { flex, rigid } = blk: {
@@ -425,6 +548,14 @@ pub const Instantiator = struct {
                             break :blk .flex;
                         },
                         .substitute_rigids => |rigid_subs| {
+                            // An anonymous open extension (`..`, written or
+                            // implicit) is never a declaration parameter, so
+                            // it is never in the substitution map: copy it as
+                            // a fresh rigid, like `.substitute_rigids_fresh`.
+                            if (self.anonymous_ext_ident) |ext_ident| {
+                                if (rigid.name.eql(ext_ident)) break :blk .rigid;
+                            }
+
                             // If this is a var that we're substituting, then we
                             // we just return it.
 
@@ -597,6 +728,7 @@ pub const Instantiator = struct {
                             .func = func,
                             .kind = .pure,
                             .vars_base = @intCast(machine.value_stack.items.len),
+                            .saved_polarity = self.current_polarity,
                         } });
                         return false;
                     },
@@ -609,6 +741,7 @@ pub const Instantiator = struct {
                             .func = func,
                             .kind = .effectful,
                             .vars_base = @intCast(machine.value_stack.items.len),
+                            .saved_polarity = self.current_polarity,
                         } });
                         return false;
                     },
@@ -621,6 +754,7 @@ pub const Instantiator = struct {
                             .func = func,
                             .kind = .unbound,
                             .vars_base = @intCast(machine.value_stack.items.len),
+                            .saved_polarity = self.current_polarity,
                         } });
                         return false;
                     },
@@ -867,15 +1001,20 @@ pub const Instantiator = struct {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < args_count) {
                 const arg_var = self.store.vars.items.items[@intFromEnum(frame.func.args.start) + arrived];
+                // Argument positions negate the surrounding polarity.
+                self.current_polarity = frame.saved_polarity.flip();
                 if (!try self.requestVar(arg_var, false)) return false;
                 continue;
             }
             if (arrived == args_count) {
+                // The return position preserves the surrounding polarity.
+                self.current_polarity = frame.saved_polarity;
                 if (!try self.requestVar(frame.func.ret, false)) return false;
                 continue;
             }
             if (arrived < args_count + 1 + deps_count) {
                 const dep_var = self.store.vars.items.items[@intFromEnum(frame.func.effect_deps.start) + (arrived - args_count - 1)];
+                self.current_polarity = frame.saved_polarity;
                 if (!try self.requestVar(dep_var, false)) return false;
                 continue;
             }
@@ -1051,6 +1190,17 @@ pub const Instantiator = struct {
                 },
                 .await_ext => {
                     const fresh_ext = machine.value_stack.pop().?;
+                    // A marker resolved open is this union's ext: hand the
+                    // post-body audit the tags it sits next to, so its report
+                    // can suggest a listed tag for an unlisted near-miss.
+                    if (self.opened_marker_exts) |sink| {
+                        for (sink.items) |*opened| {
+                            if (opened.ext == fresh_ext and opened.listed_tags == null) {
+                                opened.listed_tags = frame.tags_range;
+                                break;
+                            }
+                        }
+                    }
                     try self.finishFrame(frame.common, Content{ .structure = FlatType{ .tag_union = TagUnion{
                         .tags = frame.tags_range,
                         .ext = fresh_ext,

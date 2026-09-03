@@ -206,7 +206,7 @@ Green => LocalStatus-Complete
 
 The second branch is:
 
-    [LocalStatus, ..]
+    [LocalStatus]
 
 But the previous branches result in:
 

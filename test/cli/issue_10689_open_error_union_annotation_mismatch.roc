@@ -4,7 +4,7 @@
 app [main!] { pf: platform "../fx-open/platform/main.roc" }
 import pf.Stdout
 
-fetch : Str -> Try(Str, [Missing, ..])
+fetch : Str -> Try(Str, [Missing])
 fetch = |s| Ok(s)
 
 main! = |_args| {

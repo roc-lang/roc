@@ -12,7 +12,7 @@ app [main!] { pf: platform "./platform/main.roc" }
 import pf.Fallible
 import pf.Stdout
 
-main! : List(Str) => Try({}, [Exit(I32), HostErr(Str), ..])
+main! : List(Str) => Try({}, [Exit(I32), HostErr(Str)])
 main! = |_args| {
 	match_value = Fallible.via_match!({})?
 	Stdout.line!("match ok: ${match_value}")

@@ -40,6 +40,8 @@ pub const Problem = union(enum) {
     where_alias_in_type_position: WhereAliasInTypePosition,
     recursive_where_alias: RecursiveWhereAlias,
     where_clause_receiver_not_introduced: WhereClauseReceiverNotIntroduced,
+    tag_union_extended_beyond_annotation: TagUnionExtendedBeyondAnnotation,
+    redundant_open_tag_union: RedundantOpenTagUnion,
     invalid_nominal_decl_recursion: InvalidNominalDeclRecursion,
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
@@ -688,4 +690,28 @@ pub const WhereClauseReceiverNotIntroduced = struct {
     type_var_name: base.Ident.Idx,
     method_name: base.Ident.Idx,
     region: base.Region,
+};
+
+/// Warning for an explicit anonymous `..` on a tag union in an output position
+/// of an annotation whose binding generalizes regardless (a function, a pure
+/// signature, a value alias). Tag unions there are implicitly open, so the
+/// `..` is redundant.
+pub const RedundantOpenTagUnion = struct {
+    /// The region of the `..` itself
+    region: base.Region,
+};
+
+/// A definition produced a tag its annotation's tag union does not list. The
+/// union sits in an output position, so it is implicitly open for the
+/// definition's callers, but the annotation still bounds the definition
+/// itself (design.md "Polarity").
+pub const TagUnionExtendedBeyondAnnotation = struct {
+    /// The region of the annotated tag union
+    region: base.Region,
+    /// The first tag the definition produced beyond the annotation
+    tag_name: base.Ident.Idx,
+    /// A tag the annotation lists that `tag_name` is a likely typo of (the
+    /// same edit-distance judgment as the Type Mismatch tag-typo hint), when
+    /// there is one and the audit knew the listed tags.
+    suggestion: ?base.Ident.Idx,
 };

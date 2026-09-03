@@ -10,7 +10,7 @@ app [main!] { pf: platform "./platform/fallible_widen_main.roc" }
 
 import pf.FallibleWiden
 
-main! : List(Str) => Try({}, [Exit(I32), ..])
+main! : List(Str) => Try({}, [Exit(I32)])
 main! = |_args| {
 	_ = FallibleWiden.via_annotation!({})
 	_ = FallibleWiden.via_argument!({})

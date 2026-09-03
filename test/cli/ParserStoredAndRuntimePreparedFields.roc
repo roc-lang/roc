@@ -8,7 +8,7 @@ Format := [Identity, Kebab].{
 			Kebab => underscores_to_dashes(name)
 		}
 
-	parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError, ..])
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError])
 	parse_str = |_, state|
 		match state {
 			KebabFooValue => Ok({ value: "foo-kebab", rest: KebabDone })
@@ -16,7 +16,7 @@ Format := [Identity, Kebab].{
 			KebabFooName | KebabDone | IdentityFooName | IdentityDone | Done => Err(FormatError)
 		}
 
-	parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError, ..])
+	parse_record_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [FormatError])
 	parse_record_start = |_, state| Ok(Uncounted(state))
 
 	parse_record_field : Format,
@@ -29,7 +29,7 @@ Format := [Identity, Kebab].{
 			Continue(State),
 			Done(State),
 		],
-		[FormatError, ..],
+		[FormatError],
 	)
 	parse_record_field = |_, fields, state|
 		match state {
@@ -40,10 +40,10 @@ Format := [Identity, Kebab].{
 			KebabFooValue | IdentityFooValue | Done => Ok(Done(Done))
 		}
 
-	parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError, ..])
+	parse_record_after_field : Format, State -> Try([Continue(State), Done(State)], [FormatError])
 	parse_record_after_field = |_, state| Ok(Continue(state))
 
-	skip_record_field : Format, State -> Try(State, [FormatError, ..])
+	skip_record_field : Format, State -> Try(State, [FormatError])
 	skip_record_field = |_, state|
 		match state {
 			KebabFooName => Ok(KebabDone)
@@ -73,7 +73,7 @@ State -> Try(
 		Continue(State),
 		Done(State),
 	],
-	[FormatError, ..],
+	[FormatError],
 )
 emit_field = |fields, name, value_state, next_state| {
 	name_len = Str.count_utf8_bytes(name)

@@ -162,7 +162,10 @@ pub const Constants = struct {
     ///     records the source region of the annotated name.
     /// 72: Checked binding schemes serialize generated-codec relations that
     ///     downstream specializations must revalidate.
-    pub const CACHE_VERSION = 72;
+    /// 73: Tag unions in annotation output positions are implicitly open
+    ///     (polarity): extensionless unions there carry an anonymous rigid
+    ///     extension, and alias declaration bodies store a deferral marker.
+    pub const CACHE_VERSION = 73;
 };
 
 /// Configuration for the Roc cache system.

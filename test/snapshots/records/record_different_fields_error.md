@@ -371,7 +371,7 @@ PascalCase: "pascal",
 
 It has the type:
 
-    [PascalCase, ..]
+    [PascalCase]
 
 Since this expression is used as a statement, it must evaluate to {}.
 If you don't need the value, you can ignore it with _ =.

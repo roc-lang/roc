@@ -4383,6 +4383,115 @@ adding or citing a member, which is greppable and reviewable. A new
 probe-then-mutate rewrite requires a declared rule in this document first;
 "it makes a test pass" is not a rule.
 
+### Polarity: Output-Position Tag Unions Are Implicitly Open
+
+Every type annotation is walked with a POLARITY: the root is positive
+(output), function argument positions negate the surrounding polarity, and
+all other positions (returns, type application args, record fields, tuple
+elems, tag payloads) preserve it. An extensionless tag union with at least one
+tag in a positive position is IMPLICITLY OPEN: it is generated with a fresh
+flex extension, so `parse : Str -> Try(U8, [InvalidU8])` is instantiated
+fresh at every call and each caller may use the result at a wider union. The
+same union in a negative position stays closed as written. A union with no
+tags (`[]`) is exempt: it asserts uninhabitedness (`Try(a, [])` needs no
+`Err` branch), which opening would destroy. Polarity is walk state only
+(`types.Polarity`); no new content kind exists.
+
+The annotation still BOUNDS the definition — widening happens only at
+instantiation sites. Because the extension is a flex during the body check, a
+closed value can flow into the row and close it (a definition returning a
+value from a closed source — an input-position parameter, a nominal field —
+publishes a closed row at that position, exactly as before polarity), and an
+open value shares it; but a tag the annotation does not list is absorbed by
+ordinary unification rather than rejected. `Check.auditImplicitOpenExts`
+therefore runs immediately after the definition's right-hand side is checked,
+over every extension the annotation's generation minted
+(`Check.implicit_open_exts`, sliced per annotation by
+`annotation_implicit_open_exts`), and reports `Tag Not In Annotation` for any
+that resolved to a row carrying tags, marking that extension erroneous
+(diagnostic recovery, like every other reported problem). Row-subsumption
+coercions — letting a closed value WIDEN into the open row instead of closing
+it — are a possible follow-up that needs lowering support; they would only
+accept more programs.
+
+An anonymous `..` in a positive position of an opening annotation means
+exactly what absence means there and is generated the same way (a recorded
+flex), so the two spellings cannot drift. Elsewhere `..` remains the rigid
+`#others` it always was, and a named extension (`..others`) is always a
+rigid.
+
+VALUE bindings: an annotated value's implicitly opened row is one weak flex
+shared by every use in the module — an annotated value generalizes only when
+its annotation writes a type variable, exactly as before. The value's body is
+bounded by the audit; uses may widen the shared row, and what accumulates is
+what every later use sees, so a later annotated use listing fewer tags than
+accumulated is rejected by its own audit. This is precisely how an inferred
+value (`x = Boom`) already behaved; writing `..` on the value opts into a
+quantified row, as it always has. After the module solves, a top-level weak
+value's still-open implicit extensions are grounded to `[]`
+(`Check.closeWeakValueImplicitOpenExts`): nothing in the module can widen
+them further, and the closed row is exactly what the annotation produced
+before polarity, so importers and Monotype's stored constants see the type
+they always did (an extension that meanwhile joined a generalized scheme is
+left alone). Local value bindings are not grounded: their rows behave like
+inferred local rows and are sealed by Monotype's row defaults.
+
+An ALIAS of a tag union defers the decision to each use site: the alias
+declaration stores a marker rigid (`types.polarity_var_text`, an ordinary
+rigid with a reserved name) as the ext of each extensionless union in its
+body, and instantiation resolves every marker by the polarity of the position
+the alias is used in — a fresh flex (recorded for the audit) in positive
+positions, `[]` in negative ones — negating through functions embedded in the
+alias body (`Instantiator.PolarityVarBehavior`). Nominal declaration bodies
+close as written.
+
+A WHERE-METHOD signature is a scheme the constrained body instantiates at
+each use, exactly like a call of an annotated function. It is walked like any
+function annotation (arguments closed as written, return an output), but its
+implicitly opened output rows are generated as polarity MARKERS
+(`AnnotationGenCtx.opening = .per_use`) rather than flex vars. A body use —
+the point where a body dispatch on the constrained rigid is matched by name
+to the where-clause constraint — instantiates the signature
+(`Check.instantiateWhereMethodForUse`): every marker becomes a fresh flex, so
+that use may match the result exhaustively (closing its own copy) or widen it
+(`?` composes into a wider enclosing row), independently of every other use;
+every other leaf, the receiver rigid included, stays the same variable
+whatever its rank (`Instantiator.share_leaves`): the signature belongs to
+the enclosing scheme, whether it is still being checked or already
+generalized and re-checked against a requirement at a later boundary. An
+OBLIGATION — an instantiation of the enclosing scheme at a call site or an
+import — closes the same markers (`PolarityVarBehavior.close`), so an
+implementation is bounded by the listed tags: it may return a subset, never
+more, and its arguments must match as written. A where-alias declaration's
+signatures are copied into a referencing annotation with their markers
+intact (`.preserve`). Lowering note: a body use that WIDENS its copy asks
+Monotype to specialize the implementation at the wider row per use, which
+the dispatch plan does not yet do (one plan per obligation).
+
+Two positions opt out of implicit opening, both genuine non-producers:
+host-boundary annotations (hosted lambdas and `provides` defs) and platform
+`requires` types keep their rows as written, because the host side is a fixed
+ABI rather than a Roc producer participating in unification.
+
+Derived structural implementations — parsers, encoders, and derived
+`map`/`map!` — are consumers that determine each tag row exactly (and, for
+map, its payload selection, which an open payload row would defeat by
+reading as a type variable), so before one is derived for a type every
+reachable tag-union extension that is an unbound flex collapses to `[]`
+(`Check.closeTagRowsForDerivation`), like an exhaustive match closing an
+inferred row. A polarity MARKER that reaches a derivation directly closes the
+same way (`RedirectRule.derivation_marker_ext_closure`): a block-local alias
+such as `Shape : { kind : [A, B] }` used as `Shape.parser_for(...)` consumes
+the declaration var without instantiation, so nothing else ever resolves its
+marker, and the derivation decides its "flex or `[]`, per use" as `[]`. That
+rewrites the declaration itself, so a later use of the same alias sees the
+closed row. Rigid extensions are never closed: a polymorphic open row may
+hold tags no derivation was checked for, so it stays rejected.
+
+Display follows the same polarity: an anonymous, unshared, unconstrained flex
+ext in an output position is not rendered as `..`; rigid extensions are
+always rendered (a marker, which is written closed, is rendered closed).
+
 ### Hosted Try Question Widening
 
 `?` unwraps a `Try` condition and re-raises its error row into the enclosing
@@ -4390,7 +4499,9 @@ function's return row. When the callee's error row is closed and the
 enclosing annotated return's row is open (a rigid extension), ordinary
 unification rejects the pair, and that mismatch is a type error by design: a
 closed error row is not widened into an open annotated row at use sites
-(issue #9798's program is rejected).
+(issue #9798's program is rejected). Under polarity, a non-hosted callee's
+annotated error row is itself implicitly open, so this pairing now arises
+only where closed rows still exist — chiefly hosted boundary rows.
 
 The one declared exception is a direct call of a hosted function. A hosted
 function's boundary type is an ABI contract keyed by its declared closed row
@@ -4420,9 +4531,11 @@ test/fx-open/issue_9963_hosted_try_question_mark.roc (a direct hosted `?`
 inside an open-row platform function builds and the host's Ok is observed as
 Ok); rejected—test/fx-open/hosted_try_question_not_included.roc (a direct
 hosted `?` whose enclosing annotation omits the hosted error is a type
-error), and the issue #9798 regression test in
-src/check/test/type_checking_integration.zig (a non-hosted `?` into an open
-annotated row is a type error even when the visible errors are included).
+error). The non-hosted side of issue #9798 is superseded by polarity: a
+non-hosted callee's annotated error row is implicitly open, so `?` flows it
+into the enclosing row through ordinary unification, and the enclosing
+annotation's audit rejects an error it does not list (pinned by the
+"polarity - try" tests in src/check/test/type_checking_integration.zig).
 
 ### Derived Parser Tag-Row Closure
 
@@ -4437,9 +4550,11 @@ was checked, so that parser dispatch is rejected.
 
 This is the parser counterpart of derived encoder validation, which already
 closes an unconstrained flexible tag extension once the encoder's exact
-structural shape is selected. Parser eligibility recognizes a flexible
-variable only in the explicit tag-extension position; a bare flexible shape or
-payload remains unsupported until earlier constraints resolve it.
+structural shape is selected. Implicit output-position openness is already
+collapsed by `Check.closeTagRowsForDerivation` before eligibility runs, so a
+flexible extension that survives to the eligibility probe is a genuinely
+unresolved row and defers rather than qualifying; a bare flexible shape or
+payload likewise remains unsupported until earlier constraints resolve it.
 
 Both sides are pinned by tests: accepted—
 test/cli/JsonTagUnionProtocol.roc (issue #10418's unannotated
@@ -5813,6 +5928,14 @@ site to any family below must classify it here.
 - `markErroneousBranchWithExpected`—mechanism: diagnostic recovery. The
   expression already has a reported error; its var is redirected to a fresh
   var unified with the expected return so checking can continue past it.
+- `closeTagRowsForDerivationHelp`'s marker arm
+  (`RedirectRule.derivation_marker_ext_closure`)—policy: Polarity /
+  `closeTagRowsForDerivation` (below). A polarity marker rigid in tag-ext
+  position stands for exactly "flex or `[]`, per use site"; a marker
+  reaching a derivation through a directly-used local alias declaration
+  meets no instantiation that would resolve it, and the derivation
+  determines the row exactly, so the marker redirects to the empty tag
+  union — the same outcome instantiation's `.close` behavior produces.
 
 Other solved-graph mutations:
 
@@ -5852,6 +5975,25 @@ Other solved-graph mutations:
   ignorable payload vars for tags the expression provably never constructs
   close to the empty tag union, so matches on constructed values are
   exhaustive without wildcard arms.
+- `closeTagRowsForDerivation`—policy: Polarity (above). Before a structural
+  parser, encoder, or derived `map`/`map!` is derived for a type, every
+  reachable tag-union extension that is an unbound flex var (implicit
+  output-position openness) unifies with the empty tag union: a derived
+  implementation determines each row exactly — and derived map additionally
+  determines its payload selection, which an open payload row would defeat
+  by reading as a type variable — so the openness collapses like an
+  exhaustive match closing an inferred row. A polarity MARKER rigid in
+  tag-ext position (the alias-declaration-body deferral) collapses the same
+  way via `RedirectRule.derivation_marker_ext_closure` (above): a
+  directly-used local alias declaration's marker meets no resolving
+  instantiation, and the derivation decides its "flex or `[]`" as `[]`.
+  Both sides are pinned by the "check type - polarity - derivation ..." and
+  "... derived map/parser/encoder ..." tests in
+  src/check/test/type_checking_integration.zig: accepted—open payload rows
+  under a derived map, `Try(Str, [Missing])` fields under a derived parser
+  and encoder, a Dict key union inside a nominal arg, and a block-local
+  alias marker consumed by `Shape.parser_for`; rejected—a named rigid
+  extension, which no derivation closes.
 - `validateDerivedParseTagExt`—policy: Derived Parser Tag-Row Closure
   (above). Once structural parser eligibility has selected a known tag union,
   its unconstrained flexible extension closes to the empty tag union through

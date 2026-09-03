@@ -1,7 +1,7 @@
 ParserOldTagSpecApi :: [].{}
 
 Format := [Default].{
-	parse_tag_union : Format, Encoding.ParseTagUnionSpec(a), State -> Try({ value : a, rest : State }, [FormatError, ..])
+	parse_tag_union : Format, Encoding.ParseTagUnionSpec(a), State -> Try({ value : a, rest : State }, [FormatError])
 	parse_tag_union = |_, spec, state|
 		match state {
 			Present(tag_name) => {

@@ -102,5 +102,5 @@ match l {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[Err([EmptyList, ..]), Ok(_a), ..]"))
+(expr (type "[Err([EmptyList]), Ok(_a)]"))
 ~~~

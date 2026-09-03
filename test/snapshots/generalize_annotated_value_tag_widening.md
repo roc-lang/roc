@@ -16,9 +16,19 @@ g = f
 main! = |_| {}
 ~~~
 # EXPECTED
-NIL
+REDUNDANT OPEN TAG UNION - generalize_annotated_value_tag_widening.md:6:24:6:26
 # PROBLEMS
-NIL
+── ● redundant open tag union ── generalize_annotated_value_tag_widening.md:6:24
+
+This tag union has an explicit `..`, but it is already implicitly open.
+
+g : [Red, Green, Blue, ..]
+                       ^^
+
+Tag unions in output positions, like the return type of a function, are
+automatically open. Remove the .. or bind it to a named type variable like
+..others if you want to refer to the extension elsewhere.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -106,11 +116,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "[Green, Red, ..]"))
-		(patt (type "[Blue, Green, Red, ..]"))
+		(patt (type "[Green, Red]"))
+		(patt (type "[Blue, Green, Red]"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "[Green, Red, ..]"))
-		(expr (type "[Blue, Green, Red, ..]"))
+		(expr (type "[Green, Red]"))
+		(expr (type "[Blue, Green, Red]"))
 		(expr (type "_arg -> {}"))))
 ~~~
