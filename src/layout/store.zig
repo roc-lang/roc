@@ -862,8 +862,12 @@ pub const Store = struct {
             }
         }
 
+        fn littleEndianBytes(value: u32) [4]u8 {
+            return .{ @truncate(value), @truncate(value >> 8), @truncate(value >> 16), @truncate(value >> 24) };
+        }
+
         fn hashU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
-            const bytes = std.mem.toBytes(std.mem.nativeToLittle(u32, value));
+            const bytes = littleEndianBytes(value);
             hasher.update(&bytes);
         }
 
@@ -1038,7 +1042,7 @@ pub const Store = struct {
                 }
 
                 fn writeU32(self_sink: RenderSink, value: u32) Allocator.Error!void {
-                    const bytes = std.mem.toBytes(std.mem.nativeToLittle(u32, value));
+                    const bytes = littleEndianBytes(value);
                     try self_sink.engine.render_buf.appendSlice(self_sink.engine.allocator, &bytes);
                 }
 
@@ -1166,7 +1170,9 @@ pub const Store = struct {
                     }
                     const next_count: u32 = distinct_labels.count();
                     const stable = next_count == label_count;
-                    std.mem.swap([]RecursiveKey, &labels, &next_labels);
+                    const finished_labels = labels;
+                    labels = next_labels;
+                    next_labels = finished_labels;
                     label_count = next_count;
                     if (stable) break;
                 }
