@@ -839,12 +839,59 @@ const EvidenceMaterializationPurpose = enum {
     specialization_interface,
 };
 
-/// The evidence supplied to a callee specialization request.
-const SpecEvidenceVector = union(enum) {
-    resolved: []const SpecEvidence,
-    /// Resolve the callee's requirements from its checked dispatcher paths
-    /// over the concrete callable (compiler-generated edges only).
-    synthesize,
+/// One quantified variable's binding at a specialization request: the live
+/// graph cell the request substitutes for it, or checking's rejection of the
+/// instantiation at that variable (a reported error; a dispatch that reaches
+/// it crashes).
+const SubstSlot = union(enum) {
+    node: NodeId,
+    checked_error,
+};
+
+/// The substitution a request applies to a scheme: one slot per quantified
+/// variable, in the scheme's `scheme_vars` order. A specialization is the
+/// scheme plus this vector, and every dispatch obligation's evidence is
+/// derived from the slot its receiver occupies.
+const SpecSubstitution = []const SubstSlot;
+
+/// A callee scheme's obligation schema: the module that owns the scheme, its
+/// quantified variables in slot order, and its evidence parameters in
+/// canonical order.
+const ObligationSchema = struct {
+    view: ModuleView,
+    scheme_vars: []const checked.CheckedTypeId,
+    params: []const static_dispatch.EvidenceParamRecord,
+};
+
+/// A substitution slot sealed to a durable Monotype type, for requests that
+/// leave their requesting graph (reserved roots and queued bodies).
+const SealedSubstSlot = union(enum) {
+    ty: Type.TypeId,
+    checked_error,
+};
+
+const SealedSubstitution = []const SealedSubstSlot;
+
+/// The obligation schema of a procedure template's scheme.
+fn templateSchemaIn(view: ModuleView, template: *const checked.CheckedProcedureTemplate) ObligationSchema {
+    return .{
+        .view = view,
+        .scheme_vars = view.templates.templateSchemeVars(template),
+        .params = view.templates.evidenceParams(template),
+    };
+}
+
+/// A checked plan's recorded entries for a target's obligations, with the
+/// module whose tables those entries index.
+const EvidenceContract = struct {
+    view: ModuleView,
+    entries: []const static_dispatch.CheckedEvidence,
+};
+
+/// The substitution and the evidence derived from it for one request edge.
+const EdgeEvidence = struct {
+    subst: SpecSubstitution,
+    vector: []const SpecEvidence,
 };
 
 /// The evidence vectors in scope while lowering a body: the innermost
@@ -868,6 +915,13 @@ const EvidenceScope = struct {
 const EvidenceChain = struct {
     scope: EvidenceScope,
     vector: []const SpecEvidence = &.{},
+    /// The scheme this frame's vector answers for, and the substitution the
+    /// vector was derived from. A body lowered inside this frame forwards an
+    /// obligation on a still-open cell to the frame entry that owns that
+    /// cell. Restored compile-time functions carry their retained vector
+    /// only.
+    schema: ?ObligationSchema = null,
+    subst: SpecSubstitution = &.{},
     parent: ?*const EvidenceChain = null,
 
     fn atScope(self: *const EvidenceChain, scope: EvidenceScope) ?EvidenceChain {
@@ -896,13 +950,29 @@ fn rootEvidence(owner: names.ProcTemplate, vector: []const SpecEvidence) Evidenc
     };
 }
 
+/// The root frame of a template specialization: its obligation vector
+/// together with the substitution and schema it was derived from.
+fn rootEvidenceWithSubstitution(
+    owner: names.ProcTemplate,
+    schema: ObligationSchema,
+    edge: EdgeEvidence,
+) EvidenceChain {
+    return .{
+        .scope = .{ .owner = owner, .lexical = .root },
+        .vector = edge.vector,
+        .schema = schema,
+        .subst = edge.subst,
+    };
+}
+
 fn enterEvidenceScope(
     builder: *Builder,
     evidence: EvidenceChain,
     scope_id: checked.DispatchScopeId,
     checked_expr: checked.CheckedExprId,
-    vector: []const SpecEvidence,
+    edge: EdgeEvidence,
 ) Allocator.Error!EvidenceChain {
+    const vector = edge.vector;
     const owner = evidence.scope.owner;
     const view = builder.moduleForDigest(names.procTemplateModuleDigest(owner));
     const raw_scope = @intFromEnum(scope_id);
@@ -938,6 +1008,12 @@ fn enterEvidenceScope(
     return .{
         .scope = .{ .owner = owner, .lexical = .{ .generalized = scope_id } },
         .vector = vector,
+        .schema = .{
+            .view = view,
+            .scheme_vars = view.templates.scopeSchemeVars(&scope_record),
+            .params = view.templates.evidence_params_pool[params_start .. params_start + params_len],
+        },
+        .subst = edge.subst,
         .parent = parent,
     };
 }
@@ -2171,6 +2247,7 @@ const PendingSpecJob = struct {
     source_fn_key: names.TypeDigest,
     fn_ty: Type.TypeId,
     evidence: []const SpecEvidence,
+    subst: ?SealedSubstitution,
     signature_relation: Ast.SignatureRelation,
 };
 
@@ -3934,7 +4011,7 @@ const Builder = struct {
                     request.checked_type,
                     procedure.source_fn_ty_template,
                     root_node,
-                    &.{},
+                    .{ .subst = &.{}, .vector = &.{} },
                     request.root_evidence,
                     false,
                 );
@@ -4220,10 +4297,10 @@ const Builder = struct {
             source_ty_view.types.rootKey(source_fn_ty),
             fn_ty,
         );
-        const evidence = if (root_evidence) |evidence_ref| blk: {
+        const evidence: []const SpecEvidence = if (root_evidence) |evidence_ref| blk: {
             var timing_scope = ProcedureTimingScope.begin(self.timing, .dispatch_evidence);
             defer timing_scope.end();
-            break :blk try self.materializeRootProcedureEvidence(fn_template, evidence_ref);
+            break :blk (try self.materializeRootProcedureEvidence(fn_template, evidence_ref)).vector;
         } else &.{};
         return try self.lowerTemplateWithMono(
             template_ref,
@@ -4232,6 +4309,7 @@ const Builder = struct {
             source_ty_view.types.rootKey(source_fn_ty),
             fn_ty,
             evidence,
+            null,
             .independent_roots,
             .count,
             null,
@@ -4323,8 +4401,8 @@ const Builder = struct {
         view: ModuleView,
         template_ref: names.ProcTemplate,
         template: checked.CheckedProcedureTemplate,
-        partial: []const SpecEvidence,
-    ) Allocator.Error![]const SpecEvidence {
+        partial: EdgeEvidence,
+    ) Allocator.Error!EdgeEvidence {
         return self.completeRootTemplateEvidenceForPurpose(
             view,
             template_ref,
@@ -4339,9 +4417,9 @@ const Builder = struct {
         view: ModuleView,
         template_ref: names.ProcTemplate,
         template: checked.CheckedProcedureTemplate,
-        partial: []const SpecEvidence,
+        partial: EdgeEvidence,
         purpose: EvidenceMaterializationPurpose,
-    ) Allocator.Error![]const SpecEvidence {
+    ) Allocator.Error!EdgeEvidence {
         var timing_scope = ProcedureTimingScope.begin(self.timing, .dispatch_evidence);
         defer timing_scope.end();
 
@@ -4351,7 +4429,7 @@ const Builder = struct {
         defer draft.deinit();
         var ctx = try BodyContext.init(self.allocator, self, view, template_ref, graph, &draft);
         defer ctx.deinit();
-        ctx.evidence = rootEvidence(template_ref, partial);
+        ctx.evidence = rootEvidence(template_ref, partial.vector);
         return (try ctx.rootEdgeEvidenceForPurpose(view, template, purpose)) orelse
             Common.invariant("procedure specialization did not receive its complete checked evidence vector");
     }
@@ -4364,6 +4442,9 @@ const Builder = struct {
         source_fn_key: names.TypeDigest,
         fn_ty: Type.TypeId,
         evidence: []const SpecEvidence,
+        /// The request's substitution, or null for a root whose template is
+        /// instantiated at its own scheme.
+        subst: ?SealedSubstitution,
         signature_relation: Ast.SignatureRelation,
         request_accounting: TemplateRequestAccounting,
         precomputed_request_digest: ?names.TypeDigest,
@@ -4383,7 +4464,7 @@ const Builder = struct {
         const spec_evidence = if (evidence.len == template.evidence_params.len)
             evidence
         else
-            try self.completeRootTemplateEvidence(view, template_ref, template, evidence);
+            (try self.completeRootTemplateEvidence(view, template_ref, template, .{ .subst = &.{}, .vector = evidence })).vector;
         const source_topology: ?EvidenceChain = if (retained_topology) |topology|
             topology
         else
@@ -4441,6 +4522,7 @@ const Builder = struct {
                                 job.source_fn_key,
                                 job.fn_ty,
                                 job.evidence,
+                                job.subst,
                                 null,
                                 job.signature_relation,
                             );
@@ -4528,6 +4610,7 @@ const Builder = struct {
                     .source_fn_key = source_fn_key,
                     .fn_ty = lower_fn_ty,
                     .evidence = spec_evidence,
+                    .subst = subst,
                     .signature_relation = signature_relation,
                 });
                 self.next_spec_dispatch_index += 1;
@@ -4551,6 +4634,7 @@ const Builder = struct {
             source_fn_key,
             lower_fn_ty,
             spec_evidence,
+            subst,
             retained_topology,
             signature_relation,
         );
@@ -4571,6 +4655,7 @@ const Builder = struct {
         source_fn_key: names.TypeDigest,
         lower_fn_ty: Type.TypeId,
         spec_evidence: []const SpecEvidence,
+        subst: ?SealedSubstitution,
         retained_topology: ?EvidenceChain,
         signature_relation: Ast.SignatureRelation,
     ) Allocator.Error!void {
@@ -4617,6 +4702,7 @@ const Builder = struct {
                         declared_source_fn_key,
                         adapter_source_fn_ty,
                         &.{},
+                        null,
                         signature_relation,
                         .count,
                         null,
@@ -4696,6 +4782,7 @@ const Builder = struct {
             source_fn_key,
             lower_fn_ty,
             spec_evidence,
+            subst,
             retained_topology,
             signature_relation,
         );
@@ -5091,6 +5178,7 @@ const Builder = struct {
                     job.source_fn_key,
                     job.fn_ty,
                     job.evidence,
+                    job.subst,
                     null,
                     job.signature_relation,
                 );
@@ -5271,6 +5359,7 @@ const Builder = struct {
             job.source_fn_key,
             job.fn_ty,
             job.evidence,
+            job.subst,
             null,
             job.signature_relation,
         );
@@ -5424,6 +5513,7 @@ const Builder = struct {
         source_fn_key: names.TypeDigest,
         lower_fn_ty: Type.TypeId,
         spec_evidence: []const SpecEvidence,
+        subst: ?SealedSubstitution,
         retained_topology: ?EvidenceChain,
         signature_relation: Ast.SignatureRelation,
     ) Allocator.Error!PendingTemplateBody {
@@ -5449,6 +5539,16 @@ const Builder = struct {
         );
         body_ctx.evidence = retained_topology orelse rootEvidence(template_ref, spec_evidence);
         defer body_ctx.deinit();
+        if (subst) |sealed| {
+            // The body instantiates the template under the request's
+            // substitution: every quantified variable is its requester's cell.
+            const live = try body_ctx.substitutionFromSealed(sealed);
+            const schema = templateSchemaIn(view, &template);
+            if (retained_topology == null) {
+                body_ctx.evidence = rootEvidenceWithSubstitution(template_ref, schema, .{ .subst = live, .vector = spec_evidence });
+            }
+            try body_ctx.seedSubstitution(schema, live);
+        }
 
         const graph_fn_ty = try body_ctx.importProgramType(lower_fn_ty);
         const root_node = try body_ctx.relateCheckedFunctionToMono(template.checked_fn_root, graph_fn_ty);
@@ -5539,7 +5639,7 @@ const Builder = struct {
         source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         raw_request_fn_node: NodeId,
-        partial_evidence: []const SpecEvidence,
+        partial_edge: EdgeEvidence,
         request_edge: DraftRequestEdge,
         signature_relation: Ast.SignatureRelation,
     ) Allocator.Error!DraftFnSlot {
@@ -5547,13 +5647,14 @@ const Builder = struct {
         const request_fn_node = try source_ctx.graph.functionRequestRoot(raw_request_fn_node);
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
-        if (partial_evidence.len > template.evidence_params.len) {
+        if (partial_edge.vector.len > template.evidence_params.len) {
             Common.invariant("draft procedure specialization received more evidence than its checked requirements");
         }
-        const evidence = if (partial_evidence.len == template.evidence_params.len)
-            partial_evidence
+        const edge = if (partial_edge.vector.len == template.evidence_params.len)
+            partial_edge
         else
-            try self.completeRootTemplateEvidence(view, template_ref, template, partial_evidence);
+            try self.completeRootTemplateEvidence(view, template_ref, template, partial_edge);
+        const evidence = edge.vector;
         const family = DraftTemplateFamilyAddress.init(template_ref, source_ctx.method_scope.key, source_fn_key);
 
         // The globally reserved root is the active ancestor of recursive calls
@@ -5828,6 +5929,7 @@ const Builder = struct {
             .request_fn_node = request_fn_node,
             .initial_request_arg_classes = try source_ctx.graph.snapshotFunctionArgumentClasses(request_fn_node),
             .evidence = evidence,
+            .subst = edge.subst,
             .runtime_demand_guard_frames = try source_ctx.runtimeDemandGuardFrameAddresses(),
             .demand_start = demand_boundary,
             .demand_end = demand_boundary,
@@ -5858,7 +5960,8 @@ const Builder = struct {
         try self.registerDraftProcDebugNameForTemplate(source_ctx.draft, symbol, view, template_ref);
 
         var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self, view, source_ctx.method_scope, template_ref, source_ctx.graph, source_ctx.draft);
-        body_ctx.evidence = rootEvidence(template_ref, evidence);
+        body_ctx.evidence = rootEvidenceWithSubstitution(template_ref, templateSchemaIn(view, &template), edge);
+        try body_ctx.seedSubstitution(body_ctx.evidence.schema.?, edge.subst);
         body_ctx.runtime_demand_guard_frames = source_ctx.runtime_demand_guard_frames;
         body_ctx.frozen_sealed_emission = source_ctx.frozen_sealed_emission;
         body_ctx.frozen_type_finals = source_ctx.frozen_type_finals;
@@ -7279,7 +7382,7 @@ const Builder = struct {
         self: *Builder,
         fn_template: Ast.FnTemplate,
         evidence_span: checked.CheckedEvidenceSpan,
-    ) Allocator.Error![]const SpecEvidence {
+    ) Allocator.Error!EdgeEvidence {
         const template_ref = switch (fn_template.fn_def) {
             .local_template,
             .imported_template,
@@ -7296,11 +7399,14 @@ const Builder = struct {
         return try self.materializeCheckedProcedureEvidence(template_ref, evidence_span);
     }
 
+    /// The evidence a producer-authored root edge supplies to a template: the
+    /// template's own quantified variables, unpinned by any caller, with the
+    /// root's recorded entries as contract provenance.
     fn materializeCheckedProcedureEvidence(
         self: *Builder,
         template_ref: names.ProcTemplate,
         evidence_span: checked.CheckedEvidenceSpan,
-    ) Allocator.Error![]const SpecEvidence {
+    ) Allocator.Error!EdgeEvidence {
         const view = self.moduleForId(evidence_span.checked_module);
         if (!moduleBytesEqual(view.key.bytes, names.procTemplateModuleDigest(template_ref).bytes)) {
             Common.invariant("root procedure evidence and procedure template belonged to different checked modules");
@@ -7320,7 +7426,18 @@ const Builder = struct {
         var ctx = try BodyContext.init(self.allocator, self, view, template_ref, graph, &draft);
         defer ctx.deinit();
         ctx.evidence = rootEvidence(template_ref, &.{});
-        return try ctx.materializeEvidence(view.static_dispatch_plans.evidence_refs[start .. start + len]);
+        const template = view.templates.get(template_ref.template);
+        const subst = try ctx.substitutionFromCheckedTypes(view, view.templates.templateSchemeVars(&template));
+        return .{
+            .subst = subst,
+            .vector = try ctx.deriveEvidenceVector(
+                templateSchemaIn(view, &template),
+                subst,
+                view,
+                view.static_dispatch_plans.evidence_refs[start .. start + len],
+                .body_lowering,
+            ),
+        };
     }
 
     /// Lower (or defer) a procedure template body and return the Monotype
@@ -7352,6 +7469,7 @@ const Builder = struct {
             fn_template.source_fn_key,
             fn_template.mono_fn_ty,
             evidence,
+            null,
             .independent_roots,
             .count,
             null,
@@ -7446,6 +7564,7 @@ const Builder = struct {
                     fn_template.source_fn_key,
                     fn_template.mono_fn_ty,
                     retained.vector,
+                    null,
                     .independent_roots,
                     .count,
                     null,
@@ -8720,6 +8839,7 @@ const Builder = struct {
         spec_index: usize,
         draft_fn_ty: Type.TypeId,
         coordinator_fn_ty: Type.TypeId,
+        coordinator_subst: SealedSubstitution,
         body_scheduling: TemplateBodyScheduling,
     ) Allocator.Error!void {
         if (spec_index >= body_draft.template_specs.items.len) {
@@ -8732,6 +8852,7 @@ const Builder = struct {
             spec,
             draft_fn_ty,
             coordinator_fn_ty,
+            coordinator_subst,
             body_scheduling,
         );
         body_draft.template_specs.items[spec_index].resolved_slot = resolved_slot;
@@ -8744,6 +8865,7 @@ const Builder = struct {
         spec: anytype,
         draft_fn_ty: Type.TypeId,
         coordinator_fn_ty: Type.TypeId,
+        coordinator_subst: SealedSubstitution,
         body_scheduling: TemplateBodyScheduling,
     ) Allocator.Error!Ast.FnSlot {
         const draft_fn = &body_draft.fns.items[@intFromEnum(spec.fn_id)];
@@ -8804,6 +8926,7 @@ const Builder = struct {
                 spec.source_fn_key,
                 coordinator_fn_ty,
                 spec.evidence,
+                coordinator_subst,
                 signature_relation,
                 .already_counted,
                 request_digest,
@@ -8821,6 +8944,7 @@ const Builder = struct {
         spec_index: usize,
         draft_fn_ty: Type.TypeId,
         coordinator_fn_ty: Type.TypeId,
+        coordinator_subst: SealedSubstitution,
         body_scheduling: TemplateBodyScheduling,
     ) Allocator.Error!void {
         if (spec_index >= body_draft.sealed_template_specs.items.len) {
@@ -8833,6 +8957,7 @@ const Builder = struct {
             spec,
             draft_fn_ty,
             coordinator_fn_ty,
+            coordinator_subst,
             body_scheduling,
         );
         body_draft.sealed_template_specs.items[spec_index].resolved_slot = resolved_slot;
@@ -8855,6 +8980,7 @@ const Builder = struct {
             const spec = &body_draft.sealed_template_specs.items[spec_index];
             const draft_fn_ty = spec.request_fn_ty;
             const coordinator_fn_ty = try committed_types.commitType(draft_fn_ty);
+            const coordinator_subst = try self.commitSealedSubstitution(committed_types, spec.subst);
             // Seal-time requests are symbolic: they reserve the callee's id
             // for call-site patching and queue the body for the wave drain.
             try self.resolveSealedTemplateSpecAtType(
@@ -8862,9 +8988,28 @@ const Builder = struct {
                 spec_index,
                 draft_fn_ty,
                 coordinator_fn_ty,
+                coordinator_subst,
                 .queued,
             );
         }
+    }
+
+    /// Relocate a shard-sealed substitution into the coordinator's store,
+    /// slot by slot, exactly as the request type is relocated.
+    fn commitSealedSubstitution(
+        self: *Builder,
+        committed_types: *CommittedGraphTypes,
+        subst: SealedSubstitution,
+    ) Allocator.Error!SealedSubstitution {
+        if (subst.len == 0) return &.{};
+        const out = try self.evidence_arena.allocator().alloc(SealedSubstSlot, subst.len);
+        for (subst, out) |slot, *committed| {
+            committed.* = switch (slot) {
+                .checked_error => .checked_error,
+                .ty => |ty| .{ .ty = try committed_types.commitType(ty) },
+            };
+        }
+        return out;
     }
 
     fn buildDraftCommitMap(
@@ -9186,6 +9331,7 @@ const Builder = struct {
                 .local_context_dependent = spec.local_context_dependent,
                 .lexical_owner = spec.lexical_owner,
                 .fn_id = spec.fn_id,
+                .subst = try sealSubstitutionWithSealer(body_draft.allocator, sealer, spec.subst),
                 .resolved_slot = spec.resolved_slot,
             });
         }
@@ -12021,6 +12167,8 @@ const DraftTemplateSpec = struct {
     lookup_request_fn_node: ?NodeId = null,
     initial_request_arg_classes: []const ArgumentClassSnapshot,
     evidence: []const SpecEvidence,
+    /// The substitution the request applied to the template's scheme.
+    subst: SpecSubstitution,
     runtime_demand_guard_frames: []const RuntimeDemandGuardFrameAddress,
     /// Runtime-value demands recorded while this specialization's body (and
     /// any explicitly lexical-context-dependent procedure bodies it owns)
@@ -12057,12 +12205,28 @@ const SealedTemplateSpec = struct {
     source_fn_key: names.TypeDigest,
     request_fn_ty: Type.TypeId,
     evidence: []const SpecEvidence,
+    /// The request's substitution sealed in the shard's store epoch.
+    subst: SealedSubstitution,
     requires_local: bool,
     local_context_dependent: bool,
     lexical_owner: ?DraftOwner,
     fn_id: DraftFnId,
     resolved_slot: ?Ast.FnSlot,
 };
+
+/// Seal a draft request's substitution with the graph sealer that seals its
+/// request type.
+fn sealSubstitutionWithSealer(allocator: Allocator, sealer: anytype, subst: SpecSubstitution) Allocator.Error!SealedSubstitution {
+    if (subst.len == 0) return &.{};
+    const out = try allocator.alloc(SealedSubstSlot, subst.len);
+    for (subst, out) |slot, *sealed| {
+        sealed.* = switch (slot) {
+            .checked_error => .checked_error,
+            .node => |node| .{ .ty = try sealer.sealNode(node) },
+        };
+    }
+    return out;
+}
 
 fn draftTemplateSpecLookupRequestNode(spec: *const DraftTemplateSpec) NodeId {
     return spec.lookup_request_fn_node orelse spec.request_fn_node;
@@ -15809,6 +15973,19 @@ const BodyContext = struct {
     /// final seal imports that newer closure independently through the same map.
     /// Architecture checks restrict this escape hatch to the few operations
     /// whose durable identities must be established before the ordered commit.
+    /// Relocate a graph-sealed substitution into the coordinator's store.
+    fn commitSealedSubstitutionFromGraph(self: *BodyContext, subst: SealedSubstitution) Allocator.Error!SealedSubstitution {
+        if (subst.len == 0) return &.{};
+        const out = try self.builder.evidence_arena.allocator().alloc(SealedSubstSlot, subst.len);
+        for (subst, out) |slot, *committed| {
+            committed.* = switch (slot) {
+                .checked_error => .checked_error,
+                .ty => |ty| .{ .ty = try self.commitGraphType(ty) },
+            };
+        }
+        return out;
+    }
+
     fn commitGraphType(self: *BodyContext, graph_ty: Type.TypeId) Allocator.Error!Type.TypeId {
         if (self.typeStore() == &self.builder.program.types) return graph_ty;
         const relocation = self.draft.ensureCommittedTypeRelocation(self.graph, self.builder.program);
@@ -17369,7 +17546,7 @@ const BodyContext = struct {
                 Common.invariant("deferred inspect method was not reserved before relation freeze")
         else blk: {
             const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{value_ty}, str_ty);
-            break :blk try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize);
+            break :blk try self.methodTargetCalleeWithMono(lookup, callable_mono_ty);
         };
 
         const args = [_]DraftExprId{value};
@@ -17403,7 +17580,7 @@ const BodyContext = struct {
                         }
                         const ret_node = try self.graph.importMono(str_ty);
                         const request_node = try self.graphFunctionNode(&.{node}, ret_node);
-                        const callee = try self.methodTargetCalleeAtNode(lookup, request_node, .synthesize);
+                        const callee = try self.methodTargetCalleeAtNode(lookup, request_node, null);
                         try self.draft.prepared_inspect_methods.append(self.allocator, .{
                             .value_node = node,
                             .callee = callee,
@@ -19658,20 +19835,21 @@ const BodyContext = struct {
         const template_ref = self.builder.templateRefForProcedureUse(procedure);
         const callee_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = callee_view.templates.get(template_ref.template);
-        const partial_evidence = if (root_evidence) |producer_evidence|
+        const partial_edge = if (root_evidence) |producer_evidence|
             try self.builder.materializeCheckedProcedureEvidence(template_ref, producer_evidence)
         else
             try self.evidenceForUseSiteForPurpose(record.expr, .specialization_interface);
-        const evidence = if (partial_evidence.len == template.evidence_params.len)
-            partial_evidence
+        const edge = if (partial_edge.vector.len == template.evidence_params.len)
+            partial_edge
         else
             try self.builder.completeRootTemplateEvidenceForPurpose(
                 callee_view,
                 template_ref,
                 template,
-                partial_evidence,
+                partial_edge,
                 .specialization_interface,
             );
+        const evidence = edge.vector;
         const stored_evidence = try self.builder.constFnEvidence(rootEvidence(template_ref, evidence));
         const evidence_digest = Ast.fnEvidenceDigest(
             stored_evidence.nodes,
@@ -19741,7 +19919,8 @@ const BodyContext = struct {
         defer callee_ctx.deinit();
         callee_ctx.owner_context_fn_key = self.owner_context_fn_key;
         callee_ctx.current_fn_key = self.current_fn_key;
-        callee_ctx.evidence = rootEvidence(template_ref, evidence);
+        callee_ctx.evidence = rootEvidenceWithSubstitution(template_ref, templateSchemaIn(callee_view, &template), edge);
+        try callee_ctx.seedSubstitution(callee_ctx.evidence.schema.?, edge.subst);
         const root_node = try callee_ctx.instNode(template.checked_fn_root);
         if (template.target == .hosted) {
             try relateHostedFunctionRequestInterface(
@@ -25550,7 +25729,7 @@ const BodyContext = struct {
             return try self.addExpr(.{
                 .ty = ret_ty,
                 .data = .{ .call_proc = .{
-                    .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(parse_lookup, parse_mono_ty, .synthesize)),
+                    .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(parse_lookup, parse_mono_ty)),
                     .args = try self.addExprSpan(&parse_args),
                     .captures = try self.methodTargetCaptureSpan(parse_lookup),
                 } },
@@ -25584,7 +25763,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = ret_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(parse_lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(parse_lookup, callable_mono_ty)),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, final_spec_expr, state_expr }),
                 .captures = try self.methodTargetCaptureSpan(parse_lookup),
             } },
@@ -25788,7 +25967,7 @@ const BodyContext = struct {
         const step_expr = try self.addExpr(.{
             .ty = step_try_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(parse_lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(parse_lookup, callable_mono_ty)),
                 .args = try self.addExprSpan(&[_]DraftExprId{
                     encoding_expr,
                     try self.localExpr(fields_local, fields_ty),
@@ -26651,7 +26830,7 @@ const BodyContext = struct {
         const skip_expr = try self.addExpr(.{
             .ty = skip_try_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty)),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, try self.localExpr(rest_local, state_ty) }),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -28160,7 +28339,7 @@ const BodyContext = struct {
         const parse_null_expr = try self.addExpr(.{
             .ty = null_try_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(parse_null_lookup, parse_null_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(parse_null_lookup, parse_null_mono_ty)),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, state_expr }),
                 .captures = try self.methodTargetCaptureSpan(parse_null_lookup),
             } },
@@ -29191,7 +29370,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = str_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty)),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, field_expr }),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -30570,22 +30749,22 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         request_fn_node: NodeId,
-        evidence: []const SpecEvidence,
+        edge: EdgeEvidence,
         root_evidence: ?checked.CheckedEvidenceSpan,
         recursive_reference: bool,
     ) Allocator.Error!DraftFnSlot {
         const template_ref = self.builder.templateRefForProcedureUse(proc);
-        const requested_evidence = if (root_evidence) |producer_evidence|
+        const requested_edge = if (root_evidence) |producer_evidence|
             try self.builder.materializeCheckedProcedureEvidence(template_ref, producer_evidence)
         else
-            evidence;
+            edge;
         return try self.builder.lowerDraftTemplateFromContext(
             self,
             template_ref,
             source_fn_ty,
             source_fn_key,
             request_fn_node,
-            requested_evidence,
+            requested_edge,
             if (recursive_reference) .recursive_reference else .instantiation,
             if (proc.iterator_procedure == .iter_from_step) .exact_graph else .independent_roots,
         );
@@ -30599,7 +30778,7 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         request_fn_node: NodeId,
-        evidence: []const SpecEvidence,
+        edge: EdgeEvidence,
         recursive_reference: bool,
     ) Allocator.Error!DraftFnTarget {
         const context = self.validateLocalProcContext(
@@ -30646,9 +30825,9 @@ const BodyContext = struct {
             self.in_default_expr,
         );
         const requested_evidence = if (local.dispatch_scope) |scope|
-            try enterEvidenceScope(self.builder, context.evidence, scope, local.expr, evidence)
+            try enterEvidenceScope(self.builder, context.evidence, scope, local.expr, edge)
         else blk: {
-            if (evidence.len != 0) {
+            if (edge.vector.len != 0) {
                 Common.invariant("local procedure without a checked evidence scope received use evidence");
             }
             break :blk context.evidence;
@@ -31217,17 +31396,17 @@ const BodyContext = struct {
             .top_level_const => |const_use| return try self.restoreConstUseAtType(
                 const_use,
                 ty,
-                try self.evidenceForUseSite(record.expr),
+                (try self.evidenceForUseSite(record.expr)).vector,
             ),
             .imported_const => |const_use| return try self.restoreConstUseAtType(
                 const_use,
                 ty,
-                try self.evidenceForUseSite(record.expr),
+                (try self.evidenceForUseSite(record.expr)).vector,
             ),
             .platform_required_const => |required| return try self.restoreConstUseAtType(
                 required.const_use,
                 ty,
-                try self.evidenceForUseSite(record.expr),
+                (try self.evidenceForUseSite(record.expr)).vector,
             ),
             .local_param,
             .local_value,
@@ -31335,7 +31514,7 @@ const BodyContext = struct {
                         self.view.bodies.expr(checked_expr).ty,
                         selected.const_use,
                         expected_node,
-                        try self.evidenceForUseSite(record.expr),
+                        (try self.evidenceForUseSite(record.expr)).vector,
                         .{ .hoisted = entry },
                     );
                 }
@@ -31345,7 +31524,7 @@ const BodyContext = struct {
                     self.view.bodies.expr(checked_expr).ty,
                     const_use,
                     expected_node,
-                    try self.evidenceForUseSite(record.expr),
+                    (try self.evidenceForUseSite(record.expr)).vector,
                     .declared,
                 );
             },
@@ -31354,7 +31533,7 @@ const BodyContext = struct {
                     self.view.bodies.expr(checked_expr).ty,
                     const_use,
                     expected_node,
-                    try self.evidenceForUseSite(record.expr),
+                    (try self.evidenceForUseSite(record.expr)).vector,
                     .declared,
                 );
             },
@@ -31363,7 +31542,7 @@ const BodyContext = struct {
                     self.view.bodies.expr(checked_expr).ty,
                     required.const_use,
                     expected_node,
-                    try self.evidenceForUseSite(record.expr),
+                    (try self.evidenceForUseSite(record.expr)).vector,
                     .declared,
                 );
             },
@@ -31485,7 +31664,7 @@ const BodyContext = struct {
         self: *BodyContext,
         proc: checked.ProcedureUseTemplate,
         request_fn_node: NodeId,
-        evidence: []const SpecEvidence,
+        edge: EdgeEvidence,
         root_evidence: ?checked.CheckedEvidenceSpan,
         recursive_reference: bool,
     ) Allocator.Error!DraftExprId {
@@ -31494,7 +31673,7 @@ const BodyContext = struct {
                 callable_eval.view,
                 callable_eval.template,
                 request_fn_node,
-                evidence,
+                edge.vector,
             );
         }
         const source_fn_ty = proc.source_fn_ty_payload orelse
@@ -31504,7 +31683,7 @@ const BodyContext = struct {
             source_fn_ty,
             proc.source_fn_ty_template,
             request_fn_node,
-            evidence,
+            edge,
             root_evidence,
             recursive_reference,
         );
@@ -31650,6 +31829,9 @@ const BodyContext = struct {
             return error.OutOfMemory;
         }
         const coordinator_request_fn_ty = try self.commitGraphType(request_fn_ty);
+        const sealed_subst = (try self.sealSubstitution(spec.subst)) orelse
+            Common.invariant("eagerly completed template request left its substitution open");
+        const coordinator_subst = try self.commitSealedSubstitutionFromGraph(sealed_subst);
         // Iterator-inline completion consumes the callee's solved private
         // representation, so the body must lower now rather than queue.
         try self.builder.resolveDeferredTemplateSpecAtType(
@@ -31657,6 +31839,7 @@ const BodyContext = struct {
             spec_index,
             request_fn_ty,
             coordinator_request_fn_ty,
+            coordinator_subst,
             .immediate,
         );
         self.draft.template_specs.items[spec_index].eager_resolution = .{
@@ -31914,7 +32097,7 @@ const BodyContext = struct {
         view: ModuleView,
         root_expr: checked.CheckedExprId,
         template: checked.CheckedProcedureTemplate,
-    ) Allocator.Error!?[]const SpecEvidence {
+    ) Allocator.Error!?EdgeEvidence {
         return self.rootEdgeEvidenceByExprForPurpose(
             view,
             root_expr,
@@ -31929,12 +32112,9 @@ const BodyContext = struct {
         root_expr: checked.CheckedExprId,
         template: checked.CheckedProcedureTemplate,
         purpose: EvidenceMaterializationPurpose,
-    ) Allocator.Error!?[]const SpecEvidence {
-        const refs = view.static_dispatch_plans.siteEvidence(root_expr) orelse return null;
-        if (refs.len != template.evidence_params.len) {
-            Common.invariant("compile-time root evidence length differed from its procedure template");
-        }
-        return try self.materializeEvidenceForPurpose(refs, purpose);
+    ) Allocator.Error!?EdgeEvidence {
+        if (view.static_dispatch_plans.siteSubstitution(root_expr) == null) return null;
+        return try self.evidenceForSite(view, root_expr, templateSchemaIn(view, &template), purpose);
     }
 
     fn rootEdgeEvidenceForPurpose(
@@ -31942,7 +32122,7 @@ const BodyContext = struct {
         view: ModuleView,
         template: checked.CheckedProcedureTemplate,
         purpose: EvidenceMaterializationPurpose,
-    ) Allocator.Error!?[]const SpecEvidence {
+    ) Allocator.Error!?EdgeEvidence {
         const root_expr = switch (template.body) {
             .entry_wrapper => |wrapper_id| view.compile_time_roots.root(view.entry_wrappers.get(wrapper_id).root).expr,
             .checked_body => |body_id| view.bodies.body(body_id).root_expr,
@@ -31996,7 +32176,12 @@ const BodyContext = struct {
         if (self.restore_evidence.vector.len < entry_template.evidence_params.len) {
             const eval_root = store_view.compile_time_roots.root(body.root);
             if (try self.rootEdgeEvidenceByExpr(store_view, eval_root.expr, entry_template)) |root_evidence| {
-                body_ctx.evidence = rootEvidence(eval.entry_template, root_evidence);
+                body_ctx.evidence = rootEvidenceWithSubstitution(
+                    eval.entry_template,
+                    templateSchemaIn(store_view, &entry_template),
+                    root_evidence,
+                );
+                try body_ctx.seedSubstitution(body_ctx.evidence.schema.?, root_evidence.subst);
             } else {
                 Common.invariant("compile-time evaluation template did not contain its checked root evidence");
             }
@@ -32862,7 +33047,7 @@ const BodyContext = struct {
                 source_fn_ty,
                 source_fn_key,
                 request_fn_node,
-                retained_evidence.vector,
+                .{ .subst = &.{}, .vector = retained_evidence.vector },
                 .instantiation,
                 .independent_roots,
             )),
@@ -36948,7 +37133,7 @@ const BodyContext = struct {
         const raw_scope = @intFromEnum(scope_id);
         const scope = self.view.templates.dispatch_scopes[raw_scope];
         const params = self.view.templates.evidence_params_pool[scope.evidence_params.start .. scope.evidence_params.start + scope.evidence_params.len];
-        const vector = switch (site.evidence_source) {
+        const edge = switch (site.evidence_source) {
             .inherited => Common.invariant("nested procedure that owned a dispatch scope declared inherited evidence"),
             .checked_site => blk: {
                 const start: usize = site.evidence.start;
@@ -36958,15 +37143,27 @@ const BodyContext = struct {
                 {
                     Common.invariant("nested procedure checked evidence was outside the producer table");
                 }
-                break :blk try self.materializeNestedSiteEvidence(
-                    self.view.static_dispatch_plans.evidence_refs[start .. start + len],
-                    params,
-                    request_fn_node,
-                );
+                // The construction instantiates the scope's scheme: its root
+                // related to the request binds every quantified variable.
+                var scheme_ctx = try self.nestedInstantiationContext(self.current_fn_key);
+                defer scheme_ctx.deinit();
+                const scheme_root_node = try scheme_ctx.instNode(scope.scheme_root);
+                try relateFunctionRequestInterface(self.graph, scheme_root_node, request_fn_node);
+                const subst = try self.substitutionFromSchemeVars(&scheme_ctx, self.view.templates.scopeSchemeVars(&scope));
+                break :blk EdgeEvidence{
+                    .subst = subst,
+                    .vector = try self.deriveEvidenceVector(
+                        .{ .view = self.view, .scheme_vars = self.view.templates.scopeSchemeVars(&scope), .params = params },
+                        subst,
+                        self.view,
+                        self.view.static_dispatch_plans.evidence_refs[start .. start + len],
+                        .body_lowering,
+                    ),
+                };
             },
         };
         return .{
-            .chain = try enterEvidenceScope(self.builder, self.evidence, scope_id, expr_id, vector),
+            .chain = try enterEvidenceScope(self.builder, self.evidence, scope_id, expr_id, edge),
             .owned_scope = scope_id,
         };
     }
@@ -37385,9 +37582,18 @@ const BodyContext = struct {
             }
             break :blk existing.slot;
         } else blk: {
-            const evidence_vector = switch (try self.evidenceForDispatchTarget(plan)) {
-                .resolved => |evidence| evidence,
-                .synthesize => Common.invariant("closed direct procedure call had specialization-dependent evidence"),
+            const subst = (try self.dispatchTargetSubstitution(plan)) orelse
+                Common.invariant("closed direct procedure call had no checked substitution");
+            const template = lookup.view.templates.get(procedure.template.template);
+            const edge: EdgeEvidence = .{
+                .subst = subst,
+                .vector = try self.deriveEvidenceVector(
+                    templateSchemaIn(lookup.view, &template),
+                    subst,
+                    self.view,
+                    if (self.dispatchTargetContract(plan)) |c| c.entries else null,
+                    .body_lowering,
+                ),
             };
             const source_fn_ty = lookup.target.callable_ty;
             const created = try self.builder.lowerDraftTemplateFromContext(
@@ -37396,7 +37602,7 @@ const BodyContext = struct {
                 source_fn_ty,
                 lookup.view.types.rootKey(source_fn_ty),
                 callable_node,
-                evidence_vector,
+                edge,
                 .instantiation,
                 .independent_roots,
             );
@@ -38023,7 +38229,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = set_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty)),
                 .args = try self.addExprSpan(&[_]DraftExprId{list_expr}),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -38047,7 +38253,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = list_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty)),
                 .args = try self.addExprSpan(&[_]DraftExprId{set_expr}),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -38071,7 +38277,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = dict_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty)),
                 .args = try self.addExprSpan(&[_]DraftExprId{capacity_expr}),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -38100,7 +38306,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = dict_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty)),
                 .args = try self.addExprSpan(&[_]DraftExprId{ dict_expr, key_expr, value_expr }),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -38124,7 +38330,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = list_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty)),
                 .args = try self.addExprSpan(&[_]DraftExprId{dict_expr}),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -38713,10 +38919,10 @@ const BodyContext = struct {
         return out;
     }
 
-    /// Evidence vector for the constrained scheme instantiated at `expr` (a
-    /// value use resolved in this context's module), or empty when the use
-    /// carries no requirements.
-    fn evidenceForUseSite(self: *BodyContext, expr: checked.CheckedExprId) Allocator.Error![]const SpecEvidence {
+    /// The substitution and evidence the scheme instantiated at `expr` (a
+    /// value use resolved in this context's module) receives, or an empty
+    /// edge when the use instantiates nothing.
+    fn evidenceForUseSite(self: *BodyContext, expr: checked.CheckedExprId) Allocator.Error!EdgeEvidence {
         return self.evidenceForUseSiteForPurpose(expr, .body_lowering);
     }
 
@@ -38724,68 +38930,356 @@ const BodyContext = struct {
         self: *BodyContext,
         expr: checked.CheckedExprId,
         purpose: EvidenceMaterializationPurpose,
+    ) Allocator.Error!EdgeEvidence {
+        return self.evidenceForSite(self.view, expr, try self.useSiteSchema(expr), purpose);
+    }
+
+    /// The obligation schema of the scheme a resolved value reference
+    /// instantiates: the referenced procedure template's, the local
+    /// procedure's declaration scope's, or the const's evaluation entry
+    /// template's.
+    fn useSiteSchema(self: *BodyContext, expr: checked.CheckedExprId) Allocator.Error!ObligationSchema {
+        const raw_expr = @intFromEnum(expr);
+        if (raw_expr >= self.view.resolved_refs.by_checked_expr.len) return emptySchema(self.view);
+        const ref_id = self.view.resolved_refs.by_checked_expr[raw_expr] orelse return emptySchema(self.view);
+        const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
+        return switch (record.ref) {
+            .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |proc| self.procedureUseSchema(proc),
+            .platform_required_proc => |proc| self.procedureUseSchema(proc.procedure),
+            .local_proc => |local| self.scopeSchema(self.view, local.dispatch_scope),
+            .top_level_const, .imported_const => |const_use| self.constUseSchema(const_use),
+            .platform_required_const => |required| self.constUseSchema(required.const_use),
+            .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .platform_required_declaration, .platform_required_checked_error => emptySchema(self.view),
+        };
+    }
+
+    fn emptySchema(view: ModuleView) ObligationSchema {
+        return .{ .view = view, .scheme_vars = &.{}, .params = &.{} };
+    }
+
+    /// The schema of a generalized-local dispatch scope; a local procedure
+    /// without a scope has no obligations and no quantified variables.
+    fn scopeSchema(_: *BodyContext, view: ModuleView, maybe_scope: ?checked.DispatchScopeId) ObligationSchema {
+        const scope_id = maybe_scope orelse return emptySchema(view);
+        const raw_scope = @intFromEnum(scope_id);
+        if (raw_scope >= view.templates.dispatch_scopes.len) {
+            Common.invariant("local procedure named a dispatch scope outside its checked template table");
+        }
+        const scope = view.templates.dispatch_scopes[raw_scope];
+        return .{
+            .view = view,
+            .scheme_vars = view.templates.scopeSchemeVars(&scope),
+            .params = view.templates.evidence_params_pool[scope.evidence_params.start .. scope.evidence_params.start + scope.evidence_params.len],
+        };
+    }
+
+    fn procedureUseSchema(self: *BodyContext, proc: checked.ProcedureUseTemplate) ObligationSchema {
+        if (self.builder.callableEvalForProcedureUse(proc)) |callable_eval| {
+            // A callable-eval binding lowers through its root's entry wrapper,
+            // whose scheme is the binding's own.
+            const raw_template = @intFromEnum(callable_eval.template);
+            if (raw_template >= callable_eval.view.callable_eval_templates.templates.len) {
+                Common.invariant("callable eval binding referenced a missing checked template");
+            }
+            const eval_template = callable_eval.view.callable_eval_templates.templates[raw_template];
+            const wrapper = callable_eval.view.entry_wrappers.lookupByRoot(eval_template.root) orelse
+                Common.invariant("callable eval template root had no checked entry wrapper");
+            return self.templateSchema(wrapper.template);
+        }
+        return self.templateSchema(self.builder.templateRefForProcedureUse(proc));
+    }
+
+    fn templateSchema(self: *BodyContext, template_ref: names.ProcTemplate) ObligationSchema {
+        const view = self.builder.moduleForDigest(names.procTemplateModuleDigest(template_ref));
+        const template = view.templates.get(template_ref.template);
+        return templateSchemaIn(view, &template);
+    }
+
+    /// The schema of the entry template a const use evaluates through; a
+    /// stored or unimplemented const lowers no template body.
+    fn constUseSchema(self: *BodyContext, const_use: checked.ConstUseTemplate) ObligationSchema {
+        const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
+        const template = store_view.const_templates.get(const_use.const_ref);
+        return switch (template.state) {
+            .eval_template => |eval| self.templateSchema(eval.entry_template),
+            .stored_const, .reserved, .unimplemented => emptySchema(store_view),
+        };
+    }
+
+    /// Evidence for `schema`'s scheme at a checked instantiation site in
+    /// `site_view`: the site's recorded substitution as live cells of this
+    /// context, with the site's own entries as contract provenance.
+    fn evidenceForSite(
+        self: *BodyContext,
+        site_view: ModuleView,
+        expr: checked.CheckedExprId,
+        schema: ObligationSchema,
+        purpose: EvidenceMaterializationPurpose,
+    ) Allocator.Error!EdgeEvidence {
+        const recorded = site_view.static_dispatch_plans.siteSubstitution(expr);
+        if (recorded == null and schema.params.len != 0) Common.invariant("constrained scheme use had no checked substitution");
+        const tys = recorded orelse &.{};
+        const subst = if (tys.len == schema.scheme_vars.len)
+            try self.substitutionFromCheckedTypes(site_view, tys)
+        else if (tys.len == 0)
+            // The use shares the scheme without instantiating it: every
+            // quantified variable stands for itself.
+            try self.substitutionFromCheckedTypes(schema.view, schema.scheme_vars)
+        else
+            Common.invariant("checked site substitution length differed from its scheme's quantified variables");
+        const refs = site_view.static_dispatch_plans.siteEvidence(expr);
+        return .{
+            .subst = subst,
+            .vector = try self.deriveEvidenceVector(schema, subst, site_view, refs, purpose),
+        };
+    }
+
+    /// Live slots for a substitution recorded as checked types of
+    /// `site_view`, instantiated in this context (or in a context for that
+    /// module when the site belongs to another one).
+    fn substitutionFromCheckedTypes(
+        self: *BodyContext,
+        site_view: ModuleView,
+        tys: []const checked.CheckedTypeId,
+    ) Allocator.Error!SpecSubstitution {
+        if (tys.len == 0) return &.{};
+        const same_module = moduleBytesEqual(site_view.key.bytes, self.view.key.bytes);
+        var site_ctx: ?BodyContext = if (same_module) null else try BodyContext.initWithMethodScope(
+            self.allocator,
+            self.builder,
+            site_view,
+            self.method_scope,
+            self.owner_template,
+            self.graph,
+            self.draft,
+        );
+        defer if (site_ctx) |*ctx| ctx.deinit();
+        const ctx: *BodyContext = if (site_ctx) |*ctx| ctx else self;
+        const arena = self.builder.evidence_arena.allocator();
+        const slots = try arena.alloc(SubstSlot, tys.len);
+        for (tys, slots) |ty, *slot| {
+            slot.* = switch (checkedPayload(site_view, ty)) {
+                .err => .checked_error,
+                .pending => Common.invariant("pending checked type reached a specialization substitution"),
+                .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => .{ .node = try ctx.instNode(ty) },
+            };
+        }
+        return slots;
+    }
+
+    /// The substitution a scheme receives through the context that
+    /// instantiated its root: each quantified variable read back from
+    /// `scheme_ctx`, so every slot shares the cells the root relation
+    /// established.
+    fn substitutionFromSchemeVars(
+        self: *BodyContext,
+        scheme_ctx: *BodyContext,
+        scheme_vars: []const checked.CheckedTypeId,
+    ) Allocator.Error!SpecSubstitution {
+        if (scheme_vars.len == 0) return &.{};
+        const arena = self.builder.evidence_arena.allocator();
+        const slots = try arena.alloc(SubstSlot, scheme_vars.len);
+        for (scheme_vars, slots) |ty, *slot| slot.* = .{ .node = try scheme_ctx.instNode(ty) };
+        return slots;
+    }
+
+    /// Instantiate a scheme under a substitution: bind each quantified
+    /// variable's checked type to its slot cell before anything in this
+    /// context instantiates the scheme, so every occurrence of the variable
+    /// (in the root, in constraint callables, and at every edge inside the
+    /// body) is that cell. A rejected slot binds nothing; an instantiation
+    /// that reaches it is erroneous checked data.
+    fn seedSubstitution(self: *BodyContext, schema: ObligationSchema, subst: SpecSubstitution) Allocator.Error!void {
+        if (subst.len != schema.scheme_vars.len) {
+            Common.invariant("specialization substitution length differed from its scheme's quantified variables");
+        }
+        for (schema.scheme_vars, subst) |scheme_var, slot| {
+            const node = switch (slot) {
+                .node => |node| node,
+                .checked_error => continue,
+            };
+            const scoped_ty = self.scopedCheckedType(scheme_var);
+            if (self.scopedNode(scoped_ty)) |existing| {
+                if (!self.graph.sameClass(existing, node)) try self.graph.unify(existing, node);
+                continue;
+            }
+            try self.putScopedNode(scoped_ty, node);
+        }
+    }
+
+    /// Seal a live substitution for a request that leaves this graph. Null
+    /// when a slot is still open beyond the explicit specialization defaults.
+    fn sealSubstitution(self: *BodyContext, subst: SpecSubstitution) Allocator.Error!?SealedSubstitution {
+        if (subst.len == 0) return &.{};
+        const arena = self.builder.evidence_arena.allocator();
+        const out = try arena.alloc(SealedSubstSlot, subst.len);
+        for (subst, out) |slot, *sealed| {
+            sealed.* = switch (slot) {
+                .checked_error => .checked_error,
+                .node => |node| blk: {
+                    if (try self.graph.typeIsResolved(node)) break :blk .{ .ty = try self.activeTypeFromNode(node) };
+                    if (try self.graph.typeIsSpecializationDefaultable(node)) break :blk .{ .ty = try self.graph.specializationTypeViewForNode(node) };
+                    return null;
+                },
+            };
+        }
+        return out;
+    }
+
+    /// Live slots for a sealed substitution imported into this context's
+    /// graph.
+    fn substitutionFromSealed(self: *BodyContext, sealed: SealedSubstitution) Allocator.Error!SpecSubstitution {
+        if (sealed.len == 0) return &.{};
+        const arena = self.builder.evidence_arena.allocator();
+        const slots = try arena.alloc(SubstSlot, sealed.len);
+        for (sealed, slots) |sealed_slot, *slot| {
+            slot.* = switch (sealed_slot) {
+                .checked_error => .checked_error,
+                .ty => |ty| .{ .node = try self.activeNodeFromType(try self.importProgramType(ty)) },
+            };
+        }
+        return slots;
+    }
+
+    /// Evidence for every obligation of a scheme under a substitution. A
+    /// checked site's own entries supply the structural contracts and the
+    /// checker's rejection and unreachability verdicts; every method target is
+    /// selected from the substituted receiver.
+    fn deriveEvidenceVector(
+        self: *BodyContext,
+        schema: ObligationSchema,
+        subst: SpecSubstitution,
+        site_view: ModuleView,
+        site_refs: ?[]const static_dispatch.CheckedEvidence,
+        purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error![]const SpecEvidence {
-        const refs = self.view.static_dispatch_plans.siteEvidence(expr) orelse return &.{};
-        return self.materializeEvidenceForPurpose(refs, purpose);
+        if (schema.params.len == 0) return &.{};
+        if (site_refs) |refs| {
+            if (refs.len != schema.params.len) Common.invariant("checked site evidence length differed from its scheme's obligations");
+        }
+        const arena = self.builder.evidence_arena.allocator();
+        const out = try arena.alloc(SpecEvidence, schema.params.len);
+        for (schema.params, 0..) |param, k| {
+            if (param.slot >= subst.len) Common.invariant("obligation receiver slot was outside the request substitution");
+            out[k] = switch (subst[param.slot]) {
+                .checked_error => .checked_error,
+                .node => |node| try self.deriveObligation(
+                    schema.view,
+                    param,
+                    node,
+                    site_view,
+                    if (site_refs) |refs| refs[k] else null,
+                    purpose,
+                ),
+            };
+        }
+        return out;
     }
 
-    /// Evidence vector for a dispatch plan's chosen target (the target's own
-    /// requirements): a direct plan carries it as the evidence node's nested
-    /// refs; a constraint plan's edge-supplied target carries it materialized.
-    fn evidenceForDispatchTarget(self: *BodyContext, plan: static_dispatch.StaticDispatchCallPlan) Allocator.Error!SpecEvidenceVector {
-        switch (plan.resolution) {
-            .direct_closed, .direct_parametric => |direct| {
+    fn deriveObligation(
+        self: *BodyContext,
+        view: ModuleView,
+        param: static_dispatch.EvidenceParamRecord,
+        node: NodeId,
+        site_view: ModuleView,
+        site_ref: ?static_dispatch.CheckedEvidence,
+        purpose: EvidenceMaterializationPurpose,
+    ) Allocator.Error!SpecEvidence {
+        if (site_ref) |ref| switch (ref.resolution) {
+            .structural => |evidence| return .{ .structural = .{
+                .derivation = evidence.derivation,
+                .checked = .{ .view = site_view, .evidence = evidence },
+            } },
+            .unreachable_value => return .unreachable_value,
+            .checked_error => return .checked_error,
+            .direct, .constraint, .from_callable => {},
+        };
+        if (self.methodOwnerFromNode(node) == null) {
+            if (self.forwardedObligation(node, param.method)) |forwarded| return forwarded;
+            const defaultable = switch (self.graph.content(node)) {
+                .unresolved => |variable| variable.numeric_default_phase != null,
+                .redirect, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => false,
+            };
+            if (defaultable) self.graph.materializeLiteralDefault(node);
+        }
+        return try self.synthesizeComponentEvidenceAtNodeForPurpose(view, param.method, param.structural, node, purpose);
+    }
+
+    /// The enclosing frame entry that already answers `method` for the
+    /// cell `node` shares with a quantified variable of an enclosing scheme:
+    /// an obligation on a still-open cell inside a body is the enclosing
+    /// specialization's obligation on that same cell.
+    fn forwardedObligation(self: *BodyContext, node: NodeId, method: names.MethodNameId) ?SpecEvidence {
+        var frame: ?*const EvidenceChain = &self.evidence;
+        while (frame) |current| : (frame = current.parent) {
+            const schema = current.schema orelse continue;
+            for (schema.params, 0..) |param, k| {
+                if (param.method != method) continue;
+                if (param.slot >= current.subst.len) continue;
+                const slot = switch (current.subst[param.slot]) {
+                    .node => |slot_node| slot_node,
+                    .checked_error => continue,
+                };
+                if (!self.graph.sameClass(slot, node)) continue;
+                if (k >= current.vector.len) continue;
+                return current.vector[k];
+            }
+        }
+        return null;
+    }
+
+    /// The obligation-target contract a checked dispatch plan recorded for
+    /// its target's own obligations: a direct plan's resolved nested
+    /// entries. Every other edge derives the target's evidence from the
+    /// callable alone.
+    fn dispatchTargetContract(self: *BodyContext, plan: static_dispatch.StaticDispatchCallPlan) ?EvidenceContract {
+        return switch (plan.resolution) {
+            .direct_closed, .direct_parametric => |direct| blk: {
                 const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
-                return switch (node.nested) {
-                    .resolved => .{ .resolved = try self.materializeEvidence(self.view.static_dispatch_plans.nestedEvidence(node)) },
-                    .from_callable => .synthesize,
+                break :blk switch (node.nested) {
+                    .resolved => .{ .view = self.view, .entries = self.view.static_dispatch_plans.nestedEvidence(node) },
+                    .from_callable => null,
                 };
             },
-            .evidence_dependent => |dependent| {
-                const entry = self.evidence.at(dependent.index) orelse
-                    Common.invariant("method target evidence was absent from its lexical chain");
-                return switch (entry) {
-                    .target => |target| if (dependent.independent_callable)
-                        .synthesize
-                    else switch (target.nested) {
-                        .resolved => |nested| .{ .resolved = nested },
-                        .synthesize => .synthesize,
-                    },
-                    .structural, .unreachable_value, .checked_error => Common.invariant("method target selected unresolved or non-target checked evidence"),
-                };
-            },
+            .evidence_dependent, .structural, .checked_error, .@"unreachable" => null,
             .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
-            .structural, .checked_error, .@"unreachable" => Common.invariant("method target evidence requested for a non-target resolution"),
-        }
+        };
     }
 
-    /// Evidence vector for an iterator dispatch call's chosen target,
-    /// mirroring `evidenceForDispatchTarget` for `IteratorDispatchCall`s.
-    fn evidenceForIteratorCall(self: *BodyContext, call: static_dispatch.IteratorDispatchCall) Allocator.Error!SpecEvidenceVector {
-        switch (call.resolution) {
-            .direct_closed, .direct_parametric => |direct| {
+    /// The substitution a checked direct dispatch plan recorded for its
+    /// target: the target scheme's quantified variables as copied at that
+    /// edge, instantiated in this context.
+    fn dispatchTargetSubstitution(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+    ) Allocator.Error!?SpecSubstitution {
+        const direct = switch (plan.resolution) {
+            .direct_closed, .direct_parametric => |direct| direct,
+            .evidence_dependent, .structural, .checked_error, .@"unreachable" => return null,
+            .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
+        };
+        const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
+        const table = self.view.static_dispatch_plans;
+        return try self.substitutionFromCheckedTypes(
+            self.view,
+            table.site_substitutions[node.subst.start .. node.subst.start + node.subst.len],
+        );
+    }
+
+    /// The obligation contract a checked iterator dispatch call recorded for
+    /// its target, mirroring `dispatchTargetContract`.
+    fn iteratorCallContract(self: *BodyContext, call: static_dispatch.IteratorDispatchCall) ?EvidenceContract {
+        return switch (call.resolution) {
+            .direct_closed, .direct_parametric => |direct| blk: {
                 const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
-                return switch (node.nested) {
-                    .resolved => .{ .resolved = try self.materializeEvidence(self.view.static_dispatch_plans.nestedEvidence(node)) },
-                    .from_callable => .synthesize,
+                break :blk switch (node.nested) {
+                    .resolved => .{ .view = self.view, .entries = self.view.static_dispatch_plans.nestedEvidence(node) },
+                    .from_callable => null,
                 };
             },
-            .evidence_dependent => |dependent| {
-                const entry = self.evidence.at(dependent.index) orelse
-                    Common.invariant("iterator target evidence was absent from its lexical chain");
-                return switch (entry) {
-                    .target => |target| if (dependent.independent_callable)
-                        .synthesize
-                    else switch (target.nested) {
-                        .resolved => |nested| .{ .resolved = nested },
-                        .synthesize => .synthesize,
-                    },
-                    .structural, .unreachable_value, .checked_error => Common.invariant("iterator target selected unresolved or non-target checked evidence"),
-                };
-            },
+            .evidence_dependent, .structural, .checked_error, .@"unreachable" => null,
             .direct_pending => Common.invariant("unfinalized iterator direct call reached Monotype"),
-            .structural, .checked_error, .@"unreachable" => Common.invariant("iterator target evidence requested for a non-target resolution"),
-        }
+        };
     }
 
     /// A consumed evidence resolution: a concrete target or the checker's
@@ -39332,6 +39826,37 @@ const BodyContext = struct {
         return out;
     }
 
+    /// The evidence parameters of a generalized-local dispatch scope; a
+    /// local procedure without a scope has none.
+    fn scopeEvidenceParams(
+        _: *BodyContext,
+        view: ModuleView,
+        maybe_scope: ?checked.DispatchScopeId,
+    ) []const static_dispatch.EvidenceParamRecord {
+        const scope_id = maybe_scope orelse return &.{};
+        const raw_scope = @intFromEnum(scope_id);
+        if (raw_scope >= view.templates.dispatch_scopes.len) {
+            Common.invariant("local procedure named a dispatch scope outside its checked template table");
+        }
+        const scope = view.templates.dispatch_scopes[raw_scope];
+        return view.templates.evidence_params_pool[scope.evidence_params.start .. scope.evidence_params.start + scope.evidence_params.len];
+    }
+
+    /// The quantified variables of a local method target's declaration scope.
+    fn localProcSchemeVars(
+        _: *BodyContext,
+        view: ModuleView,
+        local: static_dispatch.LocalProcedureMethodTarget,
+    ) []const checked.CheckedTypeId {
+        const scope_id = local.dispatch_scope orelse return &.{};
+        const raw_scope = @intFromEnum(scope_id);
+        if (raw_scope >= view.templates.dispatch_scopes.len) {
+            Common.invariant("local method target named a dispatch scope outside its checked template table");
+        }
+        const scope = view.templates.dispatch_scopes[raw_scope];
+        return view.templates.scopeSchemeVars(&scope);
+    }
+
     fn localProcEvidenceParams(
         _: *BodyContext,
         view: ModuleView,
@@ -39359,6 +39884,17 @@ const BodyContext = struct {
         structural: ?static_dispatch.StructuralKind,
         component_node: NodeId,
     ) Allocator.Error!SpecEvidence {
+        return self.synthesizeComponentEvidenceAtNodeForPurpose(view, method, structural, component_node, .body_lowering);
+    }
+
+    fn synthesizeComponentEvidenceAtNodeForPurpose(
+        self: *BodyContext,
+        view: ModuleView,
+        method: names.MethodNameId,
+        structural: ?static_dispatch.StructuralKind,
+        component_node: NodeId,
+        purpose: EvidenceMaterializationPurpose,
+    ) Allocator.Error!SpecEvidence {
         if (self.methodOwnerFromNode(component_node)) |owner| {
             if (try self.lookupMethodTarget(owner, view, method)) |found| {
                 if (found.target.kind == .structural) {
@@ -39366,7 +39902,7 @@ const BodyContext = struct {
                 }
                 const arena = self.builder.evidence_arena.allocator();
                 const target = try arena.create(SpecEvidenceTarget);
-                const lookup = try self.withLocalProcContext(found);
+                const lookup = try self.methodLookupForEvidencePurpose(found, purpose);
                 target.* = .{
                     .view = lookup.view,
                     .target = lookup.target,
@@ -39634,42 +40170,12 @@ const BodyContext = struct {
         self: *BodyContext,
         lookup: MethodLookup,
         callable_mono_ty: Type.TypeId,
-        evidence_vector: SpecEvidenceVector,
     ) Allocator.Error!DraftFnSlot {
         if (self.frozen_sealed_emission) {
             return try self.methodTargetCalleeWithClosedMono(lookup, callable_mono_ty);
         }
         const callable_node = try self.activeNodeFromType(callable_mono_ty);
-        const synthesize_from_graph = switch (evidence_vector) {
-            .resolved => false,
-            .synthesize => try self.graph.typeHasActiveSnapshots(callable_mono_ty),
-        };
-        if (synthesize_from_graph) {
-            return try self.methodTargetCalleeAtNode(lookup, callable_node, .synthesize);
-        }
-        const evidence: SpecEvidenceVector = switch (evidence_vector) {
-            .resolved => evidence_vector,
-            .synthesize => switch (lookup.target.kind) {
-                .procedure => |procedure| blk: {
-                    const template = lookup.view.templates.get(procedure.template.template);
-                    if (evidenceParamsHaveHiddenDispatcher(lookup.view.templates.evidenceParams(&template))) {
-                        return try self.methodTargetCalleeAtNode(lookup, callable_node, .synthesize);
-                    }
-                    break :blk .{ .resolved = try self.synthesizeTargetEvidence(
-                        lookup,
-                        procedure.template,
-                        callable_mono_ty,
-                    ) };
-                },
-                .local_proc => .{ .resolved = &.{} },
-                .structural => Common.invariant("structural method registry result has no callable procedure body"),
-            },
-        };
-        return try self.methodTargetCalleeAtNode(
-            lookup,
-            callable_node,
-            evidence,
-        );
+        return try self.methodTargetCalleeAtNode(lookup, callable_node, null);
     }
 
     fn methodTargetCalleeWithClosedMono(
@@ -39834,11 +40340,17 @@ const BodyContext = struct {
         }
     }
 
+    /// Request the specialization of a method target at a callable request.
+    /// The target's scheme root is instantiated in the target's own context
+    /// and related to the request, which binds every quantified variable of
+    /// the scheme; the target's evidence is derived from that substitution,
+    /// with `contract` (a checked plan's recorded nested entries) supplying
+    /// structural contracts.
     fn methodTargetCalleeAtNode(
         self: *BodyContext,
         raw_lookup: MethodLookup,
         request_fn_node: NodeId,
-        evidence_vector: SpecEvidenceVector,
+        contract: ?EvidenceContract,
     ) Allocator.Error!DraftFnSlot {
         const lookup = try self.withLocalProcContext(raw_lookup);
         if (try self.preparedCodecCalleeAtNode(lookup, request_fn_node)) |prepared| return prepared;
@@ -39847,64 +40359,28 @@ const BodyContext = struct {
         return switch (lookup.target.kind) {
             .procedure => |procedure| blk: {
                 const template = lookup.view.templates.get(procedure.template.template);
-                const params = lookup.view.templates.evidenceParams(&template);
                 var target_ctx = try self.methodTargetContext(lookup);
                 defer target_ctx.deinit();
                 const target_root_node = try target_ctx.instNode(template.checked_fn_root);
-                const projected_components: ?[]NodeId = switch (evidence_vector) {
-                    .resolved => null,
-                    .synthesize => try self.projectEvidenceComponentNodes(
-                        lookup.view,
-                        params,
-                        target_root_node,
-                        &target_ctx,
-                    ),
-                };
-                defer if (projected_components) |components| self.allocator.free(components);
                 try self.relateEvidenceTargetRootToRequest(target_root_node, request_fn_node);
-                const evidence = switch (evidence_vector) {
-                    .resolved => |resolved| resolved,
-                    .synthesize => try self.synthesizeEvidenceAtComponentNodes(
-                        lookup.view,
-                        params,
-                        projected_components.?,
-                    ),
-                };
-                const slot = try self.builder.lowerDraftTemplateFromContext(
+                const edge = try self.deriveTargetEdge(&target_ctx, templateSchemaIn(lookup.view, &template), contract);
+                break :blk try self.builder.lowerDraftTemplateFromContext(
                     self,
                     procedure.template,
                     source_fn_ty,
                     source_fn_key,
                     request_fn_node,
-                    evidence,
+                    edge,
                     .instantiation,
                     if (procedure.runtime_target.iteratorProcedure() == .iter_from_step) .exact_graph else .independent_roots,
                 );
-                break :blk slot;
             },
             .local_proc => |local| blk: {
-                const params = self.localProcEvidenceParams(lookup.view, local);
-                const evidence = switch (evidence_vector) {
-                    .resolved => |resolved| resolved,
-                    .synthesize => synthesize: {
-                        var target_ctx = try self.methodTargetContext(lookup);
-                        defer target_ctx.deinit();
-                        const target_root_node = try target_ctx.instNode(source_fn_ty);
-                        const projected_components = try self.projectEvidenceComponentNodes(
-                            lookup.view,
-                            params,
-                            target_root_node,
-                            &target_ctx,
-                        );
-                        defer self.allocator.free(projected_components);
-                        try self.relateEvidenceTargetRootToRequest(target_root_node, request_fn_node);
-                        break :synthesize try self.synthesizeEvidenceAtComponentNodes(
-                            lookup.view,
-                            params,
-                            projected_components,
-                        );
-                    },
-                };
+                var target_ctx = try self.methodTargetContext(lookup);
+                defer target_ctx.deinit();
+                const target_root_node = try target_ctx.instNode(source_fn_ty);
+                try self.relateEvidenceTargetRootToRequest(target_root_node, request_fn_node);
+                const edge = try self.deriveTargetEdge(&target_ctx, self.scopeSchema(lookup.view, local.dispatch_scope), contract);
                 break :blk .{ .local = try self.lowerDraftLocalProcAtNode(
                     .{
                         .binder = local.binder,
@@ -39917,7 +40393,7 @@ const BodyContext = struct {
                     source_fn_ty,
                     source_fn_key,
                     request_fn_node,
-                    evidence,
+                    edge,
                     false,
                 ) };
             },
@@ -39925,41 +40401,55 @@ const BodyContext = struct {
         };
     }
 
+    /// The substitution and evidence a target scheme receives from a request
+    /// its root was related to in `target_ctx`.
+    fn deriveTargetEdge(
+        self: *BodyContext,
+        target_ctx: *BodyContext,
+        schema: ObligationSchema,
+        contract: ?EvidenceContract,
+    ) Allocator.Error!EdgeEvidence {
+        const subst = try self.substitutionFromSchemeVars(target_ctx, schema.scheme_vars);
+        return .{
+            .subst = subst,
+            .vector = try self.deriveEvidenceVector(
+                schema,
+                subst,
+                if (contract) |c| c.view else self.view,
+                if (contract) |c| c.entries else null,
+                .body_lowering,
+            ),
+        };
+    }
+
     /// Lower a checker-classified direct target at the already-instantiated
-    /// request interface. Unlike evidence-dependent dispatch, this does not
-    /// instantiate the target's checked root and relate it back to the request:
-    /// CheckedModule construction already performed that target instantiation and
-    /// recorded the exact callable in the plan.
+    /// request interface. CheckedModule construction performed the target
+    /// instantiation and recorded the substitution it applied, so the
+    /// target's evidence derives from that record without instantiating the
+    /// target's checked root again.
     fn methodTargetCalleeDirectAtNode(
         self: *BodyContext,
         raw_lookup: MethodLookup,
         request_fn_node: NodeId,
-        evidence_vector: SpecEvidenceVector,
+        plan: static_dispatch.StaticDispatchCallPlan,
     ) Allocator.Error!DraftFnSlot {
         const lookup = try self.withLocalProcContext(raw_lookup);
         if (try self.preparedCodecCalleeAtNode(lookup, request_fn_node)) |prepared| return prepared;
         const source_fn_ty = lookup.target.callable_ty;
         const source_fn_key = lookup.view.types.rootKey(source_fn_ty);
+        const subst = (try self.dispatchTargetSubstitution(plan)) orelse
+            Common.invariant("direct dispatch target had no checked substitution");
+        const contract: ?[]const static_dispatch.CheckedEvidence = if (self.dispatchTargetContract(plan)) |c| c.entries else null;
         return switch (lookup.target.kind) {
             .procedure => |procedure| blk: {
                 const template = lookup.view.templates.get(procedure.template.template);
-                const params = lookup.view.templates.evidenceParams(&template);
-                const evidence = switch (evidence_vector) {
-                    .resolved => |resolved| resolved,
-                    .synthesize => blk_evidence: {
-                        const components = try self.projectDirectTargetEvidenceComponentNodes(
-                            lookup,
-                            params,
-                            template.checked_fn_root,
-                            request_fn_node,
-                        );
-                        defer self.allocator.free(components);
-                        break :blk_evidence try self.synthesizeEvidenceAtComponentNodes(
-                            lookup.view,
-                            params,
-                            components,
-                        );
-                    },
+                if (subst.len != template.scheme_vars.len) {
+                    Common.invariant("direct dispatch target substitution length differed from its scheme");
+                }
+                const schema = templateSchemaIn(lookup.view, &template);
+                const edge: EdgeEvidence = .{
+                    .subst = subst,
+                    .vector = try self.deriveEvidenceVector(schema, subst, self.view, contract, .body_lowering),
                 };
                 break :blk try self.builder.lowerDraftTemplateFromContext(
                     self,
@@ -39967,29 +40457,19 @@ const BodyContext = struct {
                     source_fn_ty,
                     source_fn_key,
                     request_fn_node,
-                    evidence,
+                    edge,
                     .instantiation,
                     if (procedure.runtime_target.iteratorProcedure() == .iter_from_step) .exact_graph else .independent_roots,
                 );
             },
             .local_proc => |local| blk: {
-                const params = self.localProcEvidenceParams(lookup.view, local);
-                const evidence = switch (evidence_vector) {
-                    .resolved => |resolved| resolved,
-                    .synthesize => blk_evidence: {
-                        const components = try self.projectDirectTargetEvidenceComponentNodes(
-                            lookup,
-                            params,
-                            source_fn_ty,
-                            request_fn_node,
-                        );
-                        defer self.allocator.free(components);
-                        break :blk_evidence try self.synthesizeEvidenceAtComponentNodes(
-                            lookup.view,
-                            params,
-                            components,
-                        );
-                    },
+                const schema = self.scopeSchema(lookup.view, local.dispatch_scope);
+                if (subst.len != schema.scheme_vars.len) {
+                    Common.invariant("direct local method target substitution length differed from its scope scheme");
+                }
+                const edge: EdgeEvidence = .{
+                    .subst = subst,
+                    .vector = try self.deriveEvidenceVector(schema, subst, self.view, contract, .body_lowering),
                 };
                 break :blk .{ .local = try self.lowerDraftLocalProcAtNode(
                     .{
@@ -40003,7 +40483,7 @@ const BodyContext = struct {
                     source_fn_ty,
                     source_fn_key,
                     request_fn_node,
-                    evidence,
+                    edge,
                     false,
                 ) };
             },
@@ -40043,11 +40523,10 @@ const BodyContext = struct {
         // Materialized only past the guards above: most dispatches return
         // without consuming evidence, and materialization arena-allocates one
         // vector per target.
-        const evidence = try self.evidenceForDispatchTarget(plan);
         const slot = if (direct)
-            try self.methodTargetCalleeDirectAtNode(lookup, request_fn_node, evidence)
+            try self.methodTargetCalleeDirectAtNode(lookup, request_fn_node, plan)
         else
-            try self.methodTargetCalleeAtNode(lookup, request_fn_node, evidence);
+            try self.methodTargetCalleeAtNode(lookup, request_fn_node, self.dispatchTargetContract(plan));
         return try self.draftFnSlotTypeNode(slot, request_fn_node);
     }
 
@@ -40070,7 +40549,7 @@ const BodyContext = struct {
             .callee = draftProcCalleeForSlot(try self.methodTargetCalleeAtNode(
                 contextual_lookup,
                 callable_node,
-                try self.evidenceForDispatchTarget(plan),
+                self.dispatchTargetContract(plan),
             )),
             .args = args,
             .iterator_procedure = self.iteratorProcedureForMethodTarget(contextual_lookup.target),
@@ -40097,7 +40576,7 @@ const BodyContext = struct {
             .callee = draftProcCalleeForSlot(try self.methodTargetCalleeDirectAtNode(
                 contextual_lookup,
                 callable_node,
-                try self.evidenceForDispatchTarget(plan),
+                plan,
             )),
             .args = args,
             .captures = try self.methodTargetCaptureSpan(contextual_lookup),
@@ -40847,7 +41326,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = method.result_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(method.lookup, method.callable_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(method.lookup, method.callable_ty)),
                 .args = try self.addExprSpan(args),
                 .captures = try self.methodTargetCaptureSpan(method.lookup),
             } },
@@ -42358,7 +42837,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = ret_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty)),
                 .args = try self.addExprSpan(arg_exprs),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -42387,7 +42866,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = ret_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty)),
                 .args = try self.addExprSpan(arg_exprs),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -43223,7 +43702,9 @@ const BodyContext = struct {
     const CheckedGeneratedCodecCallee = struct {
         lookup: MethodLookup,
         callable_node: NodeId,
-        evidence: []const SpecEvidence,
+        /// The contract's recorded entries for the target's obligations,
+        /// consumed as structural-contract provenance.
+        contract: EvidenceContract,
     };
 
     /// Resolve one generated-codec method call from the exact contract emitted
@@ -43308,9 +43789,10 @@ const BodyContext = struct {
         return .{
             .lookup = lookup,
             .callable_node = try contract_ctx.instNode(call.callable_ty),
-            .evidence = try contract_ctx.materializeEvidence(
-                checked_structural.view.static_dispatch_plans.generatedCodecCallEvidence(call),
-            ),
+            .contract = .{
+                .view = checked_structural.view,
+                .entries = checked_structural.view.static_dispatch_plans.generatedCodecCallEvidence(call),
+            },
         };
     }
 
@@ -43375,9 +43857,9 @@ const BodyContext = struct {
             break :blk try self.methodTargetCalleeAtNode(
                 exact.lookup,
                 exact.callable_node,
-                .{ .resolved = exact.evidence },
+                exact.contract,
             );
-        } else try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        } else try self.methodTargetCalleeAtNode(lookup, target_node, null);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = kind,
@@ -43416,7 +43898,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[1], str_node);
         try relateRequestComponent(self.graph, target.ret, str_node);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, null);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = kind,
@@ -43455,7 +43937,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[0], state_node);
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, null);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
@@ -43808,7 +44290,7 @@ const BodyContext = struct {
             &.{ encoding_node, fields_node, state_node },
             result_node,
         );
-        const callee = try self.methodTargetCalleeAtNode(lookup, request_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNode(lookup, request_node, null);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
@@ -43850,7 +44332,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target_try.ok, state_node);
         try relateRequestComponent(self.graph, target_try.err, outer_result.err);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, null);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
@@ -43905,7 +44387,7 @@ const BodyContext = struct {
             &.{ encoding_node, private_spec, state_node },
             target.ret,
         );
-        const callee = try self.methodTargetCalleeAtNode(lookup, request_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNode(lookup, request_node, null);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
@@ -44075,7 +44557,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target_result.rest, outer_result.rest);
         try relateRequestComponent(self.graph, target_result.err, outer_result.err);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, null);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
@@ -44119,7 +44601,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target_try.err, outer_result.err);
         if (result_is_state) try relateRequestComponent(self.graph, target_try.ok, state_node);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, null);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
@@ -44159,7 +44641,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[1], state_node);
         try relateRequestComponent(self.graph, target.ret, outer_result.err);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, null);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
@@ -44197,7 +44679,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[0], state_node);
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, null);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
@@ -44285,7 +44767,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[1], state_node);
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, null);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
@@ -44432,7 +44914,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target_try.err, outer_result.err);
         try relateRequestComponent(self.graph, target_try.ok, state_node);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, null);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
@@ -44477,7 +44959,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target_result.rest, state_node);
         try relateRequestComponent(self.graph, target_result.err, outer_result.err);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, null);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .parser,
@@ -44522,7 +45004,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target_try.ok, state_node);
         try relateRequestComponent(self.graph, target_try.err, outer_try.err);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, null);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
@@ -44562,7 +45044,7 @@ const BodyContext = struct {
         try relateRequestComponent(self.graph, target.args[1], state_node);
         try relateRequestComponent(self.graph, target.ret, runtime.ret);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, null);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
@@ -44600,7 +45082,7 @@ const BodyContext = struct {
         }
         try relateRequestComponent(self.graph, target.ret, ret_node);
 
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, null);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = kind,
@@ -45550,7 +46032,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = err_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
+                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty)),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, state_expr }),
                 .captures = try self.methodTargetCaptureSpan(lookup),
                 .is_cold = true,
@@ -45900,7 +46382,7 @@ const BodyContext = struct {
             .equality => try self.graphFunctionNode(&.{ node, node }, ret_node),
             .hash => try self.graphFunctionNode(&.{ node, ret_node }, ret_node),
         };
-        const callee = try self.methodTargetCalleeAtNode(lookup, callable_node, .synthesize);
+        const callee = try self.methodTargetCalleeAtNode(lookup, callable_node, null);
         try self.draft.structural_eq_method_calls.append(self.allocator, .{
             .boundary = @intCast(boundary_index),
             .node = node,
@@ -46116,7 +46598,7 @@ const BodyContext = struct {
             }
             const arg_tys = D.methodArgTypes(ty, ctx.result_ty);
             const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, ctx.result_ty);
-            break :planned try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize);
+            break :planned try self.methodTargetCalleeWithMono(lookup, callable_mono_ty);
         };
         const args = D.callArgs(operand);
         return try self.addExpr(.{ .ty = ctx.result_ty, .data = .{ .call_proc = .{
@@ -49946,7 +50428,7 @@ const BodyContext = struct {
         const callee = try self.methodTargetCalleeAtNode(
             lookup,
             callable_node,
-            try self.evidenceForIteratorCall(plan),
+            self.iteratorCallContract(plan),
         );
         const completed_callable_node = try self.draftFnSlotTypeNode(callee, callable_node);
         if (expected_ret_ty) |expected| {
@@ -52286,7 +52768,7 @@ const BodyContext = struct {
                 const bool_ty = try self.lowerTypeFromView(lookup.view, target_fn.ret);
                 const arg_tys = [_]Type.TypeId{ entry.ty, entry.ty };
                 const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, bool_ty);
-                const callee = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize);
+                const callee = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty);
                 return try self.addExpr(.{ .ty = bool_ty, .data = .{ .call_proc = .{
                     .callee = draftProcCalleeForSlot(callee),
                     .args = try self.addExprSpan(&.{ scrutinee, expected }),
@@ -52486,6 +52968,7 @@ test "queued specialization skips a body claimed immediately before dispatch" {
                 .source_fn_key = .{},
                 .fn_ty = ty_,
                 .evidence = &.{},
+                .subst = null,
                 .signature_relation = .independent_roots,
             };
         }

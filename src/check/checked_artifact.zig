@@ -17090,9 +17090,9 @@ const EvidencePass = struct {
         // vacuous)—published as site evidence keyed by the root's body
         // expression for the drain and const-eval entries to consume.
         for (self.compile_time_roots.roots) |root| {
-            const source_pattern = root.source_pattern orelse continue;
+            const scheme_var = rootSchemeVar(root) orelse continue;
             params.clearRetainingCapacity();
-            try self.enumerateParams(ModuleEnv.varFrom(source_pattern), &params);
+            try self.enumerateParams(scheme_var, &params);
             if (params.items.len == 0) continue;
             const site_key = @intFromEnum(root.expr);
             if (self.site_seen.contains(site_key)) continue;
@@ -17103,7 +17103,7 @@ const EvidencePass = struct {
                 entries.appendAssumeCapacity((try self.evidenceForVar(param, param.dispatcher_var, param.constraint.fn_var, true)).?);
             }
             const span = try self.appendEvidenceRefs(entries.items);
-            const subst = try self.appendSiteSubstitution(ModuleEnv.varFrom(source_pattern), &.{});
+            const subst = try self.appendSiteSubstitution(scheme_var, &.{});
             try self.site_seen.put(site_key, {});
             try self.site_evidence.append(self.allocator, .{
                 .key = site_key,
@@ -17191,9 +17191,20 @@ const EvidencePass = struct {
         self.plan_table.site_substitutions = try self.site_substitutions.toOwnedSlice(self.allocator);
     }
 
+    /// The solver root of the scheme a compile-time root evaluates: the
+    /// hoisted root's source pattern or the constant's definition. Expression
+    /// roots, expect bodies and platform-required bindings have no scheme.
+    fn rootSchemeVar(root: CompileTimeRoot) ?Var {
+        if (root.source_pattern) |source_pattern| return ModuleEnv.varFrom(source_pattern);
+        return switch (root.source) {
+            .def => |def_idx| ModuleEnv.varFrom(def_idx),
+            .expr, .statement, .required_binding, .hoisted => null,
+        };
+    }
+
     /// The solver root of a template's scheme: its definition's type, or the
-    /// source pattern of the compile-time root an entry wrapper evaluates.
-    /// Intrinsic and hosted wrappers and expression roots have no scheme.
+    /// scheme of the compile-time root an entry wrapper evaluates. Intrinsic
+    /// and hosted wrappers and expression roots have no scheme.
     fn templateSchemeVar(
         self: *EvidencePass,
         template: CheckedProcedureTemplate,
@@ -17201,11 +17212,7 @@ const EvidencePass = struct {
     ) ?Var {
         if (template_defs.get(@intFromEnum(template.template_id))) |def_idx| return ModuleEnv.varFrom(def_idx);
         return switch (template.body) {
-            .entry_wrapper => |wrapper_id| blk: {
-                const wrapper = self.entry_wrappers.get(wrapper_id);
-                const root = self.compile_time_roots.root(wrapper.root);
-                break :blk if (root.source_pattern) |source_pattern| ModuleEnv.varFrom(source_pattern) else null;
-            },
+            .entry_wrapper => |wrapper_id| rootSchemeVar(self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root)),
             .checked_body, .intrinsic_wrapper, .unimplemented => null,
         };
     }
@@ -17289,10 +17296,10 @@ const EvidencePass = struct {
             .entry_wrapper => |wrapper_id| {
                 const wrapper = self.entry_wrappers.get(wrapper_id);
                 const root = self.compile_time_roots.root(wrapper.root);
-                if (root.source_pattern) |source_pattern| {
-                    try self.enumerateParams(ModuleEnv.varFrom(source_pattern), params);
+                if (rootSchemeVar(root)) |scheme_var| {
+                    try self.enumerateParams(scheme_var, params);
                 }
-                // Expression roots (REPL lines, eval snippets) have no pattern
+                // Expression roots (REPL lines, eval snippets) have no scheme
                 // and no callers, so their obligations are chain-free.
             },
             .checked_body, .intrinsic_wrapper, .unimplemented => {},
@@ -18310,9 +18317,13 @@ const EvidencePass = struct {
             entries.appendAssumeCapacity(evidence);
         }
 
+        // A nested-function-use record's scheme root is the stored
+        // expression's own type; only a value use instantiates a referenced
+        // scheme, so only value uses carry a substitution for one.
+        const nested = record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.nested_function_use);
         return .{
             .refs = try self.appendEvidenceRefs(entries.items),
-            .subst = try self.appendSiteSubstitution(@enumFromInt(record.scheme_root), pairs),
+            .subst = if (nested) .{} else try self.appendSiteSubstitution(@enumFromInt(record.scheme_root), pairs),
         };
     }
 
@@ -18577,10 +18588,20 @@ const EvidencePass = struct {
     ) Allocator.Error!void {
         if (self.site_seen.contains(site_key)) return;
 
+        const record = self.module.moduleEnvConst().scheme_uses.items.items[record_idx];
+        // A value use and a nested-function use can share one node (a
+        // referenced value stored in expression position); the value use
+        // owns the site's evidence regardless of which record checking
+        // appended first.
+        if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.nested_function_use)) {
+            if (self.source_by_checked_expr.get(site_key)) |source_node| {
+                if (self.value_use_by_node.contains(source_node)) return;
+            }
+        }
+
         self.current_chain = chain;
         defer self.current_chain = &.{};
 
-        const record = self.module.moduleEnvConst().scheme_uses.items.items[record_idx];
         const shared = record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.shared_value_use);
         const spans = (try self.evidenceRefsForRecord(record_idx, !shared)) orelse {
             try self.deferred_use_sites.append(self.allocator, .{ .record_idx = record_idx, .site_key = site_key });
