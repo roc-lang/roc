@@ -218,28 +218,16 @@ const CaptureSpanId = struct {
     }
 };
 
+/// A capture span identifies its captures structurally (source, start and
+/// length) rather than as a dense index, so it is a hashable key.
+const CaptureSpanKey = CaptureSpanId;
+
 fn specializationIdentityCaptureStart(span: CaptureSpanId) u32 {
     return switch (span.source) {
         .solved => span.start,
         .own => 0,
     };
 }
-
-const CaptureTypeKey = struct {
-    source: CaptureSpanSource,
-    start: u32,
-    len: u32,
-    solved_fn_ty: SolvedType.TypeVarId,
-
-    fn from(span: CaptureSpanId, solved_fn_ty: SolvedType.TypeVarId) CaptureTypeKey {
-        return .{
-            .source = span.source,
-            .start = span.start,
-            .len = span.len,
-            .solved_fn_ty = solved_fn_ty,
-        };
-    }
-};
 
 const ErasedReturnReuse = union(enum) {
     none,
@@ -334,26 +322,6 @@ const FnSpecContext = struct {
             lhs.captures.len == rhs.captures.len and
             lhs.capture_ty == rhs.capture_ty and
             std.meta.eql(lhs.return_reuse, rhs.return_reuse);
-    }
-};
-
-const CaptureTypeMap = std.HashMap(CaptureTypeKey, Type.TypeId, CaptureSpanContext, std.hash_map.default_max_load_percentage);
-
-const CaptureSpanContext = struct {
-    pub fn hash(_: CaptureSpanContext, span: CaptureTypeKey) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        std.hash.autoHash(&hasher, span.source);
-        std.hash.autoHash(&hasher, span.start);
-        std.hash.autoHash(&hasher, span.len);
-        std.hash.autoHash(&hasher, @intFromEnum(span.solved_fn_ty));
-        return hasher.final();
-    }
-
-    pub fn eql(_: CaptureSpanContext, lhs: CaptureTypeKey, rhs: CaptureTypeKey) bool {
-        return lhs.source == rhs.source and
-            lhs.start == rhs.start and
-            lhs.len == rhs.len and
-            lhs.solved_fn_ty == rhs.solved_fn_ty;
     }
 };
 
@@ -536,7 +504,10 @@ const Lowerer = struct {
     /// Source-level names recorded by body workers for coordinator interning.
     worker_local_names: std.ArrayList(PendingLocalName),
     source_symbols: std.AutoHashMap(Common.Symbol, Lifted.FnId),
-    capture_types: CaptureTypeMap,
+    /// Lowered capture record of every capture span seen so far. A capture
+    /// record depends only on its captures, so one record serves every
+    /// function type that carries the same span.
+    capture_types: std.AutoHashMap(CaptureSpanKey, Type.TypeId),
     captures: collections.DenseMap(Lifted.LocalId, CaptureBinding),
     recursive_value_locals: collections.DenseMap(Lifted.LocalId, void),
     recursive_value_capture_ids: collections.DenseMap(check.CheckedModule.CaptureId, void),
@@ -709,7 +680,7 @@ const Lowerer = struct {
             .folded_map_matches = .empty,
             .worker_local_names = .empty,
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
-            .capture_types = CaptureTypeMap.initContext(allocator, .{}),
+            .capture_types = std.AutoHashMap(CaptureSpanKey, Type.TypeId).init(allocator),
             .captures = collections.DenseMap(Lifted.LocalId, CaptureBinding).init(allocator),
             .recursive_value_locals = recursive_value_locals,
             .recursive_value_capture_ids = recursive_value_capture_ids,
@@ -1705,7 +1676,7 @@ const Lowerer = struct {
             .solved_fn_ty = root_fn_ty,
             .abi = abi,
             .captures = captures,
-            .capture_ty = if (capture_items.len == 0) null else try self.captureRecordType(captures, root_fn_ty),
+            .capture_ty = if (capture_items.len == 0) null else try self.captureRecordType(captures),
             .return_reuse = return_reuse,
         };
         if (self.worker_callback) {
@@ -2156,13 +2127,8 @@ const Lowerer = struct {
         return false;
     }
 
-    fn captureRecordType(
-        self: *Lowerer,
-        captures: CaptureSpanId,
-        solved_fn_ty: SolvedType.TypeVarId,
-    ) Common.LowerError!Type.TypeId {
-        const id = CaptureTypeKey.from(captures, self.solved.types.root(solved_fn_ty));
-        if (self.capture_types.get(id)) |existing| return existing;
+    fn captureRecordType(self: *Lowerer, captures: CaptureSpanId) Common.LowerError!Type.TypeId {
+        if (self.capture_types.get(captures)) |existing| return existing;
         if (self.worker_callback) return self.requireSerialWorkerRetry();
 
         const capture_items = self.captureSpan(captures);
@@ -2180,7 +2146,7 @@ const Lowerer = struct {
             };
         }
         const ty = try self.types.add(.{ .capture_record = try self.types.addCaptureFields(fields) });
-        try self.capture_types.put(id, ty);
+        try self.capture_types.put(captures, ty);
         return ty;
     }
 
