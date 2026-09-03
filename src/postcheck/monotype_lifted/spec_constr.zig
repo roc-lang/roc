@@ -3859,7 +3859,7 @@ const Pass = struct {
             .roc => |body| body,
             .hosted => return,
         };
-        var cloner = Cloner.initForRewrite(self);
+        var cloner = Cloner.initForOriginalBodyRewrite(self);
         defer cloner.deinit();
         cloner.inline_calls = switch (self.clone_inlining) {
             .all_calls => .all,
@@ -4758,6 +4758,9 @@ const Subst = struct {
 const Cloner = struct {
     pass: *Pass,
     purpose: ClonePurpose,
+    /// Only whole-body replacement may retain immutable source nodes: every
+    /// other clone needs a disjoint expression identity space.
+    source_reuse: SourceReuse,
     /// Symbolic values, shapes, and strict-binding chains owned by this clone.
     /// Accepted call patterns are copied into the pass-wide arena before this
     /// short-lived scratch arena is released.
@@ -4858,10 +4861,16 @@ const Cloner = struct {
     // the hottest paths. The bound still stops pathological cascades.
     const inline_body_work_budget: u32 = 65536;
 
+    const SourceReuse = enum {
+        none,
+        original_body,
+    };
+
     fn init(pass: *Pass, source_fn: Ast.FnId, pattern: CallPattern) Cloner {
         return .{
             .pass = pass,
             .purpose = .specialization,
+            .source_reuse = .none,
             .arena = std.heap.ArenaAllocator.init(pass.allocator),
             .source_fn = source_fn,
             .pattern = pattern,
@@ -4898,6 +4907,7 @@ const Cloner = struct {
         return .{
             .pass = pass,
             .purpose = .rewrite,
+            .source_reuse = .none,
             .arena = std.heap.ArenaAllocator.init(pass.allocator),
             .source_fn = undefined, // initForRewrite never calls buildArgs, which is the only reader.
             .pattern = .{ .args = &.{} },
@@ -4928,6 +4938,12 @@ const Cloner = struct {
             .current_region = Region.zero(),
             .current_inline_scope = Ast.InlineScopeId.none,
         };
+    }
+
+    fn initForOriginalBodyRewrite(pass: *Pass) Cloner {
+        var cloner = initForRewrite(pass);
+        cloner.source_reuse = .original_body;
+        return cloner;
     }
 
     fn initForLoopExitSelection(pass: *Pass) Cloner {
@@ -5345,7 +5361,31 @@ const Cloner = struct {
         if (!expr_region.isEmpty()) self.current_region = expr_region;
 
         const cloned = try self.cloneExprValue(expr_id);
+        if (cloned.bindings.isEmpty() and
+            self.canReuseOriginalExpr(expr_id) and
+            self.valueMatchesSourceExpr(cloned.value, expr_id, 0))
+        {
+            return expr_id;
+        }
         return try self.wrapBindings(cloned.bindings, try self.materialize(cloned.value));
+    }
+
+    fn cloneExprWithoutSourceReuse(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Ast.ExprId {
+        const saved_source_reuse = self.source_reuse;
+        defer self.source_reuse = saved_source_reuse;
+        self.source_reuse = .none;
+        return try self.cloneExpr(expr_id);
+    }
+
+    fn cloneExprValueIntoWithoutSourceReuse(
+        self: *Cloner,
+        expr_id: Ast.ExprId,
+        bindings: *BindingChain,
+    ) Common.LowerError!Value {
+        const saved_source_reuse = self.source_reuse;
+        defer self.source_reuse = saved_source_reuse;
+        self.source_reuse = .none;
+        return try self.cloneExprValueInto(expr_id, bindings);
     }
 
     fn cloneExprValue(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!ClonedValue {
@@ -5370,7 +5410,21 @@ const Cloner = struct {
         const expr = self.pass.program.getExpr(expr_id);
         switch (expr.data) {
             .local => |local| {
-                if (self.subst.getForClone(self.pass.program, local)) |value| return value;
+                if (self.subst.getForClone(self.pass.program, local)) |value| {
+                    const resolved_local = switch (value) {
+                        .expr => |resolved| localExpr(self.pass.program, resolved),
+                        .runtime_anchor => |anchor| localExpr(self.pass.program, anchor.runtime),
+                        .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => null,
+                    };
+                    if (resolved_local != null and
+                        resolved_local.? == local and
+                        self.canReuseOriginalExpr(expr_id))
+                    {
+                        return .{ .expr = expr_id };
+                    }
+                    return value;
+                }
+                if (self.canReuseOriginalExpr(expr_id)) return .{ .expr = expr_id };
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .local = local } }) };
             },
             .fn_ref => |fn_ref| return try self.callableValueFromRef(expr.ty, fn_ref, bindings),
@@ -5513,10 +5567,17 @@ const Cloner = struct {
                 if (try self.cloneBlockValue(block, bindings)) |value| return value;
                 return .{ .expr = try self.cloneExprPlain(expr_id) };
             },
-            .field_access => |field| return try self.cloneFieldAccessValue(expr.ty, field, bindings),
+            .field_access => |field| return try self.cloneFieldAccessValue(expr_id, expr.ty, field, bindings),
             .tuple_access => |access| {
+                const binding_mark = bindings.mark();
                 const receiver = try self.cloneExprValueDemandingShapeInto(access.tuple, bindings);
                 if (itemFromValue(receiver, access.elem_index)) |value| return value;
+                if (bindings.mark() == binding_mark and
+                    valueRetainsExpr(receiver, access.tuple) and
+                    self.canReuseOriginalExpr(expr_id))
+                {
+                    return .{ .expr = expr_id };
+                }
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .tuple_access = .{
                     .tuple = try self.materialize(receiver),
                     .elem_index = access.elem_index,
@@ -5993,6 +6054,30 @@ const Cloner = struct {
         if (!expr_region.isEmpty()) self.current_region = expr_region;
 
         const expr = self.pass.program.getExpr(expr_id);
+        if (self.source_reuse == .original_body) {
+            switch (expr.data) {
+                .@"unreachable",
+                .unit,
+                .uninitialized,
+                .int_lit,
+                .frac_f32_lit,
+                .frac_f64_lit,
+                .dec_lit,
+                .str_lit,
+                .bytes_lit,
+                .crash,
+                .comptime_exhaustiveness_failed,
+                => if (self.canReuseOriginalExpr(expr_id)) return expr_id,
+                .uninitialized_payload => |payload| {
+                    if (self.cloneLocalRef(payload.condition) == payload.condition and
+                        self.canReuseOriginalExpr(expr_id))
+                    {
+                        return expr_id;
+                    }
+                },
+                else => {},
+            }
+        }
         const data: Ast.ExprData = switch (expr.data) {
             .@"unreachable" => .@"unreachable",
             .local => |local| .{ .local = local },
@@ -6042,8 +6127,8 @@ const Cloner = struct {
                 .op = call.op,
                 .args = try self.cloneExprSpan(call.args),
             } },
-            .field_access => |field| return try self.cloneFieldAccess(expr.ty, field),
-            .tuple_access => |access| return try self.cloneTupleAccess(expr.ty, access),
+            .field_access => |field| return try self.cloneFieldAccess(expr_id, expr.ty, field),
+            .tuple_access => |access| return try self.cloneTupleAccess(expr_id, expr.ty, access),
             .structural_eq => |eq| .{ .structural_eq = .{
                 .lhs = try self.cloneExpr(eq.lhs),
                 .rhs = try self.cloneExpr(eq.rhs),
@@ -6171,7 +6256,114 @@ const Cloner = struct {
             } },
             .expect => |child| .{ .expect = try self.cloneExpr(child) },
         };
+        if (plainExprCanReuse(expr.data) and
+            std.meta.eql(expr.data, data) and
+            self.canReuseOriginalExpr(expr_id))
+        {
+            return expr_id;
+        }
         return try self.addExpr(.{ .ty = expr.ty, .data = data });
+    }
+
+    fn canReuseOriginalExpr(self: *const Cloner, expr_id: Ast.ExprId) bool {
+        if (self.source_reuse != .original_body or self.inline_stack.items.len != 0) return false;
+
+        // Reuse is valid only when cloning would preserve the source metadata.
+        // Missing child metadata otherwise inherits the surrounding clone's
+        // location, region, or inline scope.
+        return std.meta.eql(self.current_loc, self.pass.program.exprLoc(expr_id)) and
+            std.meta.eql(self.current_region, self.pass.program.exprRegion(expr_id)) and
+            self.current_inline_scope == self.pass.program.exprInlineScope(expr_id);
+    }
+
+    fn valueRetainsExpr(value: Value, expr_id: Ast.ExprId) bool {
+        return switch (value) {
+            .expr => |expr| expr == expr_id,
+            .runtime_anchor => |anchor| anchor.runtime == expr_id,
+            .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => false,
+        };
+    }
+
+    /// At a non-demanding materialization site, preserve a source constructor
+    /// only when symbolic analysis left its complete runtime tree unchanged.
+    fn valueMatchesSourceExpr(
+        self: *const Cloner,
+        value: Value,
+        expr_id: Ast.ExprId,
+        depth: usize,
+    ) bool {
+        if (depth >= value_wrapper_strip_cap) return false;
+        if (value == .expr) return value.expr == expr_id;
+
+        const expr = self.pass.program.getExpr(expr_id);
+        return switch (value) {
+            .runtime_anchor, .callable => false,
+            .static_data_candidate => |candidate| blk: {
+                if (expr.data != .static_data_candidate) break :blk false;
+                const source = expr.data.static_data_candidate;
+                break :blk candidate.ty == expr.ty and
+                    candidate.static_data == source.static_data and
+                    self.valueMatchesSourceExpr(candidate.runtime.*, source.runtime_expr, depth + 1);
+            },
+            .tag => |tag| blk: {
+                if (expr.data != .tag) break :blk false;
+                const source = expr.data.tag;
+                if (tag.ty != expr.ty or tag.name != source.name) break :blk false;
+                const payloads = self.pass.program.exprSpan(source.payloads);
+                if (tag.payloads.len != payloads.len) break :blk false;
+                for (0..payloads.len) |index| {
+                    if (!self.valueMatchesSourceExpr(tag.payloads[index], GuardedList.at(payloads, index), depth + 1)) break :blk false;
+                }
+                break :blk true;
+            },
+            .record => |record| blk: {
+                if (expr.data != .record) break :blk false;
+                const fields = self.pass.program.fieldExprSpan(expr.data.record);
+                if (record.ty != expr.ty or record.fields.len != fields.len) break :blk false;
+                for (0..fields.len) |index| {
+                    const source = GuardedList.at(fields, index);
+                    const field = record.fields[index];
+                    if (field.name != source.name or
+                        !self.valueMatchesSourceExpr(field.value, source.value, depth + 1))
+                    {
+                        break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+            .tuple => |tuple| blk: {
+                if (expr.data != .tuple) break :blk false;
+                const items = self.pass.program.exprSpan(expr.data.tuple);
+                if (tuple.ty != expr.ty or tuple.items.len != items.len) break :blk false;
+                for (0..items.len) |index| {
+                    if (!self.valueMatchesSourceExpr(tuple.items[index], GuardedList.at(items, index), depth + 1)) break :blk false;
+                }
+                break :blk true;
+            },
+            .nominal => |nominal| blk: {
+                if (expr.data != .nominal or nominal.ty != expr.ty) break :blk false;
+                break :blk self.valueMatchesSourceExpr(nominal.backing.*, expr.data.nominal, depth + 1);
+            },
+            .expr => unreachable,
+        };
+    }
+
+    fn plainExprCanReuse(data: Ast.ExprData) bool {
+        return switch (data) {
+            .list,
+            .record_update,
+            .low_level,
+            .structural_eq,
+            .structural_hash,
+            .if_,
+            .return_,
+            .comptime_branch_taken,
+            .dbg,
+            .expect_err,
+            .expect,
+            => true,
+            else => false,
+        };
     }
 
     fn cloneJoinPoint(self: *Cloner, ty: Type.TypeId, join_point: Ast.JoinPointExpr) Common.LowerError!Ast.ExprId {
@@ -8364,7 +8556,14 @@ const Cloner = struct {
         return .{ .shape = .{ .any = ty }, .demoted = true };
     }
 
-    fn cloneFieldAccessValue(self: *Cloner, ty: Type.TypeId, field: anytype, bindings: *BindingChain) Common.LowerError!Value {
+    fn cloneFieldAccessValue(
+        self: *Cloner,
+        original_expr: Ast.ExprId,
+        ty: Type.TypeId,
+        field: anytype,
+        bindings: *BindingChain,
+    ) Common.LowerError!Value {
+        const binding_mark = bindings.mark();
         const receiver = try self.cloneExprValueDemandingShapeInto(field.receiver, bindings);
         if (field.segments.len == 0) Common.invariant("field access path had no segments");
 
@@ -8376,6 +8575,14 @@ const Cloner = struct {
         }
         if (consumed == field.segments.len) return prefix;
 
+        if (consumed == 0 and
+            bindings.mark() == binding_mark and
+            valueRetainsExpr(prefix, field.receiver) and
+            self.canReuseOriginalExpr(original_expr))
+        {
+            return .{ .expr = original_expr };
+        }
+
         const residual_segments: Ast.Span(Ast.FieldAccessSegment) = .{
             .start = field.segments.start + consumed,
             .len = field.segments.len - consumed,
@@ -8386,16 +8593,22 @@ const Cloner = struct {
         } } }) };
     }
 
-    fn cloneFieldAccess(self: *Cloner, ty: Type.TypeId, field: anytype) Common.LowerError!Ast.ExprId {
+    fn cloneFieldAccess(self: *Cloner, original_expr: Ast.ExprId, ty: Type.TypeId, field: anytype) Common.LowerError!Ast.ExprId {
         var bindings: BindingChain = .{};
-        const value = try self.cloneFieldAccessValue(ty, field, &bindings);
+        const value = try self.cloneFieldAccessValue(original_expr, ty, field, &bindings);
         return try self.wrapBindings(bindings, try self.materialize(value));
     }
 
-    fn cloneTupleAccess(self: *Cloner, ty: Type.TypeId, access: anytype) Common.LowerError!Ast.ExprId {
+    fn cloneTupleAccess(self: *Cloner, original_expr: Ast.ExprId, ty: Type.TypeId, access: anytype) Common.LowerError!Ast.ExprId {
         const receiver = try self.cloneExprValueDemandingShape(access.tuple);
         if (itemFromValue(receiver.value, access.elem_index)) |value| {
             return try self.wrapBindings(receiver.bindings, try self.materialize(value));
+        }
+        if (receiver.bindings.isEmpty() and
+            valueRetainsExpr(receiver.value, access.tuple) and
+            self.canReuseOriginalExpr(original_expr))
+        {
+            return original_expr;
         }
         const item = try self.addExpr(.{ .ty = ty, .data = .{ .tuple_access = .{
             .tuple = try self.materialize(receiver.value),
@@ -9560,7 +9773,7 @@ const Cloner = struct {
         const saved_inline_scope = self.current_inline_scope;
         defer self.current_inline_scope = saved_inline_scope;
         try self.enterInlineScope(callable.fn_id, self.pass.program.exprLoc(original_expr));
-        return try self.cloneExprValueInto(source.expr, bindings);
+        return try self.cloneExprValueIntoWithoutSourceReuse(source.expr, bindings);
     }
 
     fn inlineDirectCallValue(
@@ -9668,7 +9881,7 @@ const Cloner = struct {
         const saved_inline_scope = self.current_inline_scope;
         defer self.current_inline_scope = saved_inline_scope;
         try self.enterInlineScope(callee, self.pass.program.exprLoc(original_expr));
-        return try self.cloneExprValueInto(source.expr, bindings);
+        return try self.cloneExprValueIntoWithoutSourceReuse(source.expr, bindings);
     }
 
     fn bindPatToValue(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!MatchVerdict {
@@ -10574,7 +10787,12 @@ const Cloner = struct {
 
         const values = try self.pass.allocator.alloc(Ast.ExprId, source.len);
         defer self.pass.allocator.free(values);
-        for (source, 0..) |expr, index| values[index] = try self.cloneExpr(expr);
+        var unchanged = self.source_reuse == .original_body;
+        for (source, 0..) |expr, index| {
+            values[index] = try self.cloneExpr(expr);
+            unchanged = unchanged and values[index] == expr;
+        }
+        if (unchanged) return span;
         return try self.pass.program.addExprSpan(values);
     }
 
@@ -10598,12 +10816,15 @@ const Cloner = struct {
 
         const operands = try self.pass.allocator.alloc(Ast.CaptureOperand, source.len);
         defer self.pass.allocator.free(operands);
+        var unchanged = self.source_reuse == .original_body;
         for (source, 0..) |operand, index| {
             operands[index] = .{
                 .id = operand.id,
                 .value = try self.cloneExpr(operand.value),
             };
+            unchanged = unchanged and std.meta.eql(operands[index], operand);
         }
+        if (unchanged) return span;
         return try self.pass.program.addCaptureOperandSpan(operands);
     }
 
@@ -10623,12 +10844,15 @@ const Cloner = struct {
 
         const values = try self.pass.allocator.alloc(Ast.FieldExpr, source.len);
         defer self.pass.allocator.free(values);
+        var unchanged = self.source_reuse == .original_body;
         for (source, 0..) |field, index| {
             values[index] = .{
                 .name = field.name,
                 .value = try self.cloneExpr(field.value),
             };
+            unchanged = unchanged and std.meta.eql(values[index], field);
         }
+        if (unchanged) return span;
         return try self.pass.program.addFieldExprSpan(values);
     }
 
@@ -10673,12 +10897,15 @@ const Cloner = struct {
 
         const values = try self.pass.allocator.alloc(Ast.IfBranch, source.len);
         defer self.pass.allocator.free(values);
+        var unchanged = self.source_reuse == .original_body;
         for (source, 0..) |branch, index| {
             values[index] = .{
                 .cond = try self.cloneExpr(branch.cond),
                 .body = try self.cloneExpr(branch.body),
             };
+            unchanged = unchanged and std.meta.eql(values[index], branch);
         }
+        if (unchanged) return span;
         return try self.pass.program.addIfBranchSpan(values);
     }
 
@@ -10957,7 +11184,7 @@ const Cloner = struct {
         // start their strip depth from zero.
         const saved_strip_depth = self.materialize_strip_depth;
         self.materialize_strip_depth = 0;
-        const worker_body = try self.cloneExpr(source_body);
+        const worker_body = try self.cloneExprWithoutSourceReuse(source_body);
         self.materialize_strip_depth = saved_strip_depth;
         self.pass.program.setFn(worker_fn_id, .{
             .symbol = symbol,
@@ -13364,6 +13591,77 @@ test "loop exit selection clone is isolated from ordinary rewrites" {
     try std.testing.expectEqual(InlineCallMode.none, exit_selection.inline_calls);
     try std.testing.expect(!exit_selection.rewrite_call_patterns);
     try std.testing.expect(!exit_selection.emit_callable_workers);
+}
+
+test "only original-body rewrites reuse unchanged source expressions" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const leaf = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+
+    const before_reuse = program.exprCount();
+    var original_body = Cloner.initForOriginalBodyRewrite(&pass);
+    defer original_body.deinit();
+    try std.testing.expectEqual(leaf, try original_body.cloneExprPlain(leaf));
+    try std.testing.expectEqual(before_reuse, program.exprCount());
+
+    const source_local = try program.addLocal(@enumFromInt(1), unit_ty);
+    const source_ref = try program.addExpr(.{ .ty = unit_ty, .data = .{ .local = source_local } });
+    const uninitialized = try program.addExpr(.{ .ty = unit_ty, .data = .{ .uninitialized_payload = .{
+        .condition = source_local,
+        .mask = 1,
+    } } });
+    const dbg = try program.addExpr(.{ .ty = unit_ty, .data = .{ .dbg = source_ref } });
+    const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{unit_ty}) });
+    const tuple = try program.addExpr(.{
+        .ty = tuple_ty,
+        .data = .{ .tuple = try program.addExprSpan(&.{source_ref}) },
+    });
+    const tuple_local = try program.addLocal(@enumFromInt(3), tuple_ty);
+    const tuple_ref = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .local = tuple_local } });
+    const tuple_access = try program.addExpr(.{
+        .ty = unit_ty,
+        .data = .{ .tuple_access = .{ .tuple = tuple_ref, .elem_index = 0 } },
+    });
+    try std.testing.expectEqual(source_ref, try original_body.cloneExpr(source_ref));
+    try std.testing.expectEqual(uninitialized, try original_body.cloneExpr(uninitialized));
+    try std.testing.expectEqual(dbg, try original_body.cloneExpr(dbg));
+    // Symbolic consumers still receive an unevaluated constructor, while a
+    // non-demanding materialization can retain its complete source expression.
+    const tuple_value = try original_body.cloneExprValue(tuple);
+    try std.testing.expect(tuple_value.value == .tuple);
+    try std.testing.expectEqual(tuple, try original_body.cloneExpr(tuple));
+    try std.testing.expectEqual(tuple_access, try original_body.cloneExpr(tuple_access));
+
+    const target_local = try program.addLocal(@enumFromInt(2), unit_ty);
+    const target_ref = try program.addExpr(.{ .ty = unit_ty, .data = .{ .local = target_local } });
+    try original_body.subst.putExact(source_local, .{ .expr = target_ref });
+    try std.testing.expectEqual(target_ref, try original_body.cloneExpr(source_ref));
+    const cloned_uninitialized = try original_body.cloneExpr(uninitialized);
+    try std.testing.expect(cloned_uninitialized != uninitialized);
+    const cloned_payload = program.getExpr(cloned_uninitialized).data.uninitialized_payload;
+    try std.testing.expectEqual(target_local, cloned_payload.condition);
+    const cloned_dbg = try original_body.cloneExpr(dbg);
+    try std.testing.expect(cloned_dbg != dbg);
+    try std.testing.expectEqual(target_ref, program.getExpr(cloned_dbg).data.dbg);
+    try std.testing.expect(try original_body.cloneExpr(tuple) != tuple);
+
+    var ordinary = Cloner.initForRewrite(&pass);
+    defer ordinary.deinit();
+    const before_clone = program.exprCount();
+    const cloned = try ordinary.cloneExprPlain(leaf);
+    try std.testing.expect(cloned != leaf);
+    try std.testing.expectEqual(before_clone + 1, program.exprCount());
+
+    var loop_exit = Cloner.initForLoopExitSelection(&pass);
+    defer loop_exit.deinit();
+    const before_loop_exit = program.exprCount();
+    try std.testing.expect(try loop_exit.cloneExprPlain(leaf) != leaf);
+    try std.testing.expectEqual(before_loop_exit + 1, program.exprCount());
 }
 
 test "rejected loop shape attempts do not retain emitted expressions" {
