@@ -1452,6 +1452,7 @@ const State = struct {
         "local_dense",
         "pool",
         "result_discriminant",
+        "any_negative",
     };
 
     /// Fields a refill leaves as the recycled state already has them. Every
