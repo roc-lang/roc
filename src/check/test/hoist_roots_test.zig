@@ -875,7 +875,9 @@ test "hoist roots publish top-level destructure binders used by executable roots
         \\s : Rec
         \\s = { req: 7, other: 1 }
         \\{ req, .. } = s
-        \\(a, b) = (1, 2)
+        \\pair : (U8, U8)
+        \\pair = (1, 2)
+        \\(a, b) = pair
         \\ops : { scale : U64 -> U64, other : U64 }
         \\ops = { scale: |x| x * 2, other: 0 }
         \\{ scale, .. } = ops
