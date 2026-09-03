@@ -137,6 +137,11 @@ pub const Solution = struct {
     leader: []u32,
     /// Source local of each pure same-value alias, or `no_local`.
     alias_source: []u32,
+    /// Immediate lender of each solved-borrowed local: the local whose value
+    /// it borrows through (its alias source, the container of its field or
+    /// payload read, or the argument a borrowed call result borrows from), or
+    /// `no_local` for owned bindings and borrowed parameters.
+    borrow_source: []u32,
     /// Solved ownership signature per proc.
     sigs: []arc_sig.RcSig,
     /// Flat complete outcome rows referenced by `RcSig.outcomes`.
@@ -205,6 +210,7 @@ pub const Solution = struct {
         self.borrowed_call_result.deinit(self.allocator);
         self.allocator.free(self.leader);
         self.allocator.free(self.alias_source);
+        self.allocator.free(self.borrow_source);
         self.allocator.free(self.sigs);
         self.allocator.free(self.outcomes);
         self.allocator.free(self.available_outcome_spans);
@@ -313,6 +319,15 @@ pub const Solution = struct {
             if (steps > self.alias_source.len) solveInvariant("ARC alias-source chain contained a cycle");
         }
         return @enumFromInt(cursor);
+    }
+
+    /// The local a solved-borrowed local borrows its value through, or null
+    /// for owned bindings and borrowed parameters.
+    pub fn borrowSourceOf(self: *const Solution, local: LIR.LocalId) ?LIR.LocalId {
+        const index = @intFromEnum(local);
+        if (index >= self.borrow_source.len) return null;
+        const source = self.borrow_source[index];
+        return if (source == no_local) null else @enumFromInt(source);
     }
 
     pub fn sigTable(self: *const Solution) arc_sig.SigTable {
@@ -930,6 +945,8 @@ pub fn solve(
     errdefer allocator.free(leader);
     const alias_source = try allocator.alloc(u32, local_count);
     errdefer allocator.free(alias_source);
+    const borrow_source = try allocator.alloc(u32, local_count);
+    errdefer allocator.free(borrow_source);
     const maybe_uninitialized_condition = try allocator.alloc(u32, local_count);
     errdefer allocator.free(maybe_uninitialized_condition);
     const maybe_uninitialized_condition_mask = try allocator.alloc(u64, local_count);
@@ -940,10 +957,17 @@ pub fn solve(
     errdefer maybe_uninitialized_join_param.deinit(allocator);
     for (leader, 0..) |*entry, index| entry.* = @intCast(index);
     @memset(alias_source, no_local);
+    @memset(borrow_source, no_local);
     @memset(maybe_uninitialized_condition, no_local);
     @memset(maybe_uninitialized_condition_mask, 0);
     for (domain.arc_to_local, 0..) |local_index, arc_index| {
-        if (binding.borrowed.isSet(arc_index)) borrowed.set(local_index);
+        if (binding.borrowed.isSet(arc_index)) {
+            borrowed.set(local_index);
+            switch (solver.defs[arc_index]) {
+                .borrow_capable => |lender| borrow_source[local_index] = domain.localAt(lender),
+                .none, .multi, .fresh => {},
+            }
+        }
         leader[local_index] = domain.localAt(binding.leader[arc_index]);
         const source = solver.alias_source[arc_index];
         if (source != no_local) alias_source[local_index] = domain.localAt(source);
@@ -965,6 +989,7 @@ pub fn solve(
         .borrowed_call_result = borrowed_call_result,
         .leader = leader,
         .alias_source = alias_source,
+        .borrow_source = borrow_source,
         .sigs = solver.sigs,
         .outcomes = &.{},
         .available_outcome_spans = try allocator.alloc(arc_sig.OutcomeSpan, proc_count),
@@ -1000,6 +1025,7 @@ pub fn solve(
         solution.borrowed_call_result.deinit(allocator);
         allocator.free(solution.leader);
         allocator.free(solution.alias_source);
+        allocator.free(solution.borrow_source);
         allocator.free(solution.sigs);
         allocator.free(solution.outcomes);
         allocator.free(solution.available_outcome_spans);

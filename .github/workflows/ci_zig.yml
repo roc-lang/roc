@@ -78,6 +78,9 @@ jobs:
       - name: check formatting
         run: zig build run-check-zig-format
 
+      - name: Check ReleaseSafe machine-code shim support ownership
+        run: zig build run-check-machine-code-shim-archive -Doptimize=ReleaseSafe
+
       - name: Check Builtin.roc formatting
         run: zig build run-check-builtin-format
 

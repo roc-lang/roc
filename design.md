@@ -6619,6 +6619,34 @@ independent of worker scheduling without locking coordinator state. Root kinds
 that reserve durable identities or write directly to the final program remain
 serial barriers until they have the same sealed-draft boundary.
 
+Post-check timing keeps two distinct measures for this boundary. Monotype wall
+time is the elapsed coordinator interval, including worker waits and ordered
+commit. Aggregate worker work is the sum of executor callback intervals and can
+exceed wall time when callbacks overlap; it is diagnostic work, not another
+sequential phase. Coordinator post-batch work separately measures validation,
+serial fallback, discard, and ordered commit after each executor barrier. Task,
+lane, retry, and discard counts explain the relationship without using
+scheduling-dependent values for compiler behavior.
+
+Boxy follows a different post-check pipeline and reports its planning and
+lowering wall phases directly rather than projecting Monotype categories onto
+work it does not perform.
+
+Solved-to-LIR lowering uses the same ownership rule at a narrower boundary.
+Only closed procedure bodies whose syntax is proven body-local enter an
+executor batch. Each callback reads a frozen coordinator prefix and writes a
+private LIR store suffix; calls, captures, compile-time sites, static data,
+dynamic inline scopes, and other globally interned state remain serial
+barriers. Source local names are returned with the suffix and interned by the
+coordinator, preserving serial string identity without making the string store
+concurrent. After the full batch returns, the coordinator appends the suffixes
+in function-worklist order and relocates every body-local statement, local,
+span, branch, join, pattern, and metadata reference. This keeps procedure and
+store identity independent of completion order while allowing the supported
+body traversal itself to run without locks. Widening the parallel subset
+requires a corresponding immutable or shard-owned boundary for each newly
+admitted global side table, not ad hoc worker mutation.
+
 Instantiation graph node ids are dense, append-only indexes for the lifetime of
 the graph. Per-node optional attributes such as a row root's current extension
 and a generated-private request's source interface are therefore dense parallel
@@ -10579,7 +10607,15 @@ ownership places. The place graph is solved to a fixpoint, so a nested read
 chain such as tag payload to struct field keeps the root aggregate's unit key.
 If the final read result binds owned, that read moves the unit only when the
 root unit is present and the ownership place has no later RC-bearing use on
-that path; otherwise it retains exactly as an ordinary read would. This use
+that path; otherwise it retains exactly as an ordinary read would. An operand
+belongs to the place exactly when its solved liveness leader is the place's
+unit local: the unit local itself and every binding the solver anchored on it
+as a borrow (pure aliases, complete and partial field or tag payload reads,
+lent call results, and their transitive borrows), all of which read the stored
+allocation without holding a unit of their own. Owned bindings hold their own
+retained unit and are their own leaders, so their later uses never keep the
+place live; binding an owned pure alias of a member does count as a use,
+because that bind retains through the place. This use
 query is definition-sensitive: a `set_local` that writes the root ends the
 current place definition after its value operand is read. Uses reached through
 the following jump belong to the newly written join value and cannot keep the
@@ -10609,11 +10645,26 @@ distinct refcounted field and that a fully dead representation lists every such
 field. It does not compare a partial list to its field-claim state: claims
 settle lazily when field reads are consumed and are shared by an alias set, so
 they are not a path-local snapshot of one binding. The later consumption and
-terminal balance checks independently prove those transfers. A borrowed result
+terminal balance checks independently prove those transfers. An RC-bearing field or
+tag payload read does consult those claims: reading a field whose stored unit a
+take on that path has already spent (settled, or pending settlement from an
+aggregate move) fails certification unless an intact surplus unit still keeps
+the field live, because the field's bytes no longer denote a unit the value
+holds. A borrowed result
 keeps the root unit key until a later consuming operation makes the same
 path-sensitive decision. This applies to ordinary owned locals and to owned
 join parameters; join parameters are not themselves assigned one global place
 origin because each incoming edge defines the join cell independently.
+
+When the root is read again only on the restoring outcomes of a direct call
+that receives the read result, the read still moves the root unit and registers
+that unit as the root-unit receipt of the call's outcome refinement. The call
+site consumes that receipt before it re-plans the refinement: the receipt makes
+the outcome convention mandatory for its position exactly as a field receipt
+does, the restoring outcomes return the root's unit, and a call that cannot
+admit the convention while holding a root-unit receipt is an ARC invariant
+violation rather than an unconditional consumption of a unit the root is read
+through again.
 
 Ownership-complete root transfer and committed struct-field transfer are two
 exact alternatives at one read, not cumulative decisions. If the root unit
@@ -10656,7 +10707,13 @@ where the field cannot have been taken yet—a take where it may already be
 gone would double-consume its unit on that path. A borrow of the field, and
 any whole use of the container, must likewise run where no take can have
 happened: after a take, the container's bytes for that field can alias the
-taker's mutation rather than the original value. An explicit outcome field
+taker's mutation rather than the original value. A borrowing read binds a
+name that keeps reading the field's stored unit without holding a unit of its
+own, and so does every binding the solver anchors as a borrow through that
+name (its pure aliases, its own field and payload reads, and call results
+lent from it). Every operand mention of any of those bindings is therefore a
+borrow observation of the field at that statement, so a take the mention
+could follow is rejected exactly like a borrowing read placed there. An explicit outcome field
 receipt changes the matching edge state from taken back to available before
 that edge is walked; this is the only transition that can clear a
 `may-taken` bit. Merges meet pointwise, and a loop poisons its own takes: a
