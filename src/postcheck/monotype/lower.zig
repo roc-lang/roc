@@ -8079,6 +8079,7 @@ const Builder = struct {
         defer owner_scope.leave();
 
         var nested_ctx = try source_ctx.nestedInstantiationContext(source_fn_key);
+        nested_ctx.in_deferred_body = true;
         nested_ctx.evidence = requested_evidence;
         defer nested_ctx.deinit();
         if (codec_contract) |contract| {
@@ -16042,6 +16043,12 @@ const BodyContext = struct {
     /// the root id travels through template requests into other modules'
     /// body contexts, where the same integer names an unrelated root.
     current_entry_root: ?EntryRoot = null,
+    /// Whether this context lowers a lambda body nested inside the current
+    /// entry root. Such a body runs only when the lambda is called, after the
+    /// root's value exists, so a constant of the root's own scrutinee (a
+    /// sibling name bound by the same top-level destructure) is an ordinary
+    /// constant use there, restored recursively like a top-level constant.
+    in_deferred_body: bool = false,
     /// Generated local for the top-level constant root currently being
     /// restored. Recursive references to that exact checked const identity
     /// consume this local so the restored value becomes an explicit recursive
@@ -18444,6 +18451,7 @@ const BodyContext = struct {
         try child.inheritActiveCodecContract(self);
         child.source_region_override = self.source_region_override;
         child.current_entry_root = self.current_entry_root;
+        child.in_deferred_body = self.in_deferred_body;
         child.active_const_binding = self.active_const_binding;
         child.runtime_demand_guard_frames = self.runtime_demand_guard_frames;
         child.function_entry_demand_guards = self.function_entry_demand_guards;
@@ -21873,6 +21881,7 @@ const BodyContext = struct {
     }
 
     fn loweringOwnHoistedConstRoot(self: *BodyContext, entry: checked.HoistedConstEntry) bool {
+        if (self.in_deferred_body) return false;
         if (self.current_entry_root) |entry_root| {
             return moduleBytesEqual(entry_root.module.bytes, self.view.key.bytes) and entry.root == entry_root.root;
         }
@@ -30096,6 +30105,7 @@ const BodyContext = struct {
             call_ctx.current_fn_key = self.current_fn_key;
             call_ctx.source_region_override = self.source_region_override;
             call_ctx.current_entry_root = self.current_entry_root;
+            call_ctx.in_deferred_body = self.in_deferred_body;
 
             const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
             var fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(
@@ -30180,6 +30190,7 @@ const BodyContext = struct {
         call_ctx.current_fn_key = self.current_fn_key;
         call_ctx.source_region_override = self.source_region_override;
         call_ctx.current_entry_root = self.current_entry_root;
+        call_ctx.in_deferred_body = self.in_deferred_body;
 
         const fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(
             call.source_fn_ty_payload,
@@ -31240,10 +31251,13 @@ const BodyContext = struct {
         const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
         switch (record.ref) {
             .selected_hoisted_const => |selected| {
-                // A selected hoisted constant has a local binder only while
-                // lowering its own root. Every other use consumes the
+                // A selected hoisted constant's binder has a local only while
+                // its own root is lowered or while a recursive restore of the
+                // constant is active; every other use consumes the
                 // checker-selected ConstStore entry directly.
-                if (try self.selectedHoistedConstMonoType(selected, checked_ty)) |ty| return ty;
+                if (self.binders.get(selected.local.binder) == null) {
+                    if (try self.selectedHoistedConstMonoType(selected, checked_ty)) |ty| return ty;
+                }
             },
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => {},
         }
@@ -31336,7 +31350,11 @@ const BodyContext = struct {
             .pattern_binder,
             => {},
             .selected_hoisted_const => |selected| {
-                if (try self.selectedHoistedConstMonoType(selected, checked_ty)) |ty| return ty;
+                // A local for the binder is consumed instead of the constant
+                // (see `lookupCallArgumentMonoType`).
+                if (self.binders.get(selected.local.binder) == null) {
+                    if (try self.selectedHoistedConstMonoType(selected, checked_ty)) |ty| return ty;
+                }
             },
             .local_param,
             .local_mutable_version,
@@ -31525,6 +31543,7 @@ const BodyContext = struct {
             call_ctx.current_fn_key = self.current_fn_key;
             call_ctx.source_region_override = self.source_region_override;
             call_ctx.current_entry_root = self.current_entry_root;
+            call_ctx.in_deferred_body = self.in_deferred_body;
 
             const fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(
                 call.source_fn_ty_payload,
@@ -31570,6 +31589,7 @@ const BodyContext = struct {
         call_ctx.current_fn_key = self.current_fn_key;
         call_ctx.source_region_override = self.source_region_override;
         call_ctx.current_entry_root = self.current_entry_root;
+        call_ctx.in_deferred_body = self.in_deferred_body;
         var fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(
             source_fn_ty,
             self,
@@ -31968,7 +31988,22 @@ const BodyContext = struct {
     fn topLevelConstBinderForUse(store_view: ModuleView, const_use: checked.ConstLocator) ?checked.PatternBinderId {
         const owner = switch (const_use.owner) {
             .top_level_binding => |owner| owner,
-            .hoisted_expr => return null,
+            // A hoisted extraction root binds its result pattern. A reference
+            // to that binder from a lambda inside the root's own scrutinee
+            // recurses through it the way a top-level constant's lambda
+            // recurses through the constant.
+            .hoisted_expr => |hoisted| {
+                if (!moduleBytesEqual(checked.constModuleId(const_use).bytes, store_view.key.bytes)) {
+                    Common.invariant("hoisted const template referenced a different checked module");
+                }
+                const entry = store_view.hoisted_constants.lookupByExpr(hoisted.expr) orelse return null;
+                const pattern = entry.pattern orelse return null;
+                const raw_pattern = @intFromEnum(pattern);
+                if (raw_pattern >= store_view.bodies.pattern_binder_by_pattern.len) {
+                    Common.invariant("hoisted const result pattern was outside the binder index");
+                }
+                return store_view.bodies.pattern_binder_by_pattern[raw_pattern];
+            },
         };
         if (!moduleBytesEqual(checked.constModuleId(const_use).bytes, store_view.key.bytes)) {
             Common.invariant("top-level const template referenced a different checked module");
@@ -32215,7 +32250,12 @@ const BodyContext = struct {
             .pattern_binder,
             => {},
             .selected_hoisted_const => |selected| {
-                if (try self.restoreSelectedHoistedConstAtType(selected, ty)) |restored| return restored;
+                // A local for the binder is the root's own in-progress value
+                // or an active recursive restore of the constant; it is
+                // consumed below instead of restoring the constant again.
+                if (self.binders.get(selected.local.binder) == null) {
+                    if (try self.restoreSelectedHoistedConstAtType(selected, ty)) |restored| return restored;
+                }
             },
             .local_param,
             .local_mutable_version,
@@ -32500,7 +32540,12 @@ const BodyContext = struct {
         switch (provenance) {
             .declared => switch (const_use.const_ref.owner) {
                 .top_level_binding => {},
-                .hoisted_expr => Common.invariant("hoisted const use reached a declared deferred boundary"),
+                // An exposed name bound by a top-level destructure is a
+                // hoisted extraction root in its own module and a declared
+                // value to every importer.
+                .hoisted_expr => if (moduleBytesEqual(checked.constModuleId(const_use.const_ref).bytes, self.view.key.bytes)) {
+                    Common.invariant("hoisted const use reached a declared deferred boundary");
+                },
             },
             .hoisted => |entry| {
                 switch (const_use.const_ref.owner) {
@@ -35228,6 +35273,7 @@ const BodyContext = struct {
         call_ctx.current_fn_key = self.current_fn_key;
         call_ctx.source_region_override = self.source_region_override;
         call_ctx.current_entry_root = self.current_entry_root;
+        call_ctx.in_deferred_body = self.in_deferred_body;
 
         const source_fn_ty = if (call.direct_target) |target|
             self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload)
@@ -38153,6 +38199,7 @@ const BodyContext = struct {
         call_ctx.current_fn_key = self.current_fn_key;
         call_ctx.source_region_override = self.source_region_override;
         call_ctx.current_entry_root = self.current_entry_root;
+        call_ctx.in_deferred_body = self.in_deferred_body;
 
         var callable_node = try call_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
             plan_id,
@@ -38717,6 +38764,7 @@ const BodyContext = struct {
         call_ctx.current_fn_key = self.current_fn_key;
         call_ctx.source_region_override = self.source_region_override;
         call_ctx.current_entry_root = self.current_entry_root;
+        call_ctx.in_deferred_body = self.in_deferred_body;
 
         const callable_node = try call_ctx.instantiateNumeralPlanCallNode(plan.callable_ty, self, checked_ret_ty, target_ty, plan_args);
 
@@ -39531,6 +39579,7 @@ const BodyContext = struct {
         call_ctx.current_fn_key = self.current_fn_key;
         call_ctx.source_region_override = self.source_region_override;
         call_ctx.current_entry_root = self.current_entry_root;
+        call_ctx.in_deferred_body = self.in_deferred_body;
 
         const plan_args = callable_plan.operands;
         var callable_node = try call_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
@@ -51852,6 +51901,7 @@ const BodyContext = struct {
         call_ctx.current_fn_key = self.current_fn_key;
         call_ctx.source_region_override = self.source_region_override;
         call_ctx.current_entry_root = self.current_entry_root;
+        call_ctx.in_deferred_body = self.in_deferred_body;
 
         var callable_node = try call_ctx.instantiateIteratorPlanCallNodeFromCaller(plan.callable_ty, self, plan_args, loop_iterator, expected_ret_ty);
         const initial_plan_fn = try self.graph.functionNodes(callable_node);

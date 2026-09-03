@@ -16438,6 +16438,36 @@ fn appendPublishedExportDef(
     try defs.append(allocator, def_idx);
 }
 
+/// The binder patterns of names bound by top-level destructures that the
+/// module exposes. An importer reaches such a name through its binder node
+/// (see `Can.populateExports`), so the export tables key its row by that node.
+fn collectPublishedExportBinders(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+) Allocator.Error![]CIR.Pattern.Idx {
+    const module_env = module.moduleEnvConst();
+    var binders = std.ArrayList(CIR.Pattern.Idx).empty;
+    errdefer binders.deinit(allocator);
+
+    const node_count = module.nodeCount();
+    var exposed_iter = module_env.common.exposed_items.iterator();
+    while (exposed_iter.next()) |entry| {
+        const raw_node_idx: u32 = entry.target.valueDefNode() orelse continue;
+        if (raw_node_idx >= node_count) continue;
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const tag = module.nodeTag(node_idx);
+        if (tag != .pattern_identifier and tag != .pattern_as) continue;
+        const binder: CIR.Pattern.Idx = @enumFromInt(raw_node_idx);
+        for (binders.items) |seen| {
+            if (seen == binder) break;
+        } else {
+            try binders.append(allocator, binder);
+        }
+    }
+
+    return try binders.toOwnedSlice(allocator);
+}
+
 fn publishImportForModule(imports: []const PublishImportArtifact, module_idx: u32) ?PublishImportArtifact {
     for (imports) |import_artifact| {
         if (import_artifact.module_idx == module_idx) return import_artifact;
@@ -28951,6 +28981,9 @@ pub const ExportedProcedureBindingTable = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         published_exports: []const CIR.Def.Idx,
+        published_export_binders: []const CIR.Pattern.Idx,
+        checked_bodies: *const CheckedBodyStore,
+        selected_hoisted_callables: *const SelectedHoistedCallableTable,
         checked_types: *const CheckedTypeStore,
         checked_templates: *const CheckedProcedureTemplateTable,
         const_templates: *const ConstTemplateTable,
@@ -28969,6 +29002,52 @@ pub const ExportedProcedureBindingTable = struct {
         errdefer {
             bindings.deinit(allocator);
             closure_pool.deinit(allocator);
+        }
+
+        // A function bound by a top-level destructure is a promoted callable
+        // root; its row is keyed by the binder node the importer reaches it
+        // through.
+        for (published_export_binders) |binder| {
+            const checked_pattern = checked_bodies.patternIdForSource(binder) orelse continue;
+            const binding_ref = selected_hoisted_callables.lookupByPattern(checked_pattern) orelse continue;
+            const binding = procedure_bindings.get(binding_ref);
+            const body: ImportedProcedureBindingBody = switch (binding.body) {
+                .direct_template => |direct| .{ .direct_template = direct },
+                .callable_eval_template => |template| .{ .callable_eval_template = template },
+            };
+            var template_closure = try buildProcedureBindingClosure(
+                allocator,
+                artifact_key,
+                checked_types,
+                checked_templates,
+                callable_eval_templates,
+                entry_wrappers,
+                const_templates,
+                resolved_value_refs,
+                procedure_bindings,
+                platform_required_bindings,
+                imports,
+                available_artifacts,
+                binding.body,
+            );
+            errdefer deinitImportedTemplateClosure(allocator, &template_closure);
+
+            const stored_closure = try closure_pool.commit(allocator, template_closure);
+            template_closure = .{};
+
+            try bindings.append(allocator, .{
+                .binding = .{
+                    .artifact = artifact_key,
+                    .def = @enumFromInt(@intFromEnum(binder)),
+                    .pattern = checked_pattern,
+                },
+                .source_scheme = binding.source_scheme,
+                .body = body,
+                .intrinsic = null,
+                .iterator_procedure = null,
+                .runtime_result_provenance = null,
+                .template_closure = stored_closure,
+            });
         }
 
         for (published_exports) |def_idx| {
@@ -29415,12 +29494,51 @@ pub const ExportedConstTemplateTable = struct {
         platform_required_bindings: *const PlatformRequiredBindingTable,
         imports: []const PublishImportArtifact,
         available_artifacts: []const ImportedModuleView,
+        published_export_binders: []const CIR.Pattern.Idx,
+        checked_bodies: *const CheckedBodyStore,
+        hoisted_constants: *const HoistedConstTable,
     ) Allocator.Error!ExportedConstTemplateTable {
         var templates = std.ArrayList(ImportedConstTemplateView).empty;
         var closure_pool = ClosurePool.empty;
         errdefer {
             templates.deinit(allocator);
             closure_pool.deinit(allocator);
+        }
+
+        // A value bound by a top-level destructure is a hoisted extraction
+        // root; its row is keyed by the binder node the importer reaches it
+        // through.
+        for (published_export_binders) |binder| {
+            const checked_pattern = checked_bodies.patternIdForSource(binder) orelse continue;
+            const entry = hoisted_constants.lookupByPattern(checked_pattern) orelse continue;
+            const template = const_templates.get(entry.const_ref);
+            var template_closure = try buildImportedConstTemplateClosure(
+                allocator,
+                artifact_key,
+                checked_types,
+                checked_templates,
+                callable_eval_templates,
+                entry_wrappers,
+                const_templates,
+                resolved_value_refs,
+                top_level_bindings,
+                platform_required_bindings,
+                imports,
+                available_artifacts,
+                entry.const_ref,
+            );
+            errdefer deinitImportedTemplateClosure(allocator, &template_closure);
+            const stored_closure = try closure_pool.commit(allocator, template_closure);
+            template_closure = .{};
+            try templates.append(allocator, .{
+                .module_idx = module.moduleIndex(),
+                .def = @enumFromInt(@intFromEnum(binder)),
+                .pattern = checked_pattern,
+                .const_ref = entry.const_ref,
+                .source_scheme = entry.source_scheme,
+                .template = template,
+                .template_closure = stored_closure,
+            });
         }
 
         for (published_exports) |def_idx| {
@@ -33675,6 +33793,8 @@ pub fn publishFromTypedModule(
     );
 
     const exports = try collectPublishedExportDefs(allocator, module);
+    const export_binders = try collectPublishedExportBinders(allocator, module);
+    defer allocator.free(export_binders);
     errdefer allocator.free(exports);
 
     const provides = try publishProvidesMetadata(allocator, module, &canonical_names);
@@ -34059,6 +34179,9 @@ pub fn publishFromTypedModule(
         allocator,
         module,
         exports,
+        export_binders,
+        checked_bodies,
+        &selected_hoisted_callables,
         checked_types,
         &checked_procedure_templates,
         &const_templates,
@@ -34090,6 +34213,9 @@ pub fn publishFromTypedModule(
         &platform_required_bindings,
         inputs.imports,
         inputs.available_artifacts,
+        export_binders,
+        checked_bodies,
+        &hoisted_constants,
     );
     errdefer exported_const_templates.deinit(allocator);
 
