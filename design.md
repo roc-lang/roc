@@ -4594,7 +4594,13 @@ root type alone cannot reach them.
 Constraint creation records the innermost prospective scheme root as the exact
 owner. At that root's generalization boundary,
 `captureSchemeDispatchRequirements` moves each still-open relation on an
-outer-rank receiver into the scheme. This is explicit producer data; no later
+outer-rank receiver into the scheme. A receiver created at the boundary's own
+rank is undecided until generalization adjusts ranks—it escapes exactly when
+it unified with an enclosing-scope variable, which only rank adjustment
+proves—so the capture before generalization leaves such candidates owned by
+their root and `captureEscapedSchemeDispatchRequirements` decides them right
+after `generalize`: an escaped receiver is captured, a quantified one carries
+its own constraint into every instantiation. This is explicit producer data; no later
 pass may recover ownership from reachability, creation order, rank shape, or
 source syntax. An explicit owner index lets each boundary consume only its own
 candidates instead of rescanning module-wide dispatch sites; the backing arena
@@ -4728,10 +4734,12 @@ relations.
 
 A generalization boundary captures its owned
 requirements before literal defaulting, runs grounded copied requirements to
-that exact fixpoint, and then captures once more. The second capture consumes
+that exact fixpoint, captures once more, and after generalization captures
+the candidates rank adjustment decided. The second capture consumes
 requirements created while selecting method targets in the worklist; capture
 itself creates no solver work, so returning from that sequence leaves the
-boundary owner quiescent rather than stranding post-capture candidates.
+boundary owner quiescent except for rank-undecided candidates, which the
+post-generalization capture consumes.
 If an outer receiver grounds only during module finalization, after its
 definition's group-local deferred queue is gone, the durable TypeScheme
 relation is explicitly re-enqueued and the ordinary plus instantiated dispatch
@@ -5913,6 +5921,15 @@ Other solved-graph mutations:
   deferred static-dispatch worklist. Retirement reads the explicit structural
   origin and checked scheme-use substitution produced by those operations;
   there is no rank rewrite, structural ownership probe, or graph restamp.
+- `retireStructurallyPublishedTypeSchemeRequirements`
+  (`unifyEquivalentGeneralizedCallables` committed probe)—policy: Pending
+  Dispatch Requirements In Type Schemes (above). A copied requirement whose
+  creation relation is attached to its published receiver is that relation:
+  its callable is unified with the creation callable through an ordinary
+  committed probe before the copy retires, so the use's copies of the
+  callable's argument and result variables stay bound to the relation that
+  every later use instantiates; a probe that cannot establish the pair keeps
+  the copy as an explicit requirement.
 - `rejectRecursiveStaticDispatch`—policy: Pending Dispatch Requirements In
   Type Schemes (above). Two triggers: the explicit derivation chain and
   alpha-normalized receiver + callable digest prove that target selection has
@@ -7813,7 +7830,9 @@ identity variables in canonical order (`scheme_vars` on the checked template
 or dispatch scope); each evidence parameter names the slot its dispatcher
 occupies. Checking persists every scheme edge: an ordinary instantiation
 records the (pristine var, fresh var) pair of every quantified variable it
-copied, and the checked module stores the edge's substitution—one checked
+copied (an orphan copy of an annotation or expected type is not a use of any
+scheme and records nothing), and the checked module stores the edge's
+substitution—one checked
 type per slot—keyed by the use expression, next to the edge's resolved
 requirements. A monomorphic edge to an in-flight recursive value or method
 target records the exact shared scheme root and no copy pairs; its
