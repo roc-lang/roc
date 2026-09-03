@@ -603,10 +603,11 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
         .package => |package| {
             node.tag = .package_header;
             node.data.lhs = @intFromEnum(package.exposes);
-            node.data.rhs = @intFromEnum(package.packages);
-            // A package header has no name token, so the optional `roc`
-            // version pin fits in main_token without an extra_data record.
-            node.main_token = try packOptionalIndex(package.roc_version);
+            const ed_start = try store.reserveExtraDataStart(3);
+            store.extra_data.appendAssumeCapacity(@intFromEnum(package.packages));
+            store.extra_data.appendAssumeCapacity(try packOptionalIndex(package.roc_version));
+            store.extra_data.appendAssumeCapacity(try packOptionalIndex(package.platform_idx));
+            node.data.rhs = ed_start;
             node.region = package.region;
         },
         .platform => |platform| {
@@ -1775,10 +1776,12 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
             } };
         },
         .package_header => {
+            const ed_start = node.data.rhs;
             return .{ .package = .{
                 .exposes = @enumFromInt(node.data.lhs),
-                .packages = @enumFromInt(node.data.rhs),
-                .roc_version = unpackOptionalIndex(AST.RecordField.Idx, node.main_token),
+                .packages = @enumFromInt(store.extra_data.items[ed_start]),
+                .roc_version = unpackOptionalIndex(AST.RecordField.Idx, store.extra_data.items[ed_start + 1]),
+                .platform_idx = unpackOptionalIndex(AST.RecordField.Idx, store.extra_data.items[ed_start + 2]),
                 .region = node.region,
             } };
         },

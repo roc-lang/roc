@@ -92,6 +92,7 @@ test "NodeStore round trip - Headers" {
         .package = .{
             .exposes = rand_idx(random, AST.Collection.Idx),
             .packages = rand_idx(random, AST.Collection.Idx),
+            .platform_idx = @enumFromInt(9),
             .roc_version = null,
             .region = rand_region(random),
         },

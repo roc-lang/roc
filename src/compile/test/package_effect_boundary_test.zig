@@ -1,10 +1,9 @@
-//! Security regression tests for the package/platform effect boundary.
+//! Security regression tests for package host authority.
 //!
-//! Roc's central safety property for dependencies is that a *package* is pure:
-//! only a *platform* can reach the host, so adding a third-party package cannot
-//! give that dependency the ability to read files, open sockets, or otherwise
-//! perform effects. That property is what makes a Roc dependency tree safe to
-//! grow without auditing every package for supply-chain behavior.
+//! A package may explicitly depend on the graph's selected platform and call
+//! its exposed hosted effects. It must not manufacture host authority of its
+//! own: only the selected platform's hosted section binds Roc declarations to
+//! host symbols, and the app remains responsible for satisfying `requires`.
 //!
 //! Nothing enforces that property in one place; it falls out of several
 //! independent checks spread across parsing, package resolution, module
@@ -13,19 +12,11 @@
 //! it, so that a refactor which quietly drops one of those checks fails here
 //! rather than in a released compiler.
 //!
-//! The last test is a positive control: a package may still *receive* an
-//! effectful function from the app and call it. Capability passing is the
-//! sanctioned way for a package to perform effects, and it must keep working;
-//! otherwise these tests could "pass" against a compiler that simply rejects
-//! everything.
+//! The last test remains a positive control for passing effectful functions as
+//! ordinary values independently of direct selected-platform access.
 //!
-//! Three more routes are covered from `test/package-effect-boundary/` instead
-//! of here: a package naming a platform as a dependency, a package header using
-//! the app-only `platform` keyword, and a package shipping a module called
-//! `Builtin`. Those are refused by package resolution and module discovery,
-//! which `Coordinator.discoverAppFromPath` does not run, so only driving the
-//! real `roc check` exercises them. Keep the two sets in sync: together they
-//! are the regression suite for this boundary.
+//! Additional CLI fixtures cover an unmarked platform target, a valid marked
+//! platform dependency, and a package shipping a module called `Builtin`.
 
 const std = @import("std");
 const build_options = @import("build_options");

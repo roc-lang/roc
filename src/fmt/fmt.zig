@@ -2809,6 +2809,82 @@ const Formatter = struct {
         return .{ .field = field_idx, .version = current };
     }
 
+    fn formatPackageDependencyRecord(
+        fmt: *Formatter,
+        packages_idx: AST.Collection.Idx,
+        platform_idx: ?AST.RecordField.Idx,
+    ) FormatAstError!void {
+        const packages = fmt.ast.store.getCollection(packages_idx);
+        const packages_multiline = fmt.collectionWillBeMultiline(AST.RecordField.Idx, packages_idx);
+        const packages_empty = packages.span.len == 0;
+        try fmt.push('{');
+        if (packages_multiline) {
+            fmt.curr_indent += 1;
+        } else if (!packages_empty) {
+            try fmt.push(' ');
+        }
+
+        var platform_field: ?AST.RecordField.Idx = null;
+        var ordinary = try std.array_list.Managed(AST.RecordField.Idx).initCapacity(fmt.ast.store.gpa, 10);
+        const package_slice = fmt.ast.store.recordFieldSlice(.{ .span = packages.span });
+        for (package_slice) |field_idx| {
+            if (platform_idx != null and field_idx == platform_idx.?) {
+                platform_field = field_idx;
+            } else {
+                try ordinary.append(field_idx);
+            }
+        }
+        const fields = try ordinary.toOwnedSlice();
+        defer fmt.ast.store.gpa.free(fields);
+
+        if (platform_field) |field_idx| {
+            const field = fmt.ast.store.getRecordField(field_idx);
+            if (packages_multiline) {
+                try fmt.flushCommentsBeforeDiscard(field.region.start);
+                try fmt.ensureNewline();
+                try fmt.pushIndent();
+            }
+            try fmt.pushTokenText(field.name);
+            if (field.value == .supplied) {
+                try fmt.pushAll(": platform ");
+                try fmt.formatExprDiscard(field.value.supplied);
+            }
+            if (packages_multiline) {
+                try fmt.push(',');
+            } else if (fields.len > 0) {
+                try fmt.pushAll(", ");
+            }
+        }
+        for (fields, 0..) |field_idx, i| {
+            const item_region = fmt.nodeRegion(@intFromEnum(field_idx));
+            if (packages_multiline) {
+                try fmt.flushCommentsBeforeDiscard(item_region.start);
+                try fmt.ensureNewline();
+                try fmt.pushIndent();
+            }
+            const formatted_field = try fmt.formatRecordFieldWithInfo(field_idx);
+            Formatter.discardRegion(formatted_field.region);
+            if (packages_multiline) {
+                if (formatted_field.ends_with_multiline_string_line or fmt.has_multiline_string) {
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                }
+                try fmt.push(',');
+            } else if (i < fields.len - 1) {
+                try fmt.pushAll(", ");
+            }
+        }
+        if (packages_multiline) {
+            try fmt.flushCommentsBeforeDiscard(packages.region.end - 1);
+            fmt.curr_indent -= 1;
+            try fmt.ensureNewline();
+            try fmt.pushIndent();
+        } else if (!packages_empty) {
+            try fmt.push(' ');
+        }
+        try fmt.push('}');
+    }
+
     fn formatHeader(fmt: *Formatter, hi: AST.Header.Idx) FormatAstError!void {
         const header = fmt.ast.store.getHeader(hi);
         const start_indent = fmt.curr_indent;
@@ -2988,16 +3064,7 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                const packages = fmt.ast.store.getCollection(p.packages);
-                const packagesItems = fmt.ast.store.recordFieldSlice(.{ .span = packages.span });
-                try fmt.formatCollection(
-                    packages.region,
-                    packages.layout,
-                    .curly,
-                    AST.RecordField.Idx,
-                    packagesItems,
-                    Formatter.formatRecordField,
-                );
+                try fmt.formatPackageDependencyRecord(p.packages, p.platform_idx);
             },
             .platform => |p| {
                 try fmt.pushAll("platform");
@@ -4424,6 +4491,20 @@ test "issue 10480: package qualifier preserved in exposed aliased imports" {
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings("module [o as n, F.s as I]\n", result);
+}
+
+test "package platform dependency formatting is stable" {
+    const result = try moduleFmtsStable(
+        std.testing.allocator,
+        "package[Wrapper]{pf:platform \"../platform/main.roc\",util:\"../util/main.roc\",roc:\"nightly-2026-08-05-24f0b47\"}",
+        false,
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        "package [Wrapper] { pf: platform \"../platform/main.roc\", util: \"../util/main.roc\", roc: \"nightly-2026-08-05-24f0b47\" }\n",
+        result,
+    );
 }
 
 test "issue 10431: wrapped declaration has no trailing whitespace" {
