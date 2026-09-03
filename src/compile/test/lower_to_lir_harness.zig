@@ -281,10 +281,12 @@ pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() L
         .tasks_committed = 33,
         .tasks_retried_serial = 44,
     };
+    var serial_timing: lir.CheckedPipeline.TimingSnapshot = .{};
     try runToLir(prepared_finite_capture_free_direct_call_fixture, &reference_writer, .{
         .specialization_workers = 1,
         .prepared_direct_call_root_fixture = true,
         .solved_lir_parallel_metrics_out = &serial_metrics,
+        .timing_out = &serial_timing,
     }, null);
     try std.testing.expectEqual(@as(u64, 0), serial_metrics.task_waves);
     try std.testing.expectEqual(@as(u64, 0), serial_metrics.tasks_submitted);
@@ -292,25 +294,38 @@ pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() L
     try std.testing.expectEqual(@as(u64, 0), serial_metrics.tasks_retried_serial);
     try std.testing.expectEqual(@as(u64, 0), serial_metrics.workspace_initializations);
     try std.testing.expectEqual(@as(u64, 0), serial_metrics.workspace_reuses);
+    const serial_parallel = serial_timing.monotype_parallel;
+    try std.testing.expectEqual(@as(u64, 0), serial_parallel.root_tasks_submitted);
+    try std.testing.expectEqual(@as(u64, 0), serial_parallel.root_tasks_committed);
+    try std.testing.expectEqual(@as(u64, 0), serial_parallel.specialization_tasks_submitted);
+    try std.testing.expectEqual(@as(u64, 0), serial_parallel.specialization_tasks_committed);
+    try std.testing.expectEqual(@as(u64, 0), serial_parallel.task_waves);
+    try std.testing.expectEqual(@as(u64, 0), serial_parallel.within_lowering_lane_reuse_tasks);
 
-    for ([_]struct { specialization_workers: usize, task_waves: u64 }{
-        .{ .specialization_workers = 2, .task_waves = 7 },
-        .{ .specialization_workers = 4, .task_waves = 4 },
+    for ([_]struct {
+        specialization_workers: usize,
+        solved_lir_task_waves: u64,
+        monotype_task_waves: u64,
+    }{
+        .{ .specialization_workers = 2, .solved_lir_task_waves = 7, .monotype_task_waves = 5 },
+        .{ .specialization_workers = 4, .solved_lir_task_waves = 4, .monotype_task_waves = 4 },
     }) |case| {
         for ([_]bool{ false, true }) |reverse_post_check_completions| {
             const candidate = try gpa.alloc(u8, cap);
             defer gpa.free(candidate);
             var candidate_writer = std.Io.Writer.fixed(candidate);
             var metrics: lir.CheckedPipeline.SolvedLirParallelMetrics = .{};
+            var timing: lir.CheckedPipeline.TimingSnapshot = .{};
             try runToLir(prepared_finite_capture_free_direct_call_fixture, &candidate_writer, .{
                 .specialization_workers = case.specialization_workers,
                 .prepared_direct_call_root_fixture = true,
                 .reverse_post_check_completions = reverse_post_check_completions,
                 .solved_lir_parallel_metrics_out = &metrics,
+                .timing_out = &timing,
             }, null);
 
             try std.testing.expectEqualStrings(reference_writer.buffered(), candidate_writer.buffered());
-            try std.testing.expectEqual(case.task_waves, metrics.task_waves);
+            try std.testing.expectEqual(case.solved_lir_task_waves, metrics.task_waves);
             try std.testing.expectEqual(@as(u64, 14), metrics.tasks_submitted);
             try std.testing.expectEqual(@as(u64, 14), metrics.tasks_committed);
             try std.testing.expectEqual(@as(u64, 0), metrics.tasks_retried_serial);
@@ -320,6 +335,25 @@ pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() L
             );
             try std.testing.expect(metrics.workspace_initializations > 0);
             try std.testing.expect(metrics.workspace_reuses > 0);
+
+            const parallel = timing.monotype_parallel;
+            try std.testing.expectEqual(@as(u64, 5), parallel.root_tasks_submitted);
+            try std.testing.expectEqual(parallel.root_tasks_submitted, parallel.root_tasks_committed);
+            try std.testing.expectEqual(@as(u64, 0), parallel.root_tasks_retried_serial);
+            try std.testing.expectEqual(@as(u64, 10), parallel.specialization_tasks_submitted);
+            try std.testing.expect(
+                parallel.specialization_tasks_submitted > parallel.peak_worker_lanes_available,
+            );
+            try std.testing.expectEqual(
+                parallel.specialization_tasks_submitted,
+                parallel.specialization_tasks_committed,
+            );
+            try std.testing.expectEqual(@as(u64, 0), parallel.specialization_tasks_retried_serial);
+            try std.testing.expectEqual(@as(u64, 0), parallel.specialization_tasks_discarded_ready);
+            // Ten specializations complete in two specialization waves after
+            // the fixed root waves, proving each run can exceed lane count.
+            try std.testing.expectEqual(case.monotype_task_waves, parallel.task_waves);
+            try std.testing.expect(parallel.within_lowering_lane_reuse_tasks > 0);
         }
     }
 }
