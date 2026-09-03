@@ -4510,10 +4510,26 @@ import — closes the same markers (`PolarityVarBehavior.close`), so an
 implementation is bounded by the listed tags: it may return a subset, never
 more, and its arguments must match as written. A where-alias declaration's
 signatures are copied into a referencing annotation with their markers
-intact (`.preserve`). Lowering note: a body use that WIDENS its copy asks
-Monotype to specialize the implementation at the wider row per use, which
-the dispatch plan does not yet do (one plan per obligation). A second
-lowering consequence: a Builtin format method's protocol result row (the ok
+intact (`.preserve`). Lowering note: a body use that WIDENS its copy is
+specialized by Monotype at the wider row when the implementation's own
+result row is open — the artifact's plan carries the use's copy as its
+callable and the implementation's scheme is instantiated against it (today
+through `paramIndexFor`'s same-name fallback; `polarity_phase_two.md` W6a
+makes that plan deliberate through a `SchemeUseRecord` slot). An
+implementation whose published result row is CLOSED (its body returns a
+closed-source value: a top-level constant, an input-position parameter, a
+nominal field) cannot yet serve a widened use; W6b adds a result-row
+widening adapter at the template boundary, generalizing the hosted `Try`
+adapter, which re-tags only the direct result row and a `Try`'s rows.
+Decided 2026-09-03: per-use opening applies at EVERY output position of
+the signature, not only the positions the adapter can re-tag; for a marker
+in any other output position (inside a `List`, a record field, a tuple, a
+tag payload, a non-`Try` nominal) that a body use widened, the obligation
+reports a problem when the resolved implementation's row at that marker
+is closed, before unifying the implementation with the signature — a
+check-time rejection that names the implementation and is lifted as the
+coercion generator grows. Open implementations at nested positions are
+unaffected. A second lowering consequence: a Builtin format method's protocol result row (the ok
 payload of `parse_record_start`, for instance) is now quantified in its
 scheme, so a stored codec restore, which emits its generated bodies from
 resolved views before the specialization graph freezes, reaches that row
