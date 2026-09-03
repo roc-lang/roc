@@ -970,4 +970,74 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "42" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/11063
+        //
+        // `Opt` brings its own `parser_for`, and the record `Opt` wraps has a
+        // field that is itself an `Opt`. Deriving the record's parser re-enters
+        // the same custom codec (custom -> derived -> custom). Both levels must
+        // decode: the outer `Opt(Inner)` from a JSON object and the inner
+        // `Opt(Bool)` from JSON `null`.
+        .name = "issue 11063: custom codec wrapping a record holding that same custom codec decodes",
+        .source_kind = .module,
+        .source =
+        \\Opt(a) := [
+        \\    None,
+        \\    Has(a),
+        \\].{
+        \\    map : Opt(a), (a -> b) -> Opt(b)
+        \\    map = |o, f|
+        \\        match o {
+        \\            Has(a) => Has(f(a))
+        \\            None => None
+        \\        }
+        \\
+        \\    with_default : Opt(a), a -> a
+        \\    with_default = |o, default|
+        \\        match o {
+        \\            Has(a) => a
+        \\            None => default
+        \\        }
+        \\
+        \\    parser_for : encoding -> (state -> Try({ value : Opt(a), rest : state }, [InvalidJson(Str), MissingRequiredField(Str), ..]))
+        \\        where [
+        \\            a.parser_for : encoding -> (state -> Try({ value : a, rest : state }, [InvalidJson(Str), MissingRequiredField(Str)])),
+        \\            encoding.parse_null : encoding, state -> Try(state, [InvalidJson(Str)]),
+        \\        ]
+        \\    parser_for = |encoding| {
+        \\        Elem : a
+        \\        parse_elem = Elem.parser_for(encoding)
+        \\
+        \\        |state|
+        \\            match encoding.parse_null(state) {
+        \\                Ok(rest) => Ok({ value: None, rest })
+        \\                Err(InvalidJson(_)) =>
+        \\                    match parse_elem(state) {
+        \\                        Ok(parsed) => Ok({ value: Has(parsed.value), rest: parsed.rest })
+        \\                        Err(InvalidJson(e)) => Err(InvalidJson(e))
+        \\                        Err(MissingRequiredField(f)) => Err(MissingRequiredField(f))
+        \\                    }
+        \\            }
+        \\    }
+        \\}
+        \\
+        \\Inner : { label : Str, flag : Opt(Bool) }
+        \\Outer : { thing : Opt(Inner) }
+        \\
+        \\describe : Inner -> Str
+        \\describe = |inner|
+        \\    Str.concat(inner.label, Opt.with_default(Opt.map(inner.flag, |b| if b "T" else "F"), "null"))
+        \\
+        \\main : Str
+        \\main = {
+        \\    decoded : Try(Outer, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded = Json.parse("{\"thing\":{\"label\":\"x\",\"flag\":null}}")
+        \\    match decoded {
+        \\        Ok(m) => Opt.with_default(Opt.map(m.thing, describe), "none")
+        \\        Err(_) => "failed"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"xnull\"" },
+    },
 };
