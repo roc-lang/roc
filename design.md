@@ -2932,7 +2932,8 @@ evidence params forwards `constraint(k)`, and an unpinned copy resolves
 against its default owner. Checking can always decide this at the edge: a
 copy the requester's specializations could still pin would be reachable from
 the requester's interface and therefore be one of its own evidence params. No
-edge publishes a symbolic recipe for Monotype to re-execute, and Monotype never
+edge records a symbolic dispatch-plan reference for Monotype to re-execute,
+and Monotype never
 instantiates a dispatch plan outside the specialization that owns it.
 
 A compiler-generated edge has no checked instantiation, so it derives a hidden
@@ -3889,21 +3890,24 @@ explicit public source and producer topology. It must not depend on operand
 order or keep the imported root and thereby discard the only data capable of
 authoring a forced-dynamic representation.
 
-The recursive edge itself is also producer-authored. Every draft function and
-globally reserved root records the owner that created it, forming an explicit
-active ownership tree. A partial open-interface match may reuse an in-progress
-specialization only when the current owner descends from that specialization in
-this tree and the request is a direct call: a direct call names the procedure
-through the checked reference that recursion shares with its definition, so
-its not-yet-joined fresh cells can still be the active specialization. A
-method-target request—a dispatch plan, a generated codec's component call, or a
-compiler-generated component edge—is always a fresh instantiation selected by a
-dispatcher; it identifies with an active specialization only through an exact
-interface, and otherwise becomes its own request even when it descends from
-that specialization with equal evidence. Shared graph cells alone cannot
-classify two sibling calls as recursion. Exact completed interfaces may still
-deduplicate normally, but only an explicit ancestor edge invokes
-recursive-interface unification and records recursive representation growth.
+The recursive edge itself is producer-authored by checking. A lookup that
+checking related monomorphically to a definition still in flight is recorded
+as a shared scheme use, and the checked module marks the resolved reference
+`recursive_reference`. Only such a reference may join an
+in-progress specialization whose interface its fresh cells have not yet joined:
+every draft function and globally reserved root records the owner that created
+it, forming an explicit active ownership tree, and the reference names the
+in-progress specialization of the same procedure, with the same evidence, on
+that chain. Every other request—a scheme instantiation, a dispatch plan, a
+generated codec's component call, or a compiler-generated component edge—is a
+fresh instantiation; it identifies with an existing specialization only
+through an exact interface and otherwise becomes its own request, even when it
+descends from a specialization of the same procedure with equal evidence.
+Neither ownership descent, shared graph cells, argument-class overlap, nor
+capture identity classifies a request as recursion. Exact interfaces may still
+deduplicate normally, but only a checked recursive reference invokes
+recursive-interface unification against a not-yet-joined interface and records
+recursive representation growth.
 
 Finalization rebuilds a selected forced-dynamic class with exactly one public
 item argument and an exact self-recursive backing before identity sealing.

@@ -15256,6 +15256,12 @@ pub const ResolvedValueRefRecord = struct {
     ref: ResolvedValueRef,
     checked_ty: CheckedTypeId,
     scope_depth: u32,
+    /// Checking related this lookup monomorphically to a definition that was
+    /// still in flight (a `shared_value_use`): the reference shares the
+    /// definition's own type variables instead of instantiating its scheme.
+    /// Monotype treats only such a reference as recursion into an in-progress
+    /// specialization; every other reference is a fresh instantiation.
+    recursive_reference: bool = false,
 };
 
 /// Public `ResolvedValueRefTable` declaration.
@@ -15301,6 +15307,13 @@ pub const ResolvedValueRefTable = struct {
         const by_checked_expr = try allocator.alloc(?ResolvedValueRefId, checked_bodies.exprCount());
         errdefer allocator.free(by_checked_expr);
         @memset(by_checked_expr, null);
+
+        var shared_use_nodes = std.AutoHashMap(u32, void).init(allocator);
+        defer shared_use_nodes.deinit();
+        for (module.moduleEnvConst().scheme_uses.items.items) |record| {
+            if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.shared_value_use)) continue;
+            try shared_use_nodes.put(record.node_idx, {});
+        }
 
         var node_idx: u32 = 0;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
@@ -15352,6 +15365,7 @@ pub const ResolvedValueRefTable = struct {
                 .ref = resolved_ref,
                 .checked_ty = checked_ty,
                 .scope_depth = 0,
+                .recursive_reference = shared_use_nodes.contains(node_idx),
             });
             by_checked_expr[@intFromEnum(checked_expr)] = id;
         }
@@ -17352,7 +17366,7 @@ const EvidencePass = struct {
             };
             const published_path: []const static_dispatch.EvidencePathStep = switch (source) {
                 .scheme_callable, .constraint_callable => param.path,
-                .use_site_only, .explicit_default, .erased_row_remainder, .checked_error => &.{},
+                .use_site_only, .explicit_default, .erased_row_remainder => &.{},
             };
             const path_start: u32 = @intCast(self.evidence_param_paths.items.len);
             for (published_path) |path_step| {
@@ -17376,7 +17390,7 @@ const EvidencePass = struct {
                 .method = try self.names.internMethodIdent(idents, param.constraint.fn_name),
                 .dispatcher_ty = self.checked_types.rootForSourceVar(self.module, param.dispatcher_var) orelse
                     checkedArtifactInvariant("checked evidence parameter dispatcher type was not published", .{}),
-                .runtime_dictionary = source == .constraint_callable or param.constraint.origin.literalKind() == null,
+                .runtime_dictionary = param.constraint.origin.literalKind() == null,
                 .structural = self.structuralKindForMethodIdent(param.constraint.fn_name),
                 .source = source,
                 .path = .{ .start = path_start, .len = @intCast(published_path.len) },
@@ -17952,7 +17966,7 @@ const EvidencePass = struct {
             switch (param.source) {
                 .scheme_callable => {},
                 .explicit_default => if (path.len != 0) return .requires_record,
-                .constraint_callable, .use_site_only, .erased_row_remainder, .checked_error => return .requires_record,
+                .constraint_callable, .use_site_only, .erased_row_remainder => return .requires_record,
             }
         }
         return .from_callable;
@@ -30257,7 +30271,6 @@ pub const CheckedModuleArtifact = struct {
                 const source_root = switch (param.source) {
                     .scheme_callable => template.checked_fn_root,
                     .constraint_callable => |source| source.callable_ty,
-                    .checked_error => continue,
                     .use_site_only, .explicit_default, .erased_row_remainder => {
                         if (path.len != 0) {
                             return .{ .kind = .evidence_param_path_diverges_from_checked_type, .index = template.evidence_params.start + @as(u32, @intCast(param_offset)), .method = param.method };
@@ -30281,7 +30294,6 @@ pub const CheckedModuleArtifact = struct {
                 const source_root = switch (param.source) {
                     .scheme_callable => scope.scheme_root,
                     .constraint_callable => |source| source.callable_ty,
-                    .checked_error => continue,
                     .use_site_only, .explicit_default, .erased_row_remainder => {
                         if (path.len != 0) return .{ .kind = .evidence_param_path_diverges_from_checked_type, .index = scope.evidence_params.start + @as(u32, @intCast(param_offset)), .method = param.method };
                         continue;

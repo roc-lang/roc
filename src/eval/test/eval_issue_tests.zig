@@ -1103,4 +1103,42 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "\"found 42\"" },
     },
+    .{
+        // The interpolation's result type is reachable only through `acc`'s
+        // `append` constraint callable, so `wrap`'s evidence parameter for it
+        // is a hidden dispatcher. The annotated call pins it to a user type
+        // whose own `from_interpolation` must be selected at that edge.
+        .name = "hidden interpolation dispatcher pinned to a custom from_interpolation at the call edge",
+        .source_kind = .module,
+        .source =
+        \\Wrap := [W(Str)].{
+        \\    from_interpolation : Str, Iter((Str, Str)) -> Wrap
+        \\    from_interpolation = |first, rest| W(Str.concat("<", Str.concat(Str.from_interpolation(first, rest), ">")))
+        \\
+        \\    text : Wrap -> Str
+        \\    text = |W(s)| s
+        \\}
+        \\
+        \\wrap = |acc, x| acc.append("v: ${x}")
+        \\
+        \\main = {
+        \\    ws : List(Wrap)
+        \\    ws = wrap([], "a")
+        \\    Str.join_with(List.map(ws, Wrap.text), ",")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"<v: a>\"" },
+    },
+    .{
+        // The same hidden dispatcher left unpinned at the call edge takes its
+        // checked default (`Str`) there.
+        .name = "hidden interpolation dispatcher defaults to Str at an unpinned call edge",
+        .source_kind = .module,
+        .source =
+        \\wrap = |acc, x| acc.append("v: ${x}")
+        \\
+        \\main = Str.join_with(wrap([], "a"), ",")
+        ,
+        .expected = .{ .inspect_str = "\"v: a\"" },
+    },
 };

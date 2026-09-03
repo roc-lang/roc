@@ -45,22 +45,16 @@ const DispatchInstantiationPhase = enum {
     expression_lowering,
 };
 
-const DraftRequestEvidenceMode = enum {
-    resolved,
-    synthesized,
-};
-
-/// How a procedure specialization request reached its template. A direct
-/// call names the procedure through the checked reference that recursion
-/// shares with the definition, so an in-progress ancestor specialization of
-/// the same family may be that recursion even before its fresh cells are
-/// joined. A method target is always a fresh instantiation selected by a
-/// dispatcher (a dispatch plan, a generated codec's component call, or a
-/// compiler-generated component edge); only an exact interface identifies it
-/// with an active specialization.
+/// How a specialization request refers to its procedure. Checking records a
+/// `recursive_reference` when a lookup shares the type variables of a
+/// definition still in flight; only such a request may join an in-progress
+/// ancestor specialization before its fresh cells are related. Every other
+/// request instantiates a scheme (a scheme use, a dispatch target, a generated
+/// codec's component call, or a compiler-generated component edge) and
+/// identifies with an existing specialization only through an exact interface.
 const DraftRequestEdge = enum {
-    direct_call,
-    method_target,
+    instantiation,
+    recursive_reference,
 };
 
 /// Coordinator-facing view of one frozen graph's finalized type/name domain.
@@ -3942,6 +3936,7 @@ const Builder = struct {
                     root_node,
                     &.{},
                     request.root_evidence,
+                    false,
                 );
                 const callee_fn_node = try ctx.draftFnSlotTypeNode(selected, root_node);
                 try relateFunctionRequestInterface(graph, root_node, callee_fn_node);
@@ -5545,7 +5540,6 @@ const Builder = struct {
         source_fn_key: names.TypeDigest,
         raw_request_fn_node: NodeId,
         partial_evidence: []const SpecEvidence,
-        evidence_mode: DraftRequestEvidenceMode,
         request_edge: DraftRequestEdge,
         signature_relation: Ast.SignatureRelation,
     ) Allocator.Error!DraftFnSlot {
@@ -5563,11 +5557,11 @@ const Builder = struct {
         const family = DraftTemplateFamilyAddress.init(template_ref, source_ctx.method_scope.key, source_fn_key);
 
         // The globally reserved root is the active ancestor of recursive calls
-        // in its own specialization graph. Reuse that exact function instead
-        // of deferring a sibling body: doing so keeps recursion within one
-        // Monotype instantiation context and lets recursive representation
-        // evidence (notably forced-dynamic iterator flow) reach the root before
-        // its single seal.
+        // in its own specialization graph. A checked recursive reference to it
+        // reuses that exact function instead of deferring a sibling body:
+        // doing so keeps recursion within one Monotype instantiation context
+        // and lets recursive representation evidence (notably forced-dynamic
+        // iterator flow) reach the root before its single seal.
         if (self.active_template_root) |active_root| {
             if (active_root.graph == source_ctx.graph and
                 active_root.family.sameRecursiveCallable(family) and
@@ -5581,14 +5575,7 @@ const Builder = struct {
                     source_ctx.draft.current_owner,
                     active_root.fn_id,
                 );
-                const partial_recursive_allowed = active_recursive_edge and request_edge == .direct_call and switch (evidence_mode) {
-                    .resolved => true,
-                    .synthesized => try draftRequestOverlapsInitialArgumentClass(
-                        source_ctx.graph,
-                        active_root.initial_request_arg_classes,
-                        request_fn_node,
-                    ),
-                };
+                const partial_recursive_allowed = active_recursive_edge and request_edge == .recursive_reference;
                 if (exact_interface or partial_recursive_allowed) {
                     if (active_recursive_edge) {
                         try source_ctx.graph.unifyRecursiveFunctionInterface(
@@ -5689,19 +5676,7 @@ const Builder = struct {
                                 source_ctx.draft.current_owner,
                                 spec.fn_id,
                             );
-                            // Synthesized component calls can share ubiquitous
-                            // result cells such as Bool across unrelated
-                            // component types; require an argument-class
-                            // anchor before treating a partial match as
-                            // recursion.
-                            const partial_recursive_allowed = active_recursive_edge and request_edge == .direct_call and switch (evidence_mode) {
-                                .resolved => true,
-                                .synthesized => try draftRequestOverlapsInitialArgumentClass(
-                                    source_ctx.graph,
-                                    spec.initial_request_arg_classes,
-                                    request_fn_node,
-                                ),
-                            };
+                            const partial_recursive_allowed = active_recursive_edge and request_edge == .recursive_reference;
                             if (!draftOpenCandidateQualifies(
                                 spec.state,
                                 exact_interface,
@@ -7438,6 +7413,7 @@ const Builder = struct {
                     &.{},
                     fn_ctx.evidence,
                     null,
+                    false,
                     .exact_graph,
                 );
                 const draft_fn = switch (fn_target) {
@@ -7567,6 +7543,7 @@ const Builder = struct {
         capture_entry_guards: []const NodeId,
         requested_evidence: EvidenceChain,
         owned_scope: ?checked.DispatchScopeId,
+        recursive_reference: bool,
         signature_relation: Ast.SignatureRelation,
     ) Allocator.Error!DraftFnTarget {
         self.count("nested_requests");
@@ -7675,7 +7652,7 @@ const Builder = struct {
                                 spec.state,
                                 exact_interface,
                                 active_recursive_edge,
-                                true,
+                                recursive_reference,
                             )) continue;
                             if (!selection.add(raw_spec, exact_interface)) {
                                 Common.invariant("draft nested request matched more than one partial active recursive specialization");
@@ -7685,55 +7662,26 @@ const Builder = struct {
                 }
             }
         }
-        if (selection.selected() == null) {
+        // A checked recursive reference whose fresh cells have not yet joined
+        // any interface class above names the in-progress specialization of
+        // the same site on its own ownership chain.
+        if (selection.selected() == null and recursive_reference) {
             for (source_ctx.draft.nested_specs.items, 0..) |*spec, raw_spec_usize| {
+                if (spec.state != .lowering) continue;
+                if (spec.request_fn_ty != null) continue;
                 if (signature_relation == .exact_graph and
                     source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation != .exact_graph)
                 {
                     continue;
                 }
-                if (!try draftNestedActiveRecursiveCandidate(
-                    source_ctx.graph,
-                    spec,
-                    family,
-                    capture_entry_guards,
-                    requested_evidence,
-                    source_ctx.draft.current_owner,
-                )) continue;
+                if (!std.meta.eql(DraftNestedFamilyAddress.init(spec.nested, spec.method_scope, spec.source_fn_key), family)) continue;
+                if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
+                if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
+                if (!source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id)) continue;
                 const raw_spec: u32 = @intCast(raw_spec_usize);
                 if (!selection.add(raw_spec, false)) {
-                    Common.invariant("draft nested request matched more than one active recursive specialization");
+                    Common.invariant("checked recursive nested reference matched more than one in-progress specialization on its ownership chain");
                 }
-            }
-        }
-        if (selection.selected() == null) {
-            var capture_anchor: ?u32 = null;
-            for (source_ctx.draft.nested_specs.items, 0..) |*spec, raw_spec_usize| {
-                if (signature_relation == .exact_graph and
-                    source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation != .exact_graph)
-                {
-                    continue;
-                }
-                if (!try draftNestedCaptureAnchoredRecursiveCandidate(
-                    source_ctx.graph,
-                    spec,
-                    family,
-                    request_fn_node,
-                    capture_entry_guards,
-                    requested_evidence,
-                )) continue;
-                const raw_spec: u32 = @intCast(raw_spec_usize);
-                if (capture_anchor) |anchor_raw| {
-                    const anchor = &source_ctx.draft.nested_specs.items[anchor_raw];
-                    const candidate_request = try source_ctx.graph.functionNodes(spec.request_fn_node);
-                    try source_ctx.graph.markRecursiveValueSlot(candidate_request.ret);
-                    try source_ctx.graph.unify(anchor.request_fn_node, spec.request_fn_node);
-                } else {
-                    capture_anchor = raw_spec;
-                }
-            }
-            if (capture_anchor) |raw_spec| {
-                if (!selection.add(raw_spec, false)) unreachable;
             }
         }
         if (selection.selected()) |raw_spec| {
@@ -7743,27 +7691,12 @@ const Builder = struct {
             // checked cells before reusing the in-progress definition.
             const spec = &source_ctx.draft.nested_specs.items[raw_spec];
             const active_recursive_edge = spec.state == .lowering and
-                (source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id) or
-                    try draftNestedActiveRecursiveCandidate(
-                        source_ctx.graph,
-                        spec,
-                        family,
-                        capture_entry_guards,
-                        requested_evidence,
-                        source_ctx.draft.current_owner,
-                    ));
-            if (try draftNestedCaptureAnchoredRecursiveCandidate(
-                source_ctx.graph,
-                spec,
-                family,
-                request_fn_node,
-                capture_entry_guards,
-                requested_evidence,
-            )) {
-                const request = try source_ctx.graph.functionNodes(request_fn_node);
-                try source_ctx.graph.markRecursiveValueSlot(request.ret);
-            }
+                source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id);
             if (active_recursive_edge) {
+                // A recursive edge into a function with no arguments carries
+                // its recursive value flow through the result alone.
+                const request = try source_ctx.graph.functionNodes(request_fn_node);
+                if (request.args.len == 0) try source_ctx.graph.markRecursiveValueSlot(request.ret);
                 try source_ctx.graph.unifyRecursiveFunctionInterface(
                     spec.request_fn_node,
                     spec.initial_request_arg_classes,
@@ -10341,6 +10274,7 @@ const Builder = struct {
             capture_entry_guards,
             fn_ctx.evidence,
             null,
+            false,
             .exact_graph,
         );
 
@@ -11793,23 +11727,6 @@ fn draftOpenCandidateQualifies(
     return exact_interface or (state == .lowering and active_recursive_edge and partial_recursive_allowed);
 }
 
-fn draftRequestOverlapsInitialArgumentClass(
-    graph: *InstGraph,
-    initial_arg_classes: []const ArgumentClassSnapshot,
-    request_fn_node: NodeId,
-) Allocator.Error!bool {
-    const request = try graph.functionNodes(request_fn_node);
-    if (initial_arg_classes.len != request.args.len) {
-        Common.invariant("draft recursive request changed function argument arity");
-    }
-    for (initial_arg_classes, request.args) |initial_class, request_arg| {
-        for (initial_class.members) |member| {
-            if (graph.sameClass(member, request_arg)) return true;
-        }
-    }
-    return false;
-}
-
 fn draftCaptureEntryGuardsMatch(
     graph: *InstGraph,
     stored_guards: []const NodeId,
@@ -11819,45 +11736,6 @@ fn draftCaptureEntryGuardsMatch(
     for (stored_guards, requested_guards) |stored, requested| {
         if (!graph.sameClass(stored, requested)) return false;
     }
-    return true;
-}
-
-fn draftNestedActiveRecursiveCandidate(
-    graph: *InstGraph,
-    spec: *const DraftNestedSpec,
-    family: DraftNestedFamilyAddress,
-    capture_entry_guards: []const NodeId,
-    requested_evidence: EvidenceChain,
-    current_owner: DraftOwner,
-) Allocator.Error!bool {
-    if (spec.state != .lowering) return false;
-    if (spec.request_fn_ty != null) return false;
-    if (!std.meta.eql(DraftNestedFamilyAddress.init(spec.nested, spec.method_scope, spec.source_fn_key), family)) return false;
-    if (!evidenceChainEql(spec.evidence, requested_evidence)) return false;
-    if (!draftCaptureEntryGuardsMatch(graph, spec.capture_entry_guards, capture_entry_guards)) return false;
-    if (!std.meta.eql(spec.lexical_owner, current_owner)) return false;
-    return true;
-}
-
-fn draftNestedCaptureAnchoredRecursiveCandidate(
-    graph: *InstGraph,
-    spec: *const DraftNestedSpec,
-    family: DraftNestedFamilyAddress,
-    request_fn_node: NodeId,
-    capture_entry_guards: []const NodeId,
-    requested_evidence: EvidenceChain,
-) Allocator.Error!bool {
-    if (spec.state != .lowering) return false;
-    if (spec.request_fn_ty != null) return false;
-    if (capture_entry_guards.len == 0) return false;
-    if (!std.meta.eql(DraftNestedFamilyAddress.init(spec.nested, spec.method_scope, spec.source_fn_key), family)) return false;
-    if (!evidenceChainEql(spec.evidence, requested_evidence)) return false;
-    if (!draftCaptureEntryGuardsMatch(graph, spec.capture_entry_guards, capture_entry_guards)) return false;
-
-    const request = try graph.functionNodes(request_fn_node);
-    if (request.args.len != 0) return false;
-    const spec_request = try graph.functionNodes(spec.request_fn_node);
-    if (spec_request.args.len != 0) return false;
     return true;
 }
 
@@ -22325,6 +22203,7 @@ const BodyContext = struct {
                         self.view.types.rootKey(expr.ty),
                         request_fn_node,
                         try self.evidenceForUseSite(record.expr),
+                        record.recursive_reference,
                     );
                     const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, request_fn_node);
                     return try self.addExprWithTypeCell(
@@ -22342,8 +22221,8 @@ const BodyContext = struct {
                 .imported_proc,
                 .hosted_proc,
                 .promoted_top_level_proc,
-                => |proc| return try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), null),
-                .platform_required_proc => |proc| return try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), proc.root_evidence),
+                => |proc| return try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), null, record.recursive_reference),
+                .platform_required_proc => |proc| return try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), proc.root_evidence, record.recursive_reference),
                 .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => {},
             }
         }
@@ -30665,12 +30544,13 @@ const BodyContext = struct {
                 source_fn_key,
                 request_fn_node,
                 evidence,
+                record.recursive_reference,
             ) },
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
             .promoted_top_level_proc,
-            => |proc| try self.draftFnSlotForProcedureUseAtNode(proc, source_fn_ty, source_fn_key, request_fn_node, evidence, null),
+            => |proc| try self.draftFnSlotForProcedureUseAtNode(proc, source_fn_ty, source_fn_key, request_fn_node, evidence, null, record.recursive_reference),
             .platform_required_proc => |proc| try self.draftFnSlotForProcedureUseAtNode(
                 proc.procedure,
                 source_fn_ty,
@@ -30678,6 +30558,7 @@ const BodyContext = struct {
                 request_fn_node,
                 evidence,
                 proc.root_evidence,
+                record.recursive_reference,
             ),
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => Common.invariant("checked direct call target was not a procedure"),
         };
@@ -30691,6 +30572,7 @@ const BodyContext = struct {
         request_fn_node: NodeId,
         evidence: []const SpecEvidence,
         root_evidence: ?checked.CheckedEvidenceSpan,
+        recursive_reference: bool,
     ) Allocator.Error!DraftFnSlot {
         const template_ref = self.builder.templateRefForProcedureUse(proc);
         const requested_evidence = if (root_evidence) |producer_evidence|
@@ -30704,8 +30586,7 @@ const BodyContext = struct {
             source_fn_key,
             request_fn_node,
             requested_evidence,
-            .resolved,
-            .direct_call,
+            if (recursive_reference) .recursive_reference else .instantiation,
             if (proc.iterator_procedure == .iter_from_step) .exact_graph else .independent_roots,
         );
     }
@@ -30719,6 +30600,7 @@ const BodyContext = struct {
         source_fn_key: names.TypeDigest,
         request_fn_node: NodeId,
         evidence: []const SpecEvidence,
+        recursive_reference: bool,
     ) Allocator.Error!DraftFnTarget {
         const context = self.validateLocalProcContext(
             context_id,
@@ -30793,6 +30675,7 @@ const BodyContext = struct {
             capture_entry_guards,
             requested_evidence,
             local.dispatch_scope,
+            recursive_reference,
             .independent_roots,
         );
     }
@@ -31386,6 +31269,7 @@ const BodyContext = struct {
                     self.view.types.rootKey(checked_ty),
                     request_fn_node,
                     try self.evidenceForUseSite(record.expr),
+                    record.recursive_reference,
                 );
                 const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, request_fn_node);
                 break :blk try self.addExprWithTypeCell(
@@ -31403,8 +31287,8 @@ const BodyContext = struct {
             .imported_proc,
             .hosted_proc,
             .promoted_top_level_proc,
-            => |proc| try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), null),
-            .platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), proc.root_evidence),
+            => |proc| try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), null, record.recursive_reference),
+            .platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), proc.root_evidence, record.recursive_reference),
             .top_level_const,
             .imported_const,
             .platform_required_const,
@@ -31494,6 +31378,7 @@ const BodyContext = struct {
                     self.view.types.rootKey(checked_ty),
                     expected_node,
                     try self.evidenceForUseSite(record.expr),
+                    record.recursive_reference,
                 );
                 const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, expected_node);
                 return try self.addExprWithTypeCell(
@@ -31519,12 +31404,14 @@ const BodyContext = struct {
                 expected_node,
                 try self.evidenceForUseSite(record.expr),
                 null,
+                record.recursive_reference,
             ),
             .platform_required_proc => |proc| return try self.lowerProcedureUseValueAtNode(
                 proc.procedure,
                 expected_node,
                 try self.evidenceForUseSite(record.expr),
                 proc.root_evidence,
+                record.recursive_reference,
             ),
             // The required def failed checking, so its type never resolves;
             // crash at the use site instead of materializing the expected node.
@@ -31600,6 +31487,7 @@ const BodyContext = struct {
         request_fn_node: NodeId,
         evidence: []const SpecEvidence,
         root_evidence: ?checked.CheckedEvidenceSpan,
+        recursive_reference: bool,
     ) Allocator.Error!DraftExprId {
         if (self.builder.callableEvalForProcedureUse(proc)) |callable_eval| {
             return try self.lowerCallableEvalBindingValueAtNode(
@@ -31618,6 +31506,7 @@ const BodyContext = struct {
             request_fn_node,
             evidence,
             root_evidence,
+            recursive_reference,
         );
         const fn_id = try self.requireLocalDraftSlot(slot);
         const fn_node = try self.draftFnSlotTypeNode(slot, request_fn_node);
@@ -32963,6 +32852,7 @@ const BodyContext = struct {
                     &.{},
                     fn_ctx.evidence,
                     null,
+                    false,
                     .exact_graph,
                 );
             },
@@ -32973,8 +32863,7 @@ const BodyContext = struct {
                 source_fn_key,
                 request_fn_node,
                 retained_evidence.vector,
-                .resolved,
-                .direct_call,
+                .instantiation,
                 .independent_roots,
             )),
         };
@@ -33125,6 +33014,7 @@ const BodyContext = struct {
                 capture_entry_guards,
                 fn_ctx.evidence,
                 null,
+                false,
                 .exact_graph,
             ),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored capturing function did not reference a checked lambda"),
@@ -33306,6 +33196,7 @@ const BodyContext = struct {
                 capture_entry_guards,
                 fn_ctx.evidence,
                 null,
+                false,
                 .exact_graph,
             ),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored capturing function did not reference a checked lambda"),
@@ -36861,6 +36752,7 @@ const BodyContext = struct {
             capture_entry_guards,
             nested_evidence.chain,
             nested_evidence.owned_scope,
+            false,
             .exact_graph,
         );
     }
@@ -36992,6 +36884,7 @@ const BodyContext = struct {
             &.{},
             nested_evidence.chain,
             nested_evidence.owned_scope,
+            false,
             .exact_graph,
         );
     }
@@ -37504,8 +37397,7 @@ const BodyContext = struct {
                 lookup.view.types.rootKey(source_fn_ty),
                 callable_node,
                 evidence_vector,
-                .resolved,
-                .method_target,
+                .instantiation,
                 .independent_roots,
             );
             const draft_spec: ?u32 = switch (created) {
@@ -39297,10 +39189,6 @@ const BodyContext = struct {
             const path = view.templates.evidenceParamPath(param);
             switch (param.source) {
                 .constraint_callable => Common.invariant("hidden dispatcher evidence was synthesized from a sealed callable type instead of the target's checked scheme"),
-                .checked_error => {
-                    out[i] = .checked_error;
-                    continue;
-                },
                 .use_site_only => Common.invariant("checked use-site-only evidence reached template synthesis without checked use-site evidence"),
                 .scheme_callable, .explicit_default, .erased_row_remainder => {},
             }
@@ -39334,7 +39222,7 @@ const BodyContext = struct {
     fn defaultedEvidenceParamPrimitive(param: static_dispatch.EvidenceParamRecord) Type.Primitive {
         const phase = switch (param.source) {
             .explicit_default => |phase| phase,
-            .scheme_callable, .constraint_callable, .use_site_only, .erased_row_remainder, .checked_error => Common.invariant("compiler-generated method edge did not contain an explicit default"),
+            .scheme_callable, .constraint_callable, .use_site_only, .erased_row_remainder => Common.invariant("compiler-generated method edge did not contain an explicit default"),
         };
         const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
             Common.invariant("checking-finalized pathless evidence param reached Monotype synthesis");
@@ -39989,11 +39877,7 @@ const BodyContext = struct {
                     source_fn_key,
                     request_fn_node,
                     evidence,
-                    switch (evidence_vector) {
-                        .resolved => .resolved,
-                        .synthesize => .synthesized,
-                    },
-                    .method_target,
+                    .instantiation,
                     if (procedure.runtime_target.iteratorProcedure() == .iter_from_step) .exact_graph else .independent_roots,
                 );
                 break :blk slot;
@@ -40034,6 +39918,7 @@ const BodyContext = struct {
                     source_fn_key,
                     request_fn_node,
                     evidence,
+                    false,
                 ) };
             },
             .structural => Common.invariant("structural method registry result has no callable procedure body"),
@@ -40083,11 +39968,7 @@ const BodyContext = struct {
                     source_fn_key,
                     request_fn_node,
                     evidence,
-                    switch (evidence_vector) {
-                        .resolved => .resolved,
-                        .synthesize => .synthesized,
-                    },
-                    .method_target,
+                    .instantiation,
                     if (procedure.runtime_target.iteratorProcedure() == .iter_from_step) .exact_graph else .independent_roots,
                 );
             },
@@ -40123,6 +40004,7 @@ const BodyContext = struct {
                     source_fn_key,
                     request_fn_node,
                     evidence,
+                    false,
                 ) };
             },
             .structural => Common.invariant("direct checked call targeted a structural derivation"),
@@ -52718,8 +52600,6 @@ test "open draft recursive provenance joins fresh interface cells only while low
     try std.testing.expectEqual(@as(u32, 2), frames.depth);
 
     try std.testing.expect(!graph.sameFunctionInterface(active_fn, recursive_fn));
-    const initial_arg_classes = try graph.snapshotFunctionArgumentClasses(active_fn);
-    try std.testing.expect(try draftRequestOverlapsInitialArgumentClass(graph, initial_arg_classes, recursive_fn));
     try std.testing.expect(!draftOpenCandidateQualifies(.lowering, false, false, false));
     try std.testing.expect(!draftOpenCandidateQualifies(.lowering, false, true, false));
     try std.testing.expect(draftOpenCandidateQualifies(.lowering, false, true, true));
@@ -52733,7 +52613,6 @@ test "open draft recursive provenance joins fresh interface cells only while low
         .ret = shared_ret,
     } });
     try std.testing.expect(!graph.sameFunctionInterface(active_fn, independent_fn));
-    try std.testing.expect(!try draftRequestOverlapsInitialArgumentClass(graph, initial_arg_classes, independent_fn));
     try std.testing.expect(!draftOpenCandidateQualifies(.lowered, false, true, true));
     try std.testing.expect(!graph.sameClass(active_arg, independent_arg));
 

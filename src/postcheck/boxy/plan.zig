@@ -7195,7 +7195,6 @@ const Builder = struct {
         const call_path: []const static_dispatch.EvidencePathStep = switch (param.source) {
             .scheme_callable => path,
             .constraint_callable, .use_site_only, .explicit_default, .erased_row_remainder => &.{},
-            .checked_error => boxyPlanInvariant("checked-error evidence parameter reached worker descriptor planning"),
         };
         const source_arg_index = evidencePathSourceArgIndex(call_path, call_arg_types.len);
 
