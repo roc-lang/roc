@@ -5512,17 +5512,23 @@ const Cloner = struct {
                 );
                 defer self.pass.allocator.free(source_fields);
                 const record_ty = recordUpdateBackingType(self.pass.program, expr.ty);
-                const type_fields = try GuardedList.dupe(
+                const result_type_fields = try GuardedList.dupe(
                     self.pass.allocator,
                     Type.Field,
                     self.pass.program.types.fieldSpan(recordUpdateFieldSpan(self.pass.program, expr.ty)),
                 );
-                defer self.pass.allocator.free(type_fields);
+                defer self.pass.allocator.free(result_type_fields);
 
                 const base = try self.cloneExpr(update.base);
                 const base_ty = self.pass.program.getExpr(base).ty;
-                if (!try self.pass.program.types.typeEql(&self.pass.program.names, base_ty, expr.ty)) {
-                    Common.invariant("record update base type differed from its result type in SpecConstr");
+                const base_type_fields = try GuardedList.dupe(
+                    self.pass.allocator,
+                    Type.Field,
+                    self.pass.program.types.fieldSpan(recordUpdateFieldSpan(self.pass.program, base_ty)),
+                );
+                defer self.pass.allocator.free(base_type_fields);
+                if (base_type_fields.len != result_type_fields.len) {
+                    Common.invariant("record update base and result had different field counts in SpecConstr");
                 }
                 const base_local = try self.pass.program.addLocal(self.pass.symbols.fresh(), base_ty);
                 try bindings.appendBinding(self.arena.allocator(), .{
@@ -5532,30 +5538,41 @@ const Cloner = struct {
                 });
                 const base_ref = try self.addExpr(.{ .ty = base_ty, .data = .{ .local = base_local } });
 
-                const fields = try self.arena.allocator().alloc(FieldValue, type_fields.len);
-                for (type_fields, 0..) |type_field, index| {
+                const fields = try self.arena.allocator().alloc(FieldValue, result_type_fields.len);
+                for (result_type_fields, 0..) |result_type_field, index| {
                     const updated = for (source_fields) |field| {
-                        if (self.pass.program.names.recordFieldLabelTextEql(type_field.name, field.name)) break field.value;
+                        if (self.pass.program.names.recordFieldLabelTextEql(result_type_field.name, field.name)) break field.value;
                     } else null;
                     if (updated != null) continue;
 
-                    const read = try self.addExpr(.{ .ty = type_field.ty, .data = .{ .field_access = .{
+                    const base_type_field = for (base_type_fields) |field| {
+                        if (self.pass.program.names.recordFieldLabelTextEql(result_type_field.name, field.name)) break field;
+                    } else Common.invariant("record update result contained a field absent from its base in SpecConstr");
+                    if (!try self.pass.program.types.typeEql(
+                        &self.pass.program.names,
+                        base_type_field.ty,
+                        result_type_field.ty,
+                    )) {
+                        Common.invariant("record update changed the type of an unmodified field in SpecConstr");
+                    }
+
+                    const read = try self.addExpr(.{ .ty = base_type_field.ty, .data = .{ .field_access = .{
                         .receiver = base_ref,
-                        .segments = try self.pass.program.addFieldAccessSegmentSpan(&.{.{ .field = type_field.name }}),
+                        .segments = try self.pass.program.addFieldAccessSegmentSpan(&.{.{ .field = base_type_field.name }}),
                     } } });
-                    const read_local = try self.pass.program.addLocal(self.pass.symbols.fresh(), type_field.ty);
+                    const read_local = try self.pass.program.addLocal(self.pass.symbols.fresh(), base_type_field.ty);
                     try bindings.appendBinding(self.arena.allocator(), .{
                         .local = read_local,
-                        .ty = type_field.ty,
+                        .ty = base_type_field.ty,
                         .value = read,
                     });
                     fields[index] = .{
-                        .name = type_field.name,
-                        .value = .{ .expr = try self.addExpr(.{ .ty = type_field.ty, .data = .{ .local = read_local } }) },
+                        .name = result_type_field.name,
+                        .value = .{ .expr = try self.addExpr(.{ .ty = base_type_field.ty, .data = .{ .local = read_local } }) },
                     };
                 }
 
-                for (type_fields, 0..) |type_field, index| {
+                for (result_type_fields, 0..) |type_field, index| {
                     const updated = for (source_fields) |field| {
                         if (self.pass.program.names.recordFieldLabelTextEql(type_field.name, field.name)) break field.value;
                     } else continue;
@@ -13599,6 +13616,55 @@ test "SpecConstr preserves record update ordering while exposing its final shape
     try std.testing.expectEqual(read_binding.binding.strict.local, program.getExpr(record.fields[0].value.expr).data.local);
     try std.testing.expectEqual(b, record.fields[1].name);
     try std.testing.expectEqual(update_local, program.getExpr(record.fields[1].value.expr).data.local);
+}
+
+test "SpecConstr record update permits an updated field representation to change" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const u8_ty = try program.types.add(.{ .primitive = .u8 });
+    const u16_ty = try program.types.add(.{ .primitive = .u16 });
+    const a = try program.names.internRecordFieldLabel("a");
+    const b = try program.names.internRecordFieldLabel("b");
+    const base_record_ty = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &.{
+        .{ .name = a, .ty = u8_ty, .default = null },
+        .{ .name = b, .ty = u8_ty, .default = null },
+    }) });
+    const result_record_ty = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &.{
+        .{ .name = a, .ty = u8_ty, .default = null },
+        .{ .name = b, .ty = u16_ty, .default = null },
+    }) });
+    const base_local = try program.addLocal(@enumFromInt(1), base_record_ty);
+    const update_local = try program.addLocal(@enumFromInt(2), u16_ty);
+    const base = try program.addExpr(.{ .ty = base_record_ty, .data = .{ .local = base_local } });
+    const update_value = try program.addExpr(.{ .ty = u16_ty, .data = .{ .local = update_local } });
+    const update = try program.addExpr(.{ .ty = result_record_ty, .data = .{ .record_update = .{
+        .base = base,
+        .fields = try program.addFieldExprSpan(&.{.{ .name = b, .value = update_value }}),
+    } } });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    const cloned = try cloner.cloneExprValue(update);
+    if (cloned.value != .record) return error.TestUnexpectedResult;
+    const record = cloned.value.record;
+    try std.testing.expectEqual(result_record_ty, record.ty);
+
+    const base_binding = cloned.bindings.first orelse return error.TestUnexpectedResult;
+    const read_binding = base_binding.next orelse return error.TestUnexpectedResult;
+    try std.testing.expect(read_binding.next == null);
+    const read_expr = read_binding.binding.strict.value;
+    try std.testing.expectEqual(u8_ty, program.getExpr(read_expr).ty);
+    const read_segments = program.fieldAccessSegmentSpan(program.getExpr(read_expr).data.field_access.segments);
+    try std.testing.expectEqual(a, GuardedList.at(read_segments, 0).field);
+
+    try std.testing.expectEqual(a, record.fields[0].name);
+    try std.testing.expectEqual(u8_ty, valueType(&program, record.fields[0].value));
+    try std.testing.expectEqual(b, record.fields[1].name);
+    try std.testing.expectEqual(u16_ty, valueType(&program, record.fields[1].value));
 }
 
 test "SpecConstr keeps a transparent recursive anchor and its initializer bindings in scope" {
