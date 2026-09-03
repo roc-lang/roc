@@ -1347,10 +1347,6 @@ pub const CheckedEvidence = struct {
         /// The checker proved this nested-procedure obligation is the matching
         /// evidence parameter projected from the concrete callable request.
         from_callable,
-        /// The receiver belongs to the exact constraint-callable occurrence
-        /// named by the evidence parameter's introducing dispatch plan. The
-        /// concrete specialization resolves it from that plan's dispatcher.
-        from_constraint_callable: ConstraintCallableEvidence,
         checked_error,
         /// The edge left this obligation's dispatcher unsolved: no value of that
         /// type can ever reach the dispatch (e.g. the `Ok` payload of a `Try` that
@@ -1358,15 +1354,6 @@ pub const CheckedEvidence = struct {
         /// lowers to an unreachable crash, never to a resolved call.
         unreachable_value,
     };
-};
-
-/// Exact checked source recipe for evidence introduced by a dispatch-plan callable.
-pub const ConstraintCallableEvidence = struct {
-    plan: StaticDispatchPlanId,
-    callable_ty: CheckedTypeId,
-    method: canonical.MethodNameId,
-    structural: ?StructuralKind,
-    path: artifact_serialize.Span,
 };
 
 /// Exact checked identities for one compiler-derived evidence entry.
@@ -1471,10 +1458,9 @@ pub const EvidenceParamSource = union(enum) {
     checked_error,
 };
 
-/// Exact callable root enumerated for a constraint plus the dispatch occurrence
-/// that supplies its concrete specialization relation.
+/// Exact scheme-side constraint callable through which the dispatcher was
+/// enumerated; the parameter's path is relative to this callable.
 pub const ConstraintCallableRoot = struct {
-    plan: StaticDispatchPlanId,
     callable_ty: CheckedTypeId,
 };
 
@@ -1720,7 +1706,6 @@ pub const StaticDispatchPlanTable = struct {
     evidence_nodes: []EvidenceNode = &.{},
     /// Flat pool of evidence: node `nested` ranges and site-evidence ranges.
     evidence_refs: []CheckedEvidence = &.{},
-    constraint_callable_paths: []const EvidencePathStep = &.{},
     /// Checked-expr-keyed evidence for instantiation sites, sorted by key.
     site_evidence: []SiteEvidenceEntry = &.{},
     /// Exact generated-codec contracts emitted by checking.
@@ -1743,15 +1728,14 @@ pub const StaticDispatchPlanTable = struct {
         iter_operand_pool: SerializedSlice(IteratorDispatchOperand) = .{},
         evidence_nodes: SerializedSlice(EvidenceNode) = .{},
         evidence_refs: SerializedSlice(CheckedEvidence) = .{},
-        constraint_callable_paths: SerializedSlice(EvidencePathStep) = .{},
         site_evidence: SerializedSlice(SiteEvidenceEntry) = .{},
         generated_codec_derivations: SerializedSlice(GeneratedCodecDerivation) = .{},
         generated_codec_calls: SerializedSlice(GeneratedCodecCall) = .{},
 
         comptime {
-            // 18 side lists → 18 base-pointer fixups on deserialize, never a
+            // 17 side lists → 17 base-pointer fixups on deserialize, never a
             // function of how many plans/operands the table holds.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 18);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 17);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(StaticDispatchPlanTable, @This());
@@ -2260,7 +2244,6 @@ pub const StaticDispatchPlanTable = struct {
         allocator.free(@constCast(self.iter_operand_pool));
         allocator.free(self.evidence_nodes);
         allocator.free(self.evidence_refs);
-        allocator.free(@constCast(self.constraint_callable_paths));
         allocator.free(self.site_evidence);
         allocator.free(self.generated_codec_derivations);
         allocator.free(self.generated_codec_calls);
