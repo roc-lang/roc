@@ -1314,12 +1314,16 @@ pub const EvidenceChainIndex = struct {
     index: u16,
 };
 
-/// Reference to an enclosing evidence slot. Same-name method calls can share
-/// target identity without sharing the callable instantiation recorded by the
-/// representative slot.
+/// Reference to an enclosing evidence slot. Explicit per-use callable
+/// instantiations can share the slot's target identity without sharing its
+/// callable instantiation. An ordinary independent rank-1 relation rebuilds
+/// nested evidence from its callable; a recorded where-method use instead
+/// reuses the slot's resolved nested vector because checking copied only the
+/// signature structure and shared every non-marker leaf.
 pub const ConstraintEvidenceRef = struct {
     index: EvidenceChainIndex,
     independent_callable: bool = false,
+    reuse_slot_nested_evidence: bool = false,
 };
 
 /// Public `CheckedEvidence` declaration.
@@ -1466,10 +1470,36 @@ pub const EvidenceParamSource = union(enum) {
     use_site_only,
     explicit_default: NumericDefaultPhase,
     erased_row_remainder,
-    /// Error-reporting-only parameter whose introducing expression published
-    /// no dispatch plan and cannot reach post-check lowering.
+    /// Error-reporting-only parameter whose introducing expression has no
+    /// checked dispatch plan and cannot reach post-check lowering.
     checked_error,
 };
+
+/// Whether a procedure target's nested evidence can be derived from its
+/// instantiated callable alone. `requires_record` includes any checked evidence
+/// entry whose dispatcher has no callable-component path; only checked per-use
+/// evidence (or an exact where-use slot reuse) can supply it.
+pub const ProcedureEvidenceSchema = enum {
+    none,
+    from_callable,
+    requires_record,
+};
+
+pub fn procedureEvidenceSchema(
+    params: []const EvidenceParamRecord,
+    paths: []const EvidencePathStep,
+) ProcedureEvidenceSchema {
+    if (params.len == 0) return .none;
+    for (params) |param| {
+        const path = paths[param.path.start .. param.path.start + param.path.len];
+        switch (param.source) {
+            .scheme_callable => {},
+            .explicit_default => if (path.len != 0) return .requires_record,
+            .constraint_callable, .use_site_only, .erased_row_remainder, .checked_error => return .requires_record,
+        }
+    }
+    return .from_callable;
+}
 
 /// Exact callable root enumerated for a constraint plus the dispatch occurrence
 /// that supplies its concrete specialization relation.
@@ -1501,10 +1531,14 @@ pub const CheckedCallResolution = union(enum) {
     /// vars; each specialization edge supplies the target as evidence.
     evidence_dependent: struct {
         index: EvidenceChainIndex,
-        /// The evidence slot is shared with another same-name call. It supplies
-        /// only target identity; this plan must instantiate that target against
-        /// its own callable relation.
+        /// The evidence slot supplies target identity but this plan owns an
+        /// explicit per-use callable relation, so it instantiates the target
+        /// against that relation rather than the slot's instantiation.
         independent_callable: bool = false,
+        /// Keep the slot's producer-resolved nested evidence while replacing
+        /// its callable instantiation. This is set only for a recorded
+        /// where-method use, whose signature copy shares every non-marker leaf.
+        reuse_slot_nested_evidence: bool = false,
     },
     /// The checker chose a compiler-derived structural implementation.
     structural: StructuralDerivation,

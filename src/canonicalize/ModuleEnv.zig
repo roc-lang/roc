@@ -678,21 +678,24 @@ pub const NumeralLiteral = extern struct {
 
 /// One constrained-scheme use recorded by checking for static-dispatch
 /// evidence. It names the source node, the scheme root used at that edge, and—
-/// for an instantiation—the fresh var each constrained scheme var was
-/// copied to. Shared monomorphic edges have no copy pairs. Publication resolves
-/// the recorded vars after checking settles to decide how each of the callee's
-/// dispatch constraints was satisfied at this site.
+/// for an instantiation—the source-to-fresh var relation needed by its slot.
+/// Ordinary evidence edges retain constrained vars; a where-method use retains
+/// the instantiator's complete structural map. Shared monomorphic edges have no
+/// copy pairs. Checked-artifact construction resolves the recorded vars after
+/// checking settles to decide how each callee dispatch requirement was
+/// satisfied at this site.
 pub const SchemeUseRecord = extern struct {
     node_idx: u32,
     /// `Slot`—distinguishes several schemes instantiated at one node (a value
-    /// use, an expression-position function stored as a value, or the target
-    /// of a dispatch constraint).
+    /// use, an expression-position function stored as a value, the target of
+    /// a dispatch constraint, or a per-use where-method signature copy).
     slot_kind: u32,
     /// For `dispatch_target` slots, the raw fn `Var` of the constraint whose
     /// discharge instantiated this scheme—unique per constraint
     /// instantiation, so nested evidence chains resolve without ambiguity.
-    /// 0 for value and nested-function use slots (keyed by `node_idx`
-    /// instead).
+    /// For `where_method_use`, the raw fn `Var` of the body dispatch whose
+    /// callable instantiated the where-method signature. 0 for value and
+    /// nested-function use slots (keyed by `node_idx` instead).
     slot_data: u32,
     /// The scheme root `Var` used at this edge. For imported schemes this is
     /// the pristine local copy; for shared uses it is the in-flight local root.
@@ -714,6 +717,12 @@ pub const SchemeUseRecord = extern struct {
         /// The scheme of the method target chosen while discharging a static
         /// dispatch constraint originating at this node.
         dispatch_target,
+        /// One body dispatch's per-use instantiation of its where-method
+        /// signature. `slot_data` is the body's constraint callable and
+        /// `scheme_root` is the pristine where-method signature callable.
+        /// The use has no child dispatch requirements; this record deliberately
+        /// relates the two callable identities for checked-plan construction.
+        where_method_use,
         /// A monomorphic reference to an in-flight unannotated definition.
         /// The edge shares the definition's vars, so its record has no copy
         /// pairs but still names the exact scheme root used by checking.
@@ -721,15 +730,42 @@ pub const SchemeUseRecord = extern struct {
     };
 };
 
-/// One (constrained scheme var → fresh instantiated var) pair of a
-/// `SchemeUseRecord`.
+/// One (source scheme var → fresh instantiated var) pair of a
+/// `SchemeUseRecord`. Ordinary evidence records retain constrained vars;
+/// `where_method_use` retains the instantiator's complete structural map.
 pub const SchemeUsePair = extern struct {
-    /// Constrained var in the pristine scheme (`Var`).
+    /// Source var in the pristine scheme (`Var`).
     old_var: u32,
     /// The fresh copy created for this instantiation (`Var`).
     fresh_var: u32,
 
     pub const SafeList = collections.SafeList(@This());
+};
+
+/// One checker-authored relation between callable targets merged while a type
+/// scheme is generalized. All variables are raw `Var` witnesses;
+/// checked-artifact construction resolves them only after checking has settled
+/// the type store.
+pub const GeneralizedDispatchTargetShare = extern struct {
+    receiver_var: u32,
+    method_ident: u32,
+    omitted_fn_var: u32,
+    retained_fn_var: u32,
+    /// For `where_method_use`, the exact raw callable key of the validating
+    /// `SchemeUseRecord`. For `shape_only`, this equals `omitted_fn_var` and is
+    /// not interpreted as a scheme-use key.
+    proof_fn_var: u32,
+    proof_kind: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+
+    pub const ProofKind = enum(u32) {
+        /// The two callables had the same generalized callable shape.
+        shape_only,
+        /// A raw where-method use copied the retained signature into the
+        /// omitted callable's settled class.
+        where_method_use,
+    };
 };
 
 /// One compiler-generated parser or encoder derivation validated by checking.
@@ -1004,8 +1040,13 @@ numeric_suffix_targets: NumericSuffixTarget.SafeList,
 /// Constrained-scheme uses recorded by checking for static-dispatch evidence;
 /// consumed at checked-module publication.
 scheme_uses: SchemeUseRecord.SafeList,
-/// Flat pool of (scheme var → fresh var) pairs backing `scheme_uses`.
+/// Flat pool of (source scheme var → fresh var) pairs backing
+/// `scheme_uses`.
 scheme_use_pairs: SchemeUsePair.SafeList,
+/// Explicit callable-target sharing produced by generalized requirement
+/// deduplication. Rows retain raw witnesses so rechecking may resolve them
+/// against the newly settled type store.
+generalized_dispatch_target_shares: GeneralizedDispatchTargetShare.SafeList,
 /// Exact source bindings that checking generalized into rank-1 type schemes.
 /// Sorted by source node for allocation-free cross-module lookup.
 binding_schemes: BindingScheme.SafeList,
@@ -1149,6 +1190,9 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.method_defs.relocate(offset);
     self.provided_low_level_defs.relocate(offset);
     self.for_loop_dispatch_plans.relocate(offset);
+    self.scheme_uses.relocate(offset);
+    self.scheme_use_pairs.relocate(offset);
+    self.generalized_dispatch_target_shares.relocate(offset);
     self.binding_schemes.relocate(offset);
     self.binding_scheme_codec_requirements.relocate(offset);
     self.rejected_static_dispatches.relocate(offset);
@@ -1251,6 +1295,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .numeric_suffix_targets = try NumericSuffixTarget.SafeList.initCapacity(gpa, 8),
         .scheme_uses = try SchemeUseRecord.SafeList.initCapacity(gpa, 8),
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
+        .generalized_dispatch_target_shares = try GeneralizedDispatchTargetShare.SafeList.initCapacity(gpa, 4),
         .binding_schemes = try BindingScheme.SafeList.initCapacity(gpa, 8),
         .binding_scheme_codec_requirements = try BindingSchemeCodecRequirement.SafeList.initCapacity(gpa, 4),
         .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
@@ -1283,6 +1328,7 @@ pub fn deinit(self: *Self) void {
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
+    self.generalized_dispatch_target_shares.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
@@ -1387,6 +1433,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
+    self.generalized_dispatch_target_shares.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
@@ -3870,6 +3917,7 @@ pub const Serialized = extern struct {
     numeric_suffix_targets: NumericSuffixTarget.SafeList.Serialized,
     scheme_uses: SchemeUseRecord.SafeList.Serialized,
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
+    generalized_dispatch_target_shares: GeneralizedDispatchTargetShare.SafeList.Serialized,
     binding_schemes: BindingScheme.SafeList.Serialized,
     binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList.Serialized,
     generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
@@ -3986,6 +4034,7 @@ pub const Serialized = extern struct {
         try self.numeric_suffix_targets.serialize(&env.numeric_suffix_targets, allocator, writer);
         try self.scheme_uses.serialize(&env.scheme_uses, allocator, writer);
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
+        try self.generalized_dispatch_target_shares.serialize(&env.generalized_dispatch_target_shares, allocator, writer);
         try self.binding_schemes.serialize(&env.binding_schemes, allocator, writer);
         try self.binding_scheme_codec_requirements.serialize(&env.binding_scheme_codec_requirements, allocator, writer);
         try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
@@ -4057,6 +4106,7 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
+            .generalized_dispatch_target_shares = self.generalized_dispatch_target_shares.deserializeInto(base_addr),
             .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
             .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
@@ -4128,6 +4178,7 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
+            .generalized_dispatch_target_shares = self.generalized_dispatch_target_shares.deserializeInto(base_addr),
             .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
             .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
@@ -4201,6 +4252,7 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
             .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
+            .generalized_dispatch_target_shares = try self.generalized_dispatch_target_shares.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
@@ -4516,7 +4568,8 @@ pub fn recordQuoteDispatchPlan(
 
 /// Record a constrained-scheme use for static-dispatch evidence.
 /// `slot_data` is the raw fn `Var` of the discharged constraint for
-/// `dispatch_target` slots and 0 for value and nested-function use slots.
+/// `dispatch_target` slots, the body constraint callable for
+/// `where_method_use`, and 0 for value and nested-function use slots.
 pub fn recordSchemeUse(
     self: *Self,
     node_idx: u32,

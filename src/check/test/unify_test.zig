@@ -2247,7 +2247,22 @@ test "unify - declarative static dispatch representative survives repeated merge
     } });
 
     try std.testing.expectEqual(.unified, try env.unify(receiver, first_call_receiver));
+    try std.testing.expectEqual(@as(usize, 1), env.scratch.generalized_dispatch_target_share_candidates.len());
+    const first_omission = env.scratch.generalized_dispatch_target_share_candidates.items.items[0];
+    try std.testing.expectEqual(first_call_receiver, first_omission.omitted_receiver_var);
+    try std.testing.expectEqual(receiver, first_omission.retained_receiver_var);
+    try std.testing.expectEqual(method_name, first_omission.method_ident);
+    try std.testing.expectEqual(first_call_fn, first_omission.omitted_fn_var);
+    try std.testing.expectEqual(declarative_fn, first_omission.retained_fn_var);
+
     try std.testing.expectEqual(.unified, try env.unify(receiver, second_call_receiver));
+    try std.testing.expectEqual(@as(usize, 1), env.scratch.generalized_dispatch_target_share_candidates.len());
+    const second_omission = env.scratch.generalized_dispatch_target_share_candidates.items.items[0];
+    try std.testing.expectEqual(second_call_receiver, second_omission.omitted_receiver_var);
+    try std.testing.expectEqual(receiver, second_omission.retained_receiver_var);
+    try std.testing.expectEqual(method_name, second_omission.method_ident);
+    try std.testing.expectEqual(second_call_fn, second_omission.omitted_fn_var);
+    try std.testing.expectEqual(declarative_fn, second_omission.retained_fn_var);
 
     const resolved = env.module_env.types.resolveVar(receiver);
     try std.testing.expect(resolved.desc.content == .flex);
@@ -2257,6 +2272,141 @@ test "unify - declarative static dispatch representative survives repeated merge
     try std.testing.expectEqual(@as(usize, 1), retained.len);
     try std.testing.expect(retained[0].origin == .desugared_binop);
     try std.testing.expect(retained[0].origin.desugared_binop.negated);
+}
+
+test "unify - method-call-only constraints emit no generalized target omission" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const method_name = try env.module_env.getIdentStore().insert(
+        env.module_env.gpa,
+        Ident.for_text("combine"),
+    );
+    const argument = try env.module_env.types.fresh();
+    const result_var = try env.module_env.types.fresh();
+    const first_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&.{argument}, result_var));
+    const second_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&.{argument}, result_var));
+    const first_range = try env.module_env.types.appendStaticDispatchConstraints(&.{.{
+        .fn_name = method_name,
+        .fn_var = first_fn,
+        .origin = .method_call,
+    }});
+    const second_range = try env.module_env.types.appendStaticDispatchConstraints(&.{.{
+        .fn_name = method_name,
+        .fn_var = second_fn,
+        .origin = .method_call,
+    }});
+    const first_receiver = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = first_range,
+    } });
+    const second_receiver = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = second_range,
+    } });
+
+    try std.testing.expectEqual(.unified, try env.unify(first_receiver, second_receiver));
+    try std.testing.expectEqual(@as(usize, 0), env.scratch.generalized_dispatch_target_share_candidates.len());
+}
+
+test "unify - recursive callable partition records exact raw target omission" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const method_name = try env.module_env.getIdentStore().insert(
+        env.module_env.gpa,
+        Ident.for_text("combine"),
+    );
+    const declarative_receiver = try env.module_env.types.fresh();
+    const call_receiver = try env.module_env.types.fresh();
+    const declarative_fn = try env.module_env.types.freshFromContent(
+        try env.mkFuncPure(&.{declarative_receiver}, declarative_receiver),
+    );
+    const call_fn = try env.module_env.types.freshFromContent(
+        try env.mkFuncPure(&.{call_receiver}, call_receiver),
+    );
+    const declarative_range = try env.module_env.types.appendStaticDispatchConstraints(&.{.{
+        .fn_name = method_name,
+        .fn_var = declarative_fn,
+        .origin = .{ .desugared_binop = .{ .negated = false } },
+    }});
+    const call_range = try env.module_env.types.appendStaticDispatchConstraints(&.{.{
+        .fn_name = method_name,
+        .fn_var = call_fn,
+        .origin = .method_call,
+    }});
+    try env.module_env.types.setVarContent(declarative_receiver, .{ .flex = .{
+        .name = null,
+        .constraints = declarative_range,
+    } });
+    try env.module_env.types.setVarContent(call_receiver, .{ .flex = .{
+        .name = null,
+        .constraints = call_range,
+    } });
+
+    try std.testing.expectEqual(.unified, try env.unify(declarative_receiver, call_receiver));
+    try std.testing.expectEqual(@as(usize, 1), env.scratch.generalized_dispatch_target_share_candidates.len());
+    const omission = env.scratch.generalized_dispatch_target_share_candidates.items.items[0];
+    try std.testing.expectEqual(call_receiver, omission.omitted_receiver_var);
+    try std.testing.expectEqual(declarative_receiver, omission.retained_receiver_var);
+    try std.testing.expectEqual(method_name, omission.method_ident);
+    try std.testing.expectEqual(call_fn, omission.omitted_fn_var);
+    try std.testing.expectEqual(declarative_fn, omission.retained_fn_var);
+}
+
+test "unify - target omission survives a later write-no-report mismatch when receiver merge committed" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const method_name = try env.module_env.getIdentStore().insert(
+        env.module_env.gpa,
+        Ident.for_text("combine"),
+    );
+    const argument = try env.module_env.types.fresh();
+    const result_var = try env.module_env.types.fresh();
+    const declarative_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&.{argument}, result_var));
+    const call_fn = try env.module_env.types.freshFromContent(try env.mkFuncPure(&.{argument}, result_var));
+    const declarative_range = try env.module_env.types.appendStaticDispatchConstraints(&.{.{
+        .fn_name = method_name,
+        .fn_var = declarative_fn,
+        .origin = .{ .desugared_binop = .{ .negated = false } },
+    }});
+    const call_range = try env.module_env.types.appendStaticDispatchConstraints(&.{.{
+        .fn_name = method_name,
+        .fn_var = call_fn,
+        .origin = .method_call,
+    }});
+    const declarative_receiver = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = declarative_range,
+    } });
+    const call_receiver = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = call_range,
+    } });
+    const expected_mismatch = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const actual_mismatch = try env.module_env.types.freshFromContent(.{ .structure = .empty_tag_union });
+    const expected = try env.module_env.types.freshFromContent(
+        try env.mkTuple(&.{ declarative_receiver, expected_mismatch }),
+    );
+    const actual = try env.module_env.types.freshFromContent(
+        try env.mkTuple(&.{ call_receiver, actual_mismatch }),
+    );
+
+    try std.testing.expectEqual(Result.mismatch, try env.unifyWriteNoReport(expected, actual));
+    try std.testing.expectEqual(
+        env.module_env.types.resolveVar(declarative_receiver).var_,
+        env.module_env.types.resolveVar(call_receiver).var_,
+    );
+    try std.testing.expectEqual(@as(usize, 1), env.scratch.generalized_dispatch_target_share_candidates.len());
+    const omission = env.scratch.generalized_dispatch_target_share_candidates.items.items[0];
+    try std.testing.expectEqual(call_receiver, omission.omitted_receiver_var);
+    try std.testing.expectEqual(declarative_receiver, omission.retained_receiver_var);
+    try std.testing.expectEqual(call_fn, omission.omitted_fn_var);
+    try std.testing.expectEqual(declarative_fn, omission.retained_fn_var);
 }
 
 test "unify - static dispatch method ordering ignores ident interning order" {

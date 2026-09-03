@@ -3,6 +3,7 @@
 const std = @import("std");
 const collections = @import("collections");
 const base = @import("base");
+const can = @import("can");
 const check = @import("check");
 const eval = @import("eval");
 const lir = @import("lir");
@@ -8258,6 +8259,141 @@ test "compiler-generated dispatch classes lower via checked evidence" {
     // dispatch plans as checked errors and crash-lower the very classes this
     // test exists to exercise.
     try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
+}
+
+test "W6a open where-method widening and nested evidence lower through explicit per-use provenance" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\describe_wide : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\describe_wide = |x| x.status()
+        \\
+        \\Job := [Pending, Failed].{
+        \\    status : Job -> [Ok(Str), Err(Str)]
+        \\    status = |job| match job { Pending => Ok("p"), Failed => Err("f") }
+        \\}
+        \\
+        \\load : a -> Try(Str, [NotFound, Other]) where [a.fetch : a -> Try(Str, [NotFound])]
+        \\load = |x| {
+        \\    value = x.fetch()?
+        \\    Ok(value)
+        \\}
+        \\
+        \\Src := [S].{
+        \\    fetch : Src -> Try(Str, [NotFound])
+        \\    fetch = |_| Ok("hit")
+        \\}
+        \\
+        \\both : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\both = |x| {
+        \\    first = match x.status() { Ok(s) => s, Err(e) => e }
+        \\    if Str.is_empty(first) Extra else x.status()
+        \\}
+        \\
+        \\Named := [N].{
+        \\    name : Named -> Str
+        \\    name = |_| "named"
+        \\}
+        \\
+        \\Nested(a) := [Wrap(a)].{
+        \\    status : Nested(a) -> [Ok(Str), Err(Str)] where [a.name : a -> Str]
+        \\    status = |Nested.Wrap(inner)| Ok(inner.name())
+        \\}
+        \\
+        \\nested_wide : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\nested_wide = |x| x.status()
+        \\
+        \\nested_closed : a -> Str where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\nested_closed = |x| match x.status() { Ok(s) => s, Err(e) => e }
+        \\
+        \\Subset := [Only].{
+        \\    status : Subset -> [Ok(Str)]
+        \\    status = |_| Ok("subset")
+        \\}
+        \\
+        \\subset_closed : a -> Str where [a.status : a -> [Ok(Str), Err(Str)]]
+        \\subset_closed = |x| match x.status() { Ok(s) => s, Err(e) => e }
+        \\
+        \\Mid := [M].{
+        \\    name : Mid -> Str
+        \\    name = |_| "mid"
+        \\}
+        \\
+        \\Source := [SourceValue].{
+        \\    step : Source -> Mid
+        \\    step = |_| Mid.M
+        \\}
+        \\
+        \\RequiresRecord(a) := [R(a)].{
+        \\    plus : RequiresRecord(a), RequiresRecord(a) -> RequiresRecord(a)
+        \\        where [a.step : a -> b, b.name : b -> Str]
+        \\    plus = |left, _| match left {
+        \\        R(inner) => {
+        \\            stepped = inner.step()
+        \\            _ = stepped.name()
+        \\            left
+        \\        }
+        \\    }
+        \\}
+        \\
+        \\repeat_plus : a, U64 -> a where [a.plus : a, a -> a]
+        \\repeat_plus = |x, n|
+        \\    if n == 0 { x.plus(x) } else { repeat_plus(x, n - 1) }
+        \\
+        \\main : Bool
+        \\main = {
+        \\    pending_ok = match describe_wide(Job.Pending) { Ok(s) => s == "p", Err(_) => False, Extra => False }
+        \\    failed_ok = match describe_wide(Job.Failed) { Ok(_) => False, Err(s) => s == "f", Extra => False }
+        \\    question_ok = match load(Src.S) { Ok(s) => s == "hit", Err(_) => False }
+        \\    both_ok = match both(Job.Pending) { Ok(s) => s == "p", Err(_) => False, Extra => False }
+        \\    nested = Nested.Wrap(Named.N)
+        \\    nested_wide_ok = match nested_wide(nested) { Ok(s) => s == "named", Err(_) => False, Extra => False }
+        \\    nested_closed_ok = nested_closed(nested) == "named"
+        \\    subset_ok = subset_closed(Subset.Only) == "subset"
+        \\    required = repeat_plus(RequiresRecord.R(Source.SourceValue), 1)
+        \\    required_ok = match required { RequiresRecord.R(Source.SourceValue) => True }
+        \\    pending_ok and failed_ok and question_ok and both_ok and nested_wide_ok and nested_closed_ok and subset_ok and required_ok
+        \\}
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+
+    // `RequiresRecord.plus` has constraint-callable-only nested evidence,
+    // so its target cannot be rebuilt from the independent callable. The raw
+    // where-use complete map must preserve the enclosing slot's resolved
+    // nested vector through checked-artifact construction and Monotype lowering.
+    var found_requires_record_reuse = false;
+    for (compiled.resources.checked_artifact.static_dispatch_plans.plans) |plan| {
+        if (!std.mem.eql(
+            u8,
+            compiled.resources.checked_artifact.canonical_names.methodNameText(plan.method),
+            "plus",
+        )) continue;
+        switch (plan.resolution) {
+            .evidence_dependent => |dependent| {
+                if (dependent.independent_callable and dependent.reuse_slot_nested_evidence) {
+                    found_requires_record_reuse = true;
+                }
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(found_requires_record_reuse);
 
     const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
     defer allocator.free(output);

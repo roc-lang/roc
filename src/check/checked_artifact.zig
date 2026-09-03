@@ -4351,10 +4351,14 @@ pub const CheckedTypeStore = struct {
 
         // Evidence nodes retain exact checked callable instantiations. Publish
         // every fresh type participating in a recorded scheme use, including
-        // the constraint function that identifies a selected dispatch target.
+        // the constraint function that identifies a selected dispatch target
+        // or a per-use where-method callable.
         for (module_env.scheme_uses.items.items) |record| {
-            if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.dispatch_target)) {
-                _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @enumFromInt(record.slot_data));
+            switch (@as(ModuleEnv.SchemeUseRecord.Slot, @enumFromInt(record.slot_kind))) {
+                .dispatch_target, .where_method_use => {
+                    _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @enumFromInt(record.slot_data));
+                },
+                .value_use, .nested_function_use, .shared_value_use => {},
             }
             const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
             for (pairs) |pair| {
@@ -16539,7 +16543,7 @@ fn sealCheckedProcedureTemplateRefs(
                     @enumFromInt(record.scheme_root),
                     {},
                 ),
-                .nested_function_use, .dispatch_target => {},
+                .nested_function_use, .dispatch_target, .where_method_use => {},
             }
         }
 
@@ -16829,6 +16833,25 @@ fn publishLocalMethodDispatchScopes(
     }
 }
 
+const GeneralizedDispatchTargetShareStart = struct {
+    receiver_root: Var,
+    method: canonical.MethodNameId,
+    omitted_root: Var,
+};
+
+const GeneralizedDispatchTargetShareEdge = struct {
+    receiver_root: Var,
+    method: canonical.MethodNameId,
+    omitted_root: Var,
+    retained_root: Var,
+};
+
+const ResolvedGeneralizedDispatchTargetShare = struct {
+    retained_root: Var,
+    proof_kind: ModuleEnv.GeneralizedDispatchTargetShare.ProofKind,
+    source_index: u32,
+};
+
 /// Resolve every static-dispatch plan and instantiation-site obligation to an
 /// explicit `direct` / `constraint(k)` / `structural` / `checked_error`
 /// resolution, and publish each template's evidence params.
@@ -16865,6 +16888,16 @@ const EvidencePass = struct {
     value_use_by_node: std.AutoHashMap(u32, u32),
     /// dispatch_target record index by the discharged edge's raw fn var.
     target_by_fn_var: std.AutoHashMap(u32, u32),
+    /// where_method_use record index by the body dispatch's raw fn var.
+    /// The record explicitly maps that callable to its pristine signature.
+    where_method_use_by_fn_var: std.AutoHashMap(u32, u32),
+    /// Post-solve adjacency index for checker-authored generalized target
+    /// sharing. Keys include receiver and method context; linked values retain
+    /// every alternate endpoint so the requested evidence slot disambiguates
+    /// them during traversal.
+    generalized_target_share_by_start: std.AutoHashMap(GeneralizedDispatchTargetShareStart, u32),
+    generalized_target_shares: std.ArrayList(ResolvedGeneralizedDispatchTargetShare),
+    generalized_target_share_next: std.ArrayList(?u32),
     /// Source node by checked expr (reverse of `exprIdForSource`).
     source_by_checked_expr: std.AutoHashMap(u32, u32),
     /// Generalized local VALUE decls (non-lambda exprs, e.g. an `if` choosing
@@ -16961,6 +16994,10 @@ const EvidencePass = struct {
             .types = module.typeStoreConst(),
             .value_use_by_node = std.AutoHashMap(u32, u32).init(allocator),
             .target_by_fn_var = std.AutoHashMap(u32, u32).init(allocator),
+            .where_method_use_by_fn_var = std.AutoHashMap(u32, u32).init(allocator),
+            .generalized_target_share_by_start = std.AutoHashMap(GeneralizedDispatchTargetShareStart, u32).init(allocator),
+            .generalized_target_shares = .empty,
+            .generalized_target_share_next = .empty,
             .source_by_checked_expr = std.AutoHashMap(u32, u32).init(allocator),
             .local_value_scheme_by_var = std.AutoHashMap(u32, u32).init(allocator),
             .value_use_record_by_pattern = std.AutoHashMap(u32, u32).init(allocator),
@@ -16988,6 +17025,10 @@ const EvidencePass = struct {
         self.deferred_use_sites.deinit(self.allocator);
         self.value_use_by_node.deinit();
         self.target_by_fn_var.deinit();
+        self.where_method_use_by_fn_var.deinit();
+        self.generalized_target_share_by_start.deinit();
+        self.generalized_target_shares.deinit(self.allocator);
+        self.generalized_target_share_next.deinit(self.allocator);
         self.source_by_checked_expr.deinit();
         self.local_value_scheme_by_var.deinit();
         self.value_use_record_by_pattern.deinit();
@@ -17292,9 +17333,22 @@ const EvidencePass = struct {
                     }
                     entry.value_ptr.* = @intCast(i);
                 },
+                .where_method_use => {
+                    // `slot_data` is the raw body constraint callable. It is
+                    // deliberately not resolved through union-find: two body
+                    // uses may settle to the same callable shape while still
+                    // owning distinct per-use signature copies.
+                    const entry = try self.where_method_use_by_fn_var.getOrPut(record.slot_data);
+                    if (entry.found_existing) {
+                        checkedArtifactInvariant("duplicate raw where-method-use callable identity", .{});
+                    }
+                    entry.value_ptr.* = @intCast(i);
+                },
                 .nested_function_use => {},
             }
         }
+
+        try self.buildGeneralizedTargetShareIndex();
 
         var raw_node: u32 = 0;
         while (raw_node < self.module.nodeCount()) : (raw_node += 1) {
@@ -17333,6 +17387,137 @@ const EvidencePass = struct {
                 const def = module_env.store.getDef(def_idx);
                 try self.mapValueSchemeParams(def.pattern, def.expr, &scheme_params);
             }
+        }
+    }
+
+    fn targetShareVar(self: *const EvidencePass, raw_var: u32) Var {
+        if (@as(u64, raw_var) >= self.types.len()) {
+            checkedArtifactInvariant("generalized dispatch target share referenced a missing source type variable", .{});
+        }
+        return @enumFromInt(raw_var);
+    }
+
+    fn targetShareProofKind(raw_kind: u32) ModuleEnv.GeneralizedDispatchTargetShare.ProofKind {
+        return switch (raw_kind) {
+            @intFromEnum(ModuleEnv.GeneralizedDispatchTargetShare.ProofKind.shape_only) => .shape_only,
+            @intFromEnum(ModuleEnv.GeneralizedDispatchTargetShare.ProofKind.where_method_use) => .where_method_use,
+            else => checkedArtifactInvariant("generalized dispatch target share had an invalid proof kind", .{}),
+        };
+    }
+
+    fn validateTargetShareProof(
+        self: *EvidencePass,
+        share: ModuleEnv.GeneralizedDispatchTargetShare,
+        omitted_root: Var,
+        retained_root: Var,
+    ) ModuleEnv.GeneralizedDispatchTargetShare.ProofKind {
+        const proof_kind = targetShareProofKind(share.proof_kind);
+        switch (proof_kind) {
+            .shape_only => {
+                if (share.proof_fn_var != share.omitted_fn_var) {
+                    checkedArtifactInvariant("shape-only generalized target share had a mismatched raw witness", .{});
+                }
+            },
+            .where_method_use => {
+                const proof_fn_var = self.targetShareVar(share.proof_fn_var);
+                if (self.types.resolveVar(proof_fn_var).var_ != omitted_root) {
+                    checkedArtifactInvariant("generalized target share where-use key did not resolve to its omitted callable", .{});
+                }
+                const record_idx = self.where_method_use_by_fn_var.get(share.proof_fn_var) orelse
+                    checkedArtifactInvariant("generalized target share named no raw where-method-use record", .{});
+                const module_env = self.module.moduleEnvConst();
+                const record = module_env.scheme_uses.items.items[record_idx];
+                if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
+                    record.slot_data != share.proof_fn_var)
+                {
+                    checkedArtifactInvariant("generalized target share named the wrong raw where-method-use record", .{});
+                }
+                const signature_var = self.targetShareVar(record.scheme_root);
+                const signature_root = self.types.resolveVar(signature_var).var_;
+                if (signature_root != retained_root) {
+                    checkedArtifactInvariant("generalized target share where-use signature did not resolve to its retained callable", .{});
+                }
+                const pairs_end = @as(u64, record.pairs_start) + record.pairs_len;
+                if (pairs_end > module_env.scheme_use_pairs.items.items.len) {
+                    checkedArtifactInvariant("generalized target share where-use pair range was out of bounds", .{});
+                }
+                const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start..][0..record.pairs_len];
+                var copied_root: ?Var = null;
+                for (pairs) |pair| {
+                    const old_var = self.targetShareVar(pair.old_var);
+                    if (self.types.resolveVar(old_var).var_ != signature_root) continue;
+                    const fresh_root = self.types.resolveVar(self.targetShareVar(pair.fresh_var)).var_;
+                    if (copied_root) |previous| {
+                        if (previous != fresh_root) {
+                            checkedArtifactInvariant("where-method-use proof copied one signature callable to conflicting classes", .{});
+                        }
+                    } else {
+                        copied_root = fresh_root;
+                    }
+                }
+                if (copied_root == null or copied_root.? != omitted_root) {
+                    checkedArtifactInvariant("generalized target share where-use copy did not resolve to its omitted callable", .{});
+                }
+            },
+        }
+        return proof_kind;
+    }
+
+    fn buildGeneralizedTargetShareIndex(self: *EvidencePass) Allocator.Error!void {
+        const module_env = self.module.moduleEnvConst();
+        var seen_raw = std.AutoHashMap(ModuleEnv.GeneralizedDispatchTargetShare, void).init(self.allocator);
+        defer seen_raw.deinit();
+        var seen_resolved = std.AutoHashMap(GeneralizedDispatchTargetShareEdge, void).init(self.allocator);
+        defer seen_resolved.deinit();
+
+        for (module_env.generalized_dispatch_target_shares.items.items, 0..) |share, source_index| {
+            const seen_entry = try seen_raw.getOrPut(share);
+            if (seen_entry.found_existing) {
+                checkedArtifactInvariant("duplicate fully scoped generalized dispatch target share", .{});
+            }
+
+            const receiver_root = self.types.resolveVar(self.targetShareVar(share.receiver_var)).var_;
+            const omitted_root = self.types.resolveVar(self.targetShareVar(share.omitted_fn_var)).var_;
+            const retained_root = self.types.resolveVar(self.targetShareVar(share.retained_fn_var)).var_;
+            const method_ident: base.Ident.Idx = @bitCast(share.method_ident);
+            if (!self.module.identStoreConst().interner.isInBounds(@enumFromInt(@as(u32, method_ident.idx)))) {
+                checkedArtifactInvariant("generalized dispatch target share referenced a missing method identifier", .{});
+            }
+            const method = try self.names.internMethodIdent(self.module.identStoreConst(), method_ident);
+            const proof_kind = self.validateTargetShareProof(share, omitted_root, retained_root);
+
+            // Later solving may collapse a previously distinct raw edge. Exact
+            // identity is then stronger than either recorded proof and needs no
+            // adjacency entry.
+            if (omitted_root == retained_root) continue;
+
+            const resolved_edge = try seen_resolved.getOrPut(.{
+                .receiver_root = receiver_root,
+                .method = method,
+                .omitted_root = omitted_root,
+                .retained_root = retained_root,
+            });
+            if (resolved_edge.found_existing) {
+                checkedArtifactInvariant("duplicate or contradictory fully scoped generalized dispatch target-share edge", .{});
+            }
+
+            const resolved_index: u32 = @intCast(self.generalized_target_shares.items.len);
+            try self.generalized_target_shares.append(self.allocator, .{
+                .retained_root = retained_root,
+                .proof_kind = proof_kind,
+                .source_index = @intCast(source_index),
+            });
+            const start = GeneralizedDispatchTargetShareStart{
+                .receiver_root = receiver_root,
+                .method = method,
+                .omitted_root = omitted_root,
+            };
+            const entry = try self.generalized_target_share_by_start.getOrPut(start);
+            try self.generalized_target_share_next.append(
+                self.allocator,
+                if (entry.found_existing) entry.value_ptr.* else null,
+            );
+            entry.value_ptr.* = resolved_index;
         }
     }
 
@@ -17522,26 +17707,239 @@ const EvidencePass = struct {
             method == idents.from_interpolation;
     }
 
-    /// The canonical `(depth, index)` of one method target in the chain,
-    /// searching innermost-out. Independent same-name callable relations share
-    /// the target slot, while their checked plans retain the per-call shape.
+    const CallableRelation = enum {
+        exact,
+        independent_synthesize,
+        independent_reuse_slot_nested,
+    };
+
+    fn callableRelationStrength(relation: CallableRelation) u8 {
+        return switch (relation) {
+            .exact => 3,
+            .independent_reuse_slot_nested => 2,
+            .independent_synthesize => 1,
+        };
+    }
+
+    fn composeCallableRelations(left: CallableRelation, right: CallableRelation) CallableRelation {
+        if (left == .independent_synthesize or right == .independent_synthesize) {
+            return .independent_synthesize;
+        }
+        if (left == .independent_reuse_slot_nested or right == .independent_reuse_slot_nested) {
+            return .independent_reuse_slot_nested;
+        }
+        return .exact;
+    }
+
+    fn targetShareEdgeRelation(
+        proof_kind: ModuleEnv.GeneralizedDispatchTargetShare.ProofKind,
+    ) CallableRelation {
+        return switch (proof_kind) {
+            .shape_only => .independent_synthesize,
+            .where_method_use => .independent_reuse_slot_nested,
+        };
+    }
+
+    const TargetShareWalkStep = struct {
+        root: Var,
+        relation: CallableRelation,
+    };
+
+    const TargetShareVisitState = enum {
+        visiting,
+        done,
+    };
+
+    fn targetShareCycleFrom(
+        self: *EvidencePass,
+        receiver_root: Var,
+        method: canonical.MethodNameId,
+        current_root: Var,
+        can_reach_requested: *const std.AutoHashMap(Var, void),
+        states: *std.AutoHashMap(Var, TargetShareVisitState),
+    ) Allocator.Error!bool {
+        if (can_reach_requested.contains(current_root)) return false;
+        const state_entry = try states.getOrPut(current_root);
+        if (state_entry.found_existing) return state_entry.value_ptr.* == .visiting;
+        state_entry.value_ptr.* = .visiting;
+
+        var edge_index = self.generalized_target_share_by_start.get(.{
+            .receiver_root = receiver_root,
+            .method = method,
+            .omitted_root = current_root,
+        });
+        while (edge_index) |index| {
+            const edge = self.generalized_target_shares.items[index];
+            if (try self.targetShareCycleFrom(
+                receiver_root,
+                method,
+                edge.retained_root,
+                can_reach_requested,
+                states,
+            )) return true;
+            edge_index = self.generalized_target_share_next.items[index];
+        }
+        states.getPtr(current_root).?.* = .done;
+        return false;
+    }
+
+    /// Strongest checker-authored relation from one omitted callable class to
+    /// the candidate retained slot. Exact identity outranks reuse, which
+    /// outranks synthesis; composition preserves reuse only when every edge
+    /// can reuse its retained slot's nested vector.
+    fn targetShareRelation(
+        self: *EvidencePass,
+        receiver_root: Var,
+        method: canonical.MethodNameId,
+        omitted_root: Var,
+        requested_retained_root: Var,
+    ) Allocator.Error!?CallableRelation {
+        return self.targetShareRelationChecked(
+            receiver_root,
+            method,
+            omitted_root,
+            requested_retained_root,
+        ) catch |err| switch (err) {
+            error.InvalidTargetShareCycle => checkedArtifactInvariant(
+                "generalized dispatch target-share cycle had no path to the requested retained slot",
+                .{},
+            ),
+            else => |alloc_error| return alloc_error,
+        };
+    }
+
+    fn targetShareRelationChecked(
+        self: *EvidencePass,
+        receiver_root: Var,
+        method: canonical.MethodNameId,
+        omitted_root: Var,
+        requested_retained_root: Var,
+    ) (Allocator.Error || error{InvalidTargetShareCycle})!?CallableRelation {
+        if (omitted_root == requested_retained_root) return .exact;
+
+        var best_by_root = std.AutoHashMap(Var, CallableRelation).init(self.allocator);
+        defer best_by_root.deinit();
+        var work = std.ArrayList(TargetShareWalkStep).empty;
+        defer work.deinit(self.allocator);
+        try best_by_root.put(omitted_root, .exact);
+        try work.append(self.allocator, .{ .root = omitted_root, .relation = .exact });
+
+        var result: ?CallableRelation = null;
+        while (work.pop()) |step| {
+            const known = best_by_root.get(step.root) orelse unreachable;
+            if (callableRelationStrength(known) > callableRelationStrength(step.relation)) continue;
+
+            var edge_index = self.generalized_target_share_by_start.get(.{
+                .receiver_root = receiver_root,
+                .method = method,
+                .omitted_root = step.root,
+            });
+            while (edge_index) |index| {
+                const edge = self.generalized_target_shares.items[index];
+                const relation = composeCallableRelations(step.relation, targetShareEdgeRelation(edge.proof_kind));
+                if (edge.retained_root == requested_retained_root and
+                    (result == null or callableRelationStrength(relation) > callableRelationStrength(result.?)))
+                {
+                    result = relation;
+                }
+
+                const entry = try best_by_root.getOrPut(edge.retained_root);
+                if (!entry.found_existing or
+                    callableRelationStrength(relation) > callableRelationStrength(entry.value_ptr.*))
+                {
+                    entry.value_ptr.* = relation;
+                    try work.append(self.allocator, .{ .root = edge.retained_root, .relation = relation });
+                }
+                edge_index = self.generalized_target_share_next.items[index];
+            }
+        }
+        // Compute which reachable nodes have any path to the requested slot.
+        // A cycle is valid only when it can eventually leave for that slot;
+        // a dead parallel cycle is an invariant even if another branch found
+        // a successful path.
+        var can_reach_requested = std.AutoHashMap(Var, void).init(self.allocator);
+        defer can_reach_requested.deinit();
+        try can_reach_requested.put(requested_retained_root, {});
+        var changed = true;
+        while (changed) {
+            changed = false;
+            var reachable_iter = best_by_root.keyIterator();
+            while (reachable_iter.next()) |current_ptr| {
+                const current_root = current_ptr.*;
+                if (can_reach_requested.contains(current_root)) continue;
+                var edge_index = self.generalized_target_share_by_start.get(.{
+                    .receiver_root = receiver_root,
+                    .method = method,
+                    .omitted_root = current_root,
+                });
+                while (edge_index) |index| {
+                    const edge = self.generalized_target_shares.items[index];
+                    if (can_reach_requested.contains(edge.retained_root)) {
+                        try can_reach_requested.put(current_root, {});
+                        changed = true;
+                        break;
+                    }
+                    edge_index = self.generalized_target_share_next.items[index];
+                }
+            }
+        }
+
+        var states = std.AutoHashMap(Var, TargetShareVisitState).init(self.allocator);
+        defer states.deinit();
+        var reachable_iter = best_by_root.keyIterator();
+        while (reachable_iter.next()) |current_ptr| {
+            if (try self.targetShareCycleFrom(
+                receiver_root,
+                method,
+                current_ptr.*,
+                &can_reach_requested,
+                &states,
+            )) {
+                return error.InvalidTargetShareCycle;
+            }
+        }
+        return result;
+    }
+
+    const ParamIndexMatch = struct {
+        index: u32,
+        callable_relation: CallableRelation,
+    };
+
+    const ParamIndexResult = union(enum) {
+        no_method,
+        unattached_callable,
+        matched: ParamIndexMatch,
+    };
+
+    /// The exact `(depth, index)` of one method target in the chain,
+    /// searching innermost-out. Every independent callable relation is backed
+    /// by explicit checker data: either membership in the receiver's declared
+    /// constraint range, or a `where_method_use` signature-copy record.
     fn chainParamIndex(
         self: *EvidencePass,
         chain: []const []const EvidenceParam,
         dispatcher_root: Var,
+        constraints: types.StaticDispatchConstraint.SafeList.Range,
         method: canonical.MethodNameId,
         constraint_fn_var: ?Var,
     ) Allocator.Error!?struct {
         index: static_dispatch.EvidenceChainIndex,
-        exact_callable: bool,
+        callable_relation: CallableRelation,
     } {
+        var saw_unattached_callable = false;
         for (chain, 0..) |params, depth| {
-            if (try self.paramIndexFor(params, dispatcher_root, method, constraint_fn_var)) |match| {
-                return .{
+            switch (try self.paramIndexFor(params, dispatcher_root, constraints, method, constraint_fn_var)) {
+                .no_method => {},
+                .unattached_callable => saw_unattached_callable = true,
+                .matched => |match| return .{
                     .index = .{ .depth = @intCast(depth), .index = @intCast(match.index) },
-                    .exact_callable = match.exact_callable,
-                };
+                    .callable_relation = match.callable_relation,
+                },
             }
+        }
+        if (saw_unattached_callable) {
+            checkedArtifactInvariant("same-name dispatch callable was not attached to its receiver constraints or a where-method-use record", .{});
         }
         return null;
     }
@@ -17600,36 +17998,93 @@ const EvidencePass = struct {
         }
     }
 
-    /// The canonical param index of one dispatch obligation.
+    /// The param index of one dispatch requirement. A name match is only a
+    /// candidate: exact callable identity, declared constraint-range
+    /// membership, a raw where-method signature instantiation, or an explicit
+    /// generalized target-share path must prove the relation.
     fn paramIndexFor(
         self: *EvidencePass,
         params: []const EvidenceParam,
         dispatcher_root: Var,
+        constraints: types.StaticDispatchConstraint.SafeList.Range,
         method: canonical.MethodNameId,
         constraint_fn_var: ?Var,
-    ) Allocator.Error!?struct {
-        index: u32,
-        exact_callable: bool,
-    } {
+    ) Allocator.Error!ParamIndexResult {
         const idents = self.module.identStoreConst();
         const constraint_fn_root = if (constraint_fn_var) |fn_var|
             self.types.resolveVar(fn_var).var_
         else
             null;
-        var same_method_fallback: ?u32 = null;
+
+        var same_method_index: ?u32 = null;
         for (params, 0..) |param, k| {
             if (self.types.resolveVar(param.dispatcher_var).var_ != dispatcher_root) continue;
             if (try self.names.internMethodIdent(idents, param.constraint.fn_name) != method) continue;
-            if (same_method_fallback == null) same_method_fallback = @intCast(k);
-            if (constraint_fn_root) |fn_root| {
-                if (self.types.resolveVar(param.constraint.fn_var).var_ != fn_root) continue;
+            if (same_method_index != null) {
+                checkedArtifactInvariant("checked evidence params repeated one dispatcher/method slot", .{});
             }
-            return .{ .index = @intCast(k), .exact_callable = true };
+            same_method_index = @intCast(k);
         }
-        return if (same_method_fallback) |index|
-            .{ .index = index, .exact_callable = false }
-        else
-            null;
+        const candidate_index = same_method_index orelse return .no_method;
+        const fn_var = constraint_fn_var orelse return .unattached_callable;
+        const fn_root = constraint_fn_root.?;
+
+        const candidate = params[candidate_index];
+        const candidate_fn_root = self.types.resolveVar(candidate.constraint.fn_var).var_;
+        if (candidate_fn_root == fn_root) {
+            return .{ .matched = .{
+                .index = candidate_index,
+                .callable_relation = .exact,
+            } };
+        }
+
+        var best_relation: ?CallableRelation = null;
+
+        if (self.where_method_use_by_fn_var.get(@intFromEnum(fn_var))) |record_idx| {
+            const module_env = self.module.moduleEnvConst();
+            const record = module_env.scheme_uses.items.items[record_idx];
+            if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
+                record.slot_data != @intFromEnum(fn_var))
+            {
+                checkedArtifactInvariant("where-method-use index named the wrong scheme-use record", .{});
+            }
+            const signature_root = self.types.resolveVar(@as(Var, @enumFromInt(record.scheme_root))).var_;
+            const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+            const copied_callable = self.pairForResolved(pairs, signature_root) orelse
+                checkedArtifactInvariant("where-method-use record omitted its signature callable copy", .{});
+            if (self.types.resolveVar(copied_callable).var_ != fn_root) {
+                checkedArtifactInvariant("where-method-use callable copy did not resolve to its body constraint", .{});
+            }
+            if (try self.targetShareRelation(dispatcher_root, method, signature_root, candidate_fn_root)) |suffix| {
+                const relation = composeCallableRelations(.independent_reuse_slot_nested, suffix);
+                best_relation = relation;
+            }
+        }
+
+        if (try self.targetShareRelation(dispatcher_root, method, fn_root, candidate_fn_root)) |relation| {
+            if (best_relation == null or
+                callableRelationStrength(relation) > callableRelationStrength(best_relation.?))
+            {
+                best_relation = relation;
+            }
+        }
+
+        for (self.types.sliceStaticDispatchConstraints(constraints)) |constraint| {
+            if (self.types.resolveVar(constraint.fn_var).var_ != fn_root) continue;
+            if (try self.names.internMethodIdent(idents, constraint.fn_name) != method) continue;
+            const relation: CallableRelation = .independent_synthesize;
+            if (best_relation == null or
+                callableRelationStrength(relation) > callableRelationStrength(best_relation.?))
+            {
+                best_relation = relation;
+            }
+            break;
+        }
+        if (best_relation) |relation| return .{ .matched = .{
+            .index = candidate_index,
+            .callable_relation = relation,
+        } };
+        return .unattached_callable;
     }
 
     fn resolvePlan(self: *EvidencePass, plan_id: static_dispatch.StaticDispatchPlanId, chain: []const []const EvidenceParam, commit_unpinned: bool) Allocator.Error!void {
@@ -17846,10 +18301,12 @@ const EvidencePass = struct {
         chain: []const []const EvidenceParam,
         commit_unpinned: bool,
     ) Allocator.Error!?static_dispatch.CheckedCallResolution {
-        if (try self.chainParamIndex(chain, dispatcher_root, method, constraint_fn_var)) |match| {
+        if (try self.chainParamIndex(chain, dispatcher_root, constraints, method, constraint_fn_var)) |match| {
+            const independent_callable = match.callable_relation != .exact;
             return .{ .evidence_dependent = .{
                 .index = match.index,
-                .independent_callable = !match.exact_callable,
+                .independent_callable = independent_callable,
+                .reuse_slot_nested_evidence = match.callable_relation == .independent_reuse_slot_nested,
             } };
         }
 
@@ -18002,11 +18459,7 @@ const EvidencePass = struct {
         };
     }
 
-    const ProcedureEvidenceSchema = enum {
-        none,
-        from_callable,
-        requires_record,
-    };
+    const ProcedureEvidenceSchema = static_dispatch.ProcedureEvidenceSchema;
 
     const ProcedureEvidenceView = struct {
         table: *const CheckedProcedureTemplateTable,
@@ -18054,16 +18507,7 @@ const EvidencePass = struct {
         params: []const static_dispatch.EvidenceParamRecord,
         paths: []const static_dispatch.EvidencePathStep,
     ) ProcedureEvidenceSchema {
-        if (params.len == 0) return .none;
-        for (params) |param| {
-            const path = paths[param.path.start .. param.path.start + param.path.len];
-            switch (param.source) {
-                .scheme_callable => {},
-                .explicit_default => if (path.len != 0) return .requires_record,
-                .constraint_callable, .use_site_only, .erased_row_remainder, .checked_error => return .requires_record,
-            }
-        }
-        return .from_callable;
+        return static_dispatch.procedureEvidenceSchema(params, paths);
     }
 
     fn procedureEvidenceSchema(self: *EvidencePass, target: static_dispatch.MethodTarget) ProcedureEvidenceSchema {
@@ -18247,6 +18691,9 @@ const EvidencePass = struct {
     fn evidenceRefsForRecord(self: *EvidencePass, record_idx: u32, commit_unpinned: bool) Allocator.Error!?artifact_serialize.Span {
         const module_env = self.module.moduleEnvConst();
         const record = module_env.scheme_uses.items.items[record_idx];
+        if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
+            checkedArtifactInvariant("where-method callable relation reached scheme-use evidence emission", .{});
+        }
         const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
 
         var params = std.ArrayListUnmanaged(EvidenceParam).empty;
@@ -18320,8 +18767,9 @@ const EvidencePass = struct {
         const dispatcher_root = self.types.resolveVar(param.dispatcher_var).var_;
         const fresh_dispatcher = self.pairForResolved(pairs, dispatcher_root) orelse {
             // The scheme var was not copied at this instantiation (it was
-            // already monomorphic there); resolve the pristine var directly.
-            return try self.evidenceForVar(param, param.dispatcher_var, null, commit_unpinned);
+            // already monomorphic there); resolve the pristine var and its
+            // explicit pristine callable directly.
+            return try self.evidenceForVar(param, param.dispatcher_var, param.constraint.fn_var, commit_unpinned);
         };
         const fn_root = self.types.resolveVar(param.constraint.fn_var).var_;
         const fresh_fn = self.pairForResolved(pairs, fn_root);
@@ -18358,6 +18806,7 @@ const EvidencePass = struct {
                 .evidence_dependent => |dependent| .{ .constraint = .{
                     .index = dependent.index,
                     .independent_callable = dependent.independent_callable,
+                    .reuse_slot_nested_evidence = dependent.reuse_slot_nested_evidence,
                 } },
                 .structural => |kind| blk: {
                     const callable_var = fresh_fn_var orelse param.constraint.fn_var;
@@ -18570,6 +19019,9 @@ const EvidencePass = struct {
         defer self.current_chain = &.{};
 
         const record = self.module.moduleEnvConst().scheme_uses.items.items[record_idx];
+        if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
+            checkedArtifactInvariant("where-method callable relation reached a scheme-use evidence site", .{});
+        }
         const shared = record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.shared_value_use);
         const span = (try self.evidenceRefsForRecord(record_idx, !shared)) orelse {
             try self.deferred_use_sites.append(self.allocator, .{ .record_idx = record_idx, .site_key = site_key });
@@ -18653,6 +19105,115 @@ const EvidencePass = struct {
         return null;
     }
 };
+
+fn appendTestGeneralizedTargetShareEdge(
+    pass: *EvidencePass,
+    receiver_root: Var,
+    method: canonical.MethodNameId,
+    omitted_root: Var,
+    retained_root: Var,
+    proof_kind: ModuleEnv.GeneralizedDispatchTargetShare.ProofKind,
+) Allocator.Error!void {
+    const index: u32 = @intCast(pass.generalized_target_shares.items.len);
+    try pass.generalized_target_shares.append(pass.allocator, .{
+        .retained_root = retained_root,
+        .proof_kind = proof_kind,
+        .source_index = index,
+    });
+    const entry = try pass.generalized_target_share_by_start.getOrPut(.{
+        .receiver_root = receiver_root,
+        .method = method,
+        .omitted_root = omitted_root,
+    });
+    try pass.generalized_target_share_next.append(
+        pass.allocator,
+        if (entry.found_existing) entry.value_ptr.* else null,
+    );
+    entry.value_ptr.* = index;
+}
+
+test "generalized target-share relation composes strength, selects the requested retained root, and rejects dead cycles" {
+    const gpa = std.testing.allocator;
+    var pass: EvidencePass = undefined;
+    pass.allocator = gpa;
+    pass.generalized_target_share_by_start = std.AutoHashMap(GeneralizedDispatchTargetShareStart, u32).init(gpa);
+    defer pass.generalized_target_share_by_start.deinit();
+    pass.generalized_target_shares = std.ArrayList(ResolvedGeneralizedDispatchTargetShare).empty;
+    defer pass.generalized_target_shares.deinit(gpa);
+    pass.generalized_target_share_next = std.ArrayList(?u32).empty;
+    defer pass.generalized_target_share_next.deinit(gpa);
+
+    const receiver: Var = @enumFromInt(1);
+    const method: canonical.MethodNameId = @enumFromInt(2);
+    const a: Var = @enumFromInt(3);
+    const b: Var = @enumFromInt(4);
+    const c: Var = @enumFromInt(5);
+
+    // Reuse composed only with reuse remains reuse.
+    try appendTestGeneralizedTargetShareEdge(&pass, receiver, method, a, b, .where_method_use);
+    try appendTestGeneralizedTargetShareEdge(&pass, receiver, method, b, c, .where_method_use);
+    const reuse_chain = (try pass.targetShareRelationChecked(receiver, method, a, c)).?;
+    try std.testing.expectEqual(
+        EvidencePass.CallableRelation.independent_reuse_slot_nested,
+        reuse_chain,
+    );
+
+    pass.generalized_target_share_by_start.clearRetainingCapacity();
+    pass.generalized_target_shares.clearRetainingCapacity();
+    pass.generalized_target_share_next.clearRetainingCapacity();
+
+    // Any synthesis edge weakens the composed path to synthesis.
+    try appendTestGeneralizedTargetShareEdge(&pass, receiver, method, a, b, .where_method_use);
+    try appendTestGeneralizedTargetShareEdge(&pass, receiver, method, b, c, .shape_only);
+    const synth_chain = (try pass.targetShareRelationChecked(receiver, method, a, c)).?;
+    try std.testing.expectEqual(
+        EvidencePass.CallableRelation.independent_synthesize,
+        synth_chain,
+    );
+
+    pass.generalized_target_share_by_start.clearRetainingCapacity();
+    pass.generalized_target_shares.clearRetainingCapacity();
+    pass.generalized_target_share_next.clearRetainingCapacity();
+
+    // A parallel all-reuse path is stronger than the direct synthesis edge.
+    try appendTestGeneralizedTargetShareEdge(&pass, receiver, method, a, b, .where_method_use);
+    try appendTestGeneralizedTargetShareEdge(&pass, receiver, method, b, c, .where_method_use);
+    try appendTestGeneralizedTargetShareEdge(&pass, receiver, method, a, c, .shape_only);
+    const parallel = (try pass.targetShareRelationChecked(receiver, method, a, c)).?;
+    try std.testing.expectEqual(
+        EvidencePass.CallableRelation.independent_reuse_slot_nested,
+        parallel,
+    );
+
+    pass.generalized_target_share_by_start.clearRetainingCapacity();
+    pass.generalized_target_shares.clearRetainingCapacity();
+    pass.generalized_target_share_next.clearRetainingCapacity();
+
+    // One omitted root may have edges to distinct retained roots. The requested
+    // root selects the endpoint and its independently proved relation.
+    try appendTestGeneralizedTargetShareEdge(&pass, receiver, method, a, b, .where_method_use);
+    try appendTestGeneralizedTargetShareEdge(&pass, receiver, method, a, c, .shape_only);
+    try std.testing.expectEqual(
+        EvidencePass.CallableRelation.independent_reuse_slot_nested,
+        (try pass.targetShareRelationChecked(receiver, method, a, b)).?,
+    );
+    try std.testing.expectEqual(
+        EvidencePass.CallableRelation.independent_synthesize,
+        (try pass.targetShareRelationChecked(receiver, method, a, c)).?,
+    );
+
+    pass.generalized_target_share_by_start.clearRetainingCapacity();
+    pass.generalized_target_shares.clearRetainingCapacity();
+    pass.generalized_target_share_next.clearRetainingCapacity();
+
+    // A cycle with no exit to the requested retained slot is an invariant.
+    try appendTestGeneralizedTargetShareEdge(&pass, receiver, method, a, b, .where_method_use);
+    try appendTestGeneralizedTargetShareEdge(&pass, receiver, method, b, a, .where_method_use);
+    try std.testing.expectError(
+        error.InvalidTargetShareCycle,
+        pass.targetShareRelationChecked(receiver, method, a, c),
+    );
+}
 
 test "procedure evidence schema positively classifies callable paths and pathless requirements" {
     var path_steps = [_]static_dispatch.EvidencePathStep{ undefined, undefined };
@@ -29546,6 +30107,7 @@ pub const DispatchEvidenceFailure = struct {
         iterator_plan_callable_not_function,
         plan_unfinalized_direct,
         plan_evidence_node_out_of_bounds,
+        dependent_nested_reuse_without_independent_callable,
         evidence_node_nested_refs_out_of_bounds,
         evidence_ref_node_out_of_bounds,
         site_evidence_key_out_of_bounds,
@@ -30033,7 +30595,10 @@ pub const CheckedModuleArtifact = struct {
     // callable relation or only the shared method target.
     // Version 76 combines the version-75 artifact with retained callable
     // evidence provenance used by pathless specialization.
-    const serialized_layout_version: u32 = 76;
+    // Version 77 distinguishes independent callable plans that reuse the
+    // evidence slot's producer-resolved nested vector from those that must
+    // synthesize nested evidence from their own callable.
+    const serialized_layout_version: u32 = 77;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -30531,7 +31096,17 @@ pub const CheckedModuleArtifact = struct {
                         .method = plan.method,
                     };
                 },
-                .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
+                .evidence_dependent => |dependent| if (dependent.reuse_slot_nested_evidence and
+                    !dependent.independent_callable)
+                {
+                    return .{
+                        .kind = .dependent_nested_reuse_without_independent_callable,
+                        .expr = plan.expr,
+                        .index = @intCast(i),
+                        .method = plan.method,
+                    };
+                },
+                .structural, .checked_error, .@"unreachable" => {},
             }
         }
         for (table.iterator_for_plans, 0..) |plan, i| {
@@ -30555,7 +31130,15 @@ pub const CheckedModuleArtifact = struct {
                         .method = call.method,
                     },
                     .checked_error, .@"unreachable" => continue,
-                    .evidence_dependent => {},
+                    .evidence_dependent => |dependent| if (dependent.reuse_slot_nested_evidence and
+                        !dependent.independent_callable)
+                    {
+                        return .{
+                            .kind = .dependent_nested_reuse_without_independent_callable,
+                            .index = @intCast(i),
+                            .method = call.method,
+                        };
+                    },
                 }
 
                 if (@intFromEnum(call.callable_ty) >= self.checked_types.payloads.items.len) {
@@ -30589,7 +31172,15 @@ pub const CheckedModuleArtifact = struct {
                 .direct => |node| if (@intFromEnum(node) >= table.evidence_nodes.len) {
                     return .{ .kind = .evidence_ref_node_out_of_bounds, .index = @intCast(i) };
                 },
-                .constraint, .structural, .from_callable, .checked_error, .unreachable_value => {},
+                .constraint => |constraint| if (constraint.reuse_slot_nested_evidence and
+                    !constraint.independent_callable)
+                {
+                    return .{
+                        .kind = .dependent_nested_reuse_without_independent_callable,
+                        .index = @intCast(i),
+                    };
+                },
+                .structural, .from_callable, .checked_error, .unreachable_value => {},
                 .from_constraint_callable => |source| if (@intFromEnum(source.plan) >= table.plans.len or
                     @as(u64, source.path.start) + source.path.len > table.constraint_callable_paths.len)
                 {
@@ -36243,8 +36834,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xFB, 0x3E, 0x9B, 0x23, 0x9B, 0xC9, 0xF4, 0x58, 0x81, 0x68, 0xB4, 0xF4, 0x94, 0xD3, 0x05, 0xC1,
-        0xE8, 0x72, 0x3C, 0x16, 0xAA, 0x66, 0x01, 0xD2, 0xC1, 0x0A, 0x76, 0xFF, 0x43, 0xB8, 0xCF, 0x15,
+        0x95, 0xF5, 0xEA, 0x6A, 0x06, 0x07, 0xC7, 0x13, 0xEC, 0x31, 0x62, 0x51, 0x33, 0xD8, 0xE9, 0xED,
+        0x22, 0x6E, 0x2E, 0x18, 0xB1, 0xAA, 0x79, 0x30, 0x86, 0x3F, 0x15, 0xA6, 0x97, 0x36, 0x74, 0x69,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

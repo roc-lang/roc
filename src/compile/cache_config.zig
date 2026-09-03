@@ -165,7 +165,14 @@ pub const Constants = struct {
     /// 73: Tag unions in annotation output positions are implicitly open
     ///     (polarity): extensionless unions there carry an anonymous rigid
     ///     extension, and alias declaration bodies store a deferral marker.
-    pub const CACHE_VERSION = 73;
+    /// 74: Scheme-use records distinguish per-use where-method signature
+    ///     copies from evidence-bearing instantiations; ModuleEnv serializes
+    ///     raw generalized-dispatch target-share witnesses, checked dispatch
+    ///     plans retain independent-callable/nested-evidence-reuse flags, and
+    ///     generalized requirement deduplication durably prefers a complete
+    ///     deferred generated-codec requirement. This format is unpublished
+    ///     while the polarity phase-two stack is incomplete.
+    pub const CACHE_VERSION = 74;
 };
 
 /// Configuration for the Roc cache system.

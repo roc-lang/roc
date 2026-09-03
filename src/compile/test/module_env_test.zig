@@ -207,6 +207,104 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(u32, 0), @intFromEnum(import_json_cached));
 }
 
+test "ModuleEnv generalized dispatch target shares survive static and mutable roundtrips" {
+    const gpa = std.testing.allocator;
+    const source = "";
+
+    var original = try ModuleEnv.init(gpa, source);
+    defer original.deinit();
+    try original.initCIRFields("Test");
+    const method = try original.insertIdent(Ident.for_text("render"));
+
+    const shares = [_]ModuleEnv.GeneralizedDispatchTargetShare{
+        .{
+            .receiver_var = 11,
+            .method_ident = @bitCast(method),
+            .omitted_fn_var = 21,
+            .retained_fn_var = 22,
+            .proof_fn_var = 21,
+            .proof_kind = @intFromEnum(ModuleEnv.GeneralizedDispatchTargetShare.ProofKind.shape_only),
+        },
+        .{
+            .receiver_var = 31,
+            .method_ident = @bitCast(method),
+            .omitted_fn_var = 41,
+            .retained_fn_var = 42,
+            .proof_fn_var = 43,
+            .proof_kind = @intFromEnum(ModuleEnv.GeneralizedDispatchTargetShare.ProofKind.where_method_use),
+        },
+    };
+    for (shares) |share| {
+        _ = try original.generalized_dispatch_target_shares.append(gpa, share);
+    }
+
+    var arena = collections.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+    var writer = CompactWriter.init();
+    defer writer.deinit(arena_alloc);
+    const serialized = try writer.appendAlloc(arena_alloc, ModuleEnv.Serialized);
+    try serialized.serialize(&original, arena_alloc, &writer);
+
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+    defer gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+    const serialized_ptr: *const ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    try serialized_ptr.validate(buffer.len);
+
+    var corrupt = serialized_ptr.*;
+    corrupt.generalized_dispatch_target_shares.len = std.math.maxInt(u64);
+    try std.testing.expectError(error.CorruptArtifact, corrupt.validate(buffer.len));
+
+    // The static Builtin-style view aliases the serialized bytes and preserves
+    // every raw witness without allocating a replacement list.
+    const static_env = try serialized_ptr.viewStatic(
+        @intFromPtr(buffer.ptr),
+        gpa,
+        source,
+        "Test",
+    );
+    try std.testing.expectEqualSlices(
+        ModuleEnv.GeneralizedDispatchTargetShare,
+        &shares,
+        static_env.generalized_dispatch_target_shares.items.items,
+    );
+
+    const mutable_env = try serialized_ptr.deserializeWithMutableTypes(
+        @intFromPtr(buffer.ptr),
+        gpa,
+        source,
+        "Test",
+    );
+    defer {
+        mutable_env.deinitCachedModule();
+        gpa.destroy(mutable_env);
+    }
+    try std.testing.expectEqualSlices(
+        ModuleEnv.GeneralizedDispatchTargetShare,
+        &shares,
+        mutable_env.generalized_dispatch_target_shares.items.items,
+    );
+
+    // Mutable-cache rechecking owns a copied table: it can append a new row
+    // without changing either the frozen buffer or its static view.
+    _ = try mutable_env.generalized_dispatch_target_shares.append(gpa, .{
+        .receiver_var = 51,
+        .method_ident = @bitCast(method),
+        .omitted_fn_var = 61,
+        .retained_fn_var = 62,
+        .proof_fn_var = 61,
+        .proof_kind = @intFromEnum(ModuleEnv.GeneralizedDispatchTargetShare.ProofKind.shape_only),
+    });
+    try std.testing.expectEqual(@as(usize, 3), mutable_env.generalized_dispatch_target_shares.items.items.len);
+    try std.testing.expectEqual(@as(usize, 2), static_env.generalized_dispatch_target_shares.items.items.len);
+    try std.testing.expectEqualSlices(
+        ModuleEnv.GeneralizedDispatchTargetShare,
+        &shares,
+        static_env.generalized_dispatch_target_shares.items.items,
+    );
+}
+
 test "ModuleEnv.Serialized finalizes method metadata tables before writing" {
     const gpa = std.testing.allocator;
     const source = "";

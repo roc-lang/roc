@@ -2960,6 +2960,88 @@ identities. A forwarded requirement records its enclosing evidence index
 explicitly; checked errors and unreachable values remain distinct evidence
 kinds.
 
+#### Generalized Dispatch Target Identity
+
+Generalization may prove that two requirements select the same target while
+leaving their callable roots intentionally distinct. Removing one requirement
+does not by itself prove that a plan which names the removed callable may use
+the retained evidence slot: receiver and method identity select the target,
+whereas callable identity determines how the target is instantiated and how
+its nested evidence is obtained. Checking therefore appends the proof to
+`ModuleEnv.generalized_dispatch_target_shares` as a durable, serialized
+`GeneralizedDispatchTargetShare`, scoped by the receiver and method and directed
+from the omitted raw callable variable to the retained raw callable variable.
+Raw variables are preserved so an exact checker witness remains distinguishable
+even when later union-find work puts several raw variables in one class.
+Checked-artifact construction resolves them after solving. It never scans a
+solved class or matches a method by name to recover a missing edge.
+
+There are exactly two proof kinds:
+
+- `shape_only` means the two callable types have the same callable `TypeDigest`
+  under the exact owning boundary's identity-variable anchors. Only
+  requirement-private generalized variables may be alpha-renamed. The plan owns
+  an independent callable instantiation and must synthesize nested evidence from
+  that callable.
+- `where_method_use` names the exact raw `SchemeUseRecord.where_method_use`
+  key whose pristine scheme root is the retained callable and whose complete
+  copy-pair map sends that callable to the omitted callable class. Every
+  non-marker leaf is thereby shared by construction. The plan owns its
+  independent callable instantiation but reuses the retained evidence slot's
+  checked nested-evidence vector.
+
+The second proof is strictly stronger. A target whose nested evidence schema
+is `requires_record` cannot obtain that record from callable synthesis, so a
+shape-only share never authorizes such a plan. It needs the exact
+`where_method_use` witness and `reuse_slot_nested_evidence`; absence of that
+proof is a checked-boundary invariant, not permission to guess or rebuild the
+record. Targets whose schema is `.none` or `.from_callable` may use the
+shape-only synthesis relation.
+
+Checker recording is transactional. When unification's declarative
+constraint-dominance rule omits a target, unifier scratch records the exact raw
+omitted and retained receiver variables plus both callable variables and the
+method. `Check.runUnify` examines those candidates after the attempted
+unification, including a partial mismatch: only a candidate whose two receiver
+operands now have one committed root survives. Different roots are discarded
+after an ordinary partial mismatch and are an invariant after a result reported
+as established. Solver probes snapshot and roll back the pending list along
+with their other transactional state, and never mutate `ModuleEnv`.
+
+Every surviving candidate has one explicit owner: the active rank-1 scheme, or
+the active recursive binding group when no member scheme owns it. Nested checks
+save and restore both owners so they cannot steal candidates. At a normal
+generalization boundary checking computes shapes under that boundary's anchors;
+at a recursive boundary it flushes the SCC once under the union of every
+member's anchors. The flush first looks for an exact raw where-use witness, then
+accepts equal anchored callable `TypeDigest`s, and otherwise deliberately retires
+the candidate without appending a ModuleEnv row. It consumes or retires every
+candidate for that owner, asserts that none survived the boundary, and asserts
+global quiescence before checked output. Rechecking a mutable deserialized module
+validates and deduplicates existing raw rows, so serialization and rechecking
+are idempotent.
+
+Checked-artifact construction resolves these rows into a scoped directed graph.
+Exact callable identity has strength 3, a `where_method_use` reuse edge has
+strength 2, and a shape-only synthesis edge has strength 1. A path containing synthesis is synthesis;
+otherwise a path containing reuse is reuse; an all-exact path is exact. Among
+parallel paths the strongest relation wins. `Check.recordGeneralizedDispatchTargetShare`
+rejects an edge that would close a cycle. Checked-artifact validation also
+rejects duplicate or contradictory scoped edges and any reachable cycle
+which cannot leave for the requested retained slot, even if a separate branch
+does reach that slot. A missing path is an invariant: `paramIndexFor` has no
+same-name target fallback.
+
+Generalized requirement deduplication chooses one final representative before
+emitting any target-share edges. For side-table requirements,
+`deferred_generated_codec = true` dominates `false` among rows with the same
+receiver, method, origin data, and callable `TypeDigest`, independent of
+encounter order, because the true row retains the complete durable
+generated-codec relation. Equal-strength requirements keep the first
+representative. Every omitted callable then points directly to that
+final representative, so a later codec upgrade cannot reverse an earlier edge
+or create a two-node cycle.
+
 Every procedure evidence parameter also carries an explicit dispatcher source.
 The source is exactly one of: a checked component path over the procedure's
 scheme callable; a checked component path over the exact checked dispatch-plan
@@ -4504,19 +4586,25 @@ that use may match the result exhaustively (closing its own copy) or widen it
 every other leaf, the receiver rigid included, stays the same variable
 whatever its rank (`Instantiator.share_leaves`): the signature belongs to
 the enclosing scheme, whether it is still being checked or already
-generalized and re-checked against a requirement at a later boundary. An
-OBLIGATION — an instantiation of the enclosing scheme at a call site or an
-import — closes the same markers (`PolarityVarBehavior.close`), so an
+generalized and re-checked against a requirement at a later boundary. A call-site
+or import instantiation of the enclosing scheme closes the same markers
+(`PolarityVarBehavior.close`), so an
 implementation is bounded by the listed tags: it may return a subset, never
 more, and its arguments must match as written. A where-alias declaration's
 signatures are copied into a referencing annotation with their markers
 intact (`.preserve`). Lowering note: a body use that WIDENS its copy is
 specialized by Monotype at the wider row when the implementation's own
-result row is open — the artifact's plan carries the use's copy as its
-callable and the implementation's scheme is instantiated against it (today
-through `paramIndexFor`'s same-name fallback; `polarity_phase_two.md` W6a
-makes that plan deliberate through a `SchemeUseRecord` slot). An
-implementation whose published result row is CLOSED (its body returns a
+result row is open. `instantiateWhereMethodForUse` records an exact raw
+`SchemeUseRecord.where_method_use`; if generalized constraint dominance later
+omits that callable class, checking appends a serialized
+`GeneralizedDispatchTargetShare` with a raw witness for the omitted class, the
+retained signature, and the exact raw copy used as its proof. The share witness
+need not be the dispatch plan's raw variable; its settled omitted root must be
+the plan's class. Checked-artifact construction consumes that explicit edge, marks
+the callable independent, and reuses the evidence slot's nested vector. It
+never recovers the relation by method name or by searching the solved
+equivalence class. An
+implementation whose checked scheme result row is CLOSED (its body returns a
 closed-source value: a top-level constant, an input-position parameter, a
 nominal field) cannot yet serve a widened use; W6b adds a result-row
 widening adapter at the template boundary, generalizing the hosted `Try`
@@ -4524,8 +4612,8 @@ adapter, which re-tags only the direct result row and a `Try`'s rows.
 Decided 2026-09-03: per-use opening applies at EVERY output position of
 the signature, not only the positions the adapter can re-tag; for a marker
 in any other output position (inside a `List`, a record field, a tuple, a
-tag payload, a non-`Try` nominal) that a body use widened, the obligation
-reports a problem when the resolved implementation's row at that marker
+tag payload, a non-`Try` nominal) that a body use widened, the checked scheme
+instantiation reports a problem when the resolved implementation's row at that marker
 is closed, before unifying the implementation with the signature — a
 check-time rejection that names the implementation and is lifted as the
 coercion generator grows. Open implementations at nested positions are
@@ -6064,6 +6152,36 @@ Other solved-graph mutations:
   and encoder, a Dict key union inside a nominal arg, and a block-local
   alias marker consumed by `Shape.parser_for`; rejected—a named rigid
   extension, which no derivation closes.
+- `deduplicateGeneralizedDispatchRequirements`—policy: Generalized Dispatch
+  Requirement Deduplication ("Generalized Dispatch Target Identity"
+  above). This is a callable `TypeDigest` probe followed, for attached
+  constraints, by `setVarContent` with a rebuilt constraint range. At one
+  completed generalization boundary, two non-literal requirements may collapse
+  only when their resolved receiver, method, origin tag and
+  `dispatchConstraintOriginFlag` agree and their callable `TypeDigest`s are
+  equal with every boundary identity variable held as an anchor. The rewrite
+  does not unify the callable roots; it retains one requirement and appends a
+  scoped `GeneralizedDispatchTargetShare` for each omitted root. For side-table
+  requirements it chooses the final representative before appending edges:
+  `deferred_generated_codec = true` dominates `false` in either source order,
+  and equal-strength rows keep the first. Accepted side: duplicate attached and
+  side-table requirements that differ only by private generalized variables
+  collapse, an exact raw where-method copy retains its slot's nested evidence,
+  a shape-only copy synthesizes only callable-derived evidence, and mixed codec
+  rows retain the complete codec row in both `[false, true]` and `[true, false]`
+  orders. Rejected side: an anchored-variable difference, unequal callable
+  `TypeDigest`, distinct method or origin, and every literal-origin
+  requirement remain separate; a shape-only edge does not authorize a target
+  whose nested schema is `requires_record`. These sides are pinned by the
+  attached generalized-target-share cases in
+  `src/check/test/scheme_use_evidence_test.zig`, the direct side-table and codec
+  permutation cases in `src/check/Check.zig`, the unifier producer cases in
+  `src/check/test/unify_test.zig`, the relation cases in
+  `src/check/checked_artifact.zig` (including multiple retained roots for one
+  omitted root), the cold/warm exact where-use row preservation case in
+  `src/compile/coordinator.zig`, and the W6a Monotype/LIR fixtures for independent
+  synthesis, rejected `requires_record` synthesis, and exact where-use
+  nested-evidence reuse.
 - `validateDerivedParseTagExt`—policy: Derived Parser Tag-Row Closure
   (above). Once structural parser eligibility has selected a known tag union,
   its unconstrained flexible extension closes to the empty tag union through
@@ -7981,10 +8099,11 @@ rank-1 instantiation can vary types but cannot vary a declaration's argument
 count or known effect mode. Once a scheme's public type is fixed, equivalent
 requirements whose only differences are private generalized variables collapse;
 public type variables remain identity anchors, so requirements a caller can
-specialize differently stay separate. Independent same-name callable relations
-share one evidence parameter: the runtime target is selected by dispatcher and
-method, while each dispatch plan checks and instantiates that target against its
-own callable relation.
+specialize differently stay separate. Independent callable relations share one
+evidence parameter only when checking has appended the scoped target-share row
+described above to `ModuleEnv`: the runtime target is selected by dispatcher and method,
+while each dispatch plan instantiates that target against its own callable
+relation. A shared method name alone proves nothing.
 
 **Edges supply evidence.** Checking persists every constrained-scheme edge.
 An ordinary instantiation records the (pristine var, fresh var) pairs of its

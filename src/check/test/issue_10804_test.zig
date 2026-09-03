@@ -1,5 +1,6 @@
 //! Regression tests for issue 10804.
 
+const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
 
 // https://github.com/roc-lang/roc/issues/10804
@@ -356,6 +357,47 @@ test "issue 10804: an imported type's derived encoder_for still validates its co
     defer test_env_b.deinit();
 
     try test_env_b.assertOneTypeError("Missing Method");
+}
+
+test "issue 10804: imported generalized derived codec revalidates accepted and rejected substitutions" {
+    const source_a =
+        \\A(a) :: { item : a }.{
+        \\  encoder_for : _
+        \\  make : a -> A(a)
+        \\  make = |value| A.{ item: value }
+        \\  to_json : A(a) -> Str
+        \\  to_json = |value| Json.to_str(value)
+        \\}
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+    try test_env_a.assertNoErrors();
+
+    // The generic value is nested in the derived record shape, so A's ModuleEnv
+    // must retain the complete generated-codec requirement with the binding
+    // scheme. Import copying replays this exact relation under B's
+    // substitution instead of treating A's successful open validation as a
+    // proof for every concrete use.
+    try std.testing.expect(test_env_a.module_env.binding_scheme_codec_requirements.items.items.len > 0);
+
+    const accepted_source =
+        \\import A
+        \\
+        \\out = A.to_json(A.make("ok"))
+    ;
+    var accepted = try TestEnv.initWithImport("Accepted", accepted_source, "A", &test_env_a);
+    defer accepted.deinit();
+    try accepted.assertNoErrors();
+
+    const rejected_source =
+        \\import A
+        \\
+        \\Opaque := [O(Str)]
+        \\out = A.to_json(A.make(Opaque.O("missing codec")))
+    ;
+    var rejected = try TestEnv.initWithImport("Rejected", rejected_source, "A", &test_env_a);
+    defer rejected.deinit();
+    try rejected.assertOneTypeError("Missing Method");
 }
 
 // Control: the same shape, except the field's type declares its own derived

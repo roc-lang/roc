@@ -3,11 +3,17 @@
 //!
 //! A constrained scheme used at a value or dispatch-target edge leaves a
 //! record. Instantiated uses carry scheme-var-to-fresh-var pairs; shared uses
-//! carry the exact monomorphic root and no pairs. Publication resolves those
-//! records after checking settles.
+//! carry the exact monomorphic root and no pairs. Checked-artifact construction
+//! resolves those records after checking settles.
 
 const std = @import("std");
-const ModuleEnv = @import("can").ModuleEnv;
+const base = @import("base");
+const can = @import("can");
+const collections = @import("collections");
+const compiled_builtins = @import("compiled_builtins");
+const checked_artifact = @import("../checked_artifact.zig");
+const types = @import("types");
+const ModuleEnv = can.ModuleEnv;
 const TestEnv = @import("./TestEnv.zig");
 
 const Slot = ModuleEnv.SchemeUseRecord.Slot;
@@ -18,6 +24,167 @@ fn recordsWithSlot(env: *const ModuleEnv, slot: Slot) usize {
         if (record.slot_kind == @intFromEnum(slot)) count += 1;
     }
     return count;
+}
+
+fn whereRecordForRawCallable(env: *const ModuleEnv, raw_fn_var: u32) ?ModuleEnv.SchemeUseRecord {
+    for (env.scheme_uses.items.items) |record| {
+        if (record.slot_kind == @intFromEnum(Slot.where_method_use) and
+            record.slot_data == raw_fn_var)
+        {
+            return record;
+        }
+    }
+    return null;
+}
+
+fn assertBuiltinIterExtremum(
+    artifact: *const checked_artifact.CheckedModuleArtifact,
+    method_name: []const u8,
+) !void {
+    const env = artifact.moduleEnvConst();
+    const source = env.getSourceAll();
+    var needle_buffer: [64]u8 = undefined;
+    const needle = try std.fmt.bufPrint(&needle_buffer, "best_so_far.{s}(item)", .{method_name});
+    const wanted_offset = std.mem.find(u8, source, needle) orelse return error.TestUnexpectedResult;
+    var found_plan = false;
+
+    for (artifact.static_dispatch_plans.by_expr) |entry| {
+        const expr_idx: can.CIR.Expr.Idx = @enumFromInt(entry.key);
+        const expr = env.store.getExpr(expr_idx);
+        if (expr != .e_dispatch_call) continue;
+        if (!std.mem.eql(u8, env.getIdent(expr.e_dispatch_call.method_name), method_name)) continue;
+
+        const receiver_region = env.store.getExprRegion(expr.e_dispatch_call.receiver);
+        const receiver_snippet = source[receiver_region.start.offset..receiver_region.end.offset];
+        if (!std.mem.eql(u8, receiver_snippet, "best_so_far")) continue;
+        if (receiver_region.start.offset != wanted_offset) continue;
+
+        try std.testing.expect(!found_plan);
+        found_plan = true;
+        const raw_plan_fn = @intFromEnum(expr.e_dispatch_call.constraint_fn_var);
+        const plan_root = env.types.resolveVar(expr.e_dispatch_call.constraint_fn_var).var_;
+
+        // The checked plan is a third raw callable in the omitted class; it
+        // is not itself a where-use key. The dedicated target-share producer
+        // records an exact raw partition endpoint for that whole omitted class,
+        // while its proof remains keyed by one exact body-use raw.
+        try std.testing.expect(whereRecordForRawCallable(env, raw_plan_fn) == null);
+        var body_use_count: usize = 0;
+        for (env.scheme_uses.items.items) |record| {
+            if (record.slot_kind != @intFromEnum(Slot.where_method_use)) continue;
+            const pairs = env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+            var reaches_plan_class = false;
+            for (pairs) |pair| {
+                if (env.types.resolveVar(@as(types.Var, @enumFromInt(pair.fresh_var))).var_ == plan_root) {
+                    reaches_plan_class = true;
+                    break;
+                }
+            }
+            if (reaches_plan_class) body_use_count += 1;
+        }
+        try std.testing.expect(body_use_count >= 2);
+
+        var found_share = false;
+        for (env.generalized_dispatch_target_shares.items.items) |share| {
+            const share_method: base.Ident.Idx = @bitCast(share.method_ident);
+            if (!std.mem.eql(u8, env.getIdent(share_method), method_name)) continue;
+            if (env.types.resolveVar(@as(types.Var, @enumFromInt(share.omitted_fn_var))).var_ != plan_root) continue;
+            try std.testing.expectEqual(
+                @intFromEnum(ModuleEnv.GeneralizedDispatchTargetShare.ProofKind.where_method_use),
+                share.proof_kind,
+            );
+            try std.testing.expect(share.proof_fn_var != raw_plan_fn);
+            const proof = whereRecordForRawCallable(env, share.proof_fn_var) orelse
+                return error.TestUnexpectedResult;
+            try std.testing.expectEqual(share.retained_fn_var, proof.scheme_root);
+
+            // Validate the approved complete-map proof by its raw key: the
+            // exact pristine retained callable must map to this omitted class.
+            var copied_retained_to_omitted = false;
+            const pairs = env.scheme_use_pairs.items.items[proof.pairs_start .. proof.pairs_start + proof.pairs_len];
+            for (pairs) |pair| {
+                if (env.types.resolveVar(@as(types.Var, @enumFromInt(pair.old_var))).var_ !=
+                    env.types.resolveVar(@as(types.Var, @enumFromInt(share.retained_fn_var))).var_)
+                {
+                    continue;
+                }
+                try std.testing.expectEqual(
+                    plan_root,
+                    env.types.resolveVar(@as(types.Var, @enumFromInt(pair.fresh_var))).var_,
+                );
+                copied_retained_to_omitted = true;
+            }
+            try std.testing.expect(copied_retained_to_omitted);
+            found_share = true;
+        }
+        try std.testing.expect(found_share);
+
+        const plan = artifact.static_dispatch_plans.plans[entry.val];
+        switch (plan.resolution) {
+            .evidence_dependent => |resolution| {
+                try std.testing.expect(resolution.independent_callable);
+                try std.testing.expect(resolution.reuse_slot_nested_evidence);
+            },
+            else => return error.TestUnexpectedResult,
+        }
+    }
+    try std.testing.expect(found_plan);
+}
+
+test "scheme use evidence resolves Builtin Iter min and max through exact raw where-use proofs" {
+    const gpa = std.testing.allocator;
+    var builtin_module = try can.BuiltinStatic.moduleView(
+        gpa,
+        compiled_builtins.builtin_bin[0..],
+        "Builtin",
+        compiled_builtins.builtin_source,
+    );
+    var artifact_owns_module = false;
+    errdefer if (!artifact_owns_module) builtin_module.deinit();
+
+    const blob = compiled_builtins.builtin_artifact_bin[0..];
+    const serialized_bytes = try checked_artifact.CheckedModuleArtifact.splitVersionTrailer(blob);
+    const backing: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 =
+        @alignCast(blob[0..serialized_bytes.len]);
+    const serialized: *const checked_artifact.CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(backing.ptr));
+    try serialized.validate(backing.len);
+    var artifact = serialized.deserializeStatic(
+        backing,
+        gpa,
+        .{ .static_builtin = builtin_module.env },
+    );
+    artifact_owns_module = true;
+    defer artifact.deinit(gpa);
+
+    try assertBuiltinIterExtremum(&artifact, "min");
+    try assertBuiltinIterExtremum(&artifact, "max");
+}
+
+test "generalized dispatch target share records attached shape-only deduplication" {
+    const source =
+        \\render_twice = |x| Str.concat(x.render(), x.render())
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const env = test_env.module_env;
+    var render_shares: usize = 0;
+    for (env.generalized_dispatch_target_shares.items.items) |share| {
+        const method: base.Ident.Idx = @bitCast(share.method_ident);
+        if (!std.mem.eql(u8, env.getIdent(method), "render")) continue;
+        try std.testing.expectEqual(
+            @intFromEnum(ModuleEnv.GeneralizedDispatchTargetShare.ProofKind.shape_only),
+            share.proof_kind,
+        );
+        try std.testing.expectEqual(share.omitted_fn_var, share.proof_fn_var);
+        try std.testing.expect(
+            env.types.resolveVar(@as(types.Var, @enumFromInt(share.omitted_fn_var))).var_ !=
+                env.types.resolveVar(@as(types.Var, @enumFromInt(share.retained_fn_var))).var_,
+        );
+        render_shares += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), render_shares);
 }
 
 test "value use of a where-clause generic records instantiation evidence" {

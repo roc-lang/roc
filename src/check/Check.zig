@@ -459,6 +459,10 @@ scheme_requirement_candidate_indices_by_owner: std.AutoHashMapUnmanaged(Var, std
 /// Constraint creation and transitive scheme instantiation stamp requirements
 /// with this exact owner instead of reconstructing ownership at a boundary.
 active_scheme_root: ?Var = null,
+/// Recursive SCC boundary work runs after each member restored
+/// `active_scheme_root`. This explicit group token owns omissions created by
+/// the shared boundary fixpoint; nested group checks save and clear it.
+active_generalized_target_share_group: ?u32 = null,
 /// Standalone schemes declared from annotated top-level defs' annotations
 /// before any body checking (annotated-scheme pre-pass). A reference to such
 /// a def before its body has been checked instantiates this scheme—exactly
@@ -743,6 +747,14 @@ evidence_target_site: ?EvidenceTargetSite = null,
 /// method var was created by the rolled-back type-store work.
 dispatch_target_instantiations: std.ArrayListUnmanaged(DispatchTargetInstantiation) = .empty,
 dispatch_target_instantiation_by_fn_var: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+/// Raw body constraint callable -> its `where_method_use` record. Deferred
+/// constraint fixpoints revisit the same raw body-dispatch use; this index makes them reuse
+/// the recorded signature copy in constant time.
+where_method_use_record_by_fn_var: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+/// Flex-constraint omissions whose receiver relation committed during
+/// unification, waiting for their exact generalization owner. Probe rollback
+/// truncates this list alongside every other solver-produced edge.
+pending_generalized_target_share_candidates: std.ArrayListUnmanaged(PendingGeneralizedTargetShareCandidate) = .empty,
 /// Explicit derivation edges for constraints copied while instantiating a
 /// selected method target. This distinguishes target-owned recursive
 /// obligations from unrelated caller constraints merely grounded by the same
@@ -1147,8 +1159,22 @@ const SchemeRequirementCandidate = struct {
     const Source = enum { creation, scheme_copy };
 };
 
+/// A solver-produced target omission owned by one exact generalization
+/// boundary. A scheme owner is the stable source identity installed in
+/// `active_scheme_root`; a recursive-group owner is the explicit shared SCC
+/// boundary token. Neither depends on mutable union-find roots.
+const PendingGeneralizedTargetShareCandidate = struct {
+    owner: Owner,
+    omission: unifier.GeneralizedDispatchTargetShareCandidate,
+
+    const Owner = union(enum) {
+        scheme: Var,
+        recursive_group: u32,
+    };
+};
+
 /// One generalization-boundary root. `owner` is the stable source var used by
-/// checker side tables; `interface` is the solved type published by the
+/// checker side tables; `interface` is the solved type recorded at the
 /// boundary. Keeping the pair in one value prevents call sites from silently
 /// swapping two parallel slices.
 const BoundaryRoot = struct {
@@ -2530,7 +2556,18 @@ fn initAssumePrepared(
         _ = try types.markVarStaticDispatchRejected(rejected.fnVar());
     }
 
-    const self: Self = .{
+    var rehydrated_where_method_uses: std.AutoHashMapUnmanaged(Var, u32) = .empty;
+    errdefer rehydrated_where_method_uses.deinit(gpa);
+    for (cir.scheme_uses.items.items, 0..) |record, record_idx| {
+        if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) continue;
+        const entry = try rehydrated_where_method_uses.getOrPut(gpa, @enumFromInt(record.slot_data));
+        if (entry.found_existing) {
+            std.debug.panic("body constraint callable has multiple where-method use records", .{});
+        }
+        entry.value_ptr.* = @intCast(record_idx);
+    }
+
+    var self: Self = .{
         .gpa = gpa,
         .types = types,
         .cir = cir,
@@ -2676,7 +2713,16 @@ fn initAssumePrepared(
         .function_effect_dependency_frame_starts = .empty,
         .function_effect_resolution = std.AutoHashMap(Var, FunctionEffectResolution).init(gpa),
         .probe_var_pool_lens = .empty,
+        .where_method_use_record_by_fn_var = rehydrated_where_method_uses,
+        .pending_generalized_target_share_candidates = .empty,
     };
+
+    // Mutable-cache rechecks retain raw share rows. Validate their exact
+    // scheme-use witnesses against this freshly restored type store before
+    // any new generalization pass can merge or extend them.
+    for (cir.generalized_dispatch_target_shares.items.items) |share| {
+        self.validateGeneralizedTargetShare(share);
+    }
 
     return self;
 }
@@ -2822,6 +2868,8 @@ pub fn deinit(self: *Self) void {
     self.default_materializations.deinit(self.gpa);
     self.dispatch_target_instantiations.deinit(self.gpa);
     self.dispatch_target_instantiation_by_fn_var.deinit(self.gpa);
+    self.where_method_use_record_by_fn_var.deinit(self.gpa);
+    self.pending_generalized_target_share_candidates.deinit(self.gpa);
     self.dispatch_derivations.deinit(self.gpa);
     self.dispatch_derivation_by_child_fn_var.deinit(self.gpa);
     self.scratch_embed_active_pairs.deinit(self.gpa);
@@ -4894,6 +4942,42 @@ fn runUnify(self: *Self, a: Var, b: Var, env: *Env, opts: unifier.Options) std.m
     if (result.isAccepted()) {
         try self.recordAbsorbedDefaults(construction_var, a, b);
     }
+    // Unifier scratch is reset by the next call, so inspect every omission
+    // now. A top-level mismatch is partial-commit: an earlier receiver merge
+    // can remain established even when later unrelated work rejects. Keep
+    // exactly those omissions whose two raw receiver operands now share a
+    // committed root. The owning boundary will separately prove either an exact
+    // where-use copy map or equal callable TypeDigests under its identity anchors.
+    for (self.unify_scratch.generalized_dispatch_target_share_candidates.items.items) |candidate| {
+        const omitted_receiver_root = self.types.resolveVar(candidate.omitted_receiver_var).var_;
+        const retained_receiver_root = self.types.resolveVar(candidate.retained_receiver_var).var_;
+        if (omitted_receiver_root != retained_receiver_root) {
+            if (result.isEstablished()) {
+                @panic("established unification left an omitted dispatch target's receiver operands unrelated");
+            }
+            continue;
+        }
+
+        // A monomorphic relation reaches no generalized ModuleEnv-output boundary
+        // and therefore needs no durable target-share row. Recursive SCC boundary
+        // work uses an explicit group token because no individual member owns
+        // its shared fixpoint.
+        const owner: PendingGeneralizedTargetShareCandidate.Owner = if (self.active_scheme_root) |owner_root|
+            .{ .scheme = owner_root }
+        else if (self.active_generalized_target_share_group) |group_index|
+            .{ .recursive_group = group_index }
+        else
+            continue;
+        const pending = PendingGeneralizedTargetShareCandidate{
+            .owner = owner,
+            .omission = candidate,
+        };
+        const already_recorded = for (self.pending_generalized_target_share_candidates.items) |existing| {
+            if (std.meta.eql(existing, pending)) break true;
+        } else false;
+        if (already_recorded) continue;
+        try self.pending_generalized_target_share_candidates.append(self.gpa, pending);
+    }
 
     // Set regions and add to the current rank all variables created during unification.
     //
@@ -6192,9 +6276,9 @@ fn instantiateVar(
 /// being checked (a body use) or already generalized (a requirement on the
 /// rigid re-checked at a later boundary). Copying a generalized receiver
 /// would mint a fresh flex carrying its constraints, which re-defers them
-/// onto the rigid and never settles. Obligations at the enclosing scheme's
-/// instantiation sites close the same markers (`PolarityVarBehavior.close`),
-/// bounding implementations by the listed tags.
+/// onto the rigid and never settles. Enclosing-scheme instantiations close the
+/// same markers (`PolarityVarBehavior.close`), bounding implementations by the
+/// listed tags.
 fn instantiateWhereMethodForUse(self: *Self, signature_var: Var, env: *Env, region: Region) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -6222,6 +6306,75 @@ fn instantiateWhereMethodForUse(self: *Self, signature_var: Var, env: *Env, regi
         self.setRegionAt(copied.*, region);
     }
     return use_var;
+}
+
+/// Persist the explicit callable relation for one per-use where-method
+/// instantiation. The instantiator copied structure while sharing every leaf,
+/// so its complete map proves the body dispatch callable's relation to the
+/// pristine signature; checked-artifact construction must never try to recover
+/// that relation by method name.
+fn recordWhereMethodUse(
+    self: *Self,
+    signature_var: Var,
+    constraint: StaticDispatchConstraint,
+) std.mem.Allocator.Error!void {
+    self.scratch_evidence_pairs.clearRetainingCapacity();
+    try self.scratch_evidence_pairs.ensureTotalCapacity(self.gpa, self.var_map.count());
+    var pair_iter = self.var_map.iterator();
+    while (pair_iter.next()) |entry| {
+        self.scratch_evidence_pairs.appendAssumeCapacity(.{
+            .old_var = @intFromEnum(entry.key_ptr.*),
+            .fresh_var = @intFromEnum(entry.value_ptr.*),
+        });
+    }
+    if (self.scratch_evidence_pairs.items.len == 0) {
+        std.debug.panic("where-method use instantiation produced no callable copy", .{});
+    }
+    try self.canonicalizeSchemeUsePairs(&self.scratch_evidence_pairs);
+    if (self.where_method_use_record_by_fn_var.contains(constraint.fn_var)) {
+        std.debug.panic("body constraint callable already has a where-method use record", .{});
+    }
+    try self.where_method_use_record_by_fn_var.ensureUnusedCapacity(self.gpa, 1);
+    const record_index: u32 = @intCast(self.cir.scheme_uses.items.items.len);
+    try self.cir.recordSchemeUse(
+        if (constraintIntroExpr(constraint)) |expr| @intFromEnum(expr) else 0,
+        .where_method_use,
+        @intFromEnum(constraint.fn_var),
+        signature_var,
+        self.scratch_evidence_pairs.items,
+    );
+    self.where_method_use_record_by_fn_var.putAssumeCapacityNoClobber(constraint.fn_var, record_index);
+    self.scratch_evidence_pairs.clearRetainingCapacity();
+}
+
+/// Return the already-minted copy for a body dispatch revisited by the
+/// constraint fixpoint. One raw body callable denotes one body-dispatch use, so a
+/// revisit must reuse its recorded copy rather than append a second edge.
+fn existingWhereMethodUse(
+    self: *Self,
+    signature_var: Var,
+    constraint_fn_var: Var,
+) ?Var {
+    const record_idx = self.where_method_use_record_by_fn_var.get(constraint_fn_var) orelse return null;
+    const record = self.cir.scheme_uses.items.items[record_idx];
+    if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
+        record.slot_data != @intFromEnum(constraint_fn_var))
+    {
+        std.debug.panic("where-method use index named the wrong scheme-use record", .{});
+    }
+    if (self.types.resolveVar(@as(Var, @enumFromInt(record.scheme_root))).var_ !=
+        self.types.resolveVar(signature_var).var_)
+    {
+        std.debug.panic("body constraint callable was matched to two where-method signatures", .{});
+    }
+    const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+    const signature_root = self.types.resolveVar(signature_var).var_;
+    for (pairs) |pair| {
+        if (self.types.resolveVar(@as(Var, @enumFromInt(pair.old_var))).var_ == signature_root) {
+            return @enumFromInt(pair.fresh_var);
+        }
+    }
+    std.debug.panic("where-method use record omitted its signature callable copy", .{});
 }
 
 /// Instantiate a type declaration's var for use in a type annotation,
@@ -8370,6 +8523,9 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     try self.finalizePlatformRequirementSolutions();
 
+    if (self.pending_generalized_target_share_candidates.items.len != 0) {
+        @panic("checked module retained generalized target-share candidates past every owning boundary");
+    }
     self.debugAssertNominalDeclTableComplete();
 }
 
@@ -12686,6 +12842,9 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 
     try self.finalizeBindingSchemeNodes();
 
+    if (self.pending_generalized_target_share_candidates.items.len != 0) {
+        @panic("checked REPL expression retained generalized target-share candidates past every owning boundary");
+    }
     self.debugAssertNominalDeclTableComplete();
 }
 
@@ -12797,6 +12956,9 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
 
     try self.finalizeBindingSchemeNodes();
 
+    if (self.pending_generalized_target_share_candidates.items.len != 0) {
+        @panic("checked REPL expression retained generalized target-share candidates past every owning boundary");
+    }
     self.debugAssertNominalDeclTableComplete();
 }
 
@@ -13100,8 +13262,13 @@ fn predeclareAnnotationScheme(
 
     try env.var_pool.pushRank();
     const saved_predeclaring = self.predeclaring_annotation;
+    const saved_active_scheme_root = self.active_scheme_root;
     self.predeclaring_annotation = true;
-    defer self.predeclaring_annotation = saved_predeclaring;
+    self.active_scheme_root = ModuleEnv.varFrom(annotation_idx);
+    defer {
+        self.predeclaring_annotation = saved_predeclaring;
+        self.active_scheme_root = saved_active_scheme_root;
+    }
     try self.generateAnnotationType(annotation_idx, env);
     const scheme_var = try self.instantiateVarOrphan(
         ModuleEnv.varFrom(annotation_idx),
@@ -13111,6 +13278,10 @@ fn predeclareAnnotationScheme(
     );
     try self.judgeFieldKindsAtBoundary(env);
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+    try self.flushGeneralizedTargetSharesAtBoundary(&.{.{
+        .owner = ModuleEnv.varFrom(annotation_idx),
+        .interface = scheme_var,
+    }}, null);
     try self.deduplicateGeneralizedDispatchRequirements(scheme_var);
     try self.publishBindingScheme(scheme_var);
     env.var_pool.popRank();
@@ -13385,8 +13556,13 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
     // therefore runs with no active owner, exactly like a driver-initiated
     // check; members that generalize install their own owners in `checkDef`.
     const saved_active_scheme_root = self.active_scheme_root;
+    const saved_active_generalized_target_share_group = self.active_generalized_target_share_group;
     self.active_scheme_root = null;
-    defer self.active_scheme_root = saved_active_scheme_root;
+    self.active_generalized_target_share_group = null;
+    defer {
+        self.active_scheme_root = saved_active_scheme_root;
+        self.active_generalized_target_share_group = saved_active_generalized_target_share_group;
+    }
 
     // A singleton value def never generalizes, so its obligations resolve at
     // the base rank (after checkDef); everything else's boundary is the RHS
@@ -13414,6 +13590,11 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
         try self.resolveGroupPendingDispatchTargets(env);
         _ = try self.resolvePendingPredeclaredSchemeUses(env, false);
     } else {
+        // The recursive SCC's boundary fixpoint is shared by all members.
+        // Member bodies install their exact scheme owner; work between those
+        // scopes belongs to this explicit group token and is flushed once
+        // under the union of member interfaces.
+        self.active_generalized_target_share_group = group_index;
         try env.var_pool.pushRank();
         const frame_rank = env.rank();
 
@@ -13482,6 +13663,7 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
         }
         try self.judgeFieldKindsAtBoundary(env);
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+        try self.flushGeneralizedTargetSharesAtBoundary(member_roots, group_index);
         for (scc.defs) |member_def_idx| {
             const member_def = self.cir.store.getDef(member_def_idx);
             const expr_var = ModuleEnv.varFrom(member_def.expr);
@@ -17749,6 +17931,10 @@ const ExprCheckFrame = struct {
             }
             try checker.judgeFieldKindsAtBoundary(env);
             try checker.generalizer.generalize(checker.gpa, &env.var_pool, env.rank());
+            try checker.flushGeneralizedTargetSharesAtBoundary(&.{.{
+                .owner = self.expr_var_raw,
+                .interface = self.expr_var,
+            }}, null);
             try checker.deduplicateGeneralizedDispatchRequirements(self.expr_var_raw);
             try checker.publishBindingScheme(self.expr_var_raw);
             checker.retireNonGeneralizedTypeSchemes(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }});
@@ -21126,6 +21312,10 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     try self.defaultLiteralsAtGeneralizationBoundary(.{ .owner = decl_pattern_var, .interface = decl_pattern_var }, env);
                     try self.judgeFieldKindsAtBoundary(env);
                     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+                    try self.flushGeneralizedTargetSharesAtBoundary(&.{.{
+                        .owner = decl_pattern_var,
+                        .interface = decl_pattern_var,
+                    }}, null);
                     try self.deduplicateGeneralizedDispatchRequirements(decl_pattern_var);
                     try self.publishBindingScheme(decl_pattern_var);
                     try self.bindBindingSchemeVar(decl_pattern_var, decl_expr_var);
@@ -23866,8 +24056,7 @@ fn copyImportedBindingSchemeCodecRequirements(
         // records its destination use expression separately as `failure_expr`.
         constraint.provenance = .{};
 
-        if (self.typeSchemeHasRequirement(scheme_idx, receiver_var, constraint)) continue;
-        try self.type_schemes.items[scheme_idx].dispatch_requirements.append(self.gpa, .{
+        const requirement = SchemeDispatchRequirement{
             .receiver_var = receiver_var,
             .constraint = constraint,
             .deferred_generated_codec = true,
@@ -23876,7 +24065,9 @@ fn copyImportedBindingSchemeCodecRequirements(
                 .receiver_var = receiver_var,
                 .constraint_fn_var = constraint.fn_var,
             },
-        });
+        };
+        if (self.mergeExactTypeSchemeRequirement(scheme_idx, requirement)) continue;
+        try self.type_schemes.items[scheme_idx].dispatch_requirements.append(self.gpa, requirement);
     }
     try self.postProcessCopiedVars(first_new_var, Region.zero());
 }
@@ -24617,6 +24808,7 @@ const Probe = struct {
     ambiguity_candidates_len: usize,
     ambiguity_escalation_journal_len: usize,
     scheme_requirement_candidates_len: usize,
+    pending_generalized_target_share_candidates_len: usize,
     open_literal_vars_len: usize,
     open_numeral_literals_len: usize,
     pending_tuple_accesses_len: usize,
@@ -24655,6 +24847,9 @@ const Probe = struct {
         }
         self.check.shrinkAmbiguityCandidatesTo(self.ambiguity_candidates_len);
         self.check.shrinkSchemeRequirementCandidatesTo(self.scheme_requirement_candidates_len);
+        self.check.pending_generalized_target_share_candidates.shrinkRetainingCapacity(
+            self.pending_generalized_target_share_candidates_len,
+        );
         // Likewise, open literals registered during the probe (by in-probe
         // instantiation) reference vars the savepoint rollback just discarded.
         self.check.open_literal_vars.shrinkRetainingCapacity(self.open_literal_vars_len);
@@ -24662,7 +24857,13 @@ const Probe = struct {
         self.check.pending_tuple_accesses.shrinkRetainingCapacity(self.pending_tuple_accesses_len);
         // Scheme-use evidence recorded during the probe can reference fresh
         // vars the savepoint rollback just discarded.
-        self.check.cir.scheme_uses.items.shrinkRetainingCapacity(self.scheme_uses_len);
+        while (self.check.cir.scheme_uses.items.items.len > self.scheme_uses_len) {
+            const removed = self.check.cir.scheme_uses.items.pop().?;
+            if (removed.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
+                const did_remove = self.check.where_method_use_record_by_fn_var.remove(@enumFromInt(removed.slot_data));
+                std.debug.assert(did_remove);
+            }
+        }
         self.check.cir.scheme_use_pairs.items.shrinkRetainingCapacity(self.scheme_use_pairs_len);
         self.check.cir.generated_codec_derivations.items.shrinkRetainingCapacity(self.generated_codec_derivations_len);
         self.check.cir.generated_codec_calls.items.shrinkRetainingCapacity(self.generated_codec_calls_len);
@@ -24709,6 +24910,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const ambiguity_candidates_len = self.ambiguity_candidates.items.len;
     const ambiguity_escalation_journal_len = self.ambiguity_escalation_journal.items.len;
     const scheme_requirement_candidates_len = self.scheme_requirement_candidates.items.len;
+    const pending_generalized_target_share_candidates_len = self.pending_generalized_target_share_candidates.items.len;
     const open_literal_vars_len = self.open_literal_vars.items.len;
     const open_numeral_literals_len = self.open_numeral_literals.items.len;
     const pending_tuple_accesses_len = self.pending_tuple_accesses.items.len;
@@ -24738,6 +24940,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .ambiguity_candidates_len = ambiguity_candidates_len,
         .ambiguity_escalation_journal_len = ambiguity_escalation_journal_len,
         .scheme_requirement_candidates_len = scheme_requirement_candidates_len,
+        .pending_generalized_target_share_candidates_len = pending_generalized_target_share_candidates_len,
         .open_literal_vars_len = open_literal_vars_len,
         .open_numeral_literals_len = open_numeral_literals_len,
         .pending_tuple_accesses_len = pending_tuple_accesses_len,
@@ -25282,6 +25485,10 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
             // definition's), so it has no fresh pairs to seed; the walk
             // reaches the shared body through the ordinary reference edge.
             .shared_value_use => {},
+            // A where-method use carries a complete structural copy map, but
+            // only to relate callable identities during checked-artifact construction.
+            // It has no child dispatch requirements and is not an edge in the default walk.
+            .where_method_use => {},
         }
     }
     for (self.dispatch_target_instantiations.items, 0..) |instantiation, index| {
@@ -26984,56 +27191,526 @@ fn removeTypeSchemeAt(self: *Self, scheme_idx: usize) void {
     }
 }
 
-fn typeSchemeHasRequirement(
+/// Merge an exact receiver/callable duplicate into an existing scheme entry.
+/// Generated-codec durability is monotone: a complete durable entry replaces
+/// an otherwise-identical ordinary entry, while an ordinary entry can never
+/// replace a durable one.
+fn mergeExactTypeSchemeRequirement(
     self: *Self,
     scheme_idx: usize,
-    receiver_var: Var,
-    constraint: StaticDispatchConstraint,
+    incoming: SchemeDispatchRequirement,
 ) bool {
-    const receiver_root = self.types.resolveVar(receiver_var).var_;
-    const fn_root = self.types.resolveVar(constraint.fn_var).var_;
-    for (self.type_schemes.items[scheme_idx].dispatch_requirements.items) |existing| {
+    const receiver_root = self.types.resolveVar(incoming.receiver_var).var_;
+    const fn_root = self.types.resolveVar(incoming.constraint.fn_var).var_;
+    for (self.type_schemes.items[scheme_idx].dispatch_requirements.items) |*existing| {
         if (self.types.resolveVar(existing.receiver_var).var_ != receiver_root) continue;
         if (self.types.resolveVar(existing.constraint.fn_var).var_ != fn_root) continue;
-        if (!existing.constraint.fn_name.eql(constraint.fn_name)) continue;
+        if (!existing.constraint.fn_name.eql(incoming.constraint.fn_name)) continue;
+        if (codecDurabilityDominates(
+            existing.deferred_generated_codec,
+            incoming.deferred_generated_codec,
+        )) {
+            existing.* = incoming;
+        }
         return true;
     }
     return false;
 }
 
-const GeneralizedSchemeRequirementKey = struct {
+const GeneralizedSchemeRequirementIdentity = struct {
     receiver_root: Var,
     fn_name: Ident.Idx,
     origin_tag: std.meta.Tag(StaticDispatchConstraint.Origin),
     origin_flag: bool,
-    callable_shape: [32]u8,
+    callable_digest: [32]u8,
 };
 
-const GeneralizedAttachedConstraintKey = struct {
+const GeneralizedSchemeRequirementGroup = struct {
+    representative_index: usize,
+    representative_deferred_generated_codec: bool,
+
+    fn consider(
+        self: *@This(),
+        requirement_index: usize,
+        deferred_generated_codec: bool,
+    ) void {
+        if (codecDurabilityDominates(
+            self.representative_deferred_generated_codec,
+            deferred_generated_codec,
+        )) {
+            self.representative_index = requirement_index;
+            self.representative_deferred_generated_codec = true;
+        }
+    }
+};
+
+fn codecDurabilityDominates(existing: bool, incoming: bool) bool {
+    return incoming and !existing;
+}
+
+const GeneralizedSchemeRequirementGroups = std.AutoHashMap(
+    GeneralizedSchemeRequirementIdentity,
+    GeneralizedSchemeRequirementGroup,
+);
+
+/// Add one already-probed requirement identity to the side-table dedup plan. Callers
+/// reserve capacity first so this helper cannot hide allocation or change
+/// stable-first ordering. Codec durability is the sole replacement rule.
+fn considerGeneralizedSchemeRequirementGroup(
+    groups: *GeneralizedSchemeRequirementGroups,
+    identity: GeneralizedSchemeRequirementIdentity,
+    requirement_index: usize,
+    deferred_generated_codec: bool,
+) void {
+    const group = groups.getPtr(identity) orelse put: {
+        groups.putAssumeCapacityNoClobber(identity, .{
+            .representative_index = requirement_index,
+            .representative_deferred_generated_codec = deferred_generated_codec,
+        });
+        break :put groups.getPtr(identity).?;
+    };
+    group.consider(requirement_index, deferred_generated_codec);
+}
+
+/// The direct target for an omitted requirement. Every alias is emitted only
+/// after group selection completes, so even a codec upgrade points all older
+/// and newer endpoints straight at the final representative and cannot form a
+/// reversal cycle.
+fn generalizedSchemeRequirementOmittedTarget(
+    group: GeneralizedSchemeRequirementGroup,
+    requirement_index: usize,
+) ?usize {
+    return if (requirement_index == group.representative_index)
+        null
+    else
+        group.representative_index;
+}
+
+test "side-table generalized dedup targets the durable codec representative in both orders" {
+    const gpa = std.testing.allocator;
+    const receiver: Var = @enumFromInt(11);
+    const method: Ident.Idx = @bitCast(@as(u32, 12));
+    const ordinary = SchemeDispatchRequirement{
+        .receiver_var = receiver,
+        .constraint = .{
+            .fn_name = method,
+            .fn_var = @enumFromInt(20),
+            .origin = .method_call,
+        },
+        .deferred_generated_codec = false,
+        .failure_expr = null,
+        .structural_origin = .{
+            .receiver_var = receiver,
+            .constraint_fn_var = @enumFromInt(20),
+        },
+    };
+    const durable = SchemeDispatchRequirement{
+        .receiver_var = receiver,
+        .constraint = .{
+            .fn_name = method,
+            .fn_var = @enumFromInt(21),
+            .origin = .method_call,
+        },
+        .deferred_generated_codec = true,
+        .failure_expr = null,
+        .structural_origin = .{
+            .receiver_var = receiver,
+            .constraint_fn_var = @enumFromInt(21),
+        },
+    };
+    const identityFor = struct {
+        fn call(requirement: SchemeDispatchRequirement) GeneralizedSchemeRequirementIdentity {
+            return .{
+                .receiver_root = requirement.receiver_var,
+                .fn_name = requirement.constraint.fn_name,
+                .origin_tag = std.meta.activeTag(requirement.constraint.origin),
+                .origin_flag = dispatchConstraintOriginFlag(requirement.constraint.origin),
+                .callable_digest = [_]u8{0xA5} ** 32,
+            };
+        }
+    }.call;
+
+    var false_then_true = GeneralizedSchemeRequirementGroups.init(gpa);
+    defer false_then_true.deinit();
+    try false_then_true.ensureTotalCapacity(1);
+    considerGeneralizedSchemeRequirementGroup(&false_then_true, identityFor(ordinary), 0, ordinary.deferred_generated_codec);
+    considerGeneralizedSchemeRequirementGroup(&false_then_true, identityFor(durable), 1, durable.deferred_generated_codec);
+    const upgraded = false_then_true.get(identityFor(ordinary)).?;
+    try std.testing.expectEqual(@as(usize, 1), upgraded.representative_index);
+    try std.testing.expect(upgraded.representative_deferred_generated_codec);
+    try std.testing.expectEqual(@as(?usize, 1), generalizedSchemeRequirementOmittedTarget(upgraded, 0));
+    try std.testing.expectEqual(@as(?usize, null), generalizedSchemeRequirementOmittedTarget(upgraded, 1));
+
+    var true_then_false = GeneralizedSchemeRequirementGroups.init(gpa);
+    defer true_then_false.deinit();
+    try true_then_false.ensureTotalCapacity(1);
+    considerGeneralizedSchemeRequirementGroup(&true_then_false, identityFor(durable), 0, durable.deferred_generated_codec);
+    considerGeneralizedSchemeRequirementGroup(&true_then_false, identityFor(ordinary), 1, ordinary.deferred_generated_codec);
+    const already_durable = true_then_false.get(identityFor(durable)).?;
+    try std.testing.expectEqual(@as(usize, 0), already_durable.representative_index);
+    try std.testing.expect(already_durable.representative_deferred_generated_codec);
+    try std.testing.expectEqual(@as(?usize, null), generalizedSchemeRequirementOmittedTarget(already_durable, 0));
+    try std.testing.expectEqual(@as(?usize, 0), generalizedSchemeRequirementOmittedTarget(already_durable, 1));
+
+    var equal_strength = GeneralizedSchemeRequirementGroups.init(gpa);
+    defer equal_strength.deinit();
+    try equal_strength.ensureTotalCapacity(1);
+    considerGeneralizedSchemeRequirementGroup(&equal_strength, identityFor(ordinary), 0, false);
+    considerGeneralizedSchemeRequirementGroup(&equal_strength, identityFor(ordinary), 1, false);
+    try std.testing.expectEqual(@as(usize, 0), equal_strength.get(identityFor(ordinary)).?.representative_index);
+
+    // The rejected side of the rewrite inventory: callable TypeDigests that differ
+    // under the owner's anchors remain separate even when receiver, name, and
+    // origin match.
+    var different_digest = identityFor(ordinary);
+    different_digest.callable_digest[0] ^= 0xFF;
+    considerGeneralizedSchemeRequirementGroup(&equal_strength, different_digest, 2, true);
+    try std.testing.expectEqual(@as(usize, 2), equal_strength.count());
+
+    // Interleaved groups still map every member directly to the final durable
+    // representative. Production emits these aliases before compacting the
+    // source array so another group's retained row cannot overwrite index 2.
+    var interleaved = GeneralizedSchemeRequirementGroups.init(gpa);
+    defer interleaved.deinit();
+    try interleaved.ensureTotalCapacity(2);
+    const group_a = identityFor(ordinary);
+    var group_b = group_a;
+    group_b.fn_name = @bitCast(@as(u32, 13));
+    considerGeneralizedSchemeRequirementGroup(&interleaved, group_a, 0, false);
+    considerGeneralizedSchemeRequirementGroup(&interleaved, group_b, 1, false);
+    considerGeneralizedSchemeRequirementGroup(&interleaved, group_a, 2, true);
+    considerGeneralizedSchemeRequirementGroup(&interleaved, group_b, 3, false);
+    considerGeneralizedSchemeRequirementGroup(&interleaved, group_a, 4, false);
+    const final_a = interleaved.get(group_a).?;
+    try std.testing.expectEqual(@as(usize, 2), final_a.representative_index);
+    try std.testing.expectEqual(@as(?usize, 2), generalizedSchemeRequirementOmittedTarget(final_a, 0));
+    try std.testing.expectEqual(@as(?usize, null), generalizedSchemeRequirementOmittedTarget(final_a, 2));
+    try std.testing.expectEqual(@as(?usize, 2), generalizedSchemeRequirementOmittedTarget(final_a, 4));
+    const final_b = interleaved.get(group_b).?;
+    try std.testing.expectEqual(@as(usize, 1), final_b.representative_index);
+    try std.testing.expectEqual(@as(?usize, 1), generalizedSchemeRequirementOmittedTarget(final_b, 3));
+}
+
+const GeneralizedAttachedConstraintIdentity = struct {
     fn_name: Ident.Idx,
     origin_tag: std.meta.Tag(StaticDispatchConstraint.Origin),
     origin_flag: bool,
-    callable_shape: [32]u8,
+    callable_digest: [32]u8,
 };
 
-fn generalizedCallableShape(
+fn generalizedTargetShareProofKind(
+    raw_kind: u32,
+) ModuleEnv.GeneralizedDispatchTargetShare.ProofKind {
+    return switch (raw_kind) {
+        @intFromEnum(ModuleEnv.GeneralizedDispatchTargetShare.ProofKind.shape_only) => .shape_only,
+        @intFromEnum(ModuleEnv.GeneralizedDispatchTargetShare.ProofKind.where_method_use) => .where_method_use,
+        else => @panic("generalized dispatch target share has an invalid proof kind"),
+    };
+}
+
+/// Validate one exact raw where-use key as a signature-copy witness for the
+/// requested omitted and retained callable roots.
+fn whereMethodUseProvesTargetShare(
+    self: *Self,
+    proof_fn_var: Var,
+    omitted_root: Var,
+    retained_root: Var,
+) bool {
+    const record_idx = self.where_method_use_record_by_fn_var.get(proof_fn_var) orelse return false;
+    const record = self.cir.scheme_uses.items.items[record_idx];
+    if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
+        record.slot_data != @intFromEnum(proof_fn_var))
+    {
+        @panic("where-method use index named the wrong scheme-use record");
+    }
+    if (self.types.resolveVar(@as(Var, @enumFromInt(record.scheme_root))).var_ != retained_root) {
+        return false;
+    }
+
+    const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+    var copied_root: ?Var = null;
+    for (pairs) |pair| {
+        if (self.types.resolveVar(@as(Var, @enumFromInt(pair.old_var))).var_ != retained_root) continue;
+        const pair_root = self.types.resolveVar(@as(Var, @enumFromInt(pair.fresh_var))).var_;
+        if (copied_root) |previous| {
+            if (previous != pair_root) {
+                @panic("where-method use record copied one signature callable to two classes");
+            }
+        } else {
+            copied_root = pair_root;
+        }
+    }
+    return copied_root == omitted_root;
+}
+
+/// Check only the two raw callable identities participating in an omission.
+/// Several unrelated where uses may settle to the same class, so a class-wide
+/// lookup or scan is forbidden.
+fn whereMethodUseProofForTargetShareEndpoints(
+    self: *Self,
+    omitted_fn_var: Var,
+    retained_fn_var: Var,
+) ?Var {
+    const omitted_root = self.types.resolveVar(omitted_fn_var).var_;
+    const retained_root = self.types.resolveVar(retained_fn_var).var_;
+    if (self.whereMethodUseProvesTargetShare(omitted_fn_var, omitted_root, retained_root)) {
+        return omitted_fn_var;
+    }
+    if (retained_fn_var != omitted_fn_var and
+        self.whereMethodUseProvesTargetShare(retained_fn_var, omitted_root, retained_root))
+    {
+        return retained_fn_var;
+    }
+    return null;
+}
+
+const WhereTargetForOmission = struct {
+    retained_fn_var: Var,
+    proof_fn_var: Var,
+};
+
+/// A flex-constraint omission may retain a raw body-use callable whose exact
+/// `where_method_use` record names the pristine signature stored for the
+/// checked evidence slot. Consult only the omission's raw variables.
+fn whereTargetForUnifierOmission(
+    self: *Self,
+    candidate: unifier.GeneralizedDispatchTargetShareCandidate,
+) ?WhereTargetForOmission {
+    const omitted_root = self.types.resolveVar(candidate.omitted_fn_var).var_;
+    const raw_keys = [_]Var{ candidate.retained_fn_var, candidate.omitted_fn_var };
+    for (raw_keys, 0..) |proof_fn_var, index| {
+        if (index == 1 and proof_fn_var == raw_keys[0]) continue;
+        const record_idx = self.where_method_use_record_by_fn_var.get(proof_fn_var) orelse continue;
+        const record = self.cir.scheme_uses.items.items[record_idx];
+        const signature_var: Var = @enumFromInt(record.scheme_root);
+        const signature_root = self.types.resolveVar(signature_var).var_;
+        if (!self.whereMethodUseProvesTargetShare(proof_fn_var, omitted_root, signature_root)) continue;
+        return .{ .retained_fn_var = signature_var, .proof_fn_var = proof_fn_var };
+    }
+    return null;
+}
+
+fn validateGeneralizedTargetShare(self: *Self, share: ModuleEnv.GeneralizedDispatchTargetShare) void {
+    const omitted_fn_var: Var = @enumFromInt(share.omitted_fn_var);
+    const retained_fn_var: Var = @enumFromInt(share.retained_fn_var);
+    const omitted_root = self.types.resolveVar(omitted_fn_var).var_;
+    const retained_root = self.types.resolveVar(retained_fn_var).var_;
+    switch (generalizedTargetShareProofKind(share.proof_kind)) {
+        .shape_only => {
+            if (share.proof_fn_var != share.omitted_fn_var) {
+                @panic("shape-only generalized target share has a mismatched raw witness");
+            }
+        },
+        .where_method_use => {
+            if (!self.whereMethodUseProvesTargetShare(
+                @enumFromInt(share.proof_fn_var),
+                omitted_root,
+                retained_root,
+            )) {
+                @panic("generalized target share has an invalid where-method-use witness");
+            }
+        },
+    }
+}
+
+fn generalizedTargetSharePathExists(
+    self: *Self,
+    receiver_root: Var,
+    method_ident: Ident.Idx,
+    start_root: Var,
+    target_root: Var,
+) Allocator.Error!bool {
+    if (start_root == target_root) return true;
+    var visited = std.AutoHashMap(Var, void).init(self.gpa);
+    defer visited.deinit();
+    var work = std.ArrayList(Var).empty;
+    defer work.deinit(self.gpa);
+    try visited.put(start_root, {});
+    try work.append(self.gpa, start_root);
+
+    while (work.pop()) |current_root| {
+        for (self.cir.generalized_dispatch_target_shares.items.items) |share| {
+            self.validateGeneralizedTargetShare(share);
+            if (!(@as(Ident.Idx, @bitCast(share.method_ident))).eql(method_ident)) continue;
+            if (self.types.resolveVar(@as(Var, @enumFromInt(share.receiver_var))).var_ != receiver_root) continue;
+            if (self.types.resolveVar(@as(Var, @enumFromInt(share.omitted_fn_var))).var_ != current_root) continue;
+            const retained_root = self.types.resolveVar(@as(Var, @enumFromInt(share.retained_fn_var))).var_;
+            if (retained_root == target_root) return true;
+            const entry = try visited.getOrPut(retained_root);
+            if (!entry.found_existing) try work.append(self.gpa, retained_root);
+        }
+    }
+    return false;
+}
+
+fn flushGeneralizedTargetShareCandidates(
+    self: *Self,
+    boundary_roots: []const BoundaryRoot,
+    recursive_group_owner: ?u32,
+    receiver_roots: *const std.AutoHashMap(Var, void),
+    callable_digests: *std.AutoHashMap(Var, [32]u8),
+) Allocator.Error!void {
+    var write: usize = 0;
+    for (self.pending_generalized_target_share_candidates.items) |pending| {
+        const owned_here = switch (pending.owner) {
+            .scheme => |owner_root| for (boundary_roots) |boundary_root| {
+                if (boundary_root.owner == owner_root) break true;
+            } else false,
+            .recursive_group => |group_index| recursive_group_owner != null and
+                recursive_group_owner.? == group_index,
+        };
+        if (!owned_here) {
+            self.pending_generalized_target_share_candidates.items[write] = pending;
+            write += 1;
+            continue;
+        }
+
+        const candidate = pending.omission;
+        const omitted_receiver_root = self.types.resolveVar(candidate.omitted_receiver_var).var_;
+        const retained_receiver_root = self.types.resolveVar(candidate.retained_receiver_var).var_;
+        if (omitted_receiver_root != retained_receiver_root) {
+            @panic("owned generalized target-share candidate lost its established receiver relation");
+        }
+
+        if (self.whereTargetForUnifierOmission(candidate)) |where_target| {
+            try self.recordGeneralizedDispatchTargetShare(
+                candidate.omitted_receiver_var,
+                candidate.method_ident,
+                candidate.omitted_fn_var,
+                where_target.retained_fn_var,
+                where_target.proof_fn_var,
+            );
+            continue;
+        }
+
+        const omitted_root = self.types.resolveVar(candidate.omitted_fn_var).var_;
+        const retained_root = self.types.resolveVar(candidate.retained_fn_var).var_;
+        if (omitted_root == retained_root) continue;
+
+        const omitted_digest = try self.generalizedCallableDigest(
+            receiver_roots,
+            callable_digests,
+            candidate.omitted_fn_var,
+        );
+        const retained_digest = try self.generalizedCallableDigest(
+            receiver_roots,
+            callable_digests,
+            candidate.retained_fn_var,
+        );
+        if (!std.mem.eql(u8, &omitted_digest, &retained_digest)) {
+            // The receiver omission committed, but this exact owning boundary
+            // proved neither a complete where-copy map nor equal generalized
+            // callable TypeDigests. It authorizes no durable ModuleEnv row. A
+            // plan that needs one is rejected during checked-artifact construction instead
+            // of letting this candidate leak into an unrelated boundary.
+            continue;
+        }
+        try self.recordGeneralizedDispatchTargetShare(
+            candidate.omitted_receiver_var,
+            candidate.method_ident,
+            candidate.omitted_fn_var,
+            candidate.retained_fn_var,
+            null,
+        );
+    }
+    self.pending_generalized_target_share_candidates.shrinkRetainingCapacity(write);
+
+    for (self.pending_generalized_target_share_candidates.items) |pending| {
+        const survived_owner = switch (pending.owner) {
+            .scheme => |owner_root| for (boundary_roots) |boundary_root| {
+                if (boundary_root.owner == owner_root) break true;
+            } else false,
+            .recursive_group => |group_index| recursive_group_owner != null and
+                recursive_group_owner.? == group_index,
+        };
+        if (survived_owner) {
+            @panic("generalized target-share candidate survived its exact owning boundary");
+        }
+    }
+}
+
+/// Record one generalized requirement omission. This runs only at completed
+/// generalization boundaries, never inside a solver probe. Existing rows are
+/// resolved again on every call so mutable-cache rechecks are idempotent even
+/// when union-find representatives have moved.
+fn recordGeneralizedDispatchTargetShare(
+    self: *Self,
+    receiver_var: Var,
+    method_ident: Ident.Idx,
+    omitted_fn_var: Var,
+    retained_fn_var: Var,
+    proof_fn_var: ?Var,
+) Allocator.Error!void {
+    if (self.probe_depth != 0) {
+        @panic("generalized dispatch target sharing cannot be recorded inside a solver probe");
+    }
+
+    const receiver_root = self.types.resolveVar(receiver_var).var_;
+    const omitted_root = self.types.resolveVar(omitted_fn_var).var_;
+    const retained_root = self.types.resolveVar(retained_fn_var).var_;
+    if (omitted_root == retained_root) return;
+
+    const proof_kind: ModuleEnv.GeneralizedDispatchTargetShare.ProofKind = if (proof_fn_var != null)
+        .where_method_use
+    else
+        .shape_only;
+    if (proof_fn_var) |proof| {
+        if (!self.whereMethodUseProvesTargetShare(proof, omitted_root, retained_root)) {
+            @panic("generalized target share was given an invalid raw where-method-use witness");
+        }
+    }
+    const new_share = ModuleEnv.GeneralizedDispatchTargetShare{
+        .receiver_var = @intFromEnum(receiver_var),
+        .method_ident = @bitCast(method_ident),
+        .omitted_fn_var = @intFromEnum(omitted_fn_var),
+        .retained_fn_var = @intFromEnum(retained_fn_var),
+        .proof_fn_var = @intFromEnum(proof_fn_var orelse omitted_fn_var),
+        .proof_kind = @intFromEnum(proof_kind),
+    };
+
+    for (self.cir.generalized_dispatch_target_shares.items.items) |*existing| {
+        self.validateGeneralizedTargetShare(existing.*);
+        if (!(@as(Ident.Idx, @bitCast(existing.method_ident))).eql(method_ident)) continue;
+        if (self.types.resolveVar(@as(Var, @enumFromInt(existing.receiver_var))).var_ != receiver_root) continue;
+        if (self.types.resolveVar(@as(Var, @enumFromInt(existing.omitted_fn_var))).var_ != omitted_root) continue;
+        if (self.types.resolveVar(@as(Var, @enumFromInt(existing.retained_fn_var))).var_ != retained_root) continue;
+
+        const existing_kind = generalizedTargetShareProofKind(existing.proof_kind);
+        if (existing_kind == .shape_only and proof_kind == .where_method_use) {
+            existing.* = new_share;
+            return;
+        }
+        return;
+    }
+    if (try self.generalizedTargetSharePathExists(
+        receiver_root,
+        method_ident,
+        retained_root,
+        omitted_root,
+    )) {
+        @panic("recordGeneralizedDispatchTargetShare attempted to create a cycle");
+    }
+    _ = try self.cir.generalized_dispatch_target_shares.append(self.gpa, new_share);
+}
+
+fn generalizedCallableDigest(
     self: *Self,
     anchors: *const std.AutoHashMap(Var, void),
     cache: *std.AutoHashMap(Var, [32]u8),
     fn_var: Var,
 ) Allocator.Error![32]u8 {
     const fn_root = self.types.resolveVar(fn_var).var_;
-    if (cache.get(fn_root)) |shape| return shape;
+    if (cache.get(fn_root)) |digest| return digest;
 
-    const shape = (try canonical_type_keys.fromVarWithAnchoredIdentities(
+    const digest = (try canonical_type_keys.fromVarWithAnchoredIdentities(
         self.gpa,
         self.types,
         self.cir,
         fn_root,
         anchors,
     )).bytes;
-    try cache.put(fn_root, shape);
-    return shape;
+    try cache.put(fn_root, digest);
+    return digest;
 }
 
 fn dispatchConstraintOriginFlag(origin: StaticDispatchConstraint.Origin) bool {
@@ -27044,12 +27721,46 @@ fn dispatchConstraintOriginFlag(origin: StaticDispatchConstraint.Origin) bool {
     };
 }
 
-/// Collapse requirements that ask for the same target with the same finalized
-/// callable shape. Variables exposed through the enclosing scheme remain fixed
+/// Consume solver-produced omissions exactly once at their owning
+/// generalization boundary. Recursive binding groups pass every member at
+/// once, so callable TypeDigests use the union of the shared SCC's identity
+/// variables instead of depending on member iteration order.
+fn flushGeneralizedTargetSharesAtBoundary(
+    self: *Self,
+    boundary_roots: []const BoundaryRoot,
+    recursive_group_owner: ?u32,
+) Allocator.Error!void {
+    var anchors = std.AutoHashMap(Var, void).init(self.gpa);
+    defer anchors.deinit();
+    for (boundary_roots) |boundary_root| {
+        const identity_vars = try canonical_type_keys.identityVarsFromVarIgnoringConstraints(
+            self.gpa,
+            self.types,
+            self.cir,
+            boundary_root.interface,
+        );
+        defer self.gpa.free(identity_vars);
+        for (identity_vars) |identity_var| {
+            try anchors.put(self.types.resolveVar(identity_var).var_, {});
+        }
+    }
+
+    var callable_digests = std.AutoHashMap(Var, [32]u8).init(self.gpa);
+    defer callable_digests.deinit();
+    try self.flushGeneralizedTargetShareCandidates(
+        boundary_roots,
+        recursive_group_owner,
+        &anchors,
+        &callable_digests,
+    );
+}
+
+/// Collapse requirements that ask for the same target with the same callable
+/// `TypeDigest`. Variables exposed through the enclosing scheme remain fixed
 /// anchors; only requirement-private generalized variables may be renamed.
 /// This keeps repeated helper uses compact without conflating call results that
-/// a caller can still specialize differently. Shape keys are memoized by
-/// finalized callable root for the duration of this pass because attached and
+/// a caller can still specialize differently. Digests are memoized by settled
+/// callable root for the duration of this pass because attached and
 /// side-table requirements commonly refer to the same callable graph.
 fn deduplicateGeneralizedDispatchRequirements(
     self: *Self,
@@ -27069,13 +27780,12 @@ fn deduplicateGeneralizedDispatchRequirements(
     for (identity_vars) |identity_var| {
         anchors.putAssumeCapacity(self.types.resolveVar(identity_var).var_, {});
     }
-
-    var callable_shapes = std.AutoHashMap(Var, [32]u8).init(self.gpa);
-    defer callable_shapes.deinit();
+    var callable_digests = std.AutoHashMap(Var, [32]u8).init(self.gpa);
+    defer callable_digests.deinit();
 
     var retained_constraints: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty;
     defer retained_constraints.deinit(self.gpa);
-    var seen_attached = std.AutoHashMap(GeneralizedAttachedConstraintKey, void).init(self.gpa);
+    var seen_attached = std.AutoHashMap(GeneralizedAttachedConstraintIdentity, StaticDispatchConstraint).init(self.gpa);
     defer seen_attached.deinit();
 
     for (identity_vars) |identity_var| {
@@ -27094,19 +27804,32 @@ fn deduplicateGeneralizedDispatchRequirements(
                 retained_constraints.appendAssumeCapacity(constraint);
                 continue;
             }
-            const callable_shape = try self.generalizedCallableShape(
+            const callable_digest = try self.generalizedCallableDigest(
                 &anchors,
-                &callable_shapes,
+                &callable_digests,
                 constraint.fn_var,
             );
-            const key = GeneralizedAttachedConstraintKey{
+            const identity = GeneralizedAttachedConstraintIdentity{
                 .fn_name = constraint.fn_name,
                 .origin_tag = std.meta.activeTag(constraint.origin),
                 .origin_flag = dispatchConstraintOriginFlag(constraint.origin),
-                .callable_shape = callable_shape,
+                .callable_digest = callable_digest,
             };
-            if (seen_attached.contains(key)) continue;
-            seen_attached.putAssumeCapacity(key, {});
+            if (seen_attached.get(identity)) |retained| {
+                const proof_fn_var = self.whereMethodUseProofForTargetShareEndpoints(
+                    constraint.fn_var,
+                    retained.fn_var,
+                );
+                try self.recordGeneralizedDispatchTargetShare(
+                    identity_var,
+                    constraint.fn_name,
+                    constraint.fn_var,
+                    retained.fn_var,
+                    proof_fn_var,
+                );
+                continue;
+            }
+            seen_attached.putAssumeCapacity(identity, constraint);
             retained_constraints.appendAssumeCapacity(constraint);
         }
         if (retained_constraints.items.len == constraints.len) continue;
@@ -27124,9 +27847,77 @@ fn deduplicateGeneralizedDispatchRequirements(
     const scheme = &self.type_schemes.items[scheme_idx];
     if (scheme.dispatch_requirements.items.len <= 1) return;
 
-    var seen = std.AutoHashMap(GeneralizedSchemeRequirementKey, void).init(self.gpa);
+    var seen = GeneralizedSchemeRequirementGroups.init(self.gpa);
     defer seen.deinit();
     try seen.ensureTotalCapacity(@intCast(scheme.dispatch_requirements.items.len));
+
+    // First choose the final representative for every equal requirement identity. A
+    // complete generated-codec requirement is durable and therefore replaces
+    // an ordinary representative regardless of source order; equal strength
+    // keeps the first. No alias edge is emitted until this choice is final, so
+    // a later upgrade cannot reverse an earlier edge into a cycle.
+    for (scheme.dispatch_requirements.items, 0..) |requirement, requirement_index| {
+        if (requirement.constraint.origin == .from_literal) continue;
+        const callable_digest = try self.generalizedCallableDigest(
+            &anchors,
+            &callable_digests,
+            requirement.constraint.fn_var,
+        );
+        const identity = GeneralizedSchemeRequirementIdentity{
+            .receiver_root = self.types.resolveVar(requirement.receiver_var).var_,
+            .fn_name = requirement.constraint.fn_name,
+            .origin_tag = std.meta.activeTag(requirement.constraint.origin),
+            .origin_flag = dispatchConstraintOriginFlag(requirement.constraint.origin),
+            .callable_digest = callable_digest,
+        };
+        considerGeneralizedSchemeRequirementGroup(
+            &seen,
+            identity,
+            requirement_index,
+            requirement.deferred_generated_codec,
+        );
+    }
+
+    // Emit every omitted edge while the original requirement array is still
+    // intact. A group's durable representative may occur after its first
+    // ordinary member, and in-place compaction can otherwise overwrite that
+    // representative before a later interleaved alias reads it.
+    for (scheme.dispatch_requirements.items, 0..) |requirement, requirement_index| {
+        if (requirement.constraint.origin == .from_literal) continue;
+
+        const callable_digest = try self.generalizedCallableDigest(
+            &anchors,
+            &callable_digests,
+            requirement.constraint.fn_var,
+        );
+        const identity = GeneralizedSchemeRequirementIdentity{
+            .receiver_root = self.types.resolveVar(requirement.receiver_var).var_,
+            .fn_name = requirement.constraint.fn_name,
+            .origin_tag = std.meta.activeTag(requirement.constraint.origin),
+            .origin_flag = dispatchConstraintOriginFlag(requirement.constraint.origin),
+            .callable_digest = callable_digest,
+        };
+        const group = seen.get(identity).?;
+        const retained = scheme.dispatch_requirements.items[group.representative_index];
+        if (generalizedSchemeRequirementOmittedTarget(group, requirement_index)) |retained_index| {
+            std.debug.assert(retained_index == group.representative_index);
+            const proof_fn_var = self.whereMethodUseProofForTargetShareEndpoints(
+                requirement.constraint.fn_var,
+                retained.constraint.fn_var,
+            );
+            try self.recordGeneralizedDispatchTargetShare(
+                requirement.receiver_var,
+                requirement.constraint.fn_name,
+                requirement.constraint.fn_var,
+                retained.constraint.fn_var,
+                proof_fn_var,
+            );
+        }
+    }
+
+    var emitted = std.AutoHashMap(GeneralizedSchemeRequirementIdentity, void).init(self.gpa);
+    defer emitted.deinit();
+    try emitted.ensureTotalCapacity(@intCast(seen.count()));
 
     var write: usize = 0;
     for (scheme.dispatch_requirements.items) |requirement| {
@@ -27138,21 +27929,22 @@ fn deduplicateGeneralizedDispatchRequirements(
             continue;
         }
 
-        const callable_shape = try self.generalizedCallableShape(
+        const callable_digest = try self.generalizedCallableDigest(
             &anchors,
-            &callable_shapes,
+            &callable_digests,
             requirement.constraint.fn_var,
         );
-        const key = GeneralizedSchemeRequirementKey{
+        const identity = GeneralizedSchemeRequirementIdentity{
             .receiver_root = self.types.resolveVar(requirement.receiver_var).var_,
             .fn_name = requirement.constraint.fn_name,
             .origin_tag = std.meta.activeTag(requirement.constraint.origin),
             .origin_flag = dispatchConstraintOriginFlag(requirement.constraint.origin),
-            .callable_shape = callable_shape,
+            .callable_digest = callable_digest,
         };
-        if (seen.contains(key)) continue;
-        seen.putAssumeCapacity(key, {});
-        scheme.dispatch_requirements.items[write] = requirement;
+        if (emitted.contains(identity)) continue;
+        emitted.putAssumeCapacityNoClobber(identity, {});
+        const group = seen.get(identity).?;
+        scheme.dispatch_requirements.items[write] = scheme.dispatch_requirements.items[group.representative_index];
         write += 1;
     }
     scheme.dispatch_requirements.shrinkRetainingCapacity(write);
@@ -27465,17 +28257,18 @@ fn captureSchemeDispatchRequirements(
             // requirement was already captured through another alias/copy.
             // Empty schemes have no semantic meaning and only add hot-path
             // lookup state.
-            const scheme_idx = if (self.typeSchemeIndexForRoot(root.owner)) |existing_scheme_idx| blk: {
-                if (self.typeSchemeHasRequirement(existing_scheme_idx, candidate.receiver_var, candidate.constraint)) continue;
-                break :blk existing_scheme_idx;
-            } else try self.ensureTypeScheme(root.owner, rank);
-            try self.type_schemes.items[scheme_idx].dispatch_requirements.append(self.gpa, .{
+            const requirement = SchemeDispatchRequirement{
                 .receiver_var = candidate.receiver_var,
                 .constraint = candidate.constraint,
                 .deferred_generated_codec = final_codec,
                 .failure_expr = candidate.failure_expr,
                 .structural_origin = candidate.structural_origin,
-            });
+            };
+            const scheme_idx = if (self.typeSchemeIndexForRoot(root.owner)) |existing_scheme_idx| blk: {
+                if (self.mergeExactTypeSchemeRequirement(existing_scheme_idx, requirement)) continue;
+                break :blk existing_scheme_idx;
+            } else try self.ensureTypeScheme(root.owner, rank);
+            try self.type_schemes.items[scheme_idx].dispatch_requirements.append(self.gpa, requirement);
         }
     }
     if (self.scheme_requirement_candidate_indices_by_owner.count() == 0) {
@@ -29986,8 +30779,18 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         const same_root = self.types.resolveVar(rigid_var).var_ == self.types.resolveVar(constraint.fn_var).var_;
                         const use_fn_var = if (same_root)
                             rigid_var
-                        else
-                            try self.instantiateWhereMethodForUse(rigid_var, env, self.getRegionAt(constraint.fn_var));
+                        else blk: {
+                            if (self.existingWhereMethodUse(rigid_var, constraint.fn_var)) |existing| {
+                                break :blk existing;
+                            }
+                            const instantiated = try self.instantiateWhereMethodForUse(
+                                rigid_var,
+                                env,
+                                self.getRegionAt(constraint.fn_var),
+                            );
+                            try self.recordWhereMethodUse(rigid_var, constraint);
+                            break :blk instantiated;
+                        };
 
                         // Unify the actual function var against the inferred var
                         //

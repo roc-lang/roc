@@ -101,6 +101,21 @@ pub const AbsorbedRecordDefault = struct {
     pub const SafeList = MkSafeList(@This());
 };
 
+/// One callable target omitted when flex receiver constraints are merged.
+/// This is per-unification scratch output; Check copies established rows into
+/// rollback-aware boundary state before the next unification resets scratch.
+pub const GeneralizedDispatchTargetShareCandidate = struct {
+    /// Raw receiver on the side whose callable target was omitted.
+    omitted_receiver_var: Var,
+    /// Raw receiver on the side that supplied the retained target.
+    retained_receiver_var: Var,
+    method_ident: Ident.Idx,
+    omitted_fn_var: Var,
+    retained_fn_var: Var,
+
+    pub const SafeList = MkSafeList(@This());
+};
+
 const NominalDirection = enum {
     a_is_nominal,
     b_is_nominal,
@@ -813,7 +828,12 @@ const Unifier = struct {
                     }
                 };
 
-                const merged_constraints = try self.unifyStaticDispatchConstraints(a_flex.constraints, b_flex.constraints);
+                const merged_constraints = try self.unifyStaticDispatchConstraints(
+                    vars.a.var_,
+                    a_flex.constraints,
+                    vars.b.var_,
+                    b_flex.constraints,
+                );
                 try self.merge(vars, Content{ .flex = .{
                     .name = mb_ident,
                     .constraints = merged_constraints,
@@ -3256,7 +3276,9 @@ const Unifier = struct {
 
     fn unifyStaticDispatchConstraints(
         self: *Self,
+        a_receiver_var: Var,
         a_constraints: StaticDispatchConstraint.SafeList.Range,
+        b_receiver_var: Var,
         b_constraints: StaticDispatchConstraint.SafeList.Range,
     ) Error!StaticDispatchConstraint.SafeList.Range {
         const a_len = a_constraints.len();
@@ -3272,7 +3294,12 @@ const Unifier = struct {
         }
 
         // Partition constraints
-        const partitioned = try self.partitionStaticDispatchConstraints(a_constraints, b_constraints);
+        const partitioned = try self.partitionStaticDispatchConstraints(
+            a_receiver_var,
+            a_constraints,
+            b_receiver_var,
+            b_constraints,
+        );
 
         // Unify shared constraints
         // IMPORTANT: We must use index-based iteration here, not slice-based.
@@ -3362,6 +3389,26 @@ const Unifier = struct {
         );
     }
 
+    fn omitStaticDispatchTarget(
+        self: *const Self,
+        omitted_receiver_var: Var,
+        retained_receiver_var: Var,
+        retained: StaticDispatchConstraint,
+        omitted: StaticDispatchConstraint,
+    ) Error!void {
+        _ = try self.scratch.in_both_static_dispatch_constraints.append(self.scratch.gpa, .{
+            .a = retained,
+            .b = omitted,
+        });
+        _ = try self.scratch.generalized_dispatch_target_share_candidates.append(self.scratch.gpa, .{
+            .omitted_receiver_var = omitted_receiver_var,
+            .retained_receiver_var = retained_receiver_var,
+            .method_ident = retained.fn_name,
+            .omitted_fn_var = omitted.fn_var,
+            .retained_fn_var = retained.fn_var,
+        });
+    }
+
     /// Match relations that deliberately share one callable type while leaving
     /// independent same-name method calls separate. When a same-name group
     /// contains any declarative relation (where clause, literal, or operator),
@@ -3370,7 +3417,9 @@ const Unifier = struct {
     /// rank-1 method scheme independently.
     fn partitionStaticDispatchConstraints(
         self: *const Self,
+        a_receiver_var: Var,
         a_constraints_range: StaticDispatchConstraint.SafeList.Range,
+        b_receiver_var: Var,
         b_constraints_range: StaticDispatchConstraint.SafeList.Range,
     ) Error!PartitionedStaticDispatchConstraints {
         const scratch = self.scratch;
@@ -3561,17 +3610,21 @@ const Unifier = struct {
                 }
                 var a_index = if (a_has_declarative) a_group_start + 1 else a_group_start;
                 while (a_index < a_group_end) : (a_index += 1) {
-                    _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, .{
-                        .a = representative,
-                        .b = a_constraints[a_indices[a_index]],
-                    });
+                    try self.omitStaticDispatchTarget(
+                        a_receiver_var,
+                        if (a_has_declarative) a_receiver_var else b_receiver_var,
+                        representative,
+                        a_constraints[a_indices[a_index]],
+                    );
                 }
                 var b_index = if (a_has_declarative) b_group_start else b_group_start + 1;
                 while (b_index < b_group_end) : (b_index += 1) {
-                    _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, .{
-                        .a = representative,
-                        .b = b_constraints[b_indices[b_index]],
-                    });
+                    try self.omitStaticDispatchTarget(
+                        b_receiver_var,
+                        if (a_has_declarative) a_receiver_var else b_receiver_var,
+                        representative,
+                        b_constraints[b_indices[b_index]],
+                    );
                 }
             } else {
                 // Only independent dot-call relations: keep each side's calls
@@ -3911,6 +3964,7 @@ pub const Scratch = struct {
     only_in_a_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
     only_in_b_static_dispatch_constraints: StaticDispatchConstraint.SafeList,
     in_both_static_dispatch_constraints: TwoStaticDispatchConstraints.SafeList,
+    generalized_dispatch_target_share_candidates: GeneralizedDispatchTargetShareCandidate.SafeList,
     a_static_dispatch_constraint_indices: MkSafeList(u32),
     b_static_dispatch_constraint_indices: MkSafeList(u32),
 
@@ -3969,6 +4023,7 @@ pub const Scratch = struct {
             .only_in_a_static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, 32),
             .only_in_b_static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, 32),
             .in_both_static_dispatch_constraints = try TwoStaticDispatchConstraints.SafeList.initCapacity(gpa, 32),
+            .generalized_dispatch_target_share_candidates = try GeneralizedDispatchTargetShareCandidate.SafeList.initCapacity(gpa, 8),
             .a_static_dispatch_constraint_indices = try MkSafeList(u32).initCapacity(gpa, 32),
             .b_static_dispatch_constraint_indices = try MkSafeList(u32).initCapacity(gpa, 32),
             .occurs_scratch = try occurs.Scratch.init(gpa),
@@ -3998,6 +4053,7 @@ pub const Scratch = struct {
         self.only_in_a_static_dispatch_constraints.deinit(self.gpa);
         self.only_in_b_static_dispatch_constraints.deinit(self.gpa);
         self.in_both_static_dispatch_constraints.deinit(self.gpa);
+        self.generalized_dispatch_target_share_candidates.deinit(self.gpa);
         self.a_static_dispatch_constraint_indices.deinit(self.gpa);
         self.b_static_dispatch_constraint_indices.deinit(self.gpa);
         self.occurs_scratch.deinit();
@@ -4025,6 +4081,7 @@ pub const Scratch = struct {
         self.only_in_a_static_dispatch_constraints.items.clearRetainingCapacity();
         self.only_in_b_static_dispatch_constraints.items.clearRetainingCapacity();
         self.in_both_static_dispatch_constraints.items.clearRetainingCapacity();
+        self.generalized_dispatch_target_share_candidates.items.clearRetainingCapacity();
         self.a_static_dispatch_constraint_indices.items.clearRetainingCapacity();
         self.b_static_dispatch_constraint_indices.items.clearRetainingCapacity();
         self.fresh_vars.items.clearRetainingCapacity();

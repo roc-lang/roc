@@ -382,57 +382,83 @@ diff. Open questions 5 and 6 are closed by this finding.
 
 ### W6. Where-method uses: deliberate per-use plans and closed-implementation re-tag
 
-**Mechanism (verified with the built compiler).** A body use that widens
-its where-method copy already lowers correctly when the implementation's
-own return row is open: the artifact's plan carries the use's copy as
-`callable_ty`, `paramIndexFor` cannot match the copy's fresh root to the
-where-clause var and falls back to a same-name match with
-`independent_callable = true`, and Monotype then instantiates the
-implementation's scheme against the use's callable. Widening, `?` into a
-wider row, exhaustive closing, two independent uses, and nested evidence all
-pass on both backends. It panics only when the implementation's return row
-is closed in its scheme (the body returns a top-level constant, an
+**Original diagnosis (verified with the built compiler).** A body use that
+widened its where-method copy happened to lower correctly for an open
+implementation because `paramIndexFor` matched the method name after exact
+callable identity failed. That behavior was useful evidence, but it was an
+undeclared fallback and is not the W6a design. Widening, `?` into a wider row,
+exhaustive closing, two independent uses, and nested evidence passed on both
+backends through that route. It panics only when the implementation's return
+row is closed in its scheme (the body returns a top-level constant, an
 input-position parameter, or a nominal field):
 `instantiateTargetFromPlanNode` → `relateFunctionRequestInterface` →
 `unifyTagRows` "instantiation widened a closed tag union".
 
-**W6a. Make per-use plans deliberate.** The working behavior rests on a
-fallback intended for a different case. Use the scheme-use mechanism that
-exists rather than a parallel pair table: a body use is a scheme
-instantiation (`instantiateWhereMethodForUse` ~6198 copies the signature's
-structure over shared leaves), and `SchemeUseRecord` (`ModuleEnv.zig` ~685)
-already models one — a slot kind, a `slot_data` unique per constraint
-instantiation (the use's constraint fn var, as `dispatch_target` does), the
-scheme root (the where-clause signature var), and copy pairs. Add
-`Slot.where_method_use`; record it in `checkStaticDispatchConstraints`'
-rigid branch (~29961) when a copy is minted, pairs from the instantiator's
-`var_map`; have `paramIndexFor` (~17512) resolve the plan's
-`constraint_fn_var` through that record to the signature root before
-matching and produce `evidence_dependent{ independent_callable = true }` by
-rule; the same-name fallback becomes an invariant. The evidence pass's
-walks over `scheme_uses` (`emitSchemeUseSiteEvidence` ~18469,
-`evidenceRefsForRecord`) skip the new slot: a body use has no obligations
-of its own. Old-branch lessons: keyed by the two explicit vars (use fn var,
-signature fn var), never by name; `evidenceNodeForTarget` memoization is
-unaffected because per-use copies never reach a `record_idx`. Update the
-`independent_callable` doc (`static_dispatch_registry.zig` ~1502), which
-today describes only the shared-slot case.
+**W6a. Make per-use plans deliberate (implemented; focused verification
+complete 2026-09-03).** A body use remains an exact raw scheme instantiation:
+`instantiateWhereMethodForUse` writes `SchemeUseRecord.where_method_use`, keyed
+by the use's raw constraint callable, with the pristine signature root and the
+complete copy map. The record has no child dispatch requirements of its own. It is not
+looked up by solved class and it is never matched by method name.
 
-Risk, to be settled in this item: an independent callable's nested evidence
-is `.synthesize`, which lowering maps to `.from_callable`
-(`appendConstFnEvidence` ~4346). An implementation whose evidence schema is
-`requires_record` (`procedureEvidenceSchemaFromSlices` ~17963: a param
-sourced from `constraint_callable`, `use_site_only`, `erased_row_remainder`,
-or a pathed `explicit_default`) cannot be synthesized from the callable.
-W6a either reuses the obligation's `.resolved` vector for target identity
-and nested evidence while keeping the callable independent, or pins such
-targets unreachable with an invariant and a fixture. Tests: the scratch
-programs from the investigation as `lir_inline`/CLI fixtures (widen; widen
-with a tag that sorts between `Err`/`Ok` to prove the implementation is
-specialized at the wider row; `?` into a wider row; one closing use and one
-widening use; an implementation with its own where-clause, exercising
-`.synthesize` nested evidence; and an implementation with a
-`requires_record` schema, constructed from one of the sources above).
+The additional case discovered during implementation is generalized
+constraint dominance. Unification can correctly omit one declarative target
+while retaining another for the same receiver and method, leaving a dispatch
+plan named by the omitted raw callable. Omission alone proves target identity,
+not callable-leaf identity, so the approved W6a representation is a durable,
+serialized raw-witness table, `GeneralizedDispatchTargetShare`. Each directed
+row scopes the omitted and retained raw callable vars by raw receiver and method
+and carries one of two proofs: equal generalized callable shape under the exact
+owning boundary's public-identity anchors, or an exact raw
+`where_method_use` record whose complete copy map connects the pristine
+signature to the omitted callable. The evidence pass resolves and indexes this
+table post-solve. Exact identity outranks where-use nested-evidence reuse, which
+outranks callable synthesis; relations compose along chains and the strongest
+parallel path wins. `Check.recordGeneralizedDispatchTargetShare` rejects a new
+cycle, and checked-artifact validation rejects duplicate/contradictory edges and
+dead reachable cycles. `paramIndexFor` has no same-name path.
+
+The candidate lifecycle is transactional and boundary-owned. Unifier scratch
+records both raw receiver operands. `Check.runUnify` validates their committed
+roots after every result, including partial mismatches; probes roll the pending
+list back. A candidate belongs explicitly to a scheme or recursive group,
+recursive SCCs flush once under the union of member anchors, and each boundary
+must consume or retire all candidates it owns. Only the boundary flush mutates
+`ModuleEnv`, and checked output requires final quiescence.
+
+The nested-evidence decision is now explicit. Shape-only sharing sets an
+independent callable whose nested evidence is synthesized from that callable.
+An exact raw where-use proof also keeps the callable independent but reuses the
+retained slot's checked nested-evidence vector. A `requires_record` evidence
+schema cannot be synthesized, so it requires the exact where-use proof. A
+direct Monotype unit pins both sides: exact where-use reuse preserves the
+retained slot's resolved nested vector, while shape-only synthesis is rejected.
+The combined W6a LIR fixture exercises the proof-backed path successfully.
+
+Approved codec amendment: generalized deduplication treats
+`deferred_generated_codec = true` as stronger than `false`. It chooses the
+final representative for each equal requirement identity before writing aliases, in
+both `[false, true]` and `[true, false]` encounter orders, and points every
+omitted callable directly at it. Equal-strength candidates keep the first.
+
+Current verification: the equivalent correctly ordered focused command,
+`zig build run-test-zig-module-check --summary all -- --test-filter "scheme use"`,
+passed all 7 build steps and both selected tests. The literal requested spelling,
+`zig build run-test-zig-module-check -- --test-filter "scheme use" --summary all`,
+reached the test runner but was rejected because `--summary all` was forwarded
+to the test binary (`unrecognized command line argument: --summary`). The final
+focused suite is green: unifier omission ownership/partial-commit tests (4/4),
+target-share relation composition/cycle tests (2/2), side-table and codec-order
+deduplication tests including interleaved groups (2/2), static/mutable
+ModuleEnv roundtrips (2/2), checked-artifact v77 and ModuleEnv cache fingerprints
+(2/2 each), serialization sizes, mutable warm-cache preservation of exact raw
+where-use records and exact-proof target-share rows (2/2),
+accepted/rejected cross-module generated-codec revalidation (2/2), the
+`requires_record` Monotype gate (2/2), and the combined W6a LIR regression
+(1/1). The LIR regression pins ordering-sensitive widening, `?` into a wider
+row, closing plus widening at independent uses, nested synthesis, and
+proof-backed `requires_record` reuse. Closed-implementation widening remains
+the deliberately separate W6b expected-failure class.
 
 **W6b. Closed implementation, widened use.** Decision: a result-row
 widening ADAPTER at the template boundary, generalizing the hosted `Try`
@@ -481,7 +507,7 @@ in the direction that matters: a body use's widening is observable when
 the constrained function's body is checked (its fresh extension resolved
 to a row carrying tags — the audit's own test), and each marker's position
 in the signature is known when it is minted. Two checker shapes were
-possible; Jared decided (e) on 2026-09-03 (open question 3): (d) per-use opening is
+possible; Jared decided (e) on 2026-09-03 (question 3, now closed): (d) per-use opening is
 restricted to the positions the adapter can re-tag — the direct result row
 and a `Try`'s rows — and every other output position of a where-method
 signature stays closed as written, so a nested widening is an ordinary
@@ -525,17 +551,21 @@ instantiation; closed implementations get a widening adapter.
 
 Update design.md's Polarity lowering note to describe W3 and W6 as declared
 rules and to state that stored-codec restores are Phase-A/Phase-B consumers
-(W2b). Nothing in this plan is a Rewrite Inventory entry: that inventory
-classifies solver-mutating rewrites in checking, and `groundRowDefaults`
-(deleted by W2b) and the adapter are Monotype mechanisms declared in the
-Monotype sections. If W6b's nested-position decision adds a checker
-rejection, that rule is declared in the Polarity section. `kupupkyt`
-already bumped the checked-artifact cache version (`CACHE_VERSION` 72 → 73,
-`src/compile/cache_config.zig`) because published `row_default`s and
-weak-value grounding changed the artifact's meaning; W6a's new
-`SchemeUseRecord` slot kind and any W3 checker-published flag change the
-artifact again and bump it once more. Refresh the PR description's
-verification section.
+(W2b). W6a's `deduplicateGeneralizedDispatchRequirements` is a Rewrite
+Inventory entry under Generalized Dispatch Requirement Deduplication: its
+accepted tests cover equal anchored callable `TypeDigest`s, exact where-use
+nested-evidence reuse, shape-only callable-derived evidence, and complete-codec
+dominance in both input orders; its rejected tests cover unequal anchored
+digests, literal requirements, distinct method/origin data, and shape-only
+`requires_record`. `groundRowDefaults` (deleted by W2b) and the W6b adapter are
+Monotype mechanisms declared in the Monotype sections. Option (e)'s W6b
+checker rejection is a declarative Polarity rule unless its implementation
+adds a solved-graph mutation, in which case that mutation needs its own Rewrite
+Inventory entry. `kupupkyt` already bumped the checked-module cache version
+(`CACHE_VERSION` 72 → 73, `src/compile/cache_config.zig`) because checked
+`row_default` data and weak-value grounding changed; W6a uses version 74 for
+the new `SchemeUseRecord` slot, target-share rows, and checked-plan flags.
+Refresh the PR description's verification section.
 
 ### W8. Report `Tag Not In Annotation` as a Type Mismatch (last; Jared, 2026-09-03)
 
@@ -700,10 +730,11 @@ described in full, with trailers):
 | `tsrzvryw` | W2a | landed, implemented + adversarially reviewed; callable-node grounding only |
 | `wwnsvqrn` | W3 | landed, implemented + reviewed twice; full `run-test-zig` 5039/5046 (7 skipped) and `run-check-snapshots` clean on its tree |
 | `vrpryvko` | W4 | landed, implemented + reviewed; tests and fixtures only |
+| working copy | W6a | implemented; producer, lifecycle, codec dominance, serialization/recheck, `requires_record`, and combined LIR focused gates green |
 
 Bookmark `jared/polarity` still points at the plan commit `wlzsxolu`;
 nothing after the original plan commit has been pushed. To publish: move
-the bookmark to the top (`jj bookmark set jared/polarity -r vrpryvko`,
+the bookmark to the top (`jj bookmark set jared/polarity -r ktlykkxv`,
 `--allow-backwards` is not needed for a forward move) and `jj git push`
 — only at Jared's explicit direction. Then refresh the PR description
 (W7).
@@ -725,24 +756,40 @@ the bookmark to the top (`jj bookmark set jared/polarity -r vrpryvko`,
   local optimum. Every behaviour change is a declared rule in
   `design.md` and is pinned by tests at each level it touches.
 - Jared's answers so far are recorded in §7 and in each item's "Landed"
-  note. Open question 3 (W6b nested positions) is still open; the
-  driver's recommendation to Jared was option (e). Ask before W6b.
+  note. Question 3 is closed: Jared chose option (e) and explicitly gave the
+  driver the green light to continue the planned work autonomously. Ask only
+  if implementation exposes a typing or lowering policy not covered by this plan.
 
 ### 8.3 What is next, in order
 
-W6a → W6b (needs the §7 question 3 answer first) → W2b (also owns the
-optional-field stored-codec fixtures, Appendix A) → W7 → W8. Each
+W6a is implemented and its focused verification is complete. Next: W6b → W2b (also owns the optional-field
+stored-codec fixtures, Appendix A) → W7 → W8. Each
 section above is the specification; the "Landed" notes on W2a/W3/W4
 show the level of detail expected in a commit and what the reviewers
 looked for. Verification matrix in §4.
 
 Facts that were only in the lost scratchpad and matter for W6:
-- Where-method widening ALREADY lowers for OPEN implementations: the
-  artifact plan carries the use's copy as `callable_ty`, `paramIndexFor`
-  cannot match the copy's fresh root to the where-clause var, falls back
-  to a same-name match with `independent_callable = true`, and Monotype
-  instantiates the implementation's scheme against the use's callable.
-  Verified on both backends with the Appendix B programs marked "passes".
+- Where-method widening lowered for OPEN implementations in the original
+  diagnosis through a same-name match. W6a removes that route. The deliberate
+  route is the exact raw `SchemeUseRecord.where_method_use` plus any serialized
+  `GeneralizedDispatchTargetShare` needed when generalized dominance omitted
+  the callable named by the plan. A share never comes from a solved-class scan
+  or a method-name match.
+- A shape-only share synthesizes nested evidence; an exact raw where-use share
+  reuses the retained slot's nested evidence. `requires_record` needs the latter
+  and is pinned by the direct Monotype accepted/rejected gate plus the combined
+  W6a LIR fixture.
+- In generalized deduplication, `deferred_generated_codec = true` dominates
+  `false` in either encounter order; choose the final representative before
+  emitting any directed share edge.
+- Focused verification: `zig build run-test-zig-module-check --summary
+  all -- --test-filter "scheme use"` passed 7/7 steps and 2/2 tests. Putting
+  `--summary all` after `--` is rejected by the test runner, so the literal
+  trailing-option form is not a valid verification command. The direct
+  producer/lifecycle/codec/relation/roundtrip/cache gates—including cold/warm
+  preservation of an exact where-use target-share row—accepted/rejected
+  cross-module codec gate, Monotype `requires_record` gate, and combined W6a LIR
+  regression are all green; see W6a's verification paragraph for counts.
 - It panics only when the implementation's own return row is closed in
   its scheme (body returns a top-level constant, an input-position
   parameter, or a nominal field): `instantiateTargetFromPlanNode` →

@@ -5605,10 +5605,13 @@ const AppRootIdentity = struct {
     module_identity_hash: [32]u8,
     cache_hits: u32,
     platform_root_publish_count: u32,
-    /// The executable root artifact serialized exactly as the checked-module
-    /// cache stores it, so tests assert byte identity between fresh and
-    /// cache-relocated publications rather than key identity alone.
-    executable_root_bytes: []u8,
+    generalized_target_share_count: usize,
+    where_method_scheme_use_count: usize,
+    where_method_target_share_count: usize,
+    /// The platform root checked artifact serialized exactly as the
+    /// checked-module cache stores it, so tests assert byte identity between
+    /// fresh and cache-relocated checked data rather than key identity alone.
+    platform_root_bytes: []u8,
     /// The app root artifact serialized the same way: the recorded platform/app
     /// requirement solutions it carries must be a pure function of the artifacts
     /// they relate.
@@ -5616,7 +5619,7 @@ const AppRootIdentity = struct {
 
     fn deinit(self: *AppRootIdentity, allocator: Allocator) void {
         allocator.free(self.app_root_bytes);
-        allocator.free(self.executable_root_bytes);
+        allocator.free(self.platform_root_bytes);
         self.* = undefined;
     }
 };
@@ -5637,8 +5640,8 @@ fn serializedCheckedArtifactBytes(
     return bytes;
 }
 
-/// Compile an app workspace and return the executable root artifact's
-/// content-addressed key and module identity hash, plus checked-cache hits.
+/// Compile an app workspace and return the platform root checked artifact's
+/// content-addressed digest and module identity hash, plus checked-cache hits.
 fn compileAppRootIdentity(
     allocator: Allocator,
     cache_dir: []const u8,
@@ -5677,16 +5680,31 @@ fn compileAppRootIdentity(
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = coord.executableRootCheckedArtifact();
-    const executable_root_bytes = try serializedCheckedArtifactBytes(allocator, root);
-    errdefer allocator.free(executable_root_bytes);
+    const platform_root_bytes = try serializedCheckedArtifactBytes(allocator, root);
+    errdefer allocator.free(platform_root_bytes);
     const app_root_bytes = try serializedCheckedArtifactBytes(allocator, coord.appRootCheckedArtifact());
     errdefer allocator.free(app_root_bytes);
+    var where_method_target_share_count: usize = 0;
+    for (root.moduleEnvConst().generalized_dispatch_target_shares.items.items) |share| {
+        if (share.proof_kind == @intFromEnum(can.ModuleEnv.GeneralizedDispatchTargetShare.ProofKind.where_method_use)) {
+            where_method_target_share_count += 1;
+        }
+    }
+    var where_method_scheme_use_count: usize = 0;
+    for (root.moduleEnvConst().scheme_uses.items.items) |record| {
+        if (record.slot_kind == @intFromEnum(can.ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
+            where_method_scheme_use_count += 1;
+        }
+    }
     return .{
         .artifact_key = root.key.bytes,
         .module_identity_hash = root.module_identity.stable_hash,
         .cache_hits = coord.getBuildStats().cache_hits,
         .platform_root_publish_count = coord.platform_root_publish_count,
-        .executable_root_bytes = executable_root_bytes,
+        .generalized_target_share_count = root.moduleEnvConst().generalized_dispatch_target_shares.items.items.len,
+        .where_method_scheme_use_count = where_method_scheme_use_count,
+        .where_method_target_share_count = where_method_target_share_count,
+        .platform_root_bytes = platform_root_bytes,
         .app_root_bytes = app_root_bytes,
     };
 }
@@ -5717,6 +5735,17 @@ fn writeCacheKeyPurityFixture(tmp_dir: *std.testing.TmpDir, sub_dir: []const u8)
         \\    hosted { "roc_echo_line": Echo.line! }
         \\
         \\import Echo
+        \\
+        \\render_twice = |x| Str.concat(x.render(), x.render())
+        \\
+        \\min_copy : Iter(item) -> Try(item, [IterWasEmpty])
+        \\    where [item.min : item, item -> item]
+        \\min_copy = |iterator|
+        \\    match Iter.next(iterator) {
+        \\        Done => Err(IterWasEmpty)
+        \\        Skip({ rest }) => min_copy(rest)
+        \\        One({ item: first, rest }) => Ok(Iter.fold(rest, first, |best, item| best.min(item)))
+        \\    }
         \\
         \\main_for_host! : List(Str) => I8
         \\main_for_host! = |args|
@@ -5837,11 +5866,11 @@ test "cache-key purity: identical workspaces in different directories produce bi
     // entries even though it ran in a different directory.
     try std.testing.expect(second.cache_hits > 0);
     // A key match implies byte-identical relocatable artifacts.
-    try std.testing.expectEqualSlices(u8, first.executable_root_bytes, second.executable_root_bytes);
+    try std.testing.expectEqualSlices(u8, first.platform_root_bytes, second.platform_root_bytes);
     try std.testing.expectEqualSlices(u8, first.app_root_bytes, second.app_root_bytes);
 }
 
-test "warm build reloads the deferred platform root without republishing" {
+test "warm build preserves exact where-use target shares in the deferred platform root" {
     const allocator = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -5854,28 +5883,32 @@ test "warm build reloads the deferred platform root without republishing" {
     const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "warm/app/main.roc", allocator);
     defer allocator.free(app_path);
 
-    // The cold build defers the platform root's check-time publication, so
-    // finalization is the platform root's single publication.
+    // The cold build defers platform-root checked-artifact construction, so
+    // finalization increments `platform_root_publish_count` exactly once.
     var cold = try compileAppRootIdentity(allocator, cache_dir, app_path);
     defer cold.deinit(allocator);
     try std.testing.expectEqual(@as(u32, 1), cold.platform_root_publish_count);
+    try std.testing.expect(cold.generalized_target_share_count > 0);
+    try std.testing.expect(cold.where_method_scheme_use_count > 0);
+    try std.testing.expect(cold.where_method_target_share_count > 0);
 
     // The warm build rechecks the deferred root to recreate its complete
-    // publication continuation, then relocates the previously-republished root
-    // from the pairing cache, so it performs no platform-root publication.
+    // continuation, then relocates the cached platform root, so the existing
+    // platform-root output counter remains zero.
     var warm = try compileAppRootIdentity(allocator, cache_dir, app_path);
     defer warm.deinit(allocator);
     try std.testing.expectEqual(@as(u32, 0), warm.platform_root_publish_count);
     try std.testing.expect(warm.cache_hits > 0);
+    try std.testing.expectEqual(cold.generalized_target_share_count, warm.generalized_target_share_count);
+    try std.testing.expectEqual(cold.where_method_scheme_use_count, warm.where_method_scheme_use_count);
+    try std.testing.expectEqual(cold.where_method_target_share_count, warm.where_method_target_share_count);
 
-    // The republished executable root is content-addressed, so both runs produce
-    // a byte-identical key—and byte-identical artifacts: the cache-relocated
-    // relation-bearing platform root serializes exactly as the fresh publication
-    // did, and the cached app artifact carries the same recorded requirement
-    // solutions as a fresh check (the relation is a pure function of the
-    // artifacts it relates).
+    // The platform root is content-addressed, so both runs produce a
+    // byte-identical digest and byte-identical checked artifacts. The
+    // cache-relocated target-share rows serialize exactly as the fresh rows, and
+    // the cached app artifact carries the same recorded requirement solutions.
     try std.testing.expectEqualSlices(u8, &cold.artifact_key, &warm.artifact_key);
-    try std.testing.expectEqualSlices(u8, cold.executable_root_bytes, warm.executable_root_bytes);
+    try std.testing.expectEqualSlices(u8, cold.platform_root_bytes, warm.platform_root_bytes);
     try std.testing.expectEqualSlices(u8, cold.app_root_bytes, warm.app_root_bytes);
 }
 
