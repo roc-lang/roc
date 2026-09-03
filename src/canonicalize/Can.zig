@@ -248,7 +248,11 @@ active_decl_value_entries: std.ArrayListUnmanaged(ActiveDeclValueEntry) = .empty
 /// Value forward references keyed by the exact parser declaration they target.
 /// The declaration-specific canonicalization path is the only consumer that
 /// may adopt one of these placeholder patterns.
-value_forward_references: std.AutoHashMapUnmanaged(AST.DeclIndex.DeclIdx, Scope.ForwardReference) = .{},
+value_forward_references: std.AutoHashMapUnmanaged(ValueForwardKey, Scope.ForwardReference) = .{},
+/// The declaration whose destructuring pattern is being canonicalized. Each
+/// name that pattern binds adopts the placeholder created for a reference to
+/// it ahead of the declaration, so that the reference resolves to the binder.
+adopting_forward_decl: ?AST.DeclIndex.DeclIdx = null,
 /// Active parser declaration scopes keyed by parser scope index.
 active_decl_scopes: std.AutoHashMapUnmanaged(AST.DeclIndex.ScopeIdx, ActiveDeclBinding) = .{},
 /// Top active declaration owner for each whole-scope type name.
@@ -761,7 +765,7 @@ fn initInternal(
         .import_indices = std.AutoHashMapUnmanaged(Ident.Idx, Import.Idx){},
         .alias_cycle_references = std.AutoHashMapUnmanaged(AST.Statement.Idx, AST.Statement.Idx){},
         .alias_cycle_scopes = std.AutoHashMapUnmanaged(AST.DeclIndex.ScopeIdx, void){},
-        .value_forward_references = std.AutoHashMapUnmanaged(AST.DeclIndex.DeclIdx, Scope.ForwardReference){},
+        .value_forward_references = std.AutoHashMapUnmanaged(ValueForwardKey, Scope.ForwardReference){},
         .assoc_value_patterns = std.AutoHashMapUnmanaged(AST.DeclIndex.AssocValue, Pattern.Idx){},
         .assoc_forward_references = std.AutoHashMapUnmanaged(AST.DeclIndex.AssocValue, Scope.ForwardReference){},
         .assoc_forward_pattern_keys = std.AutoHashMapUnmanaged(Pattern.Idx, AST.DeclIndex.AssocValue){},
@@ -3337,6 +3341,33 @@ fn rebindPlaceholderPatternIdent(
     self.env.store.nodes.set(node_idx, node);
 }
 
+/// The placeholder created for references to `ident` ahead of the declaration
+/// whose destructuring pattern is being canonicalized, made into that
+/// pattern's `assign` binder for `ident` at `region`. The placeholder keeps its
+/// index, so the earlier references resolve to the binder, and it is already
+/// in the declaration's scope.
+fn adoptForwardBinder(self: *Self, ident: Ident.Idx, region: Region) ?Pattern.Idx {
+    const decl_idx = self.adopting_forward_decl orelse return null;
+    const placeholder = self.takeValueForwardReference(decl_idx, ident) orelse return null;
+    self.env.store.setRegionAt(ModuleEnv.nodeIdxFrom(placeholder), region);
+    return placeholder;
+}
+
+/// Like `adoptForwardBinder`, for an `as` binder: the placeholder node becomes
+/// the `as` pattern over `inner_pattern`.
+fn adoptForwardAsBinder(self: *Self, ident: Ident.Idx, inner_pattern: Pattern.Idx, region: Region) ?Pattern.Idx {
+    const placeholder = self.adoptForwardBinder(ident, region) orelse return null;
+    const node_idx = ModuleEnv.nodeIdxFrom(placeholder);
+    var node = self.env.store.nodes.get(node_idx);
+    node.tag = .pattern_as;
+    node.setPayload(.{ .pattern_as = .{
+        .ident = @bitCast(ident),
+        .pattern = @intFromEnum(inner_pattern),
+    } });
+    self.env.store.nodes.set(node_idx, node);
+    return placeholder;
+}
+
 /// Publish the relative (module-prefix-stripped) qualified name of an
 /// associated item at the module scope, so user-written lookups that omit
 /// the module prefix (e.g. `One.Two.Three.Four.value` when the module is
@@ -5009,6 +5040,9 @@ fn createAnnotationDef(
         self.takeValueForwardReference(decl_idx, ident)
     else
         null;
+    if (value_forward_pattern) |forward_pattern| {
+        self.env.store.setRegionAt(ModuleEnv.nodeIdxFrom(forward_pattern), region);
+    }
     const pattern_idx = if (value_forward_pattern) |forward_pattern|
         forward_pattern
     else if (self.isPlaceholder(ident)) placeholder_check: {
@@ -7452,10 +7486,12 @@ fn canonicalizeDeclWithAnnotation(
         self.adoptValueForwardReference(decl_idx, decl.pattern)
     else
         null;
-    const pattern_idx = if (forward_pattern) |pattern|
-        pattern
-    else
-        try self.canonicalizePatternOrMalformed(decl.pattern);
+    const pattern_idx = if (forward_pattern) |pattern| pattern else blk: {
+        const saved_adopting_forward_decl = self.adopting_forward_decl;
+        self.adopting_forward_decl = parser_decl_idx;
+        defer self.adopting_forward_decl = saved_adopting_forward_decl;
+        break :blk try self.canonicalizePatternOrMalformed(decl.pattern);
+    };
     if (self.currentScopeIdx() == 0) {
         try self.markBoundPatternsGloballyResolvable(pattern_idx);
     }
@@ -8304,7 +8340,10 @@ fn canonicalizeUnqualifiedIdentExpr(
             std.debug.assert(owner_scope_idx < self.scopes.items.len);
 
             const owner_scope = &self.scopes.items[owner_scope_idx];
-            const gop = try self.value_forward_references.getOrPut(self.env.gpa, active_decl_entry.decl_idx);
+            const gop = try self.value_forward_references.getOrPut(self.env.gpa, .{
+                .decl_idx = active_decl_entry.decl_idx,
+                .ident = ident,
+            });
             const ref_pattern_idx = if (gop.found_existing) blk: {
                 try gop.value_ptr.reference_regions.append(self.env.gpa, region);
                 break :blk gop.value_ptr.pattern_idx;
@@ -15424,19 +15463,30 @@ fn canonicalizePatternOrMalformed(
     }
 }
 
+/// A declaration binding a name that was referenced ahead of it. A plainly
+/// named declaration has one such key; a destructuring declaration has one per
+/// bound name.
+const ValueForwardKey = struct {
+    decl_idx: AST.DeclIndex.DeclIdx,
+    ident: Ident.Idx,
+};
+
+/// Adopt the placeholder created for references ahead of a plainly named
+/// declaration as its binder. A destructuring declaration adopts per bound
+/// name while its pattern is canonicalized (see `adopting_forward_decl`).
 fn adoptValueForwardReference(
     self: *Self,
     parser_decl_idx: AST.DeclIndex.DeclIdx,
     ast_pattern_idx: AST.Pattern.Idx,
 ) ?Pattern.Idx {
-    if (!self.value_forward_references.contains(parser_decl_idx)) return null;
-
     const parser_decl = self.parse_ir.decl_index.decls.items[@intFromEnum(parser_decl_idx)];
     std.debug.assert(parser_decl.pattern == @intFromEnum(ast_pattern_idx));
     const ast_pattern = self.parse_ir.store.getPattern(ast_pattern_idx);
-    std.debug.assert(ast_pattern == .ident);
+    if (ast_pattern != .ident) return null;
     const ident = self.parse_ir.tokens.resolveIdentifier(ast_pattern.ident.ident_tok) orelse unreachable;
-    return self.takeValueForwardReference(parser_decl_idx, ident);
+    const placeholder = self.takeValueForwardReference(parser_decl_idx, ident) orelse return null;
+    self.env.store.setRegionAt(ModuleEnv.nodeIdxFrom(placeholder), self.parse_ir.tokenizedRegionToRegion(ast_pattern.ident.region));
+    return placeholder;
 }
 
 fn takeValueForwardReference(
@@ -15444,12 +15494,12 @@ fn takeValueForwardReference(
     parser_decl_idx: AST.DeclIndex.DeclIdx,
     ident: Ident.Idx,
 ) ?Pattern.Idx {
-    const kv = self.value_forward_references.fetchRemove(parser_decl_idx) orelse return null;
+    const kv = self.value_forward_references.fetchRemove(.{ .decl_idx = parser_decl_idx, .ident = ident }) orelse return null;
     var reference_regions = kv.value.reference_regions;
     reference_regions.deinit(self.env.gpa);
 
     const parser_decl = self.parse_ir.decl_index.decls.items[@intFromEnum(parser_decl_idx)];
-    std.debug.assert(parser_decl.name_ident != null and parser_decl.name_ident.?.eql(ident));
+    std.debug.assert(parser_decl.name_ident == null or parser_decl.name_ident.?.eql(ident));
 
     if (self.active_decl_scopes.get(parser_decl.scope)) |active_owner| {
         const owner_scope = &self.scopes.items[active_owner.canonical_scope];
@@ -17338,6 +17388,10 @@ pub fn canonicalizePattern(
                 .ident => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
+                        if (self.adoptForwardBinder(ident_idx, region)) |placeholder| {
+                            last_pattern = placeholder;
+                            continue :patternkernel_loop .dispatch;
+                        }
                         // Check if a placeholder exists for this identifier in the current scope
                         // Placeholders are tracked in the placeholder_idents hash map
                         const current_scope = &self.scopes.items[self.scopes.items.len - 1];
@@ -17718,8 +17772,9 @@ pub fn canonicalizePattern(
                 try stacks.pushParse(frame_allocator, sub_pattern_idx);
             } else {
                 // Simple case: Create the RecordDestruct for this field
-                const assign_pattern = Pattern{ .assign = .{ .ident = field_name_ident } };
-                const assign_pattern_idx = try self.env.addPattern(assign_pattern, field_region);
+                const adopted_binder = self.adoptForwardBinder(field_name_ident, field_region);
+                const assign_pattern_idx = adopted_binder orelse
+                    try self.env.addPattern(Pattern{ .assign = .{ .ident = field_name_ident } }, field_region);
 
                 const record_destruct = CIR.Pattern.RecordDestruct{
                     .label = field_name_ident,
@@ -17733,34 +17788,37 @@ pub fn canonicalizePattern(
                 const destruct_idx = try self.env.addRecordDestruct(record_destruct, field_region);
                 try self.env.store.addScratchRecordDestruct(destruct_idx);
 
-                // Introduce the identifier into scope
-                switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, field_name_ident, assign_pattern_idx, false, true)) {
-                    .success => {},
-                    .shadowing_warning => |shadowed_pattern_idx| {
-                        const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
-                        try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
-                            .ident = field_name_ident,
-                            .region = field_region,
-                            .original_region = original_region,
-                        } });
-                    },
-                    .top_level_var_error => {
-                        last_pattern = try self.env.pushMalformed(Pattern.Idx, Diagnostic{
-                            .invalid_top_level_statement = .{
-                                .stmt = try self.env.insertString("var"),
+                // Introduce the identifier into scope (an adopted binder is
+                // already there)
+                if (adopted_binder == null) {
+                    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, field_name_ident, assign_pattern_idx, false, true)) {
+                        .success => {},
+                        .shadowing_warning => |shadowed_pattern_idx| {
+                            const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                            try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                                .ident = field_name_ident,
                                 .region = field_region,
-                            },
-                        });
-                        continue :patternkernel_loop .dispatch;
-                    },
-                    .var_across_function_boundary => {
-                        last_pattern = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .ident_already_in_scope = .{
-                            .ident = field_name_ident,
-                            .region = field_region,
-                        } });
-                        continue :patternkernel_loop .dispatch;
-                    },
-                    .var_reassignment_ok => unreachable, // is_declaration=true
+                                .original_region = original_region,
+                            } });
+                        },
+                        .top_level_var_error => {
+                            last_pattern = try self.env.pushMalformed(Pattern.Idx, Diagnostic{
+                                .invalid_top_level_statement = .{
+                                    .stmt = try self.env.insertString("var"),
+                                    .region = field_region,
+                                },
+                            });
+                            continue :patternkernel_loop .dispatch;
+                        },
+                        .var_across_function_boundary => {
+                            last_pattern = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .ident_already_in_scope = .{
+                                .ident = field_name_ident,
+                                .region = field_region,
+                            } });
+                            continue :patternkernel_loop .dispatch;
+                        },
+                        .var_reassignment_ok => unreachable, // is_declaration=true
+                    }
                 }
 
                 try stacks.pushRecordNext(frame_allocator, .{
@@ -17891,30 +17949,34 @@ pub fn canonicalizePattern(
                         // Create an assign pattern for the rest variable
                         // Use the region of just the identifier token, not the full rest pattern
                         const name_region = self.parse_ir.tokenizedRegionToRegion(.{ .start = name_tok, .end = name_tok });
-                        const assign_idx = try self.env.addPattern(Pattern{ .assign = .{
+                        const adopted_binder = self.adoptForwardBinder(ident_idx, name_region);
+                        const assign_idx = adopted_binder orelse try self.env.addPattern(Pattern{ .assign = .{
                             .ident = ident_idx,
                         } }, name_region);
 
-                        // Introduce the identifier into scope
-                        switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, assign_idx, false, true)) {
-                            .success => {},
-                            .shadowing_warning => |shadowed_pattern_idx| {
-                                const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
-                                try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
-                                    .ident = ident_idx,
-                                    .region = name_region,
-                                    .original_region = original_region,
-                                } });
-                            },
-                            .top_level_var_error => {},
-                            .var_across_function_boundary => {
-                                try self.env.pushDiagnostic(Diagnostic{ .ident_already_in_scope = .{
-                                    .ident = ident_idx,
-                                    .region = list_rest_region,
-                                } });
-                            },
-                            // List rest patterns are always declarations, never reassignments
-                            .var_reassignment_ok => unreachable,
+                        // Introduce the identifier into scope (an adopted
+                        // binder is already there)
+                        if (adopted_binder == null) {
+                            switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, assign_idx, false, true)) {
+                                .success => {},
+                                .shadowing_warning => |shadowed_pattern_idx| {
+                                    const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                                    try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                                        .ident = ident_idx,
+                                        .region = name_region,
+                                        .original_region = original_region,
+                                    } });
+                                },
+                                .top_level_var_error => {},
+                                .var_across_function_boundary => {
+                                    try self.env.pushDiagnostic(Diagnostic{ .ident_already_in_scope = .{
+                                        .ident = ident_idx,
+                                        .region = list_rest_region,
+                                    } });
+                                },
+                                // List rest patterns are always declarations, never reassignments
+                                .var_reassignment_ok => unreachable,
+                            }
                         }
 
                         current_rest_pattern = assign_idx;
@@ -17994,44 +18056,46 @@ pub fn canonicalizePattern(
             // Resolve the identifier name
             if (self.parse_ir.tokens.resolveIdentifier(state.name)) |ident_idx| {
                 // Create the as pattern
-                const as_pattern = Pattern{
+                const adopted_binder = self.adoptForwardAsBinder(ident_idx, inner_pattern, state.region);
+                const pattern_idx = adopted_binder orelse try self.env.addPattern(Pattern{
                     .as = .{
                         .pattern = inner_pattern,
                         .ident = ident_idx,
                     },
-                };
+                }, state.region);
 
-                const pattern_idx = try self.env.addPattern(as_pattern, state.region);
-
-                // Introduce the identifier into scope
-                switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true)) {
-                    .success => {},
-                    .shadowing_warning => |shadowed_pattern_idx| {
-                        const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
-                        try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
-                            .ident = ident_idx,
-                            .region = state.region,
-                            .original_region = original_region,
-                        } });
-                    },
-                    .top_level_var_error => {
-                        last_pattern = try self.env.pushMalformed(Pattern.Idx, Diagnostic{
-                            .invalid_top_level_statement = .{
-                                .stmt = try self.env.insertString("var"),
+                // Introduce the identifier into scope (an adopted binder is
+                // already there)
+                if (adopted_binder == null) {
+                    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true)) {
+                        .success => {},
+                        .shadowing_warning => |shadowed_pattern_idx| {
+                            const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                            try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                                .ident = ident_idx,
                                 .region = state.region,
-                            },
-                        });
-                        continue :patternkernel_loop .dispatch;
-                    },
-                    .var_across_function_boundary => {
-                        last_pattern = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .ident_already_in_scope = .{
-                            .ident = ident_idx,
-                            .region = state.region,
-                        } });
-                        continue :patternkernel_loop .dispatch;
-                    },
-                    // As patterns are always declarations, never reassignments
-                    .var_reassignment_ok => unreachable,
+                                .original_region = original_region,
+                            } });
+                        },
+                        .top_level_var_error => {
+                            last_pattern = try self.env.pushMalformed(Pattern.Idx, Diagnostic{
+                                .invalid_top_level_statement = .{
+                                    .stmt = try self.env.insertString("var"),
+                                    .region = state.region,
+                                },
+                            });
+                            continue :patternkernel_loop .dispatch;
+                        },
+                        .var_across_function_boundary => {
+                            last_pattern = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .ident_already_in_scope = .{
+                                .ident = ident_idx,
+                                .region = state.region,
+                            } });
+                            continue :patternkernel_loop .dispatch;
+                        },
+                        // As patterns are always declarations, never reassignments
+                        .var_reassignment_ok => unreachable,
+                    }
                 }
 
                 last_pattern = pattern_idx;

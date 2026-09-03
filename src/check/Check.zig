@@ -676,12 +676,22 @@ ambiguity_escalation_journal: std.ArrayListUnmanaged(u32) = .empty,
 /// below the cursor belong to earlier defs and are either already judged or
 /// awaiting the end-of-check residual judgment.
 ambiguity_candidates_def_start: usize = 0,
+/// Prefix covered by the module-final residual judgment. Generalization may
+/// judge entries out of order, so the first residual pass still scans the
+/// whole prefix; afterward committed target probes only append a suffix and
+/// each compatibility round visits that suffix once.
+ambiguity_candidates_residual_checked: usize = 0,
 /// Ambiguity verdicts produced by the local judgment, applied (problem
 /// reports + runtime-error poisoning) in one batch at end of check so that
 /// problem order and CIR mutation timing follow the settled-state contract:
 /// nothing is reported or poisoned until every constraint has reached its
 /// final state.
 ambiguity_verdicts: std.ArrayListUnmanaged(AmbiguityVerdict),
+/// Receivers the same pinning-frontier judgment proved will be materialized
+/// through their numeric specialization default. Unlike ambiguity verdicts,
+/// these are not diagnostics: they schedule exact default-owner callable
+/// validation while checking still owns the solved graph.
+default_materializations: std.ArrayListUnmanaged(DefaultMaterialization),
 /// Cursor into `checked_lambda_params` marking the currently-processing
 /// top-level def's first lambda, so a generalization event's pinnable set
 /// includes exactly this def's lambda parameters.
@@ -1020,6 +1030,11 @@ const InstantiationDispatcher = struct {
     /// scheme requirement may remain waiting after it, then enqueue later when
     /// another obligation grounds its receiver.
     compatibility_checked: bool = false,
+    /// Exact specialization default latched from the receiver's settled
+    /// materialization fact before validating any sibling edge. A successful
+    /// sibling can ground the shared receiver, so re-deriving this afterward
+    /// would lose this edge's already-selected owner.
+    default_target: ?literal_defaulting.DefaultTarget = null,
     /// The binding group whose checking instantiated this dispatcher (null
     /// outside any group frame). A dispatcher can wait registry-only while its
     /// receiver is flex and enqueue from whichever frame grounds it, so the
@@ -1178,6 +1193,16 @@ const AmbiguityVerdict = struct {
     source: AmbiguityCandidate.Source,
 };
 
+/// A pinning-frontier proof that one receiver will use this exact numeric
+/// specialization default. The compatibility fixpoint consumes the selected
+/// target directly, then checks every exact callable edge without rescanning
+/// the receiver's constraint set per edge.
+const DefaultMaterialization = struct {
+    var_: Var,
+    target: literal_defaulting.DefaultTarget,
+    constraints: StaticDispatchConstraint.SafeList.Range,
+};
+
 /// The evidence-record key for scheme instantiations performed while
 /// discharging a static-dispatch constraint: the source node the constraint
 /// originated at plus the raw fn var of the constraint being discharged
@@ -1245,6 +1270,58 @@ fn literalMethodIdents(self: *const Self) literal_defaulting.LiteralMethodIdents
         .from_quote = self.cir.idents.from_quote,
         .from_interpolation = self.cir.idents.from_interpolation,
     };
+}
+
+fn numericDefaultPhaseForConstraints(
+    self: *const Self,
+    constraints: []const StaticDispatchConstraint,
+) ?literal_defaulting.NumericDefaultPhase {
+    return literal_defaulting.numericDefaultPhase(.{
+        .plus = self.cir.idents.plus,
+        .minus = self.cir.idents.minus,
+        .times = self.cir.idents.times,
+        .div_by = self.cir.idents.div_by,
+        .div_trunc_by = self.cir.idents.div_trunc_by,
+        .rem_by = self.cir.idents.rem_by,
+        .negate = self.cir.idents.negate,
+    }, self.literalMethodIdents(), constraints);
+}
+
+fn specializationDefaultTargetForConstraints(
+    self: *const Self,
+    constraints: []const StaticDispatchConstraint,
+) ?literal_defaulting.DefaultTarget {
+    const phase = self.numericDefaultPhaseForConstraints(constraints) orelse return null;
+    return literal_defaulting.defaultTargetForPhase(phase) orelse {
+        std.debug.panic("checker received a checking-finalized specialization default", .{});
+    };
+}
+
+/// Alias-transparent outer arity for an already checked callable. Different
+/// arities are an exact non-unifiability proof, so default compatibility can
+/// reject that edge without allocating a fresh target-scheme instantiation.
+fn callableArity(self: *const Self, var_: Var) ?u32 {
+    var current = var_;
+    var guard = types_mod.debug.IterationGuard.init("callableArity");
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| return switch (flat) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| func.args.len(),
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal_type,
+                .tag_union,
+                .empty_record,
+                .empty_tag_union,
+                => null,
+            },
+            .flex, .rigid, .field_presence, .err => return null,
+        }
+    }
 }
 
 /// Whether this constraint carries literal-conversion provenance—a
@@ -2537,6 +2614,7 @@ fn initAssumePrepared(
         .instantiation_dispatchers = .empty,
         .ambiguity_candidates = .empty,
         .ambiguity_verdicts = .empty,
+        .default_materializations = .empty,
         .open_literal_vars = .empty,
         .open_numeral_literals = .empty,
         .pending_tuple_accesses = .empty,
@@ -2712,6 +2790,7 @@ pub fn deinit(self: *Self) void {
     self.ambiguity_candidate_by_key.deinit(self.gpa);
     self.ambiguity_escalation_journal.deinit(self.gpa);
     self.ambiguity_verdicts.deinit(self.gpa);
+    self.default_materializations.deinit(self.gpa);
     self.dispatch_target_instantiations.deinit(self.gpa);
     self.dispatch_target_instantiation_by_fn_var.deinit(self.gpa);
     self.dispatch_derivations.deinit(self.gpa);
@@ -8328,7 +8407,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     for (self.selected_hoisted_roots.items, 0..) |*root, i| {
         keep_oracle.current_root_index = i;
         const intrinsic = !self.hoistExprInvalidated(root.expr) and try self.hoistedRootIsIntrinsicallyKept(root);
-        const deps = intrinsic and try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle);
+        const deps = intrinsic and try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle, self.selectedHoistedRootIsTopLevel(root.*));
         if (!intrinsic) continue;
         if (!deps) continue;
 
@@ -8459,7 +8538,7 @@ fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
 
     for (self.selected_hoisted_roots.items, 0..) |root, i| {
         keep_oracle.current_root_index = i;
-        if (!try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle)) {
+        if (!try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle, self.selectedHoistedRootIsTopLevel(root))) {
             hoistSelectionInvariant("kept selected hoisted root has unavailable dependency");
         }
     }
@@ -8661,6 +8740,11 @@ const HoistedCallableState = enum {
 const HoistedDependencyContext = struct {
     bindings: std.ArrayListUnmanaged(HoistedDependencyBinding) = .empty,
     callable_stability: std.AutoHashMapUnmanaged(HoistedCallableKey, HoistedCallableState) = .{},
+    /// Whether the root materializes a top-level binding. A lambda inside a
+    /// top-level value is part of that value, like the lambda in
+    /// `r = { g: |x| x }`, whereas a lambda inside an expression hoisted out
+    /// of a function body would need that body's environment.
+    top_level_value: bool = false,
 
     fn deinit(self: *@This(), allocator: Allocator) void {
         self.bindings.deinit(allocator);
@@ -8757,10 +8841,25 @@ fn hoistedRootDependenciesAreKept(
     self: *Self,
     expr: CIR.Expr.Idx,
     keep_oracle: *const HoistedRootKeepOracle,
+    top_level_value: bool,
 ) Allocator.Error!bool {
-    var context = HoistedDependencyContext{};
+    var context = HoistedDependencyContext{ .top_level_value = top_level_value };
     defer context.deinit(self.gpa);
     return try self.hoistedRootDependenciesAreKeptInternal(expr, &context, keep_oracle);
+}
+
+/// Whether a binding a hoisted root reads stays available once the root is
+/// evaluated on its own: a top-level binding, a binding the root itself
+/// introduces, or a binding whose own selected root is kept.
+fn hoistedRootBindingIsKept(
+    self: *Self,
+    pattern: CIR.Pattern.Idx,
+    context: *const HoistedDependencyContext,
+    keep_oracle: *const HoistedRootKeepOracle,
+) bool {
+    return self.patternIsTopLevel(pattern) or
+        context.contains(pattern) or
+        (keep_oracle.selectedPatternIsKept(pattern) orelse false);
 }
 
 fn hoistedRootDependenciesAreKeptInternal(
@@ -8773,9 +8872,21 @@ fn hoistedRootDependenciesAreKeptInternal(
     if (self.exprHasDedicatedLiteralConversionRoot(expr)) return false;
 
     return switch (self.cir.store.getExpr(expr)) {
-        .e_lookup_local => |lookup| self.patternIsTopLevel(lookup.pattern_idx) or
-            context.contains(lookup.pattern_idx) or
-            (keep_oracle.selectedPatternIsKept(lookup.pattern_idx) orelse false),
+        .e_lookup_local => |lookup| self.hoistedRootBindingIsKept(lookup.pattern_idx, context, keep_oracle),
+        // A lambda's body is not walked: a top-level binder is globally
+        // resolvable, so a lambda inside a top-level value captures only the
+        // block-local bindings of that value's own expression, and those are
+        // in `context` (staging treats lambdas as leaves, so a capture never
+        // has a staged dependency root to consult).
+        .e_lambda => context.top_level_value,
+        .e_closure => |closure| blk: {
+            if (!context.top_level_value) break :blk false;
+            for (self.cir.store.sliceCaptures(closure.captures)) |capture_idx| {
+                const capture = self.cir.store.getCapture(capture_idx);
+                if (!self.patternIsTopLevel(capture.pattern_idx) and !context.contains(capture.pattern_idx)) break :blk false;
+            }
+            break :blk true;
+        },
         .e_lookup_external,
         .e_lookup_associated_local,
         .e_lookup_associated,
@@ -8801,8 +8912,6 @@ fn hoistedRootDependenciesAreKeptInternal(
         .e_anno_only,
         .e_derived_method,
         .e_crash,
-        .e_closure,
-        .e_lambda,
         .e_hosted_lambda,
         .e_dbg,
         .e_expect_err,
@@ -9909,12 +10018,11 @@ const AmbiguitySelection = struct {
 ///   exported scheme interface or a generalized instantiated function's
 ///   arguments) from a body-local dead end. This applies equally to direct
 ///   discards and values discarded through local aliases.
-/// - A receiver carrying any literal-conversion constraint (a `from_literal`
-///   origin or a `where`-clause contract naming a literal-conversion hook) is
-///   skipped: defaulting owns it (at finalize and at generalization
-///   boundaries), and a generalized literal resolves per instantiation.
-///   Essential for numeric helpers like `|x| x + y` whose receiver carries
-///   `desugared_binop` plus `from_numeral`.
+/// - A receiver carrying a literal-conversion constraint is never reported as
+///   ambiguous: defaulting owns it. The selection still identifies a
+///   body-required non-literal contract, when present, because the shared
+///   pinning-frontier judgment must decide whether this particular use will
+///   materialize the default and therefore needs exact callable validation.
 /// - `is_eq` constraints are skipped: lowering compares structurally with no
 ///   owner needed, so a flex `is_eq` placeholder left by valid code
 ///   (`[1] == [1]`) is not a dead end. A genuinely ambiguous equality on a
@@ -9946,25 +10054,23 @@ fn selectAmbiguityConstraint(
     switch (source) {
         .instantiation => {
             var first_nonliteral_constraint: ?StaticDispatchConstraint = null;
-            var has_literal_constraint = false;
             var only_where_clause_contracts = true;
             for (constraints) |c| {
                 if (c.origin != .where_clause) only_where_clause_contracts = false;
-                if (self.types.varStaticDispatchRejected(c.fn_var)) continue;
+                if (self.staticDispatchConstraintIsInactive(c)) continue;
                 if (self.constraintIsLiteralConversion(c)) {
-                    has_literal_constraint = true;
+                    continue;
                 } else if (c.fn_name.eql(self.cir.idents.is_eq)) {
                     continue;
                 } else if (c.origin != .where_clause and first_nonliteral_constraint == null) {
                     first_nonliteral_constraint = c;
                 }
             }
-            if (has_literal_constraint) return null;
 
             // Prefer an explicit where-clause obligation that this program must
             // execute. Phantom contracts do not hide a later body-required one.
             for (constraints) |constraint| {
-                if (self.types.varStaticDispatchRejected(constraint.fn_var)) continue;
+                if (self.staticDispatchConstraintIsInactive(constraint)) continue;
                 if (constraint.origin != .where_clause) continue;
                 if (self.constraintIsLiteralConversion(constraint)) continue;
                 if (constraint.fn_name.eql(self.cir.idents.is_eq)) continue;
@@ -10041,10 +10147,23 @@ fn judgeAmbiguityCandidate(
     constraints_range: StaticDispatchConstraint.SafeList.Range,
 ) Allocator.Error!void {
     const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
-    const selection = (try self.selectAmbiguityConstraint(
+    const selection = try self.selectAmbiguityConstraint(
         constraints,
         candidate.source,
-    )) orelse return;
+    );
+    const default_target = self.specializationDefaultTargetForConstraints(constraints);
+    if (selection == null and default_target == null) return;
+
+    var only_where_clause_contracts = true;
+    for (constraints) |constraint| {
+        if (constraint.origin != .where_clause) {
+            only_where_clause_contracts = false;
+            break;
+        }
+    }
+    if (selection) |selected| {
+        only_where_clause_contracts = selected.only_where_clause_contracts;
+    }
 
     // A generalized constrained function value can outlive this judgment even
     // when a temporary scheme copy is absent from the current outer root. Its
@@ -10053,7 +10172,7 @@ fn judgeAmbiguityCandidate(
     // enclosing scheme interface (covered by the sets below), which distinguishes
     // a generic wrapper from a discarded Json.parse result.
     if (!candidate.requires_current_resolution and
-        selection.only_where_clause_contracts and
+        only_where_clause_contracts and
         resolved_rank == .generalized and
         candidate.source == .instantiation and
         try self.instantiationArgumentsCanPin(candidate.instantiation_expr, resolved_var))
@@ -10062,11 +10181,31 @@ fn judgeAmbiguityCandidate(
     }
 
     const active_pinnable = if (candidate.requires_current_resolution or
-        (selection.is_instantiated_where_clause and selection.where_dispatch_use != null))
+        (selection != null and
+            selection.?.is_instantiated_where_clause and
+            selection.?.where_dispatch_use != null))
         &self.external_pinnable
     else
         &self.pinnable_vars;
     if (active_pinnable.contains(resolved_var)) return;
+
+    // An unpinned scheme instantiation with a default is not ambiguous. Its
+    // classification instead schedules exact validation against the one owner
+    // publication will materialize. Creation candidates retain the ordinary
+    // literal-defaulting/ambiguity paths; this fact is specifically for copied
+    // scheme edges whose eventual chain-free resolution publication performs.
+    // Keep the raw var: final compatibility re-resolves and deduplicates after
+    // the remaining solver work settles.
+    if (default_target != null and candidate.source == .instantiation) {
+        try self.default_materializations.append(self.gpa, .{
+            .var_ = candidate.var_,
+            .target = default_target.?,
+            .constraints = constraints_range,
+        });
+        return;
+    }
+
+    if (selection == null) return;
 
     try self.ambiguity_verdicts.append(self.gpa, .{
         // The candidate's recorded var, not the resolved root: the apply step
@@ -10150,22 +10289,30 @@ fn judgeAmbiguityCandidatesAtGeneralizationMultiRoot(
 
 /// End-of-check residual judgment for candidates that never hit a
 /// generalization event: receivers in value-restricted bindings (which stay
-/// open to pinning by later defs and by the final constraint fixpoint, so
-/// judging them at def finalization would be premature) and instantiations
-/// performed outside any def. Judged once here at the settled state, against
-/// the whole module's remaining open surface—every top-level callable def's
-/// interface plus all recorded lambda parameters and open literals. Gated on
-/// pending candidates: a module whose receivers all resolved or were judged at
-/// generalization does zero work here.
+/// open to pinning by later defs and by ordinary final constraints, so judging
+/// them at def finalization would be premature) and instantiations performed
+/// outside any def. The compatibility fixpoint invokes this at its settled
+/// pinning frontier, against the whole module's remaining open surface—every
+/// top-level callable def's interface plus all recorded lambda parameters and
+/// open literals. A committed target can append a new suffix, so the cursor
+/// makes each suffix one-shot. A module whose receivers all resolved or were
+/// judged at generalization does zero work here.
 fn judgeResidualAmbiguityCandidates(self: *Self) Allocator.Error!void {
+    const start = self.ambiguity_candidates_residual_checked;
+    const end = self.ambiguity_candidates.items.len;
+    if (start == end) return;
+
     var any_pending = false;
-    for (self.ambiguity_candidates.items) |candidate| {
+    for (self.ambiguity_candidates.items[start..end]) |candidate| {
         if (!candidate.judged) {
             any_pending = true;
             break;
         }
     }
-    if (!any_pending) return;
+    if (!any_pending) {
+        self.ambiguity_candidates_residual_checked = end;
+        return;
+    }
 
     self.beginAmbiguityPinnableSets();
     for (0..self.cir.all_defs.span.len) |def_offset| {
@@ -10180,7 +10327,7 @@ fn judgeResidualAmbiguityCandidates(self: *Self) Allocator.Error!void {
         self.checked_lambda_params.items,
     );
 
-    for (self.ambiguity_candidates.items) |*candidate| {
+    for (self.ambiguity_candidates.items[start..end]) |*candidate| {
         if (candidate.judged) continue;
         candidate.judged = true;
         const resolved = self.types.resolveVar(candidate.var_);
@@ -10188,6 +10335,7 @@ fn judgeResidualAmbiguityCandidates(self: *Self) Allocator.Error!void {
         if (constraints_range.len() == 0) continue;
         try self.judgeAmbiguityCandidate(candidate.*, resolved.var_, resolved.desc.rank, constraints_range);
     }
+    self.ambiguity_candidates_residual_checked = end;
 }
 
 fn findStaticDispatchUseForConstraint(
@@ -10388,8 +10536,10 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
 /// unification records deferred checks while a constrained flex unifies with a
 /// concrete type, but instantiating a polymorphic where-clause starts with a
 /// fresh constrained flex that may only resolve after later call-site evidence.
-/// Re-checking the recorded range here makes that concrete owner validation
-/// explicit and leaves unresolved cases to the ambiguity verdicts.
+/// The pinning-frontier judgment first classifies unresolved receivers as
+/// caller-pinnable, ambiguous, or default-materialized. This fixpoint consumes
+/// the latter classification and checks every exact callable edge against its
+/// selected owner before any checked artifact can be published.
 ///
 /// The fixpoint returns once a round leaves no new dispatcher entry and no
 /// newly grounded pending requirement. It terminates structurally: a pending
@@ -10401,18 +10551,155 @@ fn checkInstantiatedStaticDispatchConstraints(
     self: *Self,
     env: *Env,
     is_numeric_default_pass: bool,
+    default_phase: enum { ordinary, settled },
 ) std.mem.Allocator.Error!void {
     // This fixpoint compacts the pending index and advances the checked-prefix
     // cursor—positional state no probe savepoint captures. It must only run
     // outside every speculative save/restore window.
     std.debug.assert(self.probe_depth == 0);
+
+    // Default-materialized roots and exact callable edges instantiated from a
+    // scheme. Keeping the latter keyed by raw fn identity lets the receiver
+    // pass validate only creation-site constraints; every instantiated edge
+    // then retains its own recorded use expression for failure poisoning. The
+    // ordinary invocation leaves these empty; they belong only to the one
+    // settled compatibility invocation and its complete-to-quiescence loop.
+    var default_materialization_roots = std.AutoHashMap(Var, literal_defaulting.DefaultTarget).init(self.gpa);
+    defer default_materialization_roots.deinit();
+    var instantiated_fns = std.AutoHashMap(Var, void).init(self.gpa);
+    defer instantiated_fns.deinit();
+    var pending_creation_materializations: std.ArrayListUnmanaged(DefaultMaterialization) = .empty;
+    defer pending_creation_materializations.deinit(self.gpa);
+    var dispatchers_indexed: usize = 0;
+    var materializations_checked: usize = 0;
+    var compatibility_dispatchers_checked: usize = 0;
+
     while (true) {
+        var ran_default_compatibility = false;
+
+        // Residual candidates are now at their settled pinning frontier. Judge
+        // them before compatibility so default-materialization facts are
+        // checker input, never reconstructed by publication. Successful
+        // target validation can append transitive candidates, so drive the
+        // judgment/materialization pair to quiescence before latching any new
+        // dispatcher as compatibility-checked.
+        if (default_phase == .settled) {
+            try self.judgeResidualAmbiguityCandidates();
+            pending_creation_materializations.clearRetainingCapacity();
+
+            while (materializations_checked < self.default_materializations.items.len) {
+                const materialization = self.default_materializations.items[materializations_checked];
+                materializations_checked += 1;
+
+                const resolved = self.types.resolveVar(materialization.var_);
+                if (resolved.desc.content != .flex) continue;
+                const entry = try default_materialization_roots.getOrPut(resolved.var_);
+                if (entry.found_existing) {
+                    std.debug.assert(entry.value_ptr.* == materialization.target);
+                    continue;
+                }
+                entry.value_ptr.* = materialization.target;
+                try pending_creation_materializations.append(self.gpa, materialization);
+            }
+        }
+
+        // The ordinary pass deliberately leaves this independent cursor at
+        // zero. Once every remaining solver relation is settled, validate all
+        // previously recorded exact edges plus any suffix a committed target
+        // adds. Snapshot the end: those committed targets first need their new
+        // ambiguity/default facts judged in the next outer round.
+        if (default_phase == .settled) {
+            const compatibility_end = self.instantiation_dispatchers.items.len;
+
+            // Latch every exact edge's selected target before validating any
+            // sibling. The first successful callable unify can ground their
+            // shared receiver; target choice is a settled judgment fact and
+            // must not disappear merely because validation order changed the
+            // union-find root's content.
+            var latch_idx = compatibility_dispatchers_checked;
+            while (latch_idx < compatibility_end) : (latch_idx += 1) {
+                const dispatcher = self.instantiation_dispatchers.items[latch_idx];
+                if (dispatcher.constraints.len() == 0 or dispatcher.compatibility_checked) continue;
+                const resolved = self.types.resolveVar(dispatcher.dispatcher_var);
+                if (resolved.desc.content != .flex) continue;
+                self.instantiation_dispatchers.items[latch_idx].default_target =
+                    default_materialization_roots.get(resolved.var_);
+            }
+
+            while (compatibility_dispatchers_checked < compatibility_end) : (compatibility_dispatchers_checked += 1) {
+                const dispatcher = self.instantiation_dispatchers.items[compatibility_dispatchers_checked];
+                if (dispatcher.constraints.len() == 0 or dispatcher.compatibility_checked) continue;
+                self.instantiation_dispatchers.items[compatibility_dispatchers_checked].compatibility_checked = true;
+
+                if (dispatcher.default_target) |target| {
+                    ran_default_compatibility = true;
+                    _ = try self.checkFlexVarConstraintCompatibility(
+                        dispatcher.dispatcher_var,
+                        env,
+                        is_numeric_default_pass,
+                        .{
+                            .constraints = dispatcher.constraints,
+                            .default_target = target,
+                            .allow_generalized = true,
+                            .allow_arithmetic_default = true,
+                            .error_expr = dispatcher.instantiation_expr,
+                        },
+                    );
+                }
+            }
+
+            // Most constrained schemes never materialize a specialization
+            // default. Build this raw-edge index only when at least one new
+            // materialization needs creation-vs-use separation, and retain its
+            // completed prefix across compatibility rounds.
+            if (pending_creation_materializations.items.len > 0) {
+                while (dispatchers_indexed < compatibility_end) {
+                    const indexed = self.instantiation_dispatchers.items[dispatchers_indexed];
+                    for (self.types.sliceStaticDispatchConstraints(indexed.constraints)) |constraint| {
+                        try instantiated_fns.put(constraint.fn_var, {});
+                    }
+                    dispatchers_indexed += 1;
+                }
+            }
+
+            // Exact copied edges above own their use expressions. Validate only
+            // the remaining creation-site relations from each new receiver;
+            // if an exact success grounded it, the retained ordinary queue owns
+            // its now-concrete relations instead.
+            for (pending_creation_materializations.items) |materialization| {
+                if (self.types.resolveVar(materialization.var_).desc.content != .flex) continue;
+                const constraints_start: u32 = @intFromEnum(materialization.constraints.start);
+                var constraint_offset: u32 = 0;
+                while (constraint_offset < materialization.constraints.len()) : (constraint_offset += 1) {
+                    const constraint_idx = constraints_start + constraint_offset;
+                    const constraint = self.types.static_dispatch_constraints.items.items[constraint_idx];
+                    if (instantiated_fns.contains(constraint.fn_var)) continue;
+
+                    ran_default_compatibility = true;
+                    _ = try self.checkFlexVarConstraintCompatibility(
+                        materialization.var_,
+                        env,
+                        is_numeric_default_pass,
+                        .{
+                            .constraints = .{
+                                .start = @enumFromInt(constraint_idx),
+                                .count = 1,
+                            },
+                            .default_target = materialization.target,
+                            .allow_generalized = true,
+                            .allow_arithmetic_default = true,
+                        },
+                    );
+                }
+            }
+        }
+
         const start = self.instantiation_dispatchers_checked;
         const end = self.instantiation_dispatchers.items.len;
         self.instantiation_dispatchers_checked = end;
         var appended_deferred = false;
 
-        // New dispatchers take their one compatibility transition here. Flex
+        // New dispatchers take their one deferred-queue transition here. Flex
         // scheme requirements wait on the compact pending index below; the
         // completed prefix is never rescanned.
         var dispatcher_idx = start;
@@ -10422,26 +10709,6 @@ fn checkInstantiatedStaticDispatchConstraints(
             // never retain a slice across that operation.
             const dispatcher = self.instantiation_dispatchers.items[dispatcher_idx];
             if (dispatcher.constraints.len() == 0) continue;
-
-            if (!dispatcher.compatibility_checked) {
-                self.instantiation_dispatchers.items[dispatcher_idx].compatibility_checked = true;
-
-                // The ambiguity judgment has already decided which generalized
-                // instantiations are unpinnable. Only those receivers are
-                // materialized through the specialization default at this use.
-                if (self.hasInstantiationAmbiguityVerdict(dispatcher.dispatcher_var)) {
-                    _ = try self.checkFlexVarConstraintCompatibility(
-                        dispatcher.dispatcher_var,
-                        env,
-                        is_numeric_default_pass,
-                        .{
-                            .allow_generalized = true,
-                            .allow_arithmetic_default = true,
-                            .error_expr = dispatcher.instantiation_expr,
-                        },
-                    );
-                }
-            }
 
             const current = self.instantiation_dispatchers.items[dispatcher_idx];
             if (current.deferred_enqueued) continue;
@@ -10471,11 +10738,26 @@ fn checkInstantiatedStaticDispatchConstraints(
             appended_deferred = true;
         }
 
-        if (appended_deferred) {
+        if (appended_deferred or ran_default_compatibility) {
+            // The ordinary phase may already have retained these exact ranges
+            // on the deferred queue while their receivers were flex. A
+            // successful default edge can ground such a receiver without
+            // appending another queue entry, so every compatibility round
+            // re-drives the retained queue once.
             try self.checkStaticDispatchConstraints(env, is_numeric_default_pass);
             try self.checkAllConstraints(env);
         }
+        if (default_phase == .settled and ran_default_compatibility) {
+            // A committed exact target can ground a requirement stored on an
+            // enclosing scheme. Drain that sparse registry before declaring
+            // compatibility quiescent; its ordinary dispatcher drain can add
+            // a suffix this settled loop will judge and validate next.
+            try self.checkGroundedStoredTypeSchemeRequirementsAtFinalization(env, is_numeric_default_pass);
+        }
         if (self.instantiation_dispatchers_checked == self.instantiation_dispatchers.items.len and
+            (default_phase == .ordinary or
+                (materializations_checked == self.default_materializations.items.len and
+                    compatibility_dispatchers_checked == self.instantiation_dispatchers.items.len)) and
             !self.anyPendingSchemeRequirementNewlyGrounded()) return;
     }
 }
@@ -10490,15 +10772,6 @@ fn anyPendingSchemeRequirementNewlyGrounded(self: *Self) bool {
         if (pending.deferred_enqueued) continue;
         if (self.types.resolveVar(pending.dispatcher_var).desc.content == .flex) continue;
         return true;
-    }
-    return false;
-}
-
-fn hasInstantiationAmbiguityVerdict(self: *Self, var_: Var) bool {
-    const root = self.types.resolveVar(var_).var_;
-    for (self.ambiguity_verdicts.items) |verdict| {
-        if (verdict.source != .instantiation) continue;
-        if (self.types.resolveVar(verdict.var_).var_ == root) return true;
     }
     return false;
 }
@@ -25429,7 +25702,11 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     }
     try self.validateResolvedOpenNumeralLiterals(env);
     if (scope == .module) {
-        try self.checkInstantiatedStaticDispatchConstraints(env, true);
+        // Drain every already-grounded copied relation now, but defer
+        // specialization-default compatibility until the tuple/default
+        // constraint tail below has exhausted every remaining way a caller can
+        // pin an open receiver.
+        try self.checkInstantiatedStaticDispatchConstraints(env, true, .ordinary);
         try self.checkGroundedStoredTypeSchemeRequirementsAtFinalization(env, true);
         // Final codec validation can instantiate constrained method schemes,
         // and the instantiated-dispatch fixpoint can in turn produce a codec
@@ -25437,7 +25714,7 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
         // exact worklists until neither produces another codec obligation.
         while (self.final_codec_dispatch_constraints.items.len > 0) {
             try self.checkFinalGeneratedCodecConstraints(env);
-            try self.checkInstantiatedStaticDispatchConstraints(env, true);
+            try self.checkInstantiatedStaticDispatchConstraints(env, true, .ordinary);
             try self.checkGroundedStoredTypeSchemeRequirementsAtFinalization(env, true);
         }
     } else {
@@ -25446,6 +25723,9 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     try self.resolvePendingTupleAccesses(env, true);
     try self.checkAllConstraints(env);
     try self.checkDefaultRestrictions();
+    if (scope == .module) {
+        try self.checkInstantiatedStaticDispatchConstraints(env, true, .settled);
+    }
 
     // LAST, deliberately: every acceptance/rejection judgment above—
     // `judgeOptionalFieldAccesses` (which may pin a literal-minted kind to
@@ -26359,7 +26639,7 @@ fn retireResolvedTypeSchemeRequirements(self: *Self) void {
                 continue;
             }
             const still_pending = !self.settled_static_dispatch_constraint_fns.contains(requirement.constraint.fn_var) and
-                !self.types.varStaticDispatchRejected(requirement.constraint.fn_var);
+                !self.staticDispatchConstraintIsInactive(requirement.constraint);
             if (!still_pending) continue;
             scheme.dispatch_requirements.items[write] = requirement;
             write += 1;
@@ -26499,7 +26779,7 @@ fn finalizeTypeSchemeRequirementsAtCheckedBoundary(self: *Self) Allocator.Error!
     for (self.type_schemes.items) |scheme| {
         const scheme_is_err = self.types.resolveVar(scheme.root_var).desc.content == .err;
         for (scheme.dispatch_requirements.items) |requirement| {
-            if (self.types.varStaticDispatchRejected(requirement.constraint.fn_var)) continue;
+            if (self.staticDispatchConstraintIsInactive(requirement.constraint)) continue;
 
             if (requirement.deferred_generated_codec) {
                 try self.publishBindingSchemeCodecRequirement(&scheme, requirement);
@@ -26902,7 +27182,7 @@ fn checkGroundedStoredTypeSchemeRequirementsAtFinalization(
         for (self.type_schemes.items) |scheme| {
             for (scheme.dispatch_requirements.items) |requirement| {
                 if (self.settled_static_dispatch_constraint_fns.contains(requirement.constraint.fn_var) or
-                    self.types.varStaticDispatchRejected(requirement.constraint.fn_var))
+                    self.staticDispatchConstraintIsInactive(requirement.constraint))
                 {
                     continue;
                 }
@@ -26931,7 +27211,7 @@ fn checkGroundedStoredTypeSchemeRequirementsAtFinalization(
 
         try self.checkStaticDispatchConstraints(env, is_numeric_default_pass);
         try self.checkAllConstraints(env);
-        try self.checkInstantiatedStaticDispatchConstraints(env, is_numeric_default_pass);
+        try self.checkInstantiatedStaticDispatchConstraints(env, is_numeric_default_pass, .ordinary);
         try self.checkAllConstraints(env);
 
         const discharged_now = self.dischargedDispatchRelationCount(&enqueued_fn_vars);
@@ -26976,7 +27256,8 @@ fn dischargedDispatchRelationCount(
     var fn_var_iter = fn_vars.keyIterator();
     while (fn_var_iter.next()) |fn_var| {
         if (self.settled_static_dispatch_constraint_fns.contains(fn_var.*) or
-            self.types.varStaticDispatchRejected(fn_var.*))
+            self.types.varStaticDispatchRejected(fn_var.*) or
+            self.dispatchDerivationHasRejectedAncestor(fn_var.*))
         {
             count += 1;
         }
@@ -27546,12 +27827,12 @@ fn rangeHasNonLiteralConstraint(self: *Self, range: StaticDispatchConstraint.Saf
 /// `structurallyIncompatiblePair` in src/check/unify.zig, co-located with the
 /// unify internals it reasons about. This function supplies the RANGE-WIDE side of
 /// that fence: it classifies every argument/return position of EVERY constraint in
-/// the range, requires matching arities (so every classified pair is exactly the
-/// pair `unifyFunc` would visit), and abandons refutation for the whole candidate
-/// on any `.uninspectable` position. Any deviation—aliases, records, tag unions,
-/// tuples, err content, polymorphic method positions, unexpected arity, non-fn
-/// shapes—makes the whole candidate fall through to the probe rather than
-/// weakening soundness.
+/// the range, and abandons refutation for the whole candidate on any
+/// `.uninspectable` position. A callable-arity difference directly refutes the
+/// candidate (`unifyFunc` cannot establish it) before any position walk. Every
+/// other deviation—aliases, records, tag unions, tuples, err content,
+/// polymorphic method positions, non-fn shapes—makes the whole candidate fall
+/// through to the probe rather than weakening soundness.
 fn numeralCandidateStructurallyRefuted(
     self: *Self,
     candidate_kind: CIR.NumKind,
@@ -27588,7 +27869,7 @@ fn numeralCandidateStructurallyRefuted(
         // any uncertainty falls through to the probe (return false).
         const method_func = method_types.resolveVar(def_var).desc.content.unwrapFunc() orelse return false;
         const constraint_func = self.types.resolveVar(constraint.fn_var).desc.content.unwrapFunc() orelse return false;
-        if (method_func.args.len() != constraint_func.args.len()) return false;
+        if (method_func.args.len() != constraint_func.args.len()) return true;
 
         const method_args = method_types.sliceVars(method_func.args);
         const constraint_args = self.types.sliceVars(constraint_func.args);
@@ -27994,6 +28275,38 @@ fn recordDispatchDerivations(
             .parent_fn_var = derived_parent,
         });
     }
+}
+
+/// Whether this target-owned relation is unreachable because an ancestor
+/// dispatch edge was rejected. The child is not itself rejected: its raw
+/// callable may share a class with another live relation, while this explicit
+/// derivation identity belongs only to the failed target instantiation.
+fn dispatchDerivationHasRejectedAncestor(self: *const Self, fn_var: Var) bool {
+    // Error-free modules never need to walk conditional-target ancestry. The
+    // durable rejection list is the exact monotone gate for this error-path
+    // query, so the normal dispatch loops retain one O(1) predictable check.
+    if (self.cir.rejected_static_dispatches.items.items.len == 0) return false;
+
+    var current = fn_var;
+    var followed_edges: usize = 0;
+    while (self.dispatch_derivation_by_child_fn_var.get(current)) |parent| {
+        if (self.types.varStaticDispatchRejected(parent)) return true;
+        current = parent;
+        followed_edges += 1;
+        if (followed_edges > self.dispatch_derivations.items.len) {
+            std.debug.assert(false);
+            return false;
+        }
+    }
+    return false;
+}
+
+fn staticDispatchConstraintIsInactive(
+    self: *const Self,
+    constraint: StaticDispatchConstraint,
+) bool {
+    return self.types.varStaticDispatchRejected(constraint.fn_var) or
+        self.dispatchDerivationHasRejectedAncestor(constraint.fn_var);
 }
 
 /// The edge target for a child derived under `parent_fn_var`: the nearest
@@ -29198,7 +29511,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     // Re-fetch by index each iteration because nested unification can append
                     // constraints and reallocate the backing array.
                     const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
-                    if (self.types.varStaticDispatchRejected(constraint.fn_var)) continue;
+                    if (self.staticDispatchConstraintIsInactive(constraint)) continue;
                     const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                     if (constraint_fn_resolved == .err) {
                         // If this constraint is already an error, the skip this pass
@@ -29585,7 +29898,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 var constraint_i: usize = 0;
                 while (constraint_i < constraints_len) : (constraint_i += 1) {
                     const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
-                    if (self.types.varStaticDispatchRejected(constraint.fn_var)) continue;
+                    if (self.staticDispatchConstraintIsInactive(constraint)) continue;
                     const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                     if (constraint_fn_resolved == .err) continue;
 
@@ -32067,7 +32380,9 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
         const resolution: can.NodeStore.LiteralDispatchPlan.Resolution = resolution: {
             // A dispatch-specific rejection is stronger than a concrete
             // builtin target (for example, an out-of-range U8 literal).
-            if (self.types.varStaticDispatchRejected(fn_var)) {
+            if (self.types.varStaticDispatchRejected(fn_var) or
+                self.dispatchDerivationHasRejectedAncestor(fn_var))
+            {
                 break :resolution .checked_error;
             }
 
@@ -32380,6 +32695,84 @@ test "a lambda referring to a name bound by the same top-level destructure is no
     try test_env.assertCanErrors(&.{});
 }
 
+test "a name bound by a top-level destructure can be referenced ahead of its declaration" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\later = x + 1
+        \\{x} = { x: 1 }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertDefType("later", "Dec");
+    try test_env.assertDefType("x", "Dec");
+}
+
+test "names bound by a top-level tuple destructure can be referenced ahead of their declaration" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\total = a + b
+        \\(a, b) = (1, 2)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertDefType("total", "Dec");
+    try test_env.assertDefType("b", "Dec");
+}
+
+test "a name bound inside a nested top-level destructure or by its as-binder can be referenced ahead of the declaration" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\total = inner + whole.a
+        \\{ outer: { inner }, p: { a } as whole } = { outer: { inner: 1 }, p: { a: 2 } }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertDefType("total", "Dec");
+    try test_env.assertDefType("whole", "{ a: Dec }");
+}
+
+test "a top-level destructure can reference a name bound by a later top-level destructure" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\{a} = { a: b + 1 }
+        \\{b} = { b: 1 }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertDefType("a", "Dec");
+}
+
+test "a function bound by a top-level destructure may capture a block-local binding of the destructured value" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\{ f } = {
+        \\    k = 5
+        \\    { f: |x| x + k }
+        \\}
+        \\later = f(1)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertDefType("later", "Dec");
+}
+
+test "a function bound by a top-level destructure is callable from another def" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\{f, n} = { f: |x| x + 1, n: 2 }
+        \\later = f(n)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertDefType("later", "Dec");
+}
+
 test "literal strict demands flow through polymorphic called function summaries" {
     const TestEnv = @import("test/TestEnv.zig");
     // `make`'s literal requirement is copied into `through`, then copied
@@ -32627,6 +33020,44 @@ test "dispatch derivation of a child merged into its parent's class points at th
         @as(?Var, grandparent_fn_var),
         checker.dispatch_derivation_by_child_fn_var.get(child_fn_var),
     );
+}
+
+test "dispatch relations derived only from a rejected target become inactive" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.init("RejectedDerivation", "value = \"x\"");
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const checker = &test_env.checker;
+    const parent_fn_var = try checker.types.fresh();
+    const child_fn_var = try checker.types.fresh();
+    const unrelated_fn_var = try checker.types.fresh();
+    const child = StaticDispatchConstraint{
+        .fn_name = checker.cir.idents.map,
+        .fn_var = child_fn_var,
+        .origin = .method_call,
+    };
+    const child_range = try checker.types.appendStaticDispatchConstraints(&.{child});
+    try checker.recordDispatchDerivations(child_range, parent_fn_var);
+
+    try std.testing.expect(!checker.staticDispatchConstraintIsInactive(child));
+    try checker.markStaticDispatchFnRejected(parent_fn_var);
+    try std.testing.expect(checker.staticDispatchConstraintIsInactive(child));
+    // Inactivity belongs to this explicit derivation edge. It must not turn
+    // the child's callable class into rejected evidence. Even an independently
+    // live edge unified into that exact class remains active because its raw
+    // edge identity has no rejected derivation ancestor.
+    try std.testing.expect(!checker.types.varStaticDispatchRejected(child_fn_var));
+    try checker.types.union_(unrelated_fn_var, child_fn_var, checker.types.resolveVar(child_fn_var).desc);
+    try std.testing.expectEqual(
+        checker.types.resolveVar(child_fn_var).var_,
+        checker.types.resolveVar(unrelated_fn_var).var_,
+    );
+    try std.testing.expect(!checker.staticDispatchConstraintIsInactive(.{
+        .fn_name = checker.cir.idents.map,
+        .fn_var = unrelated_fn_var,
+        .origin = .method_call,
+    }));
 }
 
 // THE FINALIZATION RE-ENQUEUE CONTRACT
@@ -36303,6 +36734,15 @@ fn validateDerivedEncodeNominal(
 }
 
 const FlexConstraintCompatibilityOptions = struct {
+    /// The exact callable obligations to validate. When no target is supplied,
+    /// the receiver's attached constraints still choose its specialization
+    /// default; this range says which independently copied edges need proof
+    /// against that owner.
+    constraints: ?StaticDispatchConstraint.SafeList.Range = null,
+    /// Target already selected by the pinning-frontier/defaulting judgment.
+    /// Supplying it keeps exact per-edge validation linear in the number of
+    /// obligations instead of rescanning the receiver range for every edge.
+    default_target: ?literal_defaulting.DefaultTarget = null,
     allow_generalized: bool = false,
     allow_arithmetic_default: bool = false,
     error_expr: ?CIR.Expr.Idx = null,
@@ -36320,37 +36760,32 @@ fn checkFlexVarConstraintCompatibility(
     options: FlexConstraintCompatibilityOptions,
 ) Allocator.Error!bool {
     const resolved = self.types.resolveVar(var_);
-    if (resolved.desc.content != .flex) return false;
     if (resolved.desc.rank == .generalized and !options.allow_generalized) return false;
 
-    const flex = resolved.desc.content.flex;
-    const constraints_range = flex.constraints;
-    if (constraints_range.len() == 0) return false;
+    const has_exact_selected_target = options.default_target != null and options.constraints != null;
+    const default_constraints_range = if (resolved.desc.content == .flex)
+        resolved.desc.content.flex.constraints
+    else if (has_exact_selected_target)
+        options.constraints.?
+    else
+        return false;
+    if (default_constraints_range.len() == 0) return false;
 
-    const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
-    const default_target = if (options.allow_arithmetic_default) blk: {
+    const default_constraints = self.types.sliceStaticDispatchConstraints(default_constraints_range);
+    const default_target = options.default_target orelse if (options.allow_arithmetic_default) blk: {
         // Instantiated, unpinned where-clause receivers are materialized by
         // publication using this exact specialization rule, including its
         // arithmetic-only Dec default. Validate the same explicit target here.
-        const default_phase = literal_defaulting.numericDefaultPhase(.{
-            .plus = self.cir.idents.plus,
-            .minus = self.cir.idents.minus,
-            .times = self.cir.idents.times,
-            .div_by = self.cir.idents.div_by,
-            .div_trunc_by = self.cir.idents.div_trunc_by,
-            .rem_by = self.cir.idents.rem_by,
-            .negate = self.cir.idents.negate,
-        }, self.literalMethodIdents(), constraints) orelse return false;
-        break :blk literal_defaulting.defaultTargetForPhase(default_phase) orelse {
-            std.debug.panic("checker flex compatibility received a checking-finalized default phase", .{});
-        };
+        break :blk self.specializationDefaultTargetForConstraints(default_constraints) orelse return false;
     } else blk: {
         // Ordinary flex compatibility is only for variables carrying literal
         // provenance. Arithmetic-only flexes remain polymorphic until a later
         // specialization explicitly materializes them.
-        const kind = literal_defaulting.dominantKind(self.literalMethodIdents(), constraints) orelse return false;
+        const kind = literal_defaulting.dominantKind(self.literalMethodIdents(), default_constraints) orelse return false;
         break :blk literal_defaulting.defaultTargetForKind(kind);
     };
+
+    const constraints_range = options.constraints orelse default_constraints_range;
 
     // Validate that all other constraints can be satisfied by the default type.
     const builtin_env = self.builtin_ctx.builtin_module orelse return false;
@@ -36379,7 +36814,7 @@ fn checkFlexVarConstraintCompatibility(
         // same equivalence class—another worklist entry or dispatcher record
         // resolving to it—must not re-validate and re-report the identical
         // mismatch.
-        if (self.types.varStaticDispatchRejected(constraint.fn_var)) continue;
+        if (self.staticDispatchConstraintIsInactive(constraint)) continue;
 
         // Skip the literal-origin constraint the default type satisfies by
         // definition. (With both literal kinds present, the var defaults to Dec and
@@ -36417,7 +36852,13 @@ fn checkFlexVarConstraintCompatibility(
             continue;
         };
 
-        // Validate the target speculatively: instantiate the default owner's
+        const imported_scheme = try self.importedMethodSchemeFromSource(builtin_env, method_binding.type_node_idx);
+        const target_arity = self.callableArity(imported_scheme);
+        const constraint_arity = self.callableArity(constraint.fn_var);
+
+        // An outer-arity difference is already an exact proof of failure and
+        // avoids allocating a throwaway target instantiation. Every remaining
+        // case is validated speculatively: instantiate the default owner's
         // method and unify it against the recorded relation inside a
         // commit-probe. Success commits in place—the real unify wrapper
         // already propagated regions, ranks, and deferred constraints into the
@@ -36429,6 +36870,10 @@ fn checkFlexVarConstraintCompatibility(
         // stood. (Obligations deferred before this attempt survive; only the
         // attempt's own recordings vanish with the store rewind.)
         const target_accepted = accepted: {
+            if (target_arity != null and constraint_arity != null and target_arity.? != constraint_arity.?) {
+                break :accepted false;
+            }
+
             var commit_probe = try self.beginCommitProbe(env);
             var committed = false;
             defer if (!committed) commit_probe.rollback();
@@ -36440,7 +36885,6 @@ fn checkFlexVarConstraintCompatibility(
                 };
                 defer self.evidence_target_site = null;
 
-                const imported_scheme = try self.importedMethodSchemeFromSource(builtin_env, method_binding.type_node_idx);
                 break :method_var try self.instantiateVar(imported_scheme, env, .{ .explicit = region });
             };
 
@@ -36458,18 +36902,21 @@ fn checkFlexVarConstraintCompatibility(
             // Report the signature mismatch against the untouched types the
             // rollback restored: the default owner's declared scheme versus
             // the relation as the program actually constrained it.
-            const scheme_var = try self.importedMethodSchemeFromSource(builtin_env, method_binding.type_node_idx);
-            const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, scheme_var);
+            const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, imported_scheme);
             const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, constraint.fn_var);
             _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
                 .types = .{
-                    .expected_var = scheme_var,
+                    .expected_var = imported_scheme,
                     .expected_snapshot = expected_snapshot,
                     .actual_var = constraint.fn_var,
                     .actual_snapshot = actual_snapshot,
                 },
                 .context = .{ .method_type = .{
                     .constraint_var = var_,
+                    .source_region = if (options.error_expr) |expr_idx|
+                        self.cir.store.getExprRegion(expr_idx)
+                    else
+                        null,
                     .dispatcher_name = default_type_ident,
                     .method_name = constraint.fn_name,
                 } },

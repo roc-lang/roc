@@ -28,19 +28,46 @@ use_it = {
 }
 ~~~
 # EXPECTED
-MISSING METHOD - static_dispatch_where_forced_numeric_issue_9657.md:12:9:12:24
+TYPE MISMATCH - static_dispatch_where_forced_numeric_issue_9657.md:19:17:19:25
+TYPE MISMATCH - static_dispatch_where_forced_numeric_issue_9657.md:19:17:19:25
 # PROBLEMS
-── ✗ missing method ──── static_dispatch_where_forced_numeric_issue_9657.md:12:9
+── ✗ type mismatch ──── static_dispatch_where_forced_numeric_issue_9657.md:19:17
 
-This is trying to dispatch a method named encode on an unresolved type
-variable, but unresolved type variables have no methods.
+The encode method on Dec has an incompatible type.
 
-output.encode()
-^^^^^^^^^^^^^^^
+transform = make_map(|n| n + 1)
+            ^^^^^^^^
 
-Hint: You can replace this static dispatch call with an ordinary function call,
-or force the type variable to become more concrete—for example, by adding a
-type annotation that narrows its type to something that actually has methods.
+The method encode has the type:
+
+    Dec, fmt -> Try(encoded, err)
+      where [fmt.encode_dec : fmt, Dec -> Try(encoded, err)]
+
+But I need it to have the type:
+
+    b -> I64 where [b.decode : I64 -> b, b.encode : b -> I64, b.plus : b, Dec
+    -> b]
+
+Hint: This function expects 1 argument but got 2.
+
+── ✗ type mismatch ──── static_dispatch_where_forced_numeric_issue_9657.md:19:17
+
+The decode method on Dec has an incompatible type.
+
+transform = make_map(|n| n + 1)
+            ^^^^^^^^
+
+The method decode has the type:
+
+    src, fmt -> (Try(Dec, err), src)
+      where [fmt.decode_dec : fmt, src -> (Try(Dec, err), src)]
+
+But I need it to have the type:
+
+    I64 -> b where [b.decode : I64 -> b, b.encode : b -> I64, b.plus : b, Dec
+    -> b]
+
+Hint: This function expects 1 argument but got 2.
 
 # TOKENS
 ~~~zig
@@ -201,7 +228,11 @@ use_it = {
 											(p-assign (ident "f")))
 										(e-lookup-local
 											(p-assign (ident "value")))))
-								(e-runtime-error (tag "erroneous_value_expr"))))))
+								(e-dispatch-call (method "encode") (constraint-fn-var 311)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "output"))))
+									(args))))))
 				(e-lookup-local
 					(p-assign (ident "wrapped")))))
 		(annotation
@@ -229,8 +260,7 @@ use_it = {
 			(s-let
 				(p-assign (ident "transform"))
 				(e-call (constraint-fn-var 331)
-					(e-lookup-local
-						(p-assign (ident "make_map")))
+					(e-runtime-error (tag "erroneous_value_expr"))
 					(e-lambda
 						(args
 							(p-assign (ident "n")))
