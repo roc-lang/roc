@@ -1286,6 +1286,12 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .trailing_try_suffix = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .return_outside_fn = .{
             .region = rand_region(),
             .context = .return_statement,

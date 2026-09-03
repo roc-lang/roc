@@ -1724,6 +1724,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .module_header_deprecated,
         .roc_version_mismatch,
         .deprecated_number_suffix,
+        .trailing_try_suffix,
         => false,
         .not_implemented,
         .exposed_but_not_implemented,

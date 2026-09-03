@@ -178,28 +178,16 @@ const CaptureSpanId = struct {
     }
 };
 
+/// A capture span identifies its captures structurally (source, start and
+/// length) rather than as a dense index, so it is a hashable key.
+const CaptureSpanKey = CaptureSpanId;
+
 fn specializationIdentityCaptureStart(span: CaptureSpanId) u32 {
     return switch (span.source) {
         .solved => span.start,
         .own => 0,
     };
 }
-
-const CaptureTypeKey = struct {
-    source: CaptureSpanSource,
-    start: u32,
-    len: u32,
-    solved_fn_ty: SolvedType.TypeVarId,
-
-    fn from(span: CaptureSpanId, solved_fn_ty: SolvedType.TypeVarId) CaptureTypeKey {
-        return .{
-            .source = span.source,
-            .start = span.start,
-            .len = span.len,
-            .solved_fn_ty = solved_fn_ty,
-        };
-    }
-};
 
 const FnSpec = struct {
     source: Lifted.FnId,
@@ -237,26 +225,6 @@ const FnSpecContext = struct {
     }
 };
 
-const CaptureTypeMap = std.HashMap(CaptureTypeKey, Type.TypeId, CaptureSpanContext, std.hash_map.default_max_load_percentage);
-
-const CaptureSpanContext = struct {
-    pub fn hash(_: CaptureSpanContext, span: CaptureTypeKey) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        std.hash.autoHash(&hasher, span.source);
-        std.hash.autoHash(&hasher, span.start);
-        std.hash.autoHash(&hasher, span.len);
-        std.hash.autoHash(&hasher, @intFromEnum(span.solved_fn_ty));
-        return hasher.final();
-    }
-
-    pub fn eql(_: CaptureSpanContext, lhs: CaptureTypeKey, rhs: CaptureTypeKey) bool {
-        return lhs.source == rhs.source and
-            lhs.start == rhs.start and
-            lhs.len == rhs.len and
-            lhs.solved_fn_ty == rhs.solved_fn_ty;
-    }
-};
-
 const Lowerer = struct {
     allocator: Allocator,
     solved: Solved.ProgramView,
@@ -271,7 +239,10 @@ const Lowerer = struct {
     fn_spec_map: std.HashMap(FnSpec, Ast.FnId, FnSpecContext, std.hash_map.default_max_load_percentage),
     fn_written: std.ArrayList(bool),
     source_symbols: std.AutoHashMap(Common.Symbol, Lifted.FnId),
-    capture_types: CaptureTypeMap,
+    /// Lowered capture record of every capture span seen so far. A capture
+    /// record depends only on its captures, so one record serves every
+    /// function type that carries the same span.
+    capture_types: std.AutoHashMap(CaptureSpanKey, Type.TypeId),
     captures: collections.DenseMap(Lifted.LocalId, CaptureBinding),
     own_captures: std.ArrayList(SolvedType.Capture),
     own_capture_spans: []?CaptureSpanId,
@@ -334,7 +305,7 @@ const Lowerer = struct {
             .fn_spec_map = std.HashMap(FnSpec, Ast.FnId, FnSpecContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
             .fn_written = .empty,
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
-            .capture_types = CaptureTypeMap.initContext(allocator, .{}),
+            .capture_types = std.AutoHashMap(CaptureSpanKey, Type.TypeId).init(allocator),
             .captures = collections.DenseMap(Lifted.LocalId, CaptureBinding).init(allocator),
             .own_captures = .empty,
             .own_capture_spans = own_capture_spans,
@@ -514,7 +485,7 @@ const Lowerer = struct {
             .solved_fn_ty = root_fn_ty,
             .abi = abi,
             .captures = captures,
-            .capture_ty = if (capture_items.len == 0) null else try self.captureRecordType(captures, root_fn_ty),
+            .capture_ty = if (capture_items.len == 0) null else try self.captureRecordType(captures),
         };
 
         const result = try self.fn_spec_map.getOrPut(spec);
@@ -662,6 +633,9 @@ const Lowerer = struct {
             .static_data_candidate => |candidate| .{ .static_data_candidate = .{
                 .static_data = candidate.static_data,
                 .runtime_expr = try self.lowerExpr(candidate.runtime_expr),
+            } },
+            .typed_boundary => |boundary| .{ .typed_boundary = .{
+                .value = try self.lowerExpr(boundary.value),
             } },
             .@"unreachable" => .@"unreachable",
             .uninitialized => .uninitialized,
@@ -1335,13 +1309,8 @@ const Lowerer = struct {
         return try self.program.types.addFnVariants(variants);
     }
 
-    fn captureRecordType(
-        self: *Lowerer,
-        captures: CaptureSpanId,
-        solved_fn_ty: SolvedType.TypeVarId,
-    ) Allocator.Error!Type.TypeId {
-        const id = CaptureTypeKey.from(captures, self.solved.types.root(solved_fn_ty));
-        if (self.capture_types.get(id)) |existing| return existing;
+    fn captureRecordType(self: *Lowerer, captures: CaptureSpanId) Allocator.Error!Type.TypeId {
+        if (self.capture_types.get(captures)) |existing| return existing;
 
         const capture_items = self.captureSpan(captures);
         const fields = try self.allocator.alloc(Type.CaptureField, capture_items.len);
@@ -1358,7 +1327,7 @@ const Lowerer = struct {
             };
         }
         const ty = try self.program.types.add(.{ .capture_record = try self.program.types.addCaptureFields(fields) });
-        try self.capture_types.put(id, ty);
+        try self.capture_types.put(captures, ty);
         return ty;
     }
 

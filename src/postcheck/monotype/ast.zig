@@ -141,6 +141,23 @@ pub const EvidenceDigest = extern struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
+/// The structural codec derivation whose checked call contract identifies a
+/// specialization context.
+pub const CodecContractKind = enum(u8) {
+    parser,
+    encoder,
+};
+
+/// Collision-authoritative specialization context for a procedure whose body
+/// is lowered beneath one exact checker-generated codec contract boundary.
+pub const CodecContractIdentity = struct {
+    module: names.CheckedModuleDigest,
+    derivation: static_dispatch.GeneratedCodecDerivationId,
+    kind: CodecContractKind,
+    constructor_ty_digest: names.TypeDigest,
+    constructor_ty: Type.TypeId,
+};
+
 /// Function template plus source and monomorphic type identities.
 pub const FnTemplate = struct {
     fn_def: FnDef,
@@ -218,6 +235,11 @@ pub const SpecIdentity = struct {
     method_scope: names.CheckedModuleDigest,
     source_fn_ty_digest: names.TypeDigest,
     evidence_digest: EvidenceDigest,
+    /// Exact lowering-only context required by generated codec method bodies.
+    /// Zero for ordinary specializations.
+    codec_contract_digest: names.TypeDigest,
+    /// Exact collision authority for `codec_contract_digest`.
+    codec_contract: ?CodecContractIdentity,
     request_fn_ty_digest: names.TypeDigest,
     request_fn_ty: Type.TypeId,
 };
@@ -297,7 +319,22 @@ pub fn fnEvidenceDigest(
                     .from_callable => {},
                 }
             },
-            .structural => |derivation| writeStructuralDerivation(&hasher, derivation),
+            .structural => |structural| {
+                writeStructuralDerivation(&hasher, structural.derivation);
+                if (structural.checked) |checked_structural| {
+                    writeU8(&hasher, 1);
+                    writeBytes(&hasher, &checked_structural.view.bytes);
+                    writeBytes(&hasher, &checked_structural.dispatcher_key.bytes);
+                    writeBytes(&hasher, &checked_structural.callable_key.bytes);
+                    writeOptionalU32(
+                        &hasher,
+                        if (checked_structural.generated_codec_derivation) |derivation|
+                            @intFromEnum(derivation)
+                        else
+                            null,
+                    );
+                } else writeU8(&hasher, 0);
+            },
             .constraint_callable => |source| {
                 writeBytes(&hasher, &source.view.bytes);
                 writeBytes(&hasher, &source.callable_key.bytes);
@@ -870,6 +907,14 @@ pub const StaticDataCandidate = struct {
     runtime_expr: ExprId,
 };
 
+/// Explicit result relation between independently specialized Monotype graphs.
+/// The child retains its producer-authored type; this expression's `ty` is the
+/// consumer type. Lambda Solved preserves the unification the removed call
+/// supplied, and LIR lowering performs the resulting typed assignment.
+pub const TypedBoundary = struct {
+    value: ExprId,
+};
+
 /// A checked early return plus the explicit target lambda return type.
 pub const Return = struct {
     value: ExprId,
@@ -891,6 +936,7 @@ pub const ExprData = union(enum(u8)) {
     str_lit: StringLiteralId,
     bytes_lit: PackedListLiteral,
     static_data_candidate: StaticDataCandidate,
+    typed_boundary: TypedBoundary,
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),
@@ -1291,6 +1337,9 @@ pub const ProgramView = struct {
 
         for (self.specs) |spec| {
             if (!self.typeRefInBounds(spec.identity.request_fn_ty)) return .spec_type_out_of_bounds;
+            if (spec.identity.codec_contract) |contract| {
+                if (!self.typeRefInBounds(contract.constructor_ty)) return .spec_type_out_of_bounds;
+            }
             if (!self.typeRefInBounds(spec.request_fn_ty)) return .spec_type_out_of_bounds;
             if (!self.typeRefInBounds(spec.solved_fn_ty)) return .spec_type_out_of_bounds;
         }
@@ -2276,6 +2325,8 @@ test "monotype program view exposes read-only side arrays" {
             .method_scope = .{},
             .source_fn_ty_digest = .{},
             .evidence_digest = fnEvidenceDigest(&.{}, &.{}, null),
+            .codec_contract_digest = .{},
+            .codec_contract = null,
             .request_fn_ty_digest = .{},
             .request_fn_ty = unit_ty,
         },
