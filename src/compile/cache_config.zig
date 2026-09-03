@@ -164,7 +164,9 @@ pub const Constants = struct {
     ///     downstream specializations must revalidate.
     /// 73: Generated codec contracts retain structural body shapes and mark
     ///     specialization-conditional method capabilities.
-    pub const CACHE_VERSION = 73;
+    /// 74: Canonicalization warns on a `?` applied to a function's return
+    ///     value (new diagnostic).
+    pub const CACHE_VERSION = 74;
 };
 
 /// Configuration for the Roc cache system.

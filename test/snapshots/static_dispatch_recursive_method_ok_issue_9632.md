@@ -176,7 +176,7 @@ result = empty.total()
 			(ty-lookup (name "Tree") (local))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-dispatch-call (method "total") (constraint-fn-var 322)
+		(e-dispatch-call (method "total") (constraint-fn-var 323)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "empty"))))

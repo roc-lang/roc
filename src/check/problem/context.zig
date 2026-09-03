@@ -71,10 +71,12 @@ pub const Context = union(enum) {
     record_update: RecordUpdateContext,
 
     // Special contexts
-    /// The ? (try) operator (simple version for early return case)
-    try_operator,
+    /// The early return of a `?` operator, checked against the function body
+    try_operator: TryReturnContext,
     /// The ? (try) operator with expression data (for invalid try operator errors)
     try_operator_expr: TryOperatorContext,
+    /// The value a `?` operator unwraps to, checked against what its position expects
+    try_operator_value: TryOperatorContext,
     /// An early return statement
     early_return,
     /// Statement expression (should be {})
@@ -245,6 +247,14 @@ pub const Context = union(enum) {
         list_length: u32,
         /// The last element node (for highlighting)
         last_elem_idx: CIR.Node.Idx,
+    };
+
+    /// Context for a `?` early return that does not match the function body
+    pub const TryReturnContext = struct {
+        /// A `?` that produces the function body's own value, when there is
+        /// one. It unwraps the `Try` the body would otherwise return, so it is
+        /// the likely cause of the mismatch being reported.
+        body_tail_try: ?CIR.Expr.Idx,
     };
 
     /// Context for try operator type errors

@@ -1106,7 +1106,7 @@ main = {
 					(e-num (value "5"))))
 			(s-let
 				(p-assign (ident "num_result"))
-				(e-dispatch-call (method "map") (constraint-fn-var 889)
+				(e-dispatch-call (method "map") (constraint-fn-var 881)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "num_container"))))
@@ -1114,7 +1114,7 @@ main = {
 						(e-lambda
 							(args
 								(p-assign (ident "x")))
-							(e-dispatch-call (method "plus") (constraint-fn-var 887)
+							(e-dispatch-call (method "plus") (constraint-fn-var 898)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "x"))))
@@ -1122,7 +1122,7 @@ main = {
 									(e-num (value "1"))))))))
 			(s-let
 				(p-assign (ident "_str_result"))
-				(e-dispatch-call (method "map") (constraint-fn-var 897)
+				(e-dispatch-call (method "map") (constraint-fn-var 901)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "str_container"))))
@@ -1134,11 +1134,11 @@ main = {
 								(p-assign (ident "s")))))))
 			(s-let
 				(p-assign (ident "chained"))
-				(e-dispatch-call (method "get_or") (constraint-fn-var 961)
+				(e-dispatch-call (method "get_or") (constraint-fn-var 967)
 					(receiver
-						(e-dispatch-call (method "flat_map") (constraint-fn-var 946)
+						(e-dispatch-call (method "flat_map") (constraint-fn-var 932)
 							(receiver
-								(e-dispatch-call (method "map") (constraint-fn-var 914)
+								(e-dispatch-call (method "map") (constraint-fn-var 912)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "num_container"))))
@@ -1146,7 +1146,7 @@ main = {
 										(e-lambda
 											(args
 												(p-assign (ident "x")))
-											(e-dispatch-call (method "plus") (constraint-fn-var 912)
+											(e-dispatch-call (method "plus") (constraint-fn-var 929)
 												(receiver
 													(e-lookup-local
 														(p-assign (ident "x"))))
@@ -1159,7 +1159,7 @@ main = {
 									(e-nominal (nominal "Container")
 										(e-tag (name "Value")
 											(args
-												(e-dispatch-call (method "plus") (constraint-fn-var 940)
+												(e-dispatch-call (method "plus") (constraint-fn-var 960)
 													(receiver
 														(e-lookup-local
 															(p-assign (ident "x"))))
@@ -1172,7 +1172,7 @@ main = {
 				(e-lambda
 					(args
 						(p-assign (ident "x")))
-					(e-dispatch-call (method "plus") (constraint-fn-var 966)
+					(e-dispatch-call (method "plus") (constraint-fn-var 979)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
@@ -1181,7 +1181,7 @@ main = {
 								(p-assign (ident "x")))))))
 			(s-let
 				(p-assign (ident "transformed"))
-				(e-call (constraint-fn-var 981)
+				(e-call (constraint-fn-var 994)
 					(e-lookup-local
 						(p-assign (ident "transform_twice")))
 					(e-lookup-local
@@ -1208,7 +1208,7 @@ main = {
 						(e-lookup-local
 							(p-assign (ident "transformed"))))
 					(field (name "final")
-						(e-dispatch-call (method "get_or") (constraint-fn-var 993)
+						(e-dispatch-call (method "get_or") (constraint-fn-var 1000)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "num_result"))))

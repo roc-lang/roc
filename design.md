@@ -6799,10 +6799,11 @@ body traversal itself to run without locks. Widening the parallel subset
 requires a corresponding immutable or shard-owned boundary for each newly
 admitted global side table, not ad hoc worker mutation.
 
-A typed boundary is body-local exactly when its child is body-local. Its source
-and destination types and layouts belong to the frozen coordinator prefix, and
-the ordinary typed assignment it emits belongs entirely to the private LIR
-suffix; the boundary introduces no additional global identity or side table.
+A typed boundary is worker-admissible exactly when its child is
+worker-admissible. Its source and destination types and layouts belong to the
+frozen coordinator prefix, and the ordinary typed assignment it emits belongs
+entirely to the private LIR suffix; the boundary introduces no additional
+global identity or side table.
 
 Instantiation graph node ids are dense, append-only indexes for the lifetime of
 the graph. Per-node optional attributes such as a row root's current extension
