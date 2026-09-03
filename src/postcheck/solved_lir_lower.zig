@@ -1341,6 +1341,7 @@ const Lowerer = struct {
                 if (!self.isBodyLocalExpr(payload, next_depth)) break false;
             } else true,
             .nominal => |inner| self.isBodyLocalExpr(inner, next_depth),
+            .typed_boundary => |boundary| self.isBodyLocalExpr(boundary.value, next_depth),
             .let_ => |let_| let_.comptime_site == null and
                 self.isBodyLocalExpr(let_.value, next_depth) and
                 self.isBodyLocalExpr(let_.rest, next_depth),
