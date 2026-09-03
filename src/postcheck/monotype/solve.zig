@@ -581,19 +581,28 @@ pub const InstGraph = struct {
     node_set_pool: collections.DenseMapPool(NodeId, void),
     /// Roots whose every reachable node was found resolved, stamped with the
     /// `resolved_epoch` current at that walk. Resolvedness survives every
-    /// union (a concrete class always wins over a variable) and every content
-    /// replacement of a variable, so a stamp goes stale only when a concrete
-    /// root's content is replaced or a variable wins a union, each of which
-    /// advances the epoch.
+    /// union (a concrete class always wins over a variable), every content
+    /// replacement of a class no snapshot could observe, and every
+    /// observationally equivalent compression, so a stamp goes stale only
+    /// when an observable class's content is replaced or a variable wins a
+    /// union, each of which advances the epoch.
     resolved_roots: collections.DenseMap(NodeId, u32),
     resolved_epoch: u32,
     /// Advances on every union and every content change, so an equal epoch
     /// proves no class in the graph has changed since.
     structure_epoch: u32,
-    /// Types known to reach no active snapshot. Store types are immutable and
-    /// every active snapshot is a type sealed after the types that could
-    /// reference it, so a negative answer never changes.
+    /// Types known to reach no active snapshot. Store types are immutable
+    /// and every snapshot is a freshly reserved slot, so no existing type can
+    /// come to reference one: a negative answer never changes.
     snapshot_free_types: collections.DenseMap(Type.TypeId, void),
+    /// At least how many times a node received a generated-private backing.
+    /// While zero, no class can reach one and the containment query answers
+    /// at once.
+    generated_private_nodes: u32,
+    /// Interned type per class root sealed in final mode, kept and dropped
+    /// together with `current_snapshots`: the same relation changes that
+    /// leave an active view current leave a committed type current.
+    current_durable: collections.DenseMap(NodeId, Type.TypeId),
     type_set_pool: collections.DenseMapPool(Type.TypeId, void),
     pub fn create(
         allocator: Allocator,
@@ -642,6 +651,8 @@ pub const InstGraph = struct {
             .resolved_epoch = 0,
             .structure_epoch = 0,
             .snapshot_free_types = collections.DenseMap(Type.TypeId, void).init(allocator),
+            .generated_private_nodes = 0,
+            .current_durable = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
             .type_set_pool = collections.DenseMapPool(Type.TypeId, void).init(allocator),
         };
         return graph;
@@ -686,6 +697,7 @@ pub const InstGraph = struct {
         self.recursive_argument_slots.deinit(allocator);
         self.containment_pending.deinit(allocator);
         self.containment_visit_epochs.deinit(allocator);
+        self.current_durable.deinit();
         self.snapshot_free_types.deinit();
         self.resolved_roots.deinit();
         self.node_set_pool.deinit();
@@ -1707,6 +1719,7 @@ pub const InstGraph = struct {
     pub fn newNode(self: *InstGraph, node_content: InstNode) Allocator.Error!NodeId {
         self.requireRelationProduction();
         const id: NodeId = @enumFromInt(@as(u32, @intCast(self.nodes.items.len)));
+        if (contentHasGeneratedPrivateBacking(node_content)) self.generated_private_nodes += 1;
         try self.nodes.append(self.allocator, node_content);
         try self.versions.append(self.allocator, 0);
         try self.class_member_next.append(self.allocator, null);
@@ -2236,6 +2249,7 @@ pub const InstGraph = struct {
     /// opaque evidence at any structural depth.
     pub fn containsGeneratedPrivate(self: *InstGraph, root: NodeId) Allocator.Error!bool {
         self.countDiagnostic("generated_private_scans");
+        if (self.generated_private_nodes == 0) return false;
         return try self.containmentResult(
             root,
             .generated_private,
@@ -3569,16 +3583,29 @@ pub const InstGraph = struct {
         }
     }
 
+    /// Whether the class is unresolved by inspection of its root alone: a
+    /// variable, or a row whose extension is a variable. No active snapshot
+    /// reaches such a class, so replacing its content cannot stale one.
+    fn classProvablyUnresolved(self: *InstGraph, root: NodeId) bool {
+        return switch (self.nodes.items[@intFromEnum(root)]) {
+            .unresolved => true,
+            .tag_union => |row| self.nodes.items[@intFromEnum(self.find(row.ext))] == .unresolved,
+            .record => |row| self.nodes.items[@intFromEnum(self.find(row.ext))] == .unresolved,
+            .redirect, .primitive, .list, .box, .tuple, .func, .empty_tag_union, .empty_record, .named, .erased, .zst => false,
+        };
+    }
+
     fn refreshActiveSnapshots(self: *InstGraph) void {
         if (!self.current_snapshots_dirty) return;
         self.current_snapshots.clearRetainingCapacity();
+        self.current_durable.clearRetainingCapacity();
         self.current_snapshots_dirty = false;
     }
 
     /// Whether the node's class has a current active snapshot. Snapshots are
-    /// taken only from resolved roots and the cache is cleared by every union
-    /// and content change, so a current snapshot proves the class is still
-    /// resolved without walking it.
+    /// taken only from resolved roots, resolvedness survives every join, and
+    /// the cache is cleared by every observable content change, so a current
+    /// snapshot proves the class is still resolved without walking it.
     fn hasCurrentSnapshot(self: *InstGraph, node: NodeId) bool {
         self.refreshActiveSnapshots();
         return self.current_snapshots.contains(self.find(node));
@@ -3603,35 +3630,60 @@ pub const InstGraph = struct {
         const loser_head = self.class_member_head.items[@intFromEnum(loser)];
         self.class_member_next.items[@intFromEnum(winner_tail)] = loser_head;
         self.class_member_tail.items[@intFromEnum(winner)] = self.class_member_tail.items[@intFromEnum(loser)];
+        const winner_content = self.nodes.items[@intFromEnum(winner)];
+        const loser_content = self.nodes.items[@intFromEnum(loser)];
+        const joins_nominal_with_structural = winner_content != .unresolved and loser_content != .unresolved and
+            (winner_content == .named) != (loser_content == .named);
         self.nodes.items[@intFromEnum(loser)] = .{ .redirect = winner };
         self.versions.items[@intFromEnum(winner)] +%= 1;
         self.structure_epoch +%= 1;
         self.countDiagnostic("class_unions");
-        self.invalidateActiveSnapshots(winner);
+        // An active snapshot exists only for a resolved class and reaches
+        // only resolved classes. A variable never wins a join, and two
+        // resolved classes that unified are equal throughout, so a join of
+        // one kind leaves every snapshot observing the same type. Only a
+        // nominal wrapper absorbing its structural backing (or the reverse)
+        // changes what a snapshot through the loser observes.
+        if (joins_nominal_with_structural) {
+            self.invalidateActiveSnapshots(winner);
+        } else {
+            // The joined class keeps its current view under its new root.
+            self.refreshActiveSnapshots();
+            if (self.current_snapshots.get(loser)) |view| {
+                if (!self.current_snapshots.contains(winner)) try self.current_snapshots.put(winner, view);
+            }
+            if (self.current_durable.get(loser)) |durable| {
+                if (!self.current_durable.contains(winner)) try self.current_durable.put(winner, durable);
+            }
+        }
         try self.drainNominalBackingCollisions();
     }
 
     /// Replace a root's content with an observationally equivalent compressed
-    /// form without invalidating immutable Type-shaped snapshots. Returns
-    /// whether the stored graph content changed.
+    /// form without invalidating snapshots or resolvedness stamps: the class
+    /// still denotes the same type and reaches the same resolved state.
+    /// Returns whether the stored graph content changed.
     fn replaceContentWithoutSnapshotInvalidation(self: *InstGraph, raw_root: NodeId, new_content: InstNode) bool {
         const root = self.find(raw_root);
         if (instNodeEql(self.nodes.items[@intFromEnum(root)], new_content)) return false;
-        if (self.nodes.items[@intFromEnum(root)] != .unresolved) {
-            // Replacing concrete content can introduce unresolved reachable
-            // nodes into classes already stamped resolved.
-            self.resolved_epoch +%= 1;
-        }
+        if (contentHasGeneratedPrivateBacking(new_content)) self.generated_private_nodes += 1;
         self.nodes.items[@intFromEnum(root)] = new_content;
         self.versions.items[@intFromEnum(root)] +%= 1;
         self.structure_epoch +%= 1;
         return true;
     }
 
-    /// Replace a root's type content and invalidate every cached snapshot.
+    /// Replace a root's type content and invalidate every cached snapshot
+    /// that could observe the class.
     fn setContent(self: *InstGraph, root: NodeId, new_content: InstNode) void {
+        const observable = !self.classProvablyUnresolved(self.find(root));
         if (!self.replaceContentWithoutSnapshotInvalidation(root, new_content)) return;
-        self.invalidateActiveSnapshots(root);
+        if (observable) {
+            self.invalidateActiveSnapshots(root);
+            // The new content can reach unresolved nodes that classes
+            // stamped resolved through this one never saw.
+            self.resolved_epoch +%= 1;
+        }
     }
 
     pub fn unify(self: *InstGraph, a: NodeId, b: NodeId) Allocator.Error!void {
@@ -4213,7 +4265,7 @@ pub const InstGraph = struct {
         if (declared_backing.node != backing_node) {
             var compressed = named;
             compressed.backing = .{ .node = backing_node, .use = declared_backing.use, .authority = declared_backing.authority };
-            self.setContent(named_node, .{ .named = compressed });
+            _ = self.replaceContentWithoutSnapshotInvalidation(named_node, .{ .named = compressed });
         }
         // The named node already owns this exact structural backing. This
         // relation arises when a checked function interface names the wrapper
@@ -4275,7 +4327,7 @@ pub const InstGraph = struct {
             if (backing.node != result) {
                 var compressed = named;
                 compressed.backing = .{ .node = result, .use = backing.use, .authority = backing.authority };
-                self.setContent(current, .{ .named = compressed });
+                _ = self.replaceContentWithoutSnapshotInvalidation(current, .{ .named = compressed });
             }
             current = next;
         }
@@ -5552,7 +5604,16 @@ pub const GraphTypeFinals = struct {
     pub fn sealNode(self: *GraphTypeFinals, raw_node: NodeId) Allocator.Error!Type.TypeId {
         const node = self.graph.find(raw_node);
         if (self.sealed.get(node)) |existing| return existing;
-        if (self.mode != .final) return try self.sealNodeSpeculative(node);
+        self.graph.refreshActiveSnapshots();
+        if (self.mode != .final) {
+            // A class with a current active snapshot has not changed since
+            // that view was taken, so a snapshot reaching it reads that view.
+            if (self.graph.current_snapshots.get(node)) |current| return current;
+            return try self.sealNodeSpeculative(node);
+        }
+        // A class sealed to an interned type since its last observable
+        // change still denotes that type.
+        if (self.graph.current_durable.get(node)) |durable| return durable;
         if (self.active_transaction != null) return try self.sealNodeSpeculative(node);
         if (self.graph.types.hasSpeculativeConstruction()) return try self.sealNodeSpeculative(node);
 
@@ -5567,12 +5628,15 @@ pub const GraphTypeFinals = struct {
         const speculative = try self.sealNodeSpeculative(node);
         var result = try self.graph.types.commitTransaction(self.graph.name_store, transaction, speculative);
         defer result.deinit();
-        self.remapSealedTypes(result);
+        try self.remapSealedTypes(result);
         return result.root;
     }
 
     fn sealNodeSpeculative(self: *GraphTypeFinals, node: NodeId) Allocator.Error!Type.TypeId {
         if (self.sealed.get(node)) |existing| return existing;
+        if (self.mode == .final) {
+            if (self.graph.current_durable.get(node)) |durable| return durable;
+        }
         const Context = struct {
             sealer: *GraphTypeFinals,
             node: NodeId,
@@ -5593,11 +5657,12 @@ pub const GraphTypeFinals = struct {
         return try self.graph.types.addRecursive(Context{ .sealer = self, .node = node }, Context.fill);
     }
 
-    fn remapSealedTypes(self: *GraphTypeFinals, result: Type.Store.TransactionResult) void {
+    fn remapSealedTypes(self: *GraphTypeFinals, result: Type.Store.TransactionResult) Allocator.Error!void {
         for (self.transaction_sealed_nodes.items) |node| {
             const entry = self.sealed.getPtr(node) orelse
                 Common.compilerBug("transaction-sealed node was missing from the sealed map at commit");
             entry.* = result.remapType(entry.*);
+            try self.graph.current_durable.put(self.graph.find(node), entry.*);
         }
         self.transaction_sealed_nodes.clearRetainingCapacity();
         for (self.transaction_sealed_types.items) |ty| {
@@ -5682,7 +5747,7 @@ pub const GraphTypeFinals = struct {
         const speculative = try self.sealStoreTypeSpeculative(ty);
         var result = try self.graph.types.commitTransaction(self.graph.name_store, transaction, speculative);
         defer result.deinit();
-        self.remapSealedTypes(result);
+        try self.remapSealedTypes(result);
         return result.root;
     }
 
@@ -6291,6 +6356,12 @@ pub fn assertNoDuplicateTags(name_store: *const names.NameStore, tags: []const T
     }
 }
 
+fn contentHasGeneratedPrivateBacking(content: InstNode) bool {
+    if (content != .named) return false;
+    const backing = content.named.backing orelse return false;
+    return backing.authority == .generated_private;
+}
+
 fn instNodeEql(left: InstNode, right: InstNode) bool {
     return switch (left) {
         .redirect => |left_next| right == .redirect and left_next == right.redirect,
@@ -6421,10 +6492,13 @@ test "graph diagnostics count authoritative operations" {
     try std.testing.expectEqual(@as(u64, 1), diagnostics.active_snapshot_cache_hits);
     try std.testing.expectEqual(@as(u64, 1), diagnostics.active_snapshot_cache_misses);
     try std.testing.expectEqual(@as(u64, 1), diagnostics.active_snapshot_nodes_materialized);
-    try std.testing.expect(diagnostics.active_snapshot_invalidations >= 1);
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.active_snapshot_entries_invalidated);
+    // A variable joining a primitive changes no observable type.
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.active_snapshot_invalidations);
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.active_snapshot_entries_invalidated);
     try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_private_scans);
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_private_nodes_visited);
+    // No node carries a generated-private backing, so the scan answers
+    // without visiting.
+    try std.testing.expectEqual(@as(u64, 0), diagnostics.generated_private_nodes_visited);
     try std.testing.expectEqual(@as(u64, 1), diagnostics.finished_mono_scans);
     try std.testing.expectEqual(@as(u64, 1), diagnostics.finished_mono_nodes_visited);
 }
@@ -7331,7 +7405,15 @@ test "relation mutation invalidates active snapshots before freezing" {
     const unresolved = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
     try graph.unify(resolved, unresolved);
 
+    // A variable joining a resolved class leaves the class's type as it
+    // was, so its current view stays.
     try std.testing.expect(graph.acceptsRelationMutation());
+    try std.testing.expect(!graph.current_snapshots_dirty);
+    const after_join = try graph.activeTypeViewForNode(resolved);
+    try std.testing.expectEqual(before_mutation, after_join);
+
+    // Replacing the class's content is observable through every view.
+    graph.setContent(graph.find(resolved), .{ .primitive = .u32 });
     try std.testing.expect(graph.current_snapshots_dirty);
 
     const after_mutation = try graph.activeTypeViewForNode(resolved);
@@ -7365,6 +7447,24 @@ test "generated-private traversal scratch handles cycles and epoch rollover" {
     };
     const recursive = try graph.addRecursiveNode(Context{}, Context.fill);
     graph.containment_visit_epoch = std.math.maxInt(u32);
+    @memset(graph.containment_visit_epochs.items, std.math.maxInt(u32));
+
+    // An unrelated generated-private node makes the traversal necessary;
+    // without one the query answers without visiting anything.
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x47} ** 32));
+    const type_name = try name_store.internTypeName("PrivateValue");
+    _ = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(31) },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .@"opaque",
+        .builtin_owner = null,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .inspectable,
+            .authority = .generated_private,
+        },
+    } });
     @memset(graph.containment_visit_epochs.items, std.math.maxInt(u32));
 
     try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));

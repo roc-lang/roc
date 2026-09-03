@@ -3087,6 +3087,16 @@ fn specializeByConstructorSketched(
         .tag, .opaque_type, .tuple, .guard => null,
     };
 
+    // Constructor ids by name once per specialization, so each row resolves
+    // its constructor in constant time.
+    var tag_ids_by_name: std.AutoHashMapUnmanaged(u29, TagId) = .empty;
+    try tag_ids_by_name.ensureTotalCapacity(allocator, @intCast(union_info.alternatives.len));
+    for (union_info.alternatives) |alt| {
+        const alt_ident = ctorNameIdent(alt.name) orelse continue;
+        const gop = tag_ids_by_name.getOrPutAssumeCapacity(alt_ident.idx);
+        if (!gop.found_existing) gop.value_ptr.* = alt.tag_id;
+    }
+
     for (matrix.rows) |row| {
         if (row.len == 0) continue;
 
@@ -3095,7 +3105,7 @@ fn specializeByConstructorSketched(
 
         switch (first) {
             .ctor => |c| {
-                const pat_tag_id = findTagId(union_info, c.tag_name) orelse continue;
+                const pat_tag_id = tag_ids_by_name.get(c.tag_name.idx) orelse continue;
                 if (@intFromEnum(pat_tag_id) == @intFromEnum(tag_id)) {
                     const new_row = try allocator.alloc(UnresolvedPattern, c.args.len + rest.len);
                     @memcpy(new_row[0..c.args.len], c.args);
