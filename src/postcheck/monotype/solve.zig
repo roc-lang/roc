@@ -2080,6 +2080,71 @@ pub const InstGraph = struct {
         });
     }
 
+    /// Commit the row default of every unresolved checked variable reachable
+    /// from `root` to the content final sealing would materialize for it:
+    /// `[]` for `.empty_tag_union`, `{}` for `.empty_record`. Rows only: a
+    /// cell carrying a numeric default phase keeps `materializeLiteralDefault`'s
+    /// runtime-demand rule, and a cell without any default is left open so a
+    /// resolved view still fails loudly for a genuinely unresolved type.
+    ///
+    /// Transitional. The one caller is the eager stored-codec restore, which
+    /// emits its generated format-method bodies from resolved views before
+    /// the graph freezes (design.md, Monotype: the declared exception to
+    /// "defaults apply only at final sealing"). `polarity_phase_two.md` W2b
+    /// moves that emission into Phase B and deletes this function. Grounding
+    /// a frozen graph is an invariant violation (`requireRelationProduction`):
+    /// after the freeze, Phase-B sealing owns every default.
+    pub fn groundRowDefaults(self: *InstGraph, root: NodeId) Allocator.Error!void {
+        self.requireRelationProduction();
+        var pending = std.ArrayList(NodeId).empty;
+        defer pending.deinit(self.allocator);
+        var seen = self.node_set_pool.acquire();
+        defer self.node_set_pool.release(&seen);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |raw_node| {
+            const node = self.find(raw_node);
+            const entry = try seen.getOrPut(node);
+            if (entry.found_existing) continue;
+            switch (self.nodes.items[@intFromEnum(node)]) {
+                .redirect => unreachable,
+                .unresolved => |variable| {
+                    if (variable.numeric_default_phase != null) continue;
+                    const row_default = variable.row_default orelse continue;
+                    self.setContent(node, switch (row_default) {
+                        .empty_record => .empty_record,
+                        .empty_tag_union => .empty_tag_union,
+                    });
+                },
+                .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
+                .list, .box => |child| try pending.append(self.allocator, child),
+                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .func => |function| {
+                    try pending.appendSlice(self.allocator, function.args);
+                    try pending.append(self.allocator, function.ret);
+                },
+                .tag_union => |row| {
+                    for (row.tags) |tag| try pending.appendSlice(self.allocator, tag.payloads);
+                    try pending.append(self.allocator, row.ext);
+                },
+                .record => |row| {
+                    for (row.fields) |field| {
+                        try pending.append(self.allocator, field.ty);
+                        if (field.value_ty) |value_ty| try pending.append(self.allocator, value_ty);
+                    }
+                    try pending.append(self.allocator, row.ext);
+                },
+                .named => |named| {
+                    try pending.appendSlice(self.allocator, named.args);
+                    if (named.backing) |backing| try pending.append(self.allocator, backing.node);
+                    for (named.declared_order) |declared| switch (declared) {
+                        .named => {},
+                        .padding => |padding| try pending.append(self.allocator, padding),
+                    };
+                },
+            }
+        }
+    }
+
     /// Whether evidence finalization has explicit producer provenance for every
     /// node in this live type. Numeric and row defaults are direct closure
     /// evidence. A plain checked variable is provisionally sealable as the
@@ -6301,6 +6366,167 @@ test "resolved graph type detection does not default open cells" {
     try graph.unify(unresolved, str);
     try std.testing.expect(try graph.typeIsResolved(open_list));
     try std.testing.expect(try graph.typeCanSealFromExplicitEvidence(open_list));
+}
+
+test "grounding row defaults resolves a defaultable protocol row and leaves other open cells alone" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const str = try graph.newNode(.{ .primitive = .str });
+    const counted = try name_store.internTagLabel("Counted");
+    const ok_tags = try graph.arena().alloc(InstTag, 1);
+    ok_tags[0] = .{ .name = counted, .checked_name = counted, .payloads = try graph.arena().dupe(NodeId, &.{str}) };
+    const ok_ext = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
+    const ok_row = try graph.newNode(.{ .tag_union = .{ .tags = ok_tags, .ext = ok_ext } });
+    const format_method = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{str}),
+        .ret = ok_row,
+    } });
+    try std.testing.expect(!try graph.typeIsResolved(format_method));
+    try graph.groundRowDefaults(format_method);
+    try std.testing.expect(try graph.typeIsResolved(format_method));
+    try std.testing.expectEqual(InstNode.empty_tag_union, graph.content(ok_ext));
+
+    const bare = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const bare_fn = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{bare}),
+        .ret = str,
+    } });
+    try graph.groundRowDefaults(bare_fn);
+    try std.testing.expect(!try graph.typeIsResolved(bare_fn));
+    try std.testing.expect(graph.content(bare) == .unresolved);
+
+    const numeric = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(.mono_specialization, null) });
+    const numeric_list = try graph.newNode(.{ .list = numeric });
+    try graph.groundRowDefaults(numeric_list);
+    try std.testing.expect(!try graph.typeIsResolved(numeric_list));
+    try std.testing.expect(graph.content(numeric) == .unresolved);
+}
+
+test "grounding row defaults reaches a record field's defaultable tail inside a recursive shape" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const kind_name = try name_store.internRecordFieldLabel("kind");
+    const extra_name = try name_store.internRecordFieldLabel("extra");
+    const rest_name = try name_store.internRecordFieldLabel("rest");
+    const tag_a = try name_store.internTagLabel("A");
+    const tag_b = try name_store.internTagLabel("B");
+    const missing = try name_store.internTagLabel("#Missing");
+    const present = try name_store.internTagLabel("#Present");
+    const str = try graph.newNode(.{ .primitive = .str });
+
+    const kind_tags = try graph.arena().alloc(InstTag, 1);
+    kind_tags[0] = .{ .name = tag_a, .checked_name = tag_a, .payloads = try graph.arena().alloc(NodeId, 0) };
+    const kind_ext = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
+    const kind_row = try graph.newNode(.{ .tag_union = .{ .tags = kind_tags, .ext = kind_ext } });
+
+    // Optional-field shape: the runtime slot is a tagged union whose payload
+    // is not the field's value node, so the value's own defaultable tail is
+    // reachable only through `value_ty`.
+    const value_tags = try graph.arena().alloc(InstTag, 1);
+    value_tags[0] = .{ .name = tag_b, .checked_name = tag_b, .payloads = try graph.arena().alloc(NodeId, 0) };
+    const value_ext = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
+    const value_row = try graph.newNode(.{ .tag_union = .{ .tags = value_tags, .ext = value_ext } });
+    const slot_tags = try graph.arena().alloc(InstTag, 2);
+    slot_tags[0] = .{ .name = missing, .checked_name = missing, .payloads = try graph.arena().alloc(NodeId, 0) };
+    slot_tags[1] = .{ .name = present, .checked_name = present, .payloads = try graph.arena().dupe(NodeId, &.{str}) };
+    const slot_ext = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
+    const slot_row = try graph.newNode(.{ .tag_union = .{ .tags = slot_tags, .ext = slot_ext } });
+
+    const shape = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const fields = try graph.arena().alloc(InstField, 3);
+    fields[0] = .{ .name = kind_name, .ty = kind_row, .default = null };
+    fields[1] = .{ .name = extra_name, .ty = slot_row, .value_ty = value_row, .kind = .optional, .default = null };
+    fields[2] = .{ .name = rest_name, .ty = shape, .default = null };
+    const record_ext = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_record) });
+    const record = try graph.newNode(.{ .record = .{ .fields = fields, .ext = record_ext } });
+    graph.setContent(shape, .{ .list = record });
+
+    try std.testing.expect(!try graph.typeIsResolved(shape));
+    // Grounding is a relation-production operation: on a frozen graph it is
+    // an invariant violation (`requireRelationProduction`).
+    try graph.groundRowDefaults(shape);
+    try std.testing.expect(try graph.typeIsResolved(shape));
+    try std.testing.expectEqual(InstNode.empty_tag_union, graph.content(kind_ext));
+    try std.testing.expectEqual(InstNode.empty_tag_union, graph.content(slot_ext));
+    try std.testing.expectEqual(InstNode.empty_tag_union, graph.content(value_ext));
+    try std.testing.expectEqual(InstNode.empty_record, graph.content(record_ext));
+}
+
+test "grounding row defaults descends through a named node's args, backing, and padding" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const tag_a = try name_store.internTagLabel("A");
+    const wrapped = try name_store.internTagLabel("Wrapped");
+    const pad = try name_store.internTagLabel("Pad");
+    const field_name = try name_store.internRecordFieldLabel("value");
+    const str = try graph.newNode(.{ .primitive = .str });
+
+    const arg_tags = try graph.arena().alloc(InstTag, 1);
+    arg_tags[0] = .{ .name = tag_a, .checked_name = tag_a, .payloads = try graph.arena().alloc(NodeId, 0) };
+    const arg_ext = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
+    const arg_row = try graph.newNode(.{ .tag_union = .{ .tags = arg_tags, .ext = arg_ext } });
+    const bare_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+
+    const backing_tags = try graph.arena().alloc(InstTag, 1);
+    backing_tags[0] = .{ .name = wrapped, .checked_name = wrapped, .payloads = try graph.arena().dupe(NodeId, &.{str}) };
+    const backing_ext = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
+    const backing = try graph.newNode(.{ .tag_union = .{ .tags = backing_tags, .ext = backing_ext } });
+
+    const padding_tags = try graph.arena().alloc(InstTag, 1);
+    padding_tags[0] = .{ .name = pad, .checked_name = pad, .payloads = try graph.arena().alloc(NodeId, 0) };
+    const padding_ext = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
+    const padding = try graph.newNode(.{ .tag_union = .{ .tags = padding_tags, .ext = padding_ext } });
+    const declared_order = try graph.arena().alloc(InstDeclaredField, 2);
+    declared_order[0] = .{ .named = field_name };
+    declared_order[1] = .{ .padding = padding };
+
+    const named = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(21) },
+        .def = .{
+            .module = try name_store.internModuleIdentity(&([_]u8{0xC2} ** 32)),
+            .type_name = try name_store.internTypeName("Shape"),
+        },
+        .kind = .@"opaque",
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{ arg_row, bare_arg }),
+        .backing = .{ .node = backing, .use = .runtime_layout_only },
+        .declared_order = declared_order,
+    } });
+
+    try graph.groundRowDefaults(named);
+    try std.testing.expectEqual(InstNode.empty_tag_union, graph.content(arg_ext));
+    try std.testing.expectEqual(InstNode.empty_tag_union, graph.content(backing_ext));
+    try std.testing.expectEqual(InstNode.empty_tag_union, graph.content(padding_ext));
+    // The defaultless argument keeps the named type unresolved.
+    try std.testing.expect(graph.content(bare_arg) == .unresolved);
+    try std.testing.expect(!try graph.typeIsResolved(named));
 }
 
 test "open draft function interfaces use related graph classes directly" {

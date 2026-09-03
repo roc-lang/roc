@@ -15533,7 +15533,15 @@ const BodyContext = struct {
     /// exact prepared call identities instead of reconstructing checked requests.
     frozen_sealed_emission: bool = false,
     /// The one finalizer that owns Phase-B materialization for this frozen
-    /// graph. Checked defaults are applied here, never by an eager consumer.
+    /// graph. Checked defaults are applied here, never by an eager consumer,
+    /// with one declared exception that is transitional (removed by
+    /// `polarity_phase_two.md` W2b): a stored codec restore prepares its
+    /// generated format-method calls before the graph freezes and must emit
+    /// their bodies from resolved views. Immediately before those views are
+    /// taken, `resolvedPreparedCodecCallsForBoundary` commits the row
+    /// defaults of every cell reachable from a prepared call's callable node
+    /// through `InstGraph.groundRowDefaults`; numeric defaults are never
+    /// committed there.
     frozen_type_finals: ?*GraphTypeFinals = null,
     /// Source region to use while inlining a compile-time const eval template.
     /// The template body can be lowered from a lookup site, but diagnostics
@@ -43826,6 +43834,20 @@ const BodyContext = struct {
         errdefer out.deinit(self.allocator);
         for (self.draft.prepared_codec_calls.items) |prepared| {
             if (prepared.boundary_expr != boundary_expr) continue;
+            if (!self.frozen_sealed_emission) {
+                // Transitional (`polarity_phase_two.md` W2a, removed by W2b):
+                // the eager stored-codec restore emits its generated bodies
+                // from resolved views before the graph freezes, so commit the
+                // row defaults final sealing would apply to every cell the
+                // callable view reaches. Every preparation relation for this
+                // boundary has already run, and a derived codec determines
+                // each protocol row exactly, so no later relation widens a
+                // grounded row. Numeric defaults are never committed here.
+                // The shape node needs no grounding: every prepared shape is
+                // a sub-node of the restore's root shape, which the restore
+                // viewed resolved before preparing any call.
+                try self.graph.groundRowDefaults(prepared.callable_node);
+            }
             try out.append(self.allocator, .{
                 .kind = prepared.kind,
                 .purpose = prepared.purpose,

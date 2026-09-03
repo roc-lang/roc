@@ -4466,7 +4466,15 @@ more, and its arguments must match as written. A where-alias declaration's
 signatures are copied into a referencing annotation with their markers
 intact (`.preserve`). Lowering note: a body use that WIDENS its copy asks
 Monotype to specialize the implementation at the wider row per use, which
-the dispatch plan does not yet do (one plan per obligation).
+the dispatch plan does not yet do (one plan per obligation). A second
+lowering consequence: a Builtin format method's protocol result row (the ok
+payload of `parse_record_start`, for instance) is now quantified in its
+scheme, so a stored codec restore, which emits its generated bodies from
+resolved views before the specialization graph freezes, reaches that row
+unresolved; transitionally it commits such rows' defaults through
+`InstGraph.groundRowDefaults` (the one declared exception to "defaults apply
+only at final sealing" in the Monotype section) until `polarity_phase_two.md`
+W2b moves that emission into Phase B.
 
 Two positions opt out of implicit opening, both genuine non-producers:
 host-boundary annotations (hosted lambdas and `provides` defs) and platform
@@ -7013,7 +7021,18 @@ and subsequent relations still act on the original graph node.
 The only time an unresolved checked variable with an empty-tag-union row
 default may become durable `tag_union []` is final graph sealing, after every
 checked interface relation and specialization demand for that body has been
-applied.
+applied. One declared exception exists and is transitional (removed by
+`polarity_phase_two.md` W2b, which moves the stored-codec restore's emission
+into Phase B): a stored codec restore prepares its generated format-method
+calls before the graph freezes and must emit their bodies from resolved
+views. Immediately before those views are taken, `InstGraph.groundRowDefaults`
+commits the row defaults of every cell reachable from a prepared call's
+callable node to the content final sealing would materialize (a prepared
+call's shape node is a sub-node of the root shape the restore has already
+viewed resolved, so it needs none). Numeric defaults are never committed
+there. A derived codec determines each
+protocol row exactly, so no later relation can widen a grounded row; the
+`unifyTagRows` invariant enforces that.
 After sealing, `tag_union []` is closed and uninhabited. Values such as `[]` can
 still be represented as `List(tag_union [])` because they contain no items,
 and code that would need an actual item value must have constrained the
