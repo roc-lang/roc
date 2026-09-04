@@ -117,6 +117,9 @@ pub const LirLoweringOptions = struct {
     /// Add a second platform-required procedure so root lowering has a parallel
     /// batch rather than only the ordinary single-entrypoint workload.
     parallel_procedure_root_fixture: bool = false,
+    /// Require four app procedures that each call a distinct capture-free direct
+    /// callee, so their worker-discovered callees form a second body-shard wave.
+    prepared_direct_call_root_fixture: bool = false,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     inline_mode: lir.CheckedPipeline.InlineMode = .none,
     spec_constr_clone_inlining: lir.CheckedPipeline.SpecConstrCloneInlining = .all_calls,
@@ -232,6 +235,129 @@ pub fn expectProcedureRootParallelismDeterministicLir(app_body: []const u8) Lowe
     try expectPostCheckParallelismDeterministicLir(app_body, true);
 }
 
+/// Four independent, finite capture-free direct calls. Each required procedure
+/// discovers its distinct direct callee, making a later worker wave
+/// observable without depending on execution timing.
+pub const prepared_finite_capture_free_direct_call_fixture =
+    \\leaf_a : I64 -> I64
+    \\leaf_a = |value| value
+    \\
+    \\leaf_b : I64 -> I64
+    \\leaf_b = |value| value
+    \\
+    \\leaf_c : I64 -> I64
+    \\leaf_c = |value| value
+    \\
+    \\leaf_d : I64 -> I64
+    \\leaf_d = |value| value
+    \\
+    \\auxiliary_a! = |value| leaf_a(value)
+    \\
+    \\auxiliary_b! = |value| leaf_b(value)
+    \\
+    \\auxiliary_c! = |value| leaf_c(value)
+    \\
+    \\auxiliary_d! = |value| leaf_d(value)
+    \\
+    \\main! = |_args| {
+    \\    Ok({})
+    \\}
+;
+
+/// Assert that prepared finite capture-free direct calls lower identically
+/// serially, in two and four worker lanes, and when worker completions are
+/// committed in reverse order. The direct callees discovered by the first
+/// eligible epoch form a later epoch; every submitted shard commits without a
+/// retry.
+pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() LowerToLirHarnessError!void {
+    const gpa = std.testing.allocator;
+    const cap = 1 << 22;
+    const reference = try gpa.alloc(u8, cap);
+    defer gpa.free(reference);
+    var reference_writer = std.Io.Writer.fixed(reference);
+    var serial_metrics: lir.CheckedPipeline.SolvedLirParallelMetrics = .{
+        .task_waves = 11,
+        .tasks_submitted = 22,
+        .tasks_committed = 33,
+        .tasks_retried_serial = 44,
+    };
+    var serial_timing: lir.CheckedPipeline.TimingSnapshot = .{};
+    try runToLir(prepared_finite_capture_free_direct_call_fixture, &reference_writer, .{
+        .specialization_workers = 1,
+        .prepared_direct_call_root_fixture = true,
+        .solved_lir_parallel_metrics_out = &serial_metrics,
+        .timing_out = &serial_timing,
+    }, null);
+    try std.testing.expectEqual(@as(u64, 0), serial_metrics.task_waves);
+    try std.testing.expectEqual(@as(u64, 0), serial_metrics.tasks_submitted);
+    try std.testing.expectEqual(@as(u64, 0), serial_metrics.tasks_committed);
+    try std.testing.expectEqual(@as(u64, 0), serial_metrics.tasks_retried_serial);
+    try std.testing.expectEqual(@as(u64, 0), serial_metrics.workspace_initializations);
+    try std.testing.expectEqual(@as(u64, 0), serial_metrics.workspace_reuses);
+    const serial_parallel = serial_timing.monotype_parallel;
+    try std.testing.expectEqual(@as(u64, 0), serial_parallel.root_tasks_submitted);
+    try std.testing.expectEqual(@as(u64, 0), serial_parallel.root_tasks_committed);
+    try std.testing.expectEqual(@as(u64, 0), serial_parallel.specialization_tasks_submitted);
+    try std.testing.expectEqual(@as(u64, 0), serial_parallel.specialization_tasks_committed);
+    try std.testing.expectEqual(@as(u64, 0), serial_parallel.task_waves);
+    try std.testing.expectEqual(@as(u64, 0), serial_parallel.within_lowering_lane_reuse_tasks);
+
+    for ([_]struct {
+        specialization_workers: usize,
+        solved_lir_task_waves: u64,
+        monotype_task_waves: u64,
+    }{
+        .{ .specialization_workers = 2, .solved_lir_task_waves = 7, .monotype_task_waves = 5 },
+        .{ .specialization_workers = 4, .solved_lir_task_waves = 4, .monotype_task_waves = 4 },
+    }) |case| {
+        for ([_]bool{ false, true }) |reverse_post_check_completions| {
+            const candidate = try gpa.alloc(u8, cap);
+            defer gpa.free(candidate);
+            var candidate_writer = std.Io.Writer.fixed(candidate);
+            var metrics: lir.CheckedPipeline.SolvedLirParallelMetrics = .{};
+            var timing: lir.CheckedPipeline.TimingSnapshot = .{};
+            try runToLir(prepared_finite_capture_free_direct_call_fixture, &candidate_writer, .{
+                .specialization_workers = case.specialization_workers,
+                .prepared_direct_call_root_fixture = true,
+                .reverse_post_check_completions = reverse_post_check_completions,
+                .solved_lir_parallel_metrics_out = &metrics,
+                .timing_out = &timing,
+            }, null);
+
+            try std.testing.expectEqualStrings(reference_writer.buffered(), candidate_writer.buffered());
+            try std.testing.expectEqual(case.solved_lir_task_waves, metrics.task_waves);
+            try std.testing.expectEqual(@as(u64, 14), metrics.tasks_submitted);
+            try std.testing.expectEqual(@as(u64, 14), metrics.tasks_committed);
+            try std.testing.expectEqual(@as(u64, 0), metrics.tasks_retried_serial);
+            try std.testing.expectEqual(
+                metrics.tasks_submitted,
+                metrics.workspace_initializations + metrics.workspace_reuses,
+            );
+            try std.testing.expect(metrics.workspace_initializations > 0);
+            try std.testing.expect(metrics.workspace_reuses > 0);
+
+            const parallel = timing.monotype_parallel;
+            try std.testing.expectEqual(@as(u64, 5), parallel.root_tasks_submitted);
+            try std.testing.expectEqual(parallel.root_tasks_submitted, parallel.root_tasks_committed);
+            try std.testing.expectEqual(@as(u64, 0), parallel.root_tasks_retried_serial);
+            try std.testing.expectEqual(@as(u64, 10), parallel.specialization_tasks_submitted);
+            try std.testing.expect(
+                parallel.specialization_tasks_submitted > parallel.peak_worker_lanes_available,
+            );
+            try std.testing.expectEqual(
+                parallel.specialization_tasks_submitted,
+                parallel.specialization_tasks_committed,
+            );
+            try std.testing.expectEqual(@as(u64, 0), parallel.specialization_tasks_retried_serial);
+            try std.testing.expectEqual(@as(u64, 0), parallel.specialization_tasks_discarded_ready);
+            // Ten specializations complete in two specialization waves after
+            // the fixed root waves, proving each run can exceed lane count.
+            try std.testing.expectEqual(case.monotype_task_waves, parallel.task_waves);
+            try std.testing.expect(parallel.within_lowering_lane_reuse_tasks > 0);
+        }
+    }
+}
+
 fn expectNamedWorkerLocalCommitted(
     store: *const lir.LirStore,
     _: *const layout.Store,
@@ -329,7 +455,12 @@ fn runToLir(
     defer tmp_dir.cleanup();
 
     try tmp_dir.dir.createDirPath(std.testing.io, ".roc_echo_platform");
-    const app_exports = if (opts.parallel_procedure_root_fixture) "main!, auxiliary!" else "main!";
+    const app_exports = if (opts.prepared_direct_call_root_fixture)
+        "main!, auxiliary_a!, auxiliary_b!, auxiliary_c!, auxiliary_d!"
+    else if (opts.parallel_procedure_root_fixture)
+        "main!, auxiliary!"
+    else
+        "main!";
     const auxiliary_source = if (opts.parallel_procedure_root_fixture)
         "\nauxiliary! = |arg| {\n    named_local = arg\n    named_local\n}\n"
     else
@@ -348,7 +479,38 @@ fn runToLir(
         .sub_path = "main.roc",
         .data = synthetic_source,
     });
-    const platform_source: []const u8 = if (opts.parallel_procedure_root_fixture)
+    const platform_source: []const u8 = if (opts.prepared_direct_call_root_fixture)
+        \\platform ""
+        \\    requires {} {
+        \\        main! : List(Str) => Try({}, [Exit(I8), ..]),
+        \\        auxiliary_a! : I64 => I64,
+        \\        auxiliary_b! : I64 => I64,
+        \\        auxiliary_c! : I64 => I64,
+        \\        auxiliary_d! : I64 => I64,
+        \\    }
+        \\    exposes [Echo]
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host! }
+        \\    hosted { "roc_echo_line": Echo.line! }
+        \\
+        \\import Echo
+        \\
+        \\main_for_host! : List(Str) => I8
+        \\main_for_host! = |args| {
+        \\    _a = auxiliary_a!(0)
+        \\    _b = auxiliary_b!(0)
+        \\    _c = auxiliary_c!(0)
+        \\    _d = auxiliary_d!(0)
+        \\    match main!(args) {
+        \\        Ok({}) => 0
+        \\        Err(Exit(code)) => code
+        \\        Err(other) => {
+        \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+        \\            1
+        \\        }
+        \\    }
+        \\}
+    else if (opts.parallel_procedure_root_fixture)
         \\platform ""
         \\    requires {} {
         \\        main! : List(Str) => Try({}, [Exit(I8), ..]),

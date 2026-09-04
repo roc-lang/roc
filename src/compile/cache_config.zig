@@ -162,7 +162,13 @@ pub const Constants = struct {
     ///     records the source region of the annotated name.
     /// 72: Checked binding schemes serialize generated-codec relations that
     ///     downstream specializations must revalidate.
-    pub const CACHE_VERSION = 73;
+    /// 73: Generated codec contracts retain structural body shapes and mark
+    ///     specialization-conditional method capabilities.
+    /// 74: Canonicalization warns on a `?` applied to a function's return
+    ///     value (new diagnostic).
+    /// 75: Checked dispatch data drops symbolic constraint-callable evidence
+    ///     and records recursive resolved references explicitly.
+    pub const CACHE_VERSION = 75;
 };
 
 /// Configuration for the Roc cache system.

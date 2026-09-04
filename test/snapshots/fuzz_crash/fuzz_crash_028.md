@@ -1624,16 +1624,14 @@ This ? may return early with a type that doesn't match the function body.
 le =(arg1)?.od()?.ned()?.recd?
     ^^^^^^^
 
-On error, this would return:
+On error, this ? returns an Err, so this function must return a Try.
 
-    Try(ok, err)
-
-But the function body evaluates to:
+But its body evaluates to:
 
     [Blue, ..]
 
 Hint: The error types from all ? operators and the function body must be
-compatible since any of them could be the actual return value.
+compatible, since any of them could be the actual return value.
 
 ── ● declaration has no value ────────────────────────── fuzz_crash_028.md:141:1
 

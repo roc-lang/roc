@@ -56,6 +56,8 @@ pub const ComptimeSite = Mono.ComptimeSite;
 pub const FieldExpr = Mono.FieldExpr;
 /// Record update expression.
 pub const RecordUpdate = Mono.RecordUpdate;
+/// Explicit producer-to-consumer result relation.
+pub const TypedBoundary = Mono.TypedBoundary;
 /// One source-ordered segment in a flattened record-field access path.
 pub const FieldAccessSegment = Mono.FieldAccessSegment;
 /// Keyed pre-lift function capture operand.
@@ -110,6 +112,11 @@ pub const Fn = struct {
     /// while the lifted function still has that signature; transformations
     /// that synthesize a different ABI clear it explicitly.
     signature: ?Type.TypeId = null,
+    /// The iterator-fusion pass normalized this function from explicit
+    /// checker-stamped iterator producers. Later structural LIR passes consume
+    /// this provenance directly instead of rediscovering iterator intent from
+    /// procedure names or body shape.
+    iterator_fusion_scope: bool = false,
     args: Span(TypedLocal),
     captures: Span(TypedLocal),
     body: FnBody,
@@ -479,12 +486,12 @@ pub const Program = struct {
     /// Ambient virtual source frame recorded by `addExpr`/`addStmt`.
     current_inline_scope: InlineScopeId,
 
-    /// Append-only section lengths at the start of a SpecConstr analysis walk.
+    /// Append-only section lengths at the start of speculative SpecConstr work.
     ///
     /// Value-aware pattern discovery evaluates expressions symbolically through
-    /// the same cloner used by the mutating rewrite. The cloner may need
-    /// temporary expression, pattern, statement, and local ids, but those ids
-    /// are analysis work storage and must not become durable lifted IR.
+    /// the same cloner used by the mutating rewrite, and loop-shape discovery may
+    /// reject a complete clone attempt. Their temporary ids must not become
+    /// durable lifted IR.
     pub const SpecConstrAnalysisMark = struct {
         fns: usize,
         exprs: usize,
@@ -496,6 +503,7 @@ pub const Program = struct {
         typed_locals: usize,
         stmt_ids: usize,
         field_exprs: usize,
+        field_access_segments: usize,
         capture_operands: usize,
         record_destructs: usize,
         str_pattern_steps: usize,
@@ -708,6 +716,7 @@ pub const Program = struct {
             .typed_locals = self.typed_locals.len(),
             .stmt_ids = self.stmt_ids.len(),
             .field_exprs = self.field_exprs.len(),
+            .field_access_segments = self.field_access_segments.len(),
             .capture_operands = self.capture_operands.len(),
             .record_destructs = self.record_destructs.len(),
             .str_pattern_steps = self.str_pattern_steps.len(),
@@ -724,8 +733,8 @@ pub const Program = struct {
         };
     }
 
-    /// Discard SpecConstr analysis-only appends while retaining their capacity
-    /// for the next analysis walk.
+    /// Discard speculative SpecConstr appends while retaining their capacity for
+    /// a retry or the next analysis walk.
     pub fn rewindSpecConstrAnalysis(self: *Program, mark: SpecConstrAnalysisMark) void {
         self.assertSpecConstrAnalysisMark(mark);
         self.freeAnalysisLocalNames(mark.local_names);
@@ -738,6 +747,7 @@ pub const Program = struct {
         self.typed_locals.restoreLen(mark.typed_locals);
         self.stmt_ids.restoreLen(mark.stmt_ids);
         self.field_exprs.restoreLen(mark.field_exprs);
+        self.field_access_segments.restoreLen(mark.field_access_segments);
         self.capture_operands.restoreLen(mark.capture_operands);
         self.record_destructs.restoreLen(mark.record_destructs);
         self.str_pattern_steps.restoreLen(mark.str_pattern_steps);
@@ -767,6 +777,7 @@ pub const Program = struct {
         self.typed_locals.shrinkAndFree(self.allocator, mark.typed_locals);
         self.stmt_ids.shrinkAndFree(self.allocator, mark.stmt_ids);
         self.field_exprs.shrinkAndFree(self.allocator, mark.field_exprs);
+        self.field_access_segments.shrinkAndFree(self.allocator, mark.field_access_segments);
         self.capture_operands.shrinkAndFree(self.allocator, mark.capture_operands);
         self.record_destructs.shrinkAndFree(self.allocator, mark.record_destructs);
         self.str_pattern_steps.shrinkAndFree(self.allocator, mark.str_pattern_steps);
