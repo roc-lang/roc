@@ -27,6 +27,7 @@ const completion_builder = @import("completion/builder.zig");
 const BuildEnvHandle = @import("build_env_handle.zig").BuildEnvHandle;
 const doc_comments = @import("doc_comments.zig");
 const rename_rules = @import("rename.zig");
+const code_action = @import("code_action.zig");
 
 const BuildEnv = compile.BuildEnv;
 const CacheManager = compile.CacheManager;
@@ -52,6 +53,14 @@ const MethodOwnerLookup = struct {
     type_ident: base.Ident.Idx,
     builtin_origin: bool,
 };
+
+/// Whether a collected list of patterns holds this one.
+fn patternListContains(patterns: []const CIR.Pattern.Idx, pattern: CIR.Pattern.Idx) bool {
+    for (patterns) |candidate| {
+        if (@intFromEnum(candidate) == @intFromEnum(pattern)) return true;
+    }
+    return false;
+}
 
 fn statementTypeAnno(module_env: *const ModuleEnv, statement: CIR.Statement) ?CIR.TypeAnno.Idx {
     return switch (statement) {
@@ -2984,6 +2993,12 @@ pub const SyntaxChecker = struct {
         character: u32,
         /// The rendered type, including its leading `: `. Owned by the result.
         label: []u8,
+        /// The edit that writes this type into the source, for a client that
+        /// lets the reader accept a hint. Null where no annotation can be
+        /// written: Roc has no inline `name : Type = value` form, so accepting
+        /// a hint has to insert a line above the binding, and not every
+        /// binding a hint is drawn on can take one.
+        edit: ?AnnotationEdit,
     };
 
     /// The hints for one requested range.
@@ -2991,10 +3006,62 @@ pub const SyntaxChecker = struct {
         hints: []InlayHint,
 
         pub fn deinit(self: InlayHintsResult, allocator: std.mem.Allocator) void {
-            for (self.hints) |hint| allocator.free(hint.label);
+            for (self.hints) |hint| {
+                allocator.free(hint.label);
+                if (hint.edit) |edit| allocator.free(edit.new_text);
+            }
             allocator.free(self.hints);
         }
     };
+
+    /// An insertion that writes a binding's inferred type above it.
+    pub const AnnotationEdit = struct {
+        /// Where the text goes. This inserts, so the range is empty.
+        range: LspRange,
+        /// The line to insert, newline included. Owned by whoever holds it.
+        new_text: []u8,
+    };
+
+    /// Build the edit that writes `rendered` as `binding`'s annotation, or
+    /// null when the binding cannot take one.
+    ///
+    /// The annotation is a line of its own above the binding, so the binding
+    /// has to open its line. Anything else in front of it - a block written on
+    /// a single line, for one - would be split across the inserted line break.
+    ///
+    /// The caller has already established that `binding` is what its line
+    /// declares; a lambda parameter is not, and its line belongs to the
+    /// parameter list.
+    fn annotationInsertion(
+        self: *SyntaxChecker,
+        module_env: *ModuleEnv,
+        binding: cir_queries.UnannotatedBinding,
+        rendered: []const u8,
+    ) Allocator.Error!?AnnotationEdit {
+        const line_starts = module_env.getLineStartsAll();
+        if (binding.range.start_line >= line_starts.len) return null;
+        const line_start = line_starts[binding.range.start_line];
+        if (line_start > binding.region.start.offset) return null;
+
+        const indent = module_env.common.source[line_start..binding.region.start.offset];
+        for (indent) |byte| {
+            if (byte != ' ' and byte != '\t') return null;
+        }
+
+        // The collected binding is spelled exactly its name, so the source
+        // under it is the name to write the annotation for.
+        const name = module_env.common.source[binding.region.start.offset..binding.region.end.offset];
+
+        return AnnotationEdit{
+            .range = .{
+                .start_line = binding.range.start_line,
+                .start_col = 0,
+                .end_line = binding.range.start_line,
+                .end_col = 0,
+            },
+            .new_text = try std.fmt.allocPrint(self.allocator, "{s}{s} : {s}\n", .{ indent, name, rendered }),
+        };
+    }
 
     /// Render the inferred type of every unannotated binding in a line range.
     ///
@@ -3043,9 +3110,18 @@ pub const SyntaxChecker = struct {
         var bindings = try cir_queries.collectUnannotatedBindings(module_env, start_offset, end_offset, self.allocator);
         defer bindings.deinit(self.allocator);
 
+        // Which of the hinted bindings could carry a written annotation, so a
+        // reader accepting a hint gets source that compiles rather than the
+        // inline form the hint's shape suggests, which Roc does not have.
+        var declared = try cir_queries.collectDeclaredPatterns(module_env, self.allocator);
+        defer declared.deinit(self.allocator);
+
         var hints: std.ArrayList(InlayHint) = .empty;
         errdefer {
-            for (hints.items) |hint| self.allocator.free(hint.label);
+            for (hints.items) |hint| {
+                self.allocator.free(hint.label);
+                if (hint.edit) |edit| self.allocator.free(edit.new_text);
+            }
             hints.deinit(self.allocator);
         }
 
@@ -3062,6 +3138,14 @@ pub const SyntaxChecker = struct {
             const rendered = type_writer.get();
             if (rendered.len == 0) continue;
 
+            // The label is cut to keep the line readable; the edit writes the
+            // type in full, because a cut one would not compile.
+            const edit = if (patternListContains(declared.items, binding.pattern))
+                try self.annotationInsertion(module_env, binding, rendered)
+            else
+                null;
+            errdefer if (edit) |unused| self.allocator.free(unused.new_text);
+
             const shown = truncateTypeLabel(rendered);
             const label = if (shown.len < rendered.len)
                 try std.fmt.allocPrint(self.allocator, ": {s}…", .{shown})
@@ -3070,15 +3154,205 @@ pub const SyntaxChecker = struct {
             errdefer self.allocator.free(label);
 
             try hints.append(self.allocator, .{
-                .line = binding.after.line,
-                .character = binding.after.character,
+                .line = binding.range.end_line,
+                .character = binding.range.end_col,
                 .label = label,
+                .edit = edit,
             });
         }
 
         return InlayHintsResult{
             .hints = try hints.toOwnedSlice(self.allocator),
         };
+    }
+
+    /// One edit the editor may offer, ready to be sent as a `CodeAction`.
+    pub const CodeAction = struct {
+        /// What the editor shows in its menu. Owned by the result.
+        title: []u8,
+        /// The LSP `CodeActionKind` this belongs under.
+        kind: []const u8,
+        /// Where the text goes. Both actions insert, so this range is empty.
+        range: LspRange,
+        /// The source to insert there. Owned by the result.
+        new_text: []u8,
+    };
+
+    /// The actions offered for one requested range.
+    pub const CodeActionsResult = struct {
+        actions: []CodeAction,
+
+        pub fn deinit(self: CodeActionsResult, allocator: std.mem.Allocator) void {
+            for (self.actions) |action| {
+                allocator.free(action.title);
+                allocator.free(action.new_text);
+            }
+            allocator.free(self.actions);
+        }
+    };
+
+    /// The `CodeActionKind` both offered actions belong to.
+    const refactor_rewrite_kind = "refactor.rewrite";
+
+    /// Offer the edits that apply to a requested range.
+    ///
+    /// Two are offered today, both written from the checked types: an
+    /// annotation for a binding that infers its type, and an `expect` that
+    /// calls a top-level function. Both need types, so a document that does
+    /// not build offers nothing.
+    pub fn getCodeActions(
+        self: *SyntaxChecker,
+        uri: []const u8,
+        override_text: ?[]const u8,
+        start_line: u32,
+        start_character: u32,
+        end_line: u32,
+        end_character: u32,
+    ) QueryError!?CodeActionsResult {
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+
+        var build = try self.prepareDocumentBuild(uri, override_text);
+        defer build.deinit();
+
+        self.logDebug(.build, "codeAction: document {s} reused={}", .{ build.absolute_path, build.reused });
+
+        if (!build.build_succeeded) {
+            self.logDebug(.build, "codeAction: build unavailable for {s}", .{build.absolute_path});
+            return null;
+        }
+
+        const module_env = build.getModuleEnv() orelse return null;
+        const start_offset = pos.positionToOffset(module_env, start_line, start_character) orelse return null;
+        const end_offset = pos.positionToOffset(module_env, end_line, end_character) orelse return null;
+        if (end_offset < start_offset) return null;
+
+        var actions: std.ArrayList(CodeAction) = .empty;
+        errdefer {
+            for (actions.items) |action| {
+                self.allocator.free(action.title);
+                self.allocator.free(action.new_text);
+            }
+            actions.deinit(self.allocator);
+        }
+
+        try self.appendAnnotationActions(module_env, start_offset, end_offset, &actions);
+        try self.appendExpectTestActions(module_env, start_offset, end_offset, &actions);
+
+        return CodeActionsResult{
+            .actions = try actions.toOwnedSlice(self.allocator),
+        };
+    }
+
+    /// Add one action per binding in the range that can take an annotation,
+    /// in source order.
+    ///
+    /// A range covering several bindings has no one right answer, and the
+    /// protocol does not ask for one: `textDocument/codeAction` answers with a
+    /// menu. Every title names its binding, so the reader picks the intended
+    /// one instead of a rule guessing at it. Earlier rules did guess -- first
+    /// by the shortest name, then by the last position -- and each picked the
+    /// wrong binding for some arrangement of the same selection.
+    ///
+    /// A cursor, which is how the request usually arrives, touches one name and
+    /// so still produces one action.
+    fn appendAnnotationActions(
+        self: *SyntaxChecker,
+        module_env: *ModuleEnv,
+        start_offset: u32,
+        end_offset: u32,
+        actions: *std.ArrayList(CodeAction),
+    ) Allocator.Error!void {
+        var bindings = try cir_queries.collectUnannotatedBindings(module_env, start_offset, end_offset, self.allocator);
+        defer bindings.deinit(self.allocator);
+        if (bindings.items.len == 0) return;
+
+        // A lambda parameter and a destructured field are bindings too, and an
+        // annotation belongs to neither: it is a line of its own above what
+        // that line declares.
+        var declared = try cir_queries.collectDeclaredPatterns(module_env, self.allocator);
+        defer declared.deinit(self.allocator);
+
+        // The walk finds bindings in traversal order; the menu reads better in
+        // the order the file writes them.
+        std.mem.sort(cir_queries.UnannotatedBinding, bindings.items, {}, bindingPrecedes);
+
+        for (bindings.items) |target| {
+            if (!patternListContains(declared.items, target.pattern)) continue;
+
+            var type_writer = try module_env.initTypeWriter();
+            defer type_writer.deinit();
+            type_writer.write(ModuleEnv.varFrom(target.pattern), .one_line) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => continue,
+            };
+
+            const rendered = type_writer.get();
+            if (rendered.len == 0) continue;
+
+            const edit = try self.annotationInsertion(module_env, target, rendered) orelse continue;
+            errdefer self.allocator.free(edit.new_text);
+
+            const name = module_env.common.source[target.region.start.offset..target.region.end.offset];
+            const title = try std.fmt.allocPrint(self.allocator, "Annotate '{s}' with its inferred type", .{name});
+
+            try actions.append(self.allocator, .{
+                .title = title,
+                .kind = refactor_rewrite_kind,
+                .range = edit.range,
+                .new_text = edit.new_text,
+            });
+        }
+    }
+
+    /// Order two bindings by where their names are written.
+    fn bindingPrecedes(_: void, left: cir_queries.UnannotatedBinding, right: cir_queries.UnannotatedBinding) bool {
+        return left.region.start.offset < right.region.start.offset;
+    }
+
+    /// Add one action per top-level function in the range that a test can be
+    /// written for, in source order.
+    ///
+    /// A range covering several functions has no one right answer, for the
+    /// same reason an annotation over several bindings does not: nothing about
+    /// the range says which function was meant. Every function the range
+    /// reaches is offered, named, and the reader picks.
+    ///
+    /// A cursor, which is how the request usually arrives, touches one
+    /// function and so still produces at most one action.
+    fn appendExpectTestActions(
+        self: *SyntaxChecker,
+        module_env: *ModuleEnv,
+        start_offset: u32,
+        end_offset: u32,
+        actions: *std.ArrayList(CodeAction),
+    ) Allocator.Error!void {
+        var definitions = try cir_queries.collectTopLevelDefinitionsInRange(module_env, start_offset, end_offset, self.allocator);
+        defer definitions.deinit(self.allocator);
+
+        for (definitions.items) |definition| {
+            const new_text = try code_action.renderExpectTest(
+                self.allocator,
+                module_env,
+                definition.name,
+                ModuleEnv.varFrom(definition.pattern),
+            ) orelse continue;
+            errdefer self.allocator.free(new_text);
+
+            const title = try std.fmt.allocPrint(self.allocator, "Generate an expect test for '{s}'", .{definition.name});
+
+            try actions.append(self.allocator, .{
+                .title = title,
+                .kind = refactor_rewrite_kind,
+                .range = .{
+                    .start_line = definition.end.line,
+                    .start_col = definition.end.character,
+                    .end_line = definition.end.line,
+                    .end_col = definition.end.character,
+                },
+                .new_text = new_text,
+            });
+        }
     }
 
     /// Every place a symbol is written, split the way LSP asks for it.

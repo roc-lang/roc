@@ -12,6 +12,7 @@ The following requests are handled:
 - `textDocument/documentHighlight`
 - `textDocument/references`
 - `textDocument/inlayHint`
+- `textDocument/codeAction`
 - `textDocument/formatting`
 - `textDocument/foldingRange`
 - `textDocument/selectionRange`
@@ -40,8 +41,53 @@ Labels are cut at 56 bytes with a trailing `…`, because a hint is drawn inside
 annotates and an inferred Roc type can be far longer than the code it describes—a generic
 function carries its whole `where` clause. Hovering the same name gives the type in full.
 
+Each hint carries the edit that writes its type into the source, so a client that lets the
+reader accept a hint inserts the annotation instead of leaving them to retype it. That matters
+here more than elsewhere: a hint reads like an inline annotation, which is how several
+languages spell one, and Roc has no `name : Type = value` form - inside a block that spelling
+is already taken by record fields, so retyping what a hint shows changes what the braces mean.
+The edit writes the two-line form, and carries the type in full even where the label is cut.
+
+A hint on a lambda parameter carries no edit. The type is still worth seeing, but a parameter
+takes no annotation, and one written above it would land in the parameter list. The same
+applies to any binding that does not open its line.
+
 A document that does not build produces no hints, which leaves whatever the editor last drew
 in place rather than blanking every hint on each keystroke.
+
+### Code actions
+
+Two actions are offered, both written from the checked types rather than from the text on
+screen. Neither is offered unless it can be written in full: a document that does not build
+has no types to read, and handing the author source that does not compile is worse than
+offering nothing.
+
+**Annotate a binding with its inferred type** writes the type on its own line above the
+binding, carrying the indentation of the line it opens. Roc has no inline `foo : U64 = 100`
+form, so this two-line one is the only one there is. It is offered for any binding a
+definition or a statement declares that does not already write its type - top level, or
+several blocks deep inside a function.
+
+Lambda parameters and destructured fields are left out. They are plain bindings like any
+other, and a Roc lambda may spread its parameters over several lines, so a parameter can open
+a line of its own: what declares a binding tells the two apart, the source around it does not.
+The binding must still open its line, which rules out a block written on a single line, since
+anything in front of the binding would be split across the inserted line break. Where a
+selection covers several bindings, the innermost one is annotated.
+
+**Generate an expect test for a function** writes an `expect` that calls the function,
+directly after the definition it tests. Each argument and the expected result are placeholder
+literals of the right type - `""`, `0`, `[]`, `Bool.True`, and records and tuples of those -
+so the generated test compiles and fails loudly until the author replaces the values.
+
+The action is left out rather than guessed at when a type has no such literal: a nominal type
+the author declared, a tag union, a function argument, or a type variable. It is also left out
+for effectful functions, because `expect` checks a value rather than running effects, for
+functions taking no arguments, and for anything that is not a top-level definition - a
+generated `expect` sits at the top level, where a name bound inside a block cannot be reached.
+
+The inserted annotation is the checker's own rendering of the type, which is worth a read
+before it is kept: an inferred type can be wider than the one the author would write.
 
 ### References
 

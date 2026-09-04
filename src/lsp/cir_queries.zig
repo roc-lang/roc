@@ -1171,8 +1171,11 @@ pub fn declarationNameRegion(module_env: *ModuleEnv, target_pattern: CIR.Pattern
 /// A binding whose type is inferred rather than written down.
 pub const UnannotatedBinding = struct {
     pattern: CIR.Pattern.Idx,
-    /// Where the inferred type belongs: immediately after the bound name.
-    after: LspPosition,
+    /// Where the bound name is written. An inlay hint is drawn just past its
+    /// end; a generated annotation goes above the line its start names.
+    range: LspRange,
+    /// The same span in bytes, so a caller can read the source around it.
+    region: Region,
 };
 
 /// Context for collecting the patterns that carry a written type annotation.
@@ -1231,7 +1234,8 @@ const CollectBindingsContext = struct {
         const range = regionToRange(ctx.module_env, region) orelse return .continue_traversal;
         ctx.results.append(ctx.allocator, .{
             .pattern = pattern_idx,
-            .after = .{ .line = range.end_line, .character = range.end_col },
+            .range = range,
+            .region = region,
         }) catch |err| {
             ctx.oom = err;
             return .stop;
@@ -1323,6 +1327,137 @@ pub fn collectUnannotatedBindings(
     }
     results.shrinkRetainingCapacity(kept);
 
+    return results;
+}
+
+/// Context for collecting the patterns that definitions and statements declare.
+const CollectDeclaredContext = struct {
+    allocator: std.mem.Allocator,
+    results: *std.ArrayList(CIR.Pattern.Idx),
+    oom: ?std.mem.Allocator.Error = null,
+
+    fn visitStmtPre(ctx: *CollectDeclaredContext, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
+        const pattern_idx = statementPattern(stmt) orelse return .continue_traversal;
+        ctx.results.append(ctx.allocator, pattern_idx) catch |err| {
+            ctx.oom = err;
+            return .stop;
+        };
+        return .continue_traversal;
+    }
+};
+
+/// Collect every pattern that a definition or a statement declares.
+///
+/// A type annotation is written on the line above the binding it names, so it
+/// belongs only to a binding that is what its line declares. Lambda parameters
+/// and destructured fields are `assign` patterns too, and a Roc lambda may
+/// spread its parameters over several lines, so a parameter can open a line of
+/// its own - which is why the two are told apart by what declares them rather
+/// than by what the source around them looks like.
+pub fn collectDeclaredPatterns(
+    module_env: *ModuleEnv,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!std.ArrayList(CIR.Pattern.Idx) {
+    var results: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    errdefer results.deinit(allocator);
+
+    var ctx = CollectDeclaredContext{
+        .allocator = allocator,
+        .results = &results,
+    };
+    var visitor = CirVisitor(CollectDeclaredContext).init(&ctx, .{
+        .visit_stmt_pre = CollectDeclaredContext.visitStmtPre,
+    });
+
+    // A top-level definition is not a statement, so its pattern is taken from
+    // the definition itself; the ones inside blocks are reached by the walk.
+    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        try results.append(allocator, def.pattern);
+        visitor.walkExpr(&module_env.store, def.expr);
+        if (visitor.stopped) break;
+    }
+    if (!visitor.stopped) {
+        visitor.walkModule(&module_env.store, module_env.all_statements);
+    }
+    if (ctx.oom) |err| return err;
+
+    return results;
+}
+
+/// Where the line holding `offset` ends, before its line break.
+///
+/// Generated source is inserted here so that whatever the author wrote after a
+/// value on the same line -- in practice a comment -- keeps the line it was
+/// written on.
+fn lineEndAfter(source: []const u8, offset: u32) u32 {
+    if (offset >= source.len) return @intCast(source.len);
+    const newline = std.mem.findScalarPos(u8, source, offset, '\n') orelse
+        return @intCast(source.len);
+    if (newline > offset and source[newline - 1] == '\r') return @intCast(newline - 1);
+    return @intCast(newline);
+}
+
+/// A top-level definition the requested range falls inside.
+pub const TopLevelDefinition = struct {
+    pattern: CIR.Pattern.Idx,
+    /// The bound name, borrowed from the module's ident store.
+    name: []const u8,
+    /// Where the definition's value ends, so generated source can follow it.
+    end: LspPosition,
+};
+
+/// Find every top-level definition whose source covers part of a byte range,
+/// in source order.
+///
+/// Only plain `assign` bindings whose source spells exactly the bound name
+/// qualify. The name is what generated code calls the definition by, so a
+/// pattern spelling anything else would produce a call to something that is
+/// not there.
+///
+/// Definitions nested inside a block are not searched. A generated `expect`
+/// sits at the top level of the module, where a name bound inside a block
+/// cannot be reached.
+pub fn collectTopLevelDefinitionsInRange(
+    module_env: *ModuleEnv,
+    start_offset: u32,
+    end_offset: u32,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!std.ArrayList(TopLevelDefinition) {
+    var results: std.ArrayList(TopLevelDefinition) = .empty;
+    errdefer results.deinit(allocator);
+
+    const source = module_env.common.source;
+    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        const pattern = module_env.store.getPattern(def.pattern);
+        if (std.meta.activeTag(pattern) != .assign) continue;
+
+        const name = module_env.common.idents.getText(pattern.assign.ident);
+        const name_region = module_env.store.getPatternRegion(def.pattern);
+        if (name_region.end.offset > source.len or name_region.start.offset > name_region.end.offset) continue;
+        if (!std.mem.eql(u8, source[name_region.start.offset..name_region.end.offset], name)) continue;
+
+        // The whole definition counts, name and value alike, so the cursor can
+        // sit anywhere inside the function it asks about.
+        const body_region = module_env.store.getExprRegion(def.expr);
+        const extent_end = @max(name_region.end.offset, body_region.end.offset);
+        if (extent_end < start_offset or name_region.start.offset > end_offset) continue;
+
+        // Past anything else written on that line, not at the value's own end.
+        // A comment after the value would otherwise be pushed down onto the
+        // generated `expect` and read as a remark about it.
+        var insertion_region = body_region;
+        insertion_region.end.offset = lineEndAfter(source, body_region.end.offset);
+        const body_range = regionToRange(module_env, insertion_region) orelse continue;
+        try results.append(allocator, .{
+            .pattern = def.pattern,
+            .name = name,
+            .end = .{ .line = body_range.end_line, .character = body_range.end_col },
+        });
+    }
     return results;
 }
 

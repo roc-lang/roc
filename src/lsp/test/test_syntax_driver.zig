@@ -26,6 +26,7 @@ pub const TestSyntaxDriver = struct {
     prepare_rename_calls: usize = 0,
     references_calls: usize = 0,
     inlay_hint_calls: usize = 0,
+    code_action_calls: usize = 0,
 
     pub const CheckError = syntax.SyntaxChecker.CheckError;
     pub const QueryError = syntax.SyntaxChecker.QueryError;
@@ -183,6 +184,19 @@ pub const TestSyntaxDriver = struct {
         _: u32,
     ) QueryError!?syntax.SyntaxChecker.InlayHintsResult {
         self.inlay_hint_calls += 1;
+        return null;
+    }
+
+    pub fn getCodeActions(
+        self: *TestSyntaxDriver,
+        _: []const u8,
+        _: ?[]const u8,
+        _: u32,
+        _: u32,
+        _: u32,
+        _: u32,
+    ) QueryError!?syntax.SyntaxChecker.CodeActionsResult {
+        self.code_action_calls += 1;
         return null;
     }
 };

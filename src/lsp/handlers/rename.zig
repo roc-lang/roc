@@ -18,53 +18,13 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
-const syntax = @import("../syntax.zig");
 const position_params = @import("position_params.zig");
+const workspace_edit = @import("workspace_edit.zig");
 
-/// One text replacement inside a document.
-const TextEdit = struct {
-    range: Range,
-    newText: []const u8,
-};
-
-const Position = struct {
-    line: u32,
-    character: u32,
-};
-
-const Range = struct {
-    start: Position,
-    end: Position,
-};
-
-/// An LSP `WorkspaceEdit` carrying edits for a single document.
-///
-/// `changes` is keyed by document URI, which no static Zig struct can express,
-/// so the object is written by hand. The `changes` form is used rather than
-/// `documentChanges` because every client supports it, while `documentChanges`
-/// is gated on a client capability the server does not currently parse.
-const WorkspaceEdit = struct {
-    uri: []const u8,
-    edits: []const TextEdit,
-
-    pub fn jsonStringify(self: WorkspaceEdit, writer: anytype) error{WriteFailed}!void {
-        try writer.beginObject();
-        try writer.objectField("changes");
-        try writer.beginObject();
-        try writer.objectField(self.uri);
-        try writer.write(self.edits);
-        try writer.endObject();
-        try writer.endObject();
-    }
-};
-
-/// Convert a collected range into the LSP wire shape.
-fn toRange(range: syntax.SyntaxChecker.LspRange) Range {
-    return .{
-        .start = .{ .line = range.start_line, .character = range.start_col },
-        .end = .{ .line = range.end_line, .character = range.end_col },
-    };
-}
+const Range = workspace_edit.Range;
+const TextEdit = workspace_edit.TextEdit;
+const WorkspaceEdit = workspace_edit.WorkspaceEdit;
+const toRange = workspace_edit.toRange;
 
 /// Handler for `textDocument/rename` requests.
 pub fn handler(comptime ServerType: type) type {

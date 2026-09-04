@@ -336,6 +336,17 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "inlay hints show inferred types and skip annotated bindings", .run = inlayHintsShowInferredTypes },
     .{ .name = "inlay hints stay within the requested range and truncate long types", .run = inlayHintsRespectRangeAndLength },
     .{ .name = "inlay hints survive an out-of-range end line", .run = inlayHintsSurviveOutOfRangeEndLine },
+    .{ .name = "inlay hints carry the edit that writes their type down", .run = inlayHintsCarryTheirAnnotationEdit },
+    .{ .name = "code actions annotate a binding with its inferred type", .run = codeActionsAnnotateInferredBinding },
+    .{ .name = "code actions generate an expect test for a function", .run = codeActionsGenerateExpectTest },
+    .{ .name = "code actions offer an annotation and a test for one function", .run = codeActionsOfferBothForOneFunction },
+    .{ .name = "code actions annotate a binding nested inside a function", .run = codeActionsAnnotateNestedBinding },
+    .{ .name = "code actions do not annotate a lambda parameter", .run = codeActionsLeaveLambdaParametersAlone },
+    .{ .name = "code actions leave out a test they cannot write", .run = codeActionsLeaveOutUnwritableTest },
+    .{ .name = "code actions offer nothing for a document that does not compile", .run = codeActionsOfferNothingWithoutTypes },
+    .{ .name = "code actions offer one annotation per binding a selection reaches", .run = codeActionsOfferOnePerBinding },
+    .{ .name = "code actions leave a trailing comment on its own line", .run = codeActionsKeepTrailingComment },
+    .{ .name = "code actions offer one test per function a selection reaches", .run = codeActionsOfferOneTestPerFunction },
     .{ .name = "the name on an annotation is a usable starting point", .run = annotationNameResolvesLikeAnyOccurrence },
     .{ .name = "positions are UTF-16 code units, not bytes", .run = positionsUseUtf16CodeUnits },
     .{ .name = "rename refuses a declaration that is not a plain name", .run = renameRefusesNonIsolatedDeclaration },
@@ -1484,6 +1495,26 @@ pub fn renameRefusesNonIsolatedDeclaration() integration_spec.SpecError!void {
 }
 
 /// Find the hint at a position and return its label.
+/// The hint drawn at one position, or null.
+fn hintAt(hints: std.json.Value, line: i64, character: i64) integration_spec.SpecError!?std.json.Value {
+    if (hints != .array) return error.TestUnexpectedResult;
+    for (hints.array.items) |hint| {
+        const position = try objectField(hint, "position");
+        if ((try integerField(position, "line")) != line) continue;
+        if ((try integerField(position, "character")) != character) continue;
+        return hint;
+    }
+    return null;
+}
+
+/// The single text edit a hint carries, or null when it carries none.
+fn hintEdit(hint: std.json.Value) integration_spec.SpecError!?std.json.Value {
+    if (hint != .object) return error.TestUnexpectedResult;
+    const edits = hint.object.get("textEdits") orelse return null;
+    if (edits != .array or edits.array.items.len != 1) return error.TestUnexpectedResult;
+    return edits.array.items[0];
+}
+
 fn hintLabelAt(hints: std.json.Value, line: i64, character: i64) integration_spec.SpecError!?[]const u8 {
     if (hints != .array) return error.TestUnexpectedResult;
     for (hints.array.items) |hint| {
@@ -1609,6 +1640,15 @@ pub fn inlayHintsRespectRangeAndLength() integration_spec.SpecError!void {
     try std.testing.expect(std.mem.endsWith(u8, label, "…"));
     // ": " + at most 56 bytes of type + the three bytes of "…".
     try std.testing.expect(label.len <= 2 + 56 + 3);
+
+    // The label is cut to keep the line readable, but the edit that writes the
+    // type down carries it in full: a cut type would not compile.
+    const wide_hint = try hintAt(hints, 4, 8) orelse return error.TestUnexpectedResult;
+    const wide_edit = try hintEdit(wide_hint) orelse return error.TestUnexpectedResult;
+    const new_text = try stringField(wide_edit, "newText");
+    try std.testing.expect(std.mem.startsWith(u8, new_text, "    wide : {"));
+    try std.testing.expect(std.mem.endsWith(u8, new_text, "}\n"));
+    try std.testing.expect(new_text.len > label.len);
 }
 
 /// Verifies a range whose end line is past the document does not crash.
@@ -5261,4 +5301,698 @@ pub fn definitionHandlerBranchValueOpenTagDoesNotNavigateToMatchConditionType() 
         const uri = try stringField(result, "uri");
         try std.testing.expect(!std.mem.endsWith(u8, uri, "pkg/State.roc"));
     }
+}
+
+/// The first code action whose title starts with `prefix`, or null.
+fn codeActionByPrefix(actions: std.json.Value, prefix: []const u8) integration_spec.SpecError!?std.json.Value {
+    if (actions != .array) return error.TestUnexpectedResult;
+    for (actions.array.items) |action| {
+        if (action != .object) continue;
+        const title = action.object.get("title") orelse continue;
+        if (title != .string) continue;
+        if (std.mem.startsWith(u8, title.string, prefix)) return action;
+    }
+    return null;
+}
+
+/// The single edit an action carries for the document it was asked about.
+fn codeActionEdit(action: std.json.Value, uri: []const u8) integration_spec.SpecError!std.json.Value {
+    const edit = try objectField(action, "edit");
+    const edits = try workspaceEditsFor(edit, uri);
+    if (edits != .array or edits.array.items.len != 1) return error.TestUnexpectedResult;
+    return edits.array.items[0];
+}
+
+/// Assert an edit inserts `new_text` at exactly one position.
+fn expectInsertionAt(
+    edit: std.json.Value,
+    line: i64,
+    character: i64,
+    new_text: []const u8,
+) integration_spec.SpecError!void {
+    const range = try objectField(edit, "range");
+    const start = try objectField(range, "start");
+    const end = try objectField(range, "end");
+    try std.testing.expectEqual(line, (try objectField(start, "line")).integer);
+    try std.testing.expectEqual(character, (try objectField(start, "character")).integer);
+    try std.testing.expectEqual(line, (try objectField(end, "line")).integer);
+    try std.testing.expectEqual(character, (try objectField(end, "character")).integer);
+    try std.testing.expectEqualStrings(new_text, try stringField(edit, "newText"));
+}
+
+/// Build the `textDocument/codeAction` request for one range.
+fn codeActionRequest(
+    allocator: std.mem.Allocator,
+    id: u32,
+    uri: []const u8,
+    start_line: u32,
+    start_character: u32,
+    end_line: u32,
+    end_character: u32,
+) integration_spec.SpecError![]u8 {
+    return try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":{d},"method":"textDocument/codeAction","params":{{"textDocument":{{"uri":"{s}"}},"range":{{"start":{{"line":{d},"character":{d}}},"end":{{"line":{d},"character":{d}}}}},"context":{{"diagnostics":[]}}}}}}
+    , .{ id, uri, start_line, start_character, end_line, end_character });
+}
+
+/// Verifies the offered annotation carries the binding's inferred type, keeps
+/// the indentation of the line it is written above, and is not offered for a
+/// definition whose type is not a function to test.
+pub fn codeActionsAnnotateInferredBinding() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "code_action_annotate.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\main = {{
+        \\    text = "roc"
+        \\    text
+        \\}}
+    , .{platform_path});
+    defer allocator.free(source);
+
+    const request = try codeActionRequest(allocator, 2, fixture.uri, 3, 4, 3, 8);
+    defer allocator.free(request);
+
+    // The same range, asked for as quick fixes only.
+    const quickfix_request = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/codeAction","params":{{"textDocument":{{"uri":"{s}"}},"range":{{"start":{{"line":3,"character":4}},"end":{{"line":3,"character":8}}}},"context":{{"diagnostics":[],"only":["quickfix"]}}}}}}
+    , .{fixture.uri});
+    defer allocator.free(quickfix_request);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{ request, quickfix_request });
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const actions = try response.result();
+
+    const annotate = try codeActionByPrefix(actions, "Annotate 'text'") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("refactor.rewrite", try stringField(annotate, "kind"));
+
+    // The annotation opens the line the binding is on, carrying its indent.
+    const edit = try codeActionEdit(annotate, fixture.uri);
+    try expectInsertionAt(edit, 3, 0, "    text : Str\n");
+
+    // `main` is a string, not something an `expect` can call.
+    try std.testing.expect((try codeActionByPrefix(actions, "Generate an expect test")) == null);
+
+    // Asked for quick fixes only, the same range offers nothing: everything
+    // here is a refactor.
+    var filtered = try responseById(allocator, responses, 3);
+    defer filtered.deinit();
+    const filtered_actions = try filtered.result();
+    try std.testing.expect(filtered_actions == .array);
+    try std.testing.expectEqual(@as(usize, 0), filtered_actions.array.items.len);
+}
+
+/// Verifies the generated `expect` calls the function with a value of each
+/// parameter's type and lands directly after the definition it tests.
+pub fn codeActionsGenerateExpectTest() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "code_action_expect.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\greet : Str -> Str
+        \\greet = |name| name
+        \\
+        \\tally : List(U8), U64 -> {{ total: U64, seen: Bool }}
+        \\tally = |bytes, start| {{ total: start + List.len(bytes), seen: Bool.True }}
+        \\
+        \\main = greet("roc")
+    , .{platform_path});
+    defer allocator.free(source);
+
+    const greet_request = try codeActionRequest(allocator, 2, fixture.uri, 3, 0, 3, 0);
+    defer allocator.free(greet_request);
+    const tally_request = try codeActionRequest(allocator, 3, fixture.uri, 6, 0, 6, 0);
+    defer allocator.free(tally_request);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{ greet_request, tally_request });
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const actions = try response.result();
+
+    const generate = try codeActionByPrefix(actions, "Generate an expect test for 'greet'") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("refactor.rewrite", try stringField(generate, "kind"));
+
+    // `greet = |name| name` ends at column 19, and the test follows it after a
+    // blank line.
+    const edit = try codeActionEdit(generate, fixture.uri);
+    try expectInsertionAt(
+        edit,
+        3,
+        19,
+        "\n\n## TODO Replace these placeholder values with a case worth checking.\nexpect greet(\"\") == \"\"",
+    );
+
+    // `greet` already writes its type, so there is nothing to annotate.
+    try std.testing.expect((try codeActionByPrefix(actions, "Annotate")) == null);
+
+    // Every parameter gets a value of its own type, nested types included.
+    // Record fields come out in the checker's order rather than the source's,
+    // which a Roc record literal does not care about.
+    var tally_response = try responseById(allocator, responses, 3);
+    defer tally_response.deinit();
+    const tally_actions = try tally_response.result();
+    const tally_generate = try codeActionByPrefix(tally_actions, "Generate an expect test for 'tally'") orelse return error.TestUnexpectedResult;
+    const tally_edit = try codeActionEdit(tally_generate, fixture.uri);
+    try expectInsertionAt(
+        tally_edit,
+        6,
+        74,
+        "\n\n## TODO Replace these placeholder values with a case worth checking.\nexpect tally([], 0) == { seen: Bool.True, total: 0 }",
+    );
+}
+
+/// Verifies a function whose parameter has no obvious literal value gets no
+/// generated test, rather than one that does not compile.
+pub fn codeActionsLeaveOutUnwritableTest() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "code_action_unwritable.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    // A function is not a value this can write down.
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\apply : (Str -> Str), Str -> Str
+        \\apply = |f, text| f(text)
+        \\
+        \\main = apply(|s| s, "roc")
+    , .{platform_path});
+    defer allocator.free(source);
+
+    const request = try codeActionRequest(allocator, 2, fixture.uri, 3, 0, 3, 0);
+    defer allocator.free(request);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{request});
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const actions = try response.result();
+    try std.testing.expect(actions == .array);
+    try std.testing.expect((try codeActionByPrefix(actions, "Generate an expect test")) == null);
+}
+
+/// Verifies a document that does not compile offers an empty list.
+///
+/// Both actions are written from the checked types, and a document that does
+/// not build has none. The answer is an empty list rather than null: the editor
+/// asked what it may do here, and the answer is "nothing".
+pub fn codeActionsOfferNothingWithoutTypes() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "code_action_broken.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    // `n *` is left dangling, so the document does not parse.
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\double = |n| n *
+        \\
+        \\main = double(21)
+    , .{platform_path});
+    defer allocator.free(source);
+
+    const request = try codeActionRequest(allocator, 2, fixture.uri, 2, 0, 2, 0);
+    defer allocator.free(request);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{request});
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const actions = try response.result();
+    try std.testing.expect(actions == .array);
+    try std.testing.expectEqual(@as(usize, 0), actions.array.items.len);
+}
+
+/// Verifies a function that infers a concrete type is offered both actions at
+/// once, each carrying its own edit.
+pub fn codeActionsOfferBothForOneFunction() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "code_action_both.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\shout = |text| Str.concat(text, "!")
+        \\
+        \\main = shout("roc")
+    , .{platform_path});
+    defer allocator.free(source);
+
+    const request = try codeActionRequest(allocator, 2, fixture.uri, 2, 0, 2, 0);
+    defer allocator.free(request);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{request});
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const actions = try response.result();
+    try std.testing.expect(actions == .array);
+    try std.testing.expectEqual(@as(usize, 2), actions.array.items.len);
+
+    const annotate = try codeActionByPrefix(actions, "Annotate 'shout'") orelse return error.TestUnexpectedResult;
+    try expectInsertionAt(try codeActionEdit(annotate, fixture.uri), 2, 0, "shout : Str -> Str\n");
+
+    // `shout = |text| Str.concat(text, "!")` ends at column 36.
+    const generate = try codeActionByPrefix(actions, "Generate an expect test for 'shout'") orelse return error.TestUnexpectedResult;
+    try expectInsertionAt(
+        try codeActionEdit(generate, fixture.uri),
+        2,
+        36,
+        "\n\n## TODO Replace these placeholder values with a case worth checking.\nexpect shout(\"\") == \"\"",
+    );
+}
+
+/// Verifies a binding several blocks deep inside a function is annotated, with
+/// the indentation of the line it is written on.
+pub fn codeActionsAnnotateNestedBinding() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "code_action_nested.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\pick : Str -> Str
+        \\pick = |text| {{
+        \\    outer = Str.concat(text, "!")
+        \\    inner = {{
+        \\        doubled = Str.concat(outer, outer)
+        \\        doubled
+        \\    }}
+        \\    inner
+        \\}}
+        \\
+        \\main = pick("roc")
+    , .{platform_path});
+    defer allocator.free(source);
+
+    const request = try codeActionRequest(allocator, 2, fixture.uri, 6, 8, 6, 15);
+    defer allocator.free(request);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{request});
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const actions = try response.result();
+
+    const annotate = try codeActionByPrefix(actions, "Annotate 'doubled'") orelse return error.TestUnexpectedResult;
+    try expectInsertionAt(try codeActionEdit(annotate, fixture.uri), 6, 0, "        doubled : Str\n");
+}
+
+/// Verifies a lambda parameter is never annotated.
+///
+/// A parameter is a plain binding like any other, and Roc lets a lambda spread
+/// its parameters over several lines, so a parameter can open its own line.
+/// Writing a type above one would land inside the parameter list.
+pub fn codeActionsLeaveLambdaParametersAlone() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "code_action_param.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\join : Str, Str -> Str
+        \\join = |
+        \\    left,
+        \\    right,
+        \\| Str.concat(left, right)
+        \\
+        \\main = join("ro", "c")
+    , .{platform_path});
+    defer allocator.free(source);
+
+    const request = try codeActionRequest(allocator, 2, fixture.uri, 4, 4, 4, 8);
+    defer allocator.free(request);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{request});
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const actions = try response.result();
+    try std.testing.expect(actions == .array);
+    try std.testing.expect((try codeActionByPrefix(actions, "Annotate")) == null);
+}
+
+/// Verifies a hint carries the edit that writes its type into the source, and
+/// only where such an annotation can be written.
+///
+/// A hint reads like an inline annotation, which Roc does not have, so a reader
+/// who retypes what one shows gets source that does not compile. The edit turns
+/// accepting the hint into the two-line form that does - and a lambda parameter,
+/// which can take no annotation at all, carries no edit rather than a broken one.
+pub fn inlayHintsCarryTheirAnnotationEdit() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "inlay_edits.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\join = |
+        \\    left,
+        \\    right,
+        \\| Str.concat(left, right)
+        \\
+        \\main = {{
+        \\    text = join("ro", "c")
+        \\    text
+        \\}}
+    , .{platform_path});
+    defer allocator.free(source);
+
+    const request = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/inlayHint","params":{{"textDocument":{{"uri":"{s}"}},"range":{{"start":{{"line":0,"character":0}},"end":{{"line":11,"character":0}}}}}}}}
+    , .{fixture.uri});
+    defer allocator.free(request);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{request});
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const hints = try response.result();
+
+    // A local binding inside a block takes the annotation on the line above,
+    // with that line's indentation.
+    const text_hint = try hintAt(hints, 8, 8) orelse return error.TestUnexpectedResult;
+    const text_edit = try hintEdit(text_hint) orelse return error.TestUnexpectedResult;
+    try expectInsertionAt(text_edit, 8, 0, "    text : Str\n");
+
+    // So does a top-level definition.
+    const join_hint = try hintAt(hints, 2, 4) orelse return error.TestUnexpectedResult;
+    const join_edit = try hintEdit(join_hint) orelse return error.TestUnexpectedResult;
+    try expectInsertionAt(join_edit, 2, 0, "join : Str, Str -> Str\n");
+
+    // A lambda parameter still gets its hint, because the type is worth
+    // seeing, but no edit: written above, it would land in the parameter list.
+    const left_hint = try hintAt(hints, 3, 8) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(": Str", try stringField(left_hint, "label"));
+    try std.testing.expect((try hintEdit(left_hint)) == null);
+}
+
+/// Verifies a selection covering several bindings offers one action each.
+///
+/// Reported by review on #11069, twice. Choosing one of them by comparing name
+/// lengths annotated `outer`, because five characters is fewer than seven;
+/// choosing by the latest position annotated whichever sibling came last in the
+/// file. There is no rule that reads a reader's mind, and the protocol does not
+/// need one: a code action request is answered with a menu.
+pub fn codeActionsOfferOnePerBinding() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "code_action_several.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\pick : Str -> Str
+        \\pick = |text| {{
+        \\    outer = Str.concat(text, "!")
+        \\    inner = {{
+        \\        doubled = Str.concat(outer, outer)
+        \\        doubled
+        \\    }}
+        \\    inner
+        \\}}
+        \\
+        \\main = pick("roc")
+    , .{platform_path});
+    defer allocator.free(source);
+
+    // From `outer` on line 4 down through `doubled` on line 6, so all three
+    // names fall inside the range.
+    const request = try codeActionRequest(allocator, 2, fixture.uri, 4, 4, 6, 15);
+    defer allocator.free(request);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{request});
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const actions = try response.result();
+
+    // Every binding the range reaches is offered, none is chosen for the
+    // reader, and each edit goes above the line its own binding opens.
+    const outer = try codeActionByPrefix(actions, "Annotate 'outer'") orelse return error.TestUnexpectedResult;
+    try expectInsertionAt(try codeActionEdit(outer, fixture.uri), 4, 0, "    outer : Str\n");
+
+    const inner = try codeActionByPrefix(actions, "Annotate 'inner'") orelse return error.TestUnexpectedResult;
+    try expectInsertionAt(try codeActionEdit(inner, fixture.uri), 5, 0, "    inner : Str\n");
+
+    const doubled = try codeActionByPrefix(actions, "Annotate 'doubled'") orelse return error.TestUnexpectedResult;
+    try expectInsertionAt(try codeActionEdit(doubled, fixture.uri), 6, 0, "        doubled : Str\n");
+
+    // A cursor on one name still answers with that one alone.
+    const narrow = try codeActionRequest(allocator, 3, fixture.uri, 6, 8, 6, 8);
+    defer allocator.free(narrow);
+    const narrow_responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{narrow});
+    defer {
+        for (narrow_responses) |body| allocator.free(body);
+        allocator.free(narrow_responses);
+    }
+    var narrow_response = try responseById(allocator, narrow_responses, 3);
+    defer narrow_response.deinit();
+    const narrow_actions = try narrow_response.result();
+    try std.testing.expect((try codeActionByPrefix(narrow_actions, "Annotate 'doubled'")) != null);
+    try std.testing.expect((try codeActionByPrefix(narrow_actions, "Annotate 'outer'")) == null);
+    try std.testing.expect((try codeActionByPrefix(narrow_actions, "Annotate 'inner'")) == null);
+}
+
+/// Verifies a generated test goes below a comment written after the value.
+///
+/// Reported by review on #11069. Inserting at the value's own end put the test
+/// in front of the comment, which carried the comment onto the generated
+/// `expect` and left it reading as a remark about the test.
+pub fn codeActionsKeepTrailingComment() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "code_action_comment.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\greet : Str -> Str
+        \\greet = |name| name # says nothing yet
+        \\
+        \\main = greet("roc")
+    , .{platform_path});
+    defer allocator.free(source);
+
+    const request = try codeActionRequest(allocator, 2, fixture.uri, 3, 0, 3, 0);
+    defer allocator.free(request);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{request});
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const actions = try response.result();
+
+    const generate = try codeActionByPrefix(actions, "Generate an expect test for 'greet'") orelse return error.TestUnexpectedResult;
+
+    // The value ends at column 19; the comment runs to column 38, and the test
+    // starts after it.
+    try expectInsertionAt(
+        try codeActionEdit(generate, fixture.uri),
+        3,
+        38,
+        "\n\n## TODO Replace these placeholder values with a case worth checking.\nexpect greet(\"\") == \"\"",
+    );
+}
+
+/// Verifies a selection covering several functions offers one test each.
+///
+/// Reported by review on #11069. `findTopLevelDefinitionAtOffset` returned the
+/// first function the range overlapped and only that one got a generated-test
+/// action; a selection spanning `first` and `second` offered a test for
+/// `first` alone, with no way to ask for `second`'s instead.
+pub fn codeActionsOfferOneTestPerFunction() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "code_action_several_functions.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\first : Str -> Str
+        \\first = |name| name
+        \\
+        \\second : Str -> Str
+        \\second = |name| name
+        \\
+        \\main = second(first("roc"))
+    , .{platform_path});
+    defer allocator.free(source);
+
+    // From `first`'s annotation on line 2 down through `second`'s value on
+    // line 6, so both definitions fall inside the range.
+    const request = try codeActionRequest(allocator, 2, fixture.uri, 2, 0, 6, 0);
+    defer allocator.free(request);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{request});
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const actions = try response.result();
+
+    // Both functions the range reaches are offered, neither is chosen for the
+    // reader, and each test follows its own definition.
+    const first_test = try codeActionByPrefix(actions, "Generate an expect test for 'first'") orelse return error.TestUnexpectedResult;
+    try expectInsertionAt(
+        try codeActionEdit(first_test, fixture.uri),
+        3,
+        19,
+        "\n\n## TODO Replace these placeholder values with a case worth checking.\nexpect first(\"\") == \"\"",
+    );
+
+    const second_test = try codeActionByPrefix(actions, "Generate an expect test for 'second'") orelse return error.TestUnexpectedResult;
+    try expectInsertionAt(
+        try codeActionEdit(second_test, fixture.uri),
+        6,
+        20,
+        "\n\n## TODO Replace these placeholder values with a case worth checking.\nexpect second(\"\") == \"\"",
+    );
+
+    // A cursor on one function still answers with that one alone.
+    const narrow = try codeActionRequest(allocator, 3, fixture.uri, 3, 2, 3, 2);
+    defer allocator.free(narrow);
+    const narrow_responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{narrow});
+    defer {
+        for (narrow_responses) |body| allocator.free(body);
+        allocator.free(narrow_responses);
+    }
+    var narrow_response = try responseById(allocator, narrow_responses, 3);
+    defer narrow_response.deinit();
+    const narrow_actions = try narrow_response.result();
+    try std.testing.expect((try codeActionByPrefix(narrow_actions, "Generate an expect test for 'first'")) != null);
+    try std.testing.expect((try codeActionByPrefix(narrow_actions, "Generate an expect test for 'second'")) == null);
 }
