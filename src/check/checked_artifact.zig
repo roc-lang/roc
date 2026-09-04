@@ -9403,6 +9403,9 @@ test "checked binder mutability comes from the CIR var tag, not identifier spell
     defer test_env.deinit();
     try testing.expectEqual(@as(usize, 0), test_env.checker.problems.problems.items.len);
 
+    const mutable_ident = try test_env.module_env.insertIdent(Ident.for_text("$mutable"));
+    const immutable_ident = try test_env.module_env.insertIdent(Ident.for_text("$immutable"));
+
     const source_modules = [_]TypedCIR.Modules.SourceModule{
         .{ .precompiled = test_env.module_env },
     };
@@ -9446,11 +9449,10 @@ test "checked binder mutability comes from the CIR var tag, not identifier spell
         if (tag != .pattern_identifier and tag != .pattern_var_identifier) continue;
         const pattern = module.pattern(source_pattern).data;
         const ident = if (pattern == .assign) pattern.assign.ident else pattern.var_assign.ident;
-        const name = module.getIdent(ident);
-        if (!std.mem.eql(u8, name, "$mutable") and !std.mem.eql(u8, name, "$immutable")) continue;
+        if (ident != mutable_ident and ident != immutable_ident) continue;
 
         const binder = checked_bodies.patternBinderForSource(source_pattern) orelse return error.TestUnexpectedResult;
-        if (std.mem.eql(u8, name, "$mutable")) {
+        if (ident == mutable_ident) {
             try testing.expect(checked_bodies.patternBinderIsReassignable(binder));
             saw_mutable = true;
         } else {
