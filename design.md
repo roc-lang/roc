@@ -3786,6 +3786,8 @@ const IteratorKind = enum(u8) {
     drop_first,
     concat,
     append,
+    with_index,
+    step_by,
     forced_dynamic,
 };
 

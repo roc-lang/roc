@@ -5248,6 +5248,38 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "Known(4)" },
     },
     .{
+        .name = "inspect: Iter.with_index pairs items with their position",
+        .source =
+        \\{
+        \\    iter = ["a", "b", "c"].iter().with_index()
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[(0, \"a\"), (1, \"b\"), (2, \"c\")]" },
+    },
+    .{
+        // The counter advances only on `One`, so a skipping source still hands
+        // out consecutive indices. Counting skips too would read [(1, 2), (3, 4), (5, 6)].
+        .name = "inspect: Iter.with_index numbers only yielded items",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3, 4, 5, 6].iter().keep_if(|n| n % 2 == 0).with_index()
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[(0, 2), (1, 4), (2, 6)]" },
+    },
+    .{
+        .name = "inspect: Iter.with_index forwards the source's known length",
+        .source = "Iter.size_hint([1.I64, 2, 3].iter().with_index())",
+        .expected = .{ .inspect_str = "Known(3)" },
+    },
+    .{
+        .name = "inspect: Iter.with_index reports unknown length over a skipping source",
+        .source = "Iter.size_hint([1.I64, 2, 3].iter().keep_if(|n| n > 1).with_index())",
+        .expected = .{ .inspect_str = "Unknown" },
+    },
+    .{
         .name = "inspect: Iter.next steps appended iterator in order",
         .source =
         \\{

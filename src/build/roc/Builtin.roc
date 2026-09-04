@@ -3198,6 +3198,17 @@ Builtin :: [].{
 					)
 				}
 
+		## Returns an iterator that pairs each item with its position among the
+		## items this iterator yields. The first yielded item gets index `0`, and
+		## the index only advances for items that are actually yielded.
+		## ```roc
+		## expect Iter.fold(["a", "b"].iter().with_index(), [], |acc, item| acc.append(item)) == [(0, "a"), (1, "b")]
+		##
+		## expect Iter.fold([1, 2, 3, 4].iter().keep_if(|n| n > 2).with_index(), [], |acc, item| acc.append(item)) == [(0, 3), (1, 4)]
+		## ```
+		with_index : Iter(a) -> Iter((U64, a))
+		with_index = |iterator| iter_with_index(iterator, 0)
+
 		keep_if : Iter(a), (a -> Bool) -> Iter(a)
 		keep_if = |iterator, predicate|
 			iter_from_step(
@@ -3425,40 +3436,7 @@ Builtin :: [].{
 		## expect Iter.fold(Iter.step_by(List.iter([1, 2, 3]), 0), [], |acc, item| acc.append(item)) == []
 		## ```
 		step_by : Iter(item), U64 -> Iter(item)
-		step_by = |iterator, n|
-			match iterator {
-				{ len_if_known, .. } =>
-					iter_from_step(
-						match len_if_known {
-							Known(len) => if n == 0 {
-								Known(0)
-							} else {
-								Known(
-									if len == 0 {
-										0
-									} else {
-										(len - 1) / n + 1
-									},
-								)
-							}
-							Unknown => if n == 0 {
-								Known(0)
-							} else {
-								Unknown
-							}
-						},
-						||
-							if n == 0 {
-								Done
-							} else {
-								match Iter.next(iterator) {
-									Done => Done
-									Skip({ rest }) => Skip({ rest: Iter.step_by(rest, n) })
-									One({ item, rest }) => One({ item, rest: Iter.step_by(Iter.drop_first(rest, n - 1), n) })
-								}
-							},
-					)
-				}
+		step_by = |iterator, n| iter_step_by(iterator, (n, 0))
 	}
 
 	## An effectful iterator: identical to [Iter] except that its `step!` thunk is
@@ -22864,6 +22842,61 @@ range_done = || iter_from_step(
 	Known(0),
 	|| Done,
 )
+
+# The recursive worker behind `Iter.with_index`. It is a registered iterator
+# adapter (`static_dispatch_registry.zig`), so it must take the source iterator
+# first and exactly one other argument; the public `with_index` is the arity-1
+# wrapper that seeds the counter.
+iter_with_index : Iter(a), U64 -> Iter((U64, a))
+iter_with_index = |src, index|
+	iter_from_step(
+		src.len_if_known,
+		||
+			match Iter.next(src) {
+				Done => Done
+				Skip({ rest }) => Skip({ rest: iter_with_index(rest, index) })
+				One({ item, rest }) => One({ item: (index, item), rest: iter_with_index(rest, index + 1) })
+			},
+	)
+
+# The recursive worker behind `Iter.step_by`, carrying `(stride, pending)`: how
+# far apart yielded items are, and how many yielded items are still to be
+# dropped before the next one. Skipping inline (rather than delegating to
+# `Iter.drop_first`) is what keeps this a registered adapter: a `drop_first`
+# layer per yielded item would grow the successor's type without bound, so the
+# chain could never mint. The counters ride in one tuple because a registered
+# adapter takes the source iterator plus exactly one other argument.
+iter_step_by : Iter(item), (U64, U64) -> Iter(item)
+iter_step_by = |src, (stride, pending)|
+	iter_from_step(
+		match src.len_if_known {
+			Known(len) => if stride == 0 or len <= pending {
+				Known(0)
+			} else {
+				Known((len - pending - 1) / stride + 1)
+			}
+			Unknown => if stride == 0 {
+				Known(0)
+			} else {
+				Unknown
+			}
+		},
+		||
+			if stride == 0 {
+				Done
+			} else {
+				match Iter.next(src) {
+					Done => Done
+					Skip({ rest }) => Skip({ rest: iter_step_by(rest, (stride, pending)) })
+					One({ item, rest }) =>
+						if pending == 0 {
+							One({ item, rest: iter_step_by(rest, (stride, stride - 1)) })
+						} else {
+							Skip({ rest: iter_step_by(rest, (stride, pending - 1)) })
+						}
+					}
+			},
+	)
 
 ## The result of scanning a JSON string body; all fields are zero-copy slices.
 ## `after` is the text following the closing quote. The body is:

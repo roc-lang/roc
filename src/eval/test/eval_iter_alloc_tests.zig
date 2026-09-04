@@ -58,6 +58,25 @@ pub const tests = [_]TestCase{
         .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 0 } },
     },
     .{
+        .name = "iter alloc: range with_index fold is zero-alloc",
+        .source = "if Iter.fold(Iter.with_index((10.U64..<15).iter()), 0.U64, |a, (i, n)| a + i * n) == 130 { \"ok\" } else { \"bad\" }",
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 0 } },
+    },
+    .{
+        // `with_index` numbers only YIELDED items: the `keep_if` source feeds it
+        // `Skip`s, which it forwards without advancing the counter. The fold
+        // packs each (index, item) pair positionally, so indices 3,4,5 (counting
+        // skips) would read 334455 instead of 31425.
+        .name = "iter alloc: keep_if with_index fold indexes yielded items and is zero-alloc",
+        .source = "if Iter.fold(Iter.with_index(Iter.keep_if((0.U64..<6).iter(), |n| n > 2)), 0.U64, |a, (i, n)| a * 100 + i * 10 + n) == 31425 { \"ok\" } else { \"bad\" }",
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 0 } },
+    },
+    .{
+        .name = "iter alloc: range step_by fold is zero-alloc",
+        .source = "if Iter.fold(Iter.step_by((0.U64..<6).iter(), 2), 0.U64, |a, b| a + b) == 6 { \"ok\" } else { \"bad\" }",
+        .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 0 } },
+    },
+    .{
         .name = "iter alloc: range keep_if fold is zero-alloc",
         .source = "if Iter.fold(Iter.keep_if((0.U64..<6).iter(), |n| n > 2), 0.U64, |a, b| a + b) == 12 { \"ok\" } else { \"bad\" }",
         .expected = .{ .allocations_at_most = .{ .output = "ok", .max_allocations = 0 } },
