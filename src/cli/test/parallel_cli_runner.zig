@@ -1051,6 +1051,11 @@ const subcommand_cases = [_]CliCase{
     // pointing at an implemented function should explain that implementation.
     .{ .id = 0, .suite = .subcommands, .name = "issue 10423: hosted entry reports implemented function as not hosted", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/hosted-section-errors/issue_10423_hosted_implementation/main.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "invalid hosted section" }, .{ .stream = .stderr, .text = "Pages.list" }, .{ .stream = .stderr, .text = "has an implementation" } }, .not_contains = &.{.{ .stream = .stderr, .text = "no exposed module declares a hosted function with that name" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check accepts a valid hosted section", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/fx/platform/main.roc", .not_contains = &.{.{ .stream = .stderr, .text = "invalid hosted section" }} } } },
+    // Repro for https://github.com/roc-lang/roc/issues/10850: a platform root
+    // that declares its provided entrypoint twice reports the duplicate through
+    // checking's diagnostics instead of publishing a hosted procedure whose def
+    // has no checked template.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10850: duplicate platform entrypoint declaration reports without panic", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10850_duplicate_platform_entrypoint_annotation.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{.{ .stream = .stderr, .text = "duplicate definition" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "hosted procedure def has no checked template" }, .{ .stream = .stderr, .text = "checked artifact invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     // A hosted declaration the platform header never bound has no linker symbol,
     // so building one reports the invalid hosted section instead of lowering a
     // host boundary that cannot link.

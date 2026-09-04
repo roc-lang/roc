@@ -213,6 +213,8 @@ const PendingProvidesEntry = struct {
     region: Region,
 };
 
+const TopLevelValueDefMap = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx);
+
 const MethodRegistrationKind = enum {
     declaration_owner,
     receiver_extension,
@@ -955,7 +957,7 @@ fn recordGlobalValueDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Err
 
 fn topLevelDefIsSelected(
     self: *const Self,
-    selected_by_ident: *const std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx),
+    selected_by_ident: *const TopLevelValueDefMap,
     def_idx: CIR.Def.Idx,
 ) bool {
     const def = self.env.store.getDef(def_idx);
@@ -966,7 +968,7 @@ fn topLevelDefIsSelected(
 
 fn globalDefIntroducesValueBinding(
     self: *const Self,
-    selected_by_ident: *const std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx),
+    selected_by_ident: *const TopLevelValueDefMap,
     def_idx: CIR.Def.Idx,
 ) bool {
     const def = self.env.store.getDef(def_idx);
@@ -4639,8 +4641,30 @@ pub fn canonicalizeFile(
         }
     }
 
-    try self.resolvePlatformProvides();
-    try self.resolvePlatformHosted();
+    // Associated forward-reference adoption can rewrite a placeholder's ident
+    // while canonicalization is in progress. Select source-visible values only
+    // after those rewrites are complete, so every name-sensitive output below
+    // consumes the same final definition identity.
+    var top_level_value_defs_by_ident = TopLevelValueDefMap{};
+    defer top_level_value_defs_by_ident.deinit(self.env.gpa);
+    for (self.scratch_global_value_defs.items) |def_idx| {
+        const def = self.env.store.getDef(def_idx);
+        const pattern = self.env.store.getPattern(def.pattern);
+        if (pattern != .assign) continue;
+
+        const selected = try top_level_value_defs_by_ident.getOrPut(self.env.gpa, pattern.assign.ident);
+        if (!selected.found_existing) {
+            selected.value_ptr.* = def_idx;
+        } else {
+            const prior = self.env.store.getDef(selected.value_ptr.*);
+            if (self.env.store.getExpr(prior.expr) == .e_anno_only and self.env.store.getExpr(def.expr) != .e_anno_only) {
+                selected.value_ptr.* = def_idx;
+            }
+        }
+    }
+
+    try self.resolvePlatformProvides(&top_level_value_defs_by_ident);
+    try self.resolvePlatformHosted(&top_level_value_defs_by_ident);
     try self.resolveQualifiedExposedTypes();
 
     // Check for exposed but not implemented items
@@ -4673,28 +4697,6 @@ pub fn canonicalizeFile(
         try self.env.store.addScratchDef(def_idx);
     }
     self.env.global_value_defs = try self.env.store.defSpanFrom(global_value_defs_start);
-
-    // Associated forward-reference adoption can rewrite a placeholder's ident
-    // while canonicalization is in progress. Select source-visible values only
-    // after those rewrites are complete, so the retained identifiers and
-    // definition identities are final.
-    var top_level_value_defs_by_ident = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx){};
-    defer top_level_value_defs_by_ident.deinit(self.env.gpa);
-    for (self.scratch_global_value_defs.items) |def_idx| {
-        const def = self.env.store.getDef(def_idx);
-        const pattern = self.env.store.getPattern(def.pattern);
-        if (pattern != .assign) continue;
-
-        const selected = try top_level_value_defs_by_ident.getOrPut(self.env.gpa, pattern.assign.ident);
-        if (!selected.found_existing) {
-            selected.value_ptr.* = def_idx;
-        } else {
-            const prior = self.env.store.getDef(selected.value_ptr.*);
-            if (self.env.store.getExpr(prior.expr) == .e_anno_only and self.env.store.getExpr(def.expr) != .e_anno_only) {
-                selected.value_ptr.* = def_idx;
-            }
-        }
-    }
 
     var value_binding_defs_match_global = true;
     var top_level_value_defs_match_global = true;
@@ -6110,22 +6112,10 @@ fn addPlatformHostedItems(
 /// Resolve hosted mappings once imports and exposed definitions are known.
 /// The resulting target is the same explicit external-definition identity
 /// used by ordinary qualified value lookups.
-/// This module's own top-level definition of `ident`, for a hosted entry that
-/// named no module. A later definition wins, the way a duplicate top-level
-/// value's later definition does.
-fn platformOwnDefForIdent(self: *const Self, ident: Ident.Idx) ?CIR.Def.Idx {
-    var found: ?CIR.Def.Idx = null;
-    for (self.scratch_global_value_defs.items) |def_idx| {
-        const def = self.env.store.getDef(def_idx);
-        const pattern = self.env.store.getPattern(def.pattern);
-        if (pattern != .assign) continue;
-        if (!pattern.assign.ident.eql(ident)) continue;
-        found = def_idx;
-    }
-    return found;
-}
-
-fn resolvePlatformHosted(self: *Self) std.mem.Allocator.Error!void {
+fn resolvePlatformHosted(
+    self: *Self,
+    selected_by_ident: *const TopLevelValueDefMap,
+) std.mem.Allocator.Error!void {
     if (self.env.module_kind != .platform) return;
 
     for (self.env.hosted_entries.items.items) |*entry| {
@@ -6134,7 +6124,7 @@ fn resolvePlatformHosted(self: *Self) std.mem.Allocator.Error!void {
             // platform module. Such a target has no import, so a resolved entry
             // with no `target_import` is how later stages read "the platform's
             // own definition".
-            const own_def = self.platformOwnDefForIdent(entry.func_ident) orelse {
+            const own_def = selected_by_ident.get(entry.func_ident) orelse {
                 entry.target_status = .missing_value;
                 continue;
             };
@@ -6246,12 +6236,12 @@ fn addPlatformProvidesItems(
 
 /// Resolve `provides` declarations once all platform top-level definitions are
 /// known. Only platform-local definitions are published to later stages.
-fn resolvePlatformProvides(self: *Self) std.mem.Allocator.Error!void {
+fn resolvePlatformProvides(
+    self: *Self,
+    selected_by_ident: *const TopLevelValueDefMap,
+) std.mem.Allocator.Error!void {
     for (self.pending_provides_entries.items) |entry| {
-        const local_def: ?CIR.Def.Idx = if (self.env.getExposedValueNodeIndexById(entry.ident)) |node_idx|
-            @enumFromInt(@as(u32, @intCast(node_idx)))
-        else
-            null;
+        const local_def = selected_by_ident.get(entry.ident);
         _ = try self.env.provides_entries.append(self.env.gpa, .{
             .ident = entry.ident,
             .ffi_symbol = entry.ffi_symbol,
