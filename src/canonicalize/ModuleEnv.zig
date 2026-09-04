@@ -3623,9 +3623,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const region_info = self.calcRegionInfo(data.region);
 
             var report = try Report.init(allocator, "Trailing `?`", "", .warning);
-            try report.headline.addReflowingText("This ");
+            try report.headline.addReflowingText("It's usually a mistake to use a postfix ");
             try report.headline.addAnnotated("?", .inline_code);
-            try report.headline.addReflowingText(" is applied to the value this function returns:");
+            try report.headline.addReflowingText(" on values being returned implicitly at the end of a function like this:");
 
             try report.document.addSourceRegion(
                 region_info,
@@ -3636,31 +3636,78 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             );
             try report.document.addLineBreak();
 
-            try report.document.addReflowingText("A ");
+            try report.document.addReflowingText("This is because ");
             try report.document.addAnnotated("?", .inline_code);
-            try report.document.addReflowingText(" here is almost always a mistake. On ");
-            try report.document.addAnnotated("Err", .inline_code);
-            try report.document.addReflowingText(", it returns the error from the function early. On ");
-            try report.document.addAnnotated("Ok", .inline_code);
-            try report.document.addReflowingText(", it unwraps the payload and returns that instead of the ");
+            try report.document.addReflowingText(" is syntax sugar for doing a ");
+            try report.document.addAnnotated("match", .inline_code);
+            try report.document.addReflowingText(" on a ");
             try report.document.addAnnotated("Try", .inline_code);
-            try report.document.addReflowingText(", which only type-checks when the payload is itself a ");
-            try report.document.addAnnotated("Try", .inline_code);
-            try report.document.addReflowingText(".");
+            try report.document.addReflowingText(" value like this:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.startAnnotation(.code_block);
+            try report.document.addIndent(1);
+            try report.document.addKeyword("match");
+            try report.document.addText(" ");
+            try report.document.addUnqualifiedSymbol("value_before_question_mark");
+            try report.document.addText(" {");
+            try report.document.addLineBreak();
+            try report.document.addIndent(2);
+            try report.document.addTagName("Ok");
+            try report.document.addText("(");
+            try report.document.addUnqualifiedSymbol("ok_payload");
+            try report.document.addText(") ");
+            try report.document.addBinaryOperator("=>");
+            try report.document.addText(" ");
+            try report.document.addUnqualifiedSymbol("ok_payload");
+            try report.document.addLineBreak();
+            try report.document.addIndent(2);
+            try report.document.addTagName("Err");
+            try report.document.addText("(");
+            try report.document.addUnqualifiedSymbol("err_payload");
+            try report.document.addText(") ");
+            try report.document.addBinaryOperator("=>");
+            try report.document.addText(" ");
+            try report.document.addKeyword("return");
+            try report.document.addText(" ");
+            try report.document.addTagName("Err");
+            try report.document.addText("(");
+            try report.document.addUnqualifiedSymbol("err_payload");
+            try report.document.addText(")");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addText("}");
+            try report.document.endAnnotation();
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
-            try report.document.addReflowingText("If you meant to return the ");
-            try report.document.addAnnotated("Try", .inline_code);
-            try report.document.addReflowingText(" as-is, remove the ");
+            try report.document.addReflowingText("When you use ");
             try report.document.addAnnotated("?", .inline_code);
-            try report.document.addReflowingText(". If you really do want to unwrap a nested ");
+            try report.document.addReflowingText(" on the value at the end of a function, it changes \"implicitly return this ");
             try report.document.addAnnotated("Try", .inline_code);
-            try report.document.addReflowingText(" here, write that as a ");
+            try report.document.addReflowingText(" value\" to \"return this ");
+            try report.document.addAnnotated("Try", .inline_code);
+            try report.document.addReflowingText(" value if it's an ");
+            try report.document.addAnnotated("Err", .inline_code);
+            try report.document.addReflowingText(", but if it's ");
+            try report.document.addAnnotated("Ok", .inline_code);
+            try report.document.addReflowingText(", unwrap its ");
+            try report.document.addAnnotated("Ok", .inline_code);
+            try report.document.addReflowingText(" payload and return that instead\" - which can only possibly type-check when returning ");
+            try report.document.addAnnotated("Try(Try(..., ...), ...)", .inline_code);
+            try report.document.addReflowingText(", which is so unusual that using ");
+            try report.document.addAnnotated("?", .inline_code);
+            try report.document.addReflowingText(" here is almost always a mistake in practice.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Usually removing the ");
+            try report.document.addAnnotated("?", .inline_code);
+            try report.document.addReflowingText(" here is what makes the most sense, but if you really want this behavior, make it clear by using an explicit ");
             try report.document.addAnnotated("match", .inline_code);
-            try report.document.addReflowingText(" instead, because a trailing ");
+            try report.document.addReflowingText(" instead of the ");
             try report.document.addAnnotated("?", .inline_code);
-            try report.document.addReflowingText(" is confusing to read.");
+            try report.document.addReflowingText(" syntax sugar.");
 
             break :blk report;
         },

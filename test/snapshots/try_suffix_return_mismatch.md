@@ -48,18 +48,28 @@ TYPE MISMATCH - try_suffix_return_mismatch.md:30:8:30:18
 # PROBLEMS
 ── ● trailing `?` ─────────────────────────── try_suffix_return_mismatch.md:9:10
 
-This ? is applied to the value this function returns:
+It's usually a mistake to use a postfix ? on values being returned implicitly
+at the end of a function like this:
 
 parse(t)?
         ^
 
-A ? here is almost always a mistake. On Err, it returns the error from the
-function early. On Ok, it unwraps the payload and returns that instead of the
-Try, which only type-checks when the payload is itself a Try.
+This is because ? is syntax sugar for doing a match on a Try value like this:
 
-If you meant to return the Try as-is, remove the ?. If you really do want to
-unwrap a nested Try here, write that as a match instead, because a trailing ?
-is confusing to read.
+    match value_before_question_mark {
+        Ok(ok_payload) => ok_payload
+        Err(err_payload) => return Err(err_payload)
+    }
+
+When you use ? on the value at the end of a function, it changes "implicitly
+return this Try value" to "return this Try value if it's an Err, but if it's
+Ok, unwrap its Ok payload and return that instead" - which can only possibly
+type-check when returning Try(Try(..., ...), ...), which is so unusual that
+using ? here is almost always a mistake in practice.
+
+Usually removing the ? here is what makes the most sense, but if you really
+want this behavior, make it clear by using an explicit match instead of the ?
+syntax sugar.
 
 ── ✗ type mismatch ─────────────────────────── try_suffix_return_mismatch.md:8:6
 
@@ -68,13 +78,11 @@ This ? may return early with a type that doesn't match the function body.
 t = parse(s)?
     ^^^^^^^^^
 
-On error, this ? returns Err(e) where e has the type:
+If this Try is an Err, then the ? after it immediately returns an Err whose payload has this type:
 
     [BadInput]
 
-So this function must return a Try with a compatible error type.
-
-But its body evaluates to:
+Returning an Err with that type only works if the function itself returns a Try with a compatible error type, but this function's return type is:
 
     Str
 
@@ -92,13 +100,13 @@ This ? may return early with a type that doesn't match the function body.
 t = parse(s)?
     ^^^^^^^^^
 
-On error, this ? returns Err(e) where e has the type:
+If this Try is an Err, then the ? after it immediately returns an Err whose
+payload has this type:
 
     [BadInput]
 
-So this function must return a Try with a compatible error type.
-
-But its body evaluates to:
+Returning an Err with that type only works if the function itself returns a Try
+with a compatible error type, but this function's return type is:
 
     Str
 
@@ -112,13 +120,13 @@ This ? may return early with a type that doesn't match the function body.
 _x = xs.first()?
      ^^^^^^^^^^^
 
-On error, this ? returns Err(e) where e has the type:
+If this Try is an Err, then the ? after it immediately returns an Err whose
+payload has this type:
 
     [ListWasEmpty, ..]
 
-So this function must return a Try with a compatible error type.
-
-But its body evaluates to:
+Returning an Err with that type only works if the function itself returns a Try
+with a compatible error type, but this function's return type is:
 
     U64
 
@@ -132,13 +140,13 @@ This ? may return early with a type that doesn't match the function body.
 _x = l.first()?
      ^^^^^^^^^^
 
-On error, this ? returns Err(e) where e has the type:
+If this Try is an Err, then the ? after it immediately returns an Err whose
+payload has this type:
 
     [ListWasEmpty, ..]
 
-So this function must return a Try with a compatible error type.
-
-But its body evaluates to:
+Returning an Err with that type only works if the function itself returns a Try
+with a compatible error type, but this function's return type is:
 
     {}
 
