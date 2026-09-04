@@ -2302,10 +2302,12 @@ test "issue 10529 ten-level open Try chain with inline callback stays bounded" {
     ;
 
     const counters = try monotypeCountersForModule(allocator, source);
-    // Each helper adds a fixed amount of work: completed transitive interface
-    // summaries replay without coupling the two independent calls.
-    try std.testing.expect(counters.template_misses <= 75);
-    try std.testing.expect(counters.nominal_backing_instantiations <= 2250);
+    // Each helper adds a bounded amount of work: completed transitive interface
+    // summaries replay without coupling the two independent calls. Resolving
+    // hidden defaultable evidence at checked edges adds exact specializations
+    // to this chain, but does not restore its prior combinatorial growth.
+    try std.testing.expect(counters.template_misses <= 80);
+    try std.testing.expect(counters.nominal_backing_instantiations <= 3100);
 }
 
 test "independent same-name helper requirements lower separately" {
