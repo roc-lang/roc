@@ -829,7 +829,7 @@ const ExactBitSet = struct {
 
     fn initEmpty(allocator: Allocator, bit_len: usize) Allocator.Error!ExactBitSet {
         const word_len = std.math.divCeil(usize, bit_len, 64) catch unreachable;
-        if (word_len > @as(usize, std.math.maxInt(u32)) + 1) {
+        if (word_len != 0 and word_len - 1 > std.math.maxInt(u32)) {
             arcInvariant("ARC liveness bit domain exceeded the snapshot index representation");
         }
         return .{ .bit_len = bit_len, .words = ArcSnapshot(u64, 0).init(allocator, word_len) };
