@@ -16,19 +16,41 @@ redeclareTest = |_| {
 result = redeclareTest({})
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:4:2:4:13
+VAR NAME MISSING `$` - can_var_scoping_var_redeclaration.md:3:6:3:8
+DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:4:6:4:8
+VAR NAME MISSING `$` - can_var_scoping_var_redeclaration.md:4:6:4:8
 # PROBLEMS
-── ● duplicate definition ───────────── can_var_scoping_var_redeclaration.md:4:2
+── ● var name missing `$` ───────────── can_var_scoping_var_redeclaration.md:3:6
+
+The mutable binding x_ is declared with var but its name does not start with $.
+
+var x_ = 5
+    ^^
+
+Rename this binding and all of its uses to $x_. The name is only a convention;
+mutability comes from the var declaration.
+
+── ● duplicate definition ───────────── can_var_scoping_var_redeclaration.md:4:6
 
 The name x_ is being redeclared here:
 
 var x_ = 10 # Redeclare var - should warn but proceed
-^^^^^^^^^^^
+    ^^
 
-In this scope, x_ was already defined in can_var_scoping_var_redeclaration.md:3:2:
+In this scope, x_ was already defined in can_var_scoping_var_redeclaration.md:3:6:
 
 var x_ = 5
-^^^^^^^^^^
+    ^^
+
+── ● var name missing `$` ───────────── can_var_scoping_var_redeclaration.md:4:6
+
+The mutable binding x_ is declared with var but its name does not start with $.
+
+var x_ = 10 # Redeclare var - should warn but proceed
+    ^^
+
+Rename this binding and all of its uses to $x_. The name is only a convention;
+mutability comes from the var declaration.
 
 # TOKENS
 ~~~zig
@@ -81,19 +103,19 @@ NO CHANGE
 				(p-underscore))
 			(e-block
 				(s-var
-					(p-assign (ident "x_"))
+					(p-var-assign (ident "x_"))
 					(e-num (value "5")))
 				(s-var
-					(p-assign (ident "x_"))
+					(p-var-assign (ident "x_"))
 					(e-num (value "10")))
 				(s-reassign
-					(p-assign (ident "x_"))
+					(p-var-assign (ident "x_"))
 					(e-num (value "15")))
 				(e-lookup-local
-					(p-assign (ident "x_"))))))
+					(p-var-assign (ident "x_"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 251)
+		(e-call (constraint-fn-var 253)
 			(e-lookup-local
 				(p-assign (ident "redeclareTest")))
 			(e-empty_record))))

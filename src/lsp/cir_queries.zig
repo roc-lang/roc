@@ -971,6 +971,7 @@ const FindTagAtOffsetContext = struct {
                 }
             },
             .assign,
+            .var_assign,
             .num_literal,
             .num_from_numeral_literal,
             .small_dec_literal,
@@ -1140,9 +1141,14 @@ pub fn collectLookupReferences(
 /// this", not as "nothing to do".
 pub fn declarationNameRegion(module_env: *ModuleEnv, target_pattern: CIR.Pattern.Idx) ?LspRange {
     const pattern = module_env.store.getPattern(target_pattern);
-    if (std.meta.activeTag(pattern) != .assign) return null;
+    const ident = if (pattern == .assign)
+        pattern.assign.ident
+    else if (pattern == .var_assign)
+        pattern.var_assign.ident
+    else
+        return null;
 
-    const name = module_env.common.idents.getText(pattern.assign.ident);
+    const name = module_env.common.idents.getText(ident);
     const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(target_pattern));
     const region = module_env.store.getRegionAt(pattern_node_idx);
 
@@ -1203,11 +1209,16 @@ const CollectBindingsContext = struct {
     oom: ?std.mem.Allocator.Error = null,
 
     fn visitPatternPre(ctx: *CollectBindingsContext, pattern_idx: CIR.Pattern.Idx, pattern: CIR.Pattern) VisitAction {
-        if (std.meta.activeTag(pattern) != .assign) return .continue_traversal;
+        const ident = if (pattern == .assign)
+            pattern.assign.ident
+        else if (pattern == .var_assign)
+            pattern.var_assign.ident
+        else
+            return .continue_traversal;
 
         // A leading `_` marks a binding the author deliberately ignores.
         // Annotating what someone said they do not care about is noise.
-        const name = ctx.module_env.common.idents.getText(pattern.assign.ident);
+        const name = ctx.module_env.common.idents.getText(ident);
         if (base.Ident.Attributes.fromString(name).ignored) return .continue_traversal;
 
         const region = ctx.store.getPatternRegion(pattern_idx);

@@ -2427,6 +2427,66 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .binding_name_does_not_match_mutability => |data| blk: {
+            const ident_name = self.getIdent(data.ident);
+            const region_info = self.calcRegionInfo(data.region);
+            const title = switch (data.mutability) {
+                .mutable => "Var Name Missing `$`",
+                .immutable => "Dollar Prefix Without `var`",
+            };
+            var report = try Report.init(allocator, title, "", .warning);
+            const owned_ident = try report.addOwnedString(ident_name);
+
+            switch (data.mutability) {
+                .mutable => {
+                    try report.headline.addReflowingText("The mutable binding ");
+                    try report.headline.addUnqualifiedSymbol(owned_ident);
+                    try report.headline.addReflowingText(" is declared with ");
+                    try report.headline.addKeyword("var");
+                    try report.headline.addReflowingText(" but its name does not start with ");
+                    try report.headline.addInlineCode("$");
+                    try report.headline.addReflowingText(".");
+
+                    const suggested = try std.fmt.allocPrint(allocator, "${s}", .{ident_name});
+                    defer allocator.free(suggested);
+                    const owned_suggested = try report.addOwnedString(suggested);
+                    try report.document.addReflowingText("Rename this binding and all of its uses to ");
+                    try report.document.addUnqualifiedSymbol(owned_suggested);
+                    try report.document.addReflowingText(". The name is only a convention; mutability comes from the ");
+                    try report.document.addKeyword("var");
+                    try report.document.addReflowingText(" declaration.");
+                },
+                .immutable => {
+                    try report.headline.addReflowingText("The immutable binding ");
+                    try report.headline.addUnqualifiedSymbol(owned_ident);
+                    try report.headline.addReflowingText(" starts with ");
+                    try report.headline.addInlineCode("$");
+                    try report.headline.addReflowingText(" but is not declared with ");
+                    try report.headline.addKeyword("var");
+                    try report.headline.addReflowingText(".");
+
+                    const suggested = if (ident_name.len > 0) ident_name[1..] else ident_name;
+                    const owned_suggested = try report.addOwnedString(suggested);
+                    try report.document.addReflowingText("Either rename this binding and all of its uses to ");
+                    try report.document.addUnqualifiedSymbol(owned_suggested);
+                    try report.document.addReflowingText(", or declare it with ");
+                    try report.document.addKeyword("var");
+                    try report.document.addReflowingText(" if it should be mutable.");
+                },
+            }
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+            break :blk report;
+        },
         .empty_tuple => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 

@@ -23,8 +23,8 @@ an ordinary top-level declaration.
 
 For example:
     main = {
-        var count = 0
-        count
+        var $count = 0
+        $count
     }
 
 I found var here.

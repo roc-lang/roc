@@ -906,6 +906,10 @@ fn emitPatternFrame(
     const pattern = self.module_env.store.getPattern(pattern_idx);
     switch (pattern) {
         .assign => |ident| try self.emitIdent(self.module_env.getIdent(ident.ident)),
+        .var_assign => |ident| {
+            try self.write("var ");
+            try self.emitIdent(self.module_env.getIdent(ident.ident));
+        },
         .underscore => try self.write("_"),
         .num_literal => |num| try self.emitIntValue(num.value),
         .num_from_numeral_literal => try self.emitRecordedNumeral(ModuleEnv.nodeIdxFrom(pattern_idx), null),
@@ -1168,8 +1172,9 @@ fn base256ToDecimalDigits(self: *Self, bytes_be: []const u8) std.mem.Allocator.E
 
 fn addPatternToScope(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!void {
     const pattern = self.module_env.store.getPattern(pattern_idx);
-    if (pattern == .assign) {
-        const name = self.module_env.getIdent(pattern.assign.ident);
+    if (pattern == .assign or pattern == .var_assign) {
+        const ident = if (pattern == .assign) pattern.assign.ident else pattern.var_assign.ident;
+        const name = self.module_env.getIdent(ident);
         try self.names_in_scope.put(name, {});
     }
     // For other pattern types (destructuring, etc.), we could recursively add names
