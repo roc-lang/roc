@@ -9,6 +9,7 @@
 
 const std = @import("std");
 const CIR = @import("can").CIR;
+const ModuleEnv = @import("can").ModuleEnv;
 const TestEnv = @import("./TestEnv.zig");
 
 // Basic where clause tests
@@ -508,6 +509,152 @@ test "where alias - constraints apply to the referencing signature" {
     try test_env.assertLastDefType("a -> Str where [a.to_str : a -> Str]");
 }
 
+test "where alias - malformed empty declaration publishes checked error" {
+    const source =
+        \\a.Empty : where []
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try std.testing.expect(test_env.parse_ast.hasErrors());
+
+    const publications = test_env.module_env.where_alias_declaration_publications.items.items;
+    try std.testing.expectEqual(@as(usize, 1), publications.len);
+    try std.testing.expectEqual(
+        ModuleEnv.WhereAliasDeclarationPublication.Outcome.checked_error,
+        publications[0].decodedOutcome().?,
+    );
+    try std.testing.expectEqual(@as(u32, 0), publications[0].dependency_rank);
+    try std.testing.expectEqual(@as(u32, 0), publications[0].expansions_len);
+}
+
+test "where alias - unowned receiver publishes checked error" {
+    const source =
+        \\a.Bad : where [b.bad : b -> Str]
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    const diagnostics = try test_env.module_env.getDiagnostics();
+    defer std.testing.allocator.free(diagnostics);
+    try std.testing.expect(diagnostics.len != 0);
+    const publications = test_env.module_env.where_alias_declaration_publications.items.items;
+    try std.testing.expectEqual(@as(usize, 1), publications.len);
+    try std.testing.expectEqual(
+        ModuleEnv.WhereAliasDeclarationPublication.Outcome.checked_error,
+        publications[0].decodedOutcome().?,
+    );
+    try std.testing.expectEqual(@as(u32, 0), publications[0].expansions_len);
+}
+
+test "where alias - mixed owned and unowned sources publish checked error atomically" {
+    const source =
+        \\a.Bad : where [a.good : a -> Str, b.bad : b -> Str]
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    const publications = test_env.module_env.where_alias_declaration_publications.items.items;
+    try std.testing.expectEqual(@as(usize, 1), publications.len);
+    try std.testing.expectEqual(
+        ModuleEnv.WhereAliasDeclarationPublication.Outcome.checked_error,
+        publications[0].decodedOutcome().?,
+    );
+    try std.testing.expectEqual(@as(u32, 0), publications[0].expansions_len);
+    try std.testing.expectEqual(@as(usize, 0), test_env.module_env.where_alias_expansions.items.items.len);
+}
+
+test "where alias - dependency rank is canonical across independent source orders" {
+    const first_then_second =
+        \\a.First : where [a.first : a -> Str]
+        \\a.Second : where [a.second : a -> U64]
+        \\a.Middle : where [a.First, a.Second]
+        \\a.Top : where [a.Middle]
+    ;
+    var first_then_second_env = try TestEnv.init("FirstThenSecond", first_then_second);
+    defer first_then_second_env.deinit();
+    try first_then_second_env.assertNoErrors();
+    const first_then_second_publications = first_then_second_env.module_env.where_alias_declaration_publications.items.items;
+    try std.testing.expectEqual(@as(usize, 4), first_then_second_publications.len);
+    try std.testing.expectEqualSlices(
+        u32,
+        &.{ 0, 0, 1, 2 },
+        &.{
+            first_then_second_publications[0].dependency_rank,
+            first_then_second_publications[1].dependency_rank,
+            first_then_second_publications[2].dependency_rank,
+            first_then_second_publications[3].dependency_rank,
+        },
+    );
+
+    const second_then_first =
+        \\a.Second : where [a.second : a -> U64]
+        \\a.First : where [a.first : a -> Str]
+        \\a.Middle : where [a.Second, a.First]
+        \\a.Top : where [a.Middle]
+    ;
+    var second_then_first_env = try TestEnv.init("SecondThenFirst", second_then_first);
+    defer second_then_first_env.deinit();
+    try second_then_first_env.assertNoErrors();
+    const second_then_first_publications = second_then_first_env.module_env.where_alias_declaration_publications.items.items;
+    try std.testing.expectEqual(@as(usize, 4), second_then_first_publications.len);
+    try std.testing.expectEqualSlices(
+        u32,
+        &.{ 0, 0, 1, 2 },
+        &.{
+            second_then_first_publications[0].dependency_rank,
+            second_then_first_publications[1].dependency_rank,
+            second_then_first_publications[2].dependency_rank,
+            second_then_first_publications[3].dependency_rank,
+        },
+    );
+}
+
+test "where alias - checked error dependency poisons referencing declaration" {
+    const source =
+        \\a.Bad : where [a.Bad]
+        \\a.UsesBad : where [a.Bad]
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    const publications = test_env.module_env.where_alias_declaration_publications.items.items;
+    try std.testing.expectEqual(@as(usize, 2), publications.len);
+    for (publications) |publication| {
+        try std.testing.expectEqual(
+            ModuleEnv.WhereAliasDeclarationPublication.Outcome.checked_error,
+            publication.decodedOutcome().?,
+        );
+        try std.testing.expectEqual(@as(u32, 0), publication.dependency_rank);
+        try std.testing.expectEqual(@as(u32, 0), publication.expansions_len);
+    }
+}
+
+test "where alias - imported checked error poisons local declaration" {
+    const source_a =
+        \\module [Bad]
+        \\
+        \\a.Bad : where [a.Bad]
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+
+    const source_b =
+        \\import A exposing [Bad]
+        \\
+        \\a.UsesBad : where [a.Bad]
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+    defer test_env_b.deinit();
+    const publications = test_env_b.module_env.where_alias_declaration_publications.items.items;
+    try std.testing.expectEqual(@as(usize, 1), publications.len);
+    try std.testing.expectEqual(
+        ModuleEnv.WhereAliasDeclarationPublication.Outcome.checked_error,
+        publications[0].decodedOutcome().?,
+    );
+    try std.testing.expectEqual(@as(u32, 0), publications[0].dependency_rank);
+    try std.testing.expectEqual(@as(u32, 0), publications[0].expansions_len);
+}
+
 test "where alias - naming another where alias applies both constraint sets" {
     const source =
         \\a.Showable : where [a.to_str : a -> Str]
@@ -554,6 +701,53 @@ test "where alias - imported from another module" {
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
     try test_env_b.assertLastDefType("a -> Str where [a.to_str : a -> Str]");
+}
+
+test "where alias - imported-only dependency has local rank zero" {
+    const source_a =
+        \\module [Stringable]
+        \\
+        \\a.Stringable : where [a.hidden_method : a -> Str]
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+
+    const source_b =
+        \\import A exposing [Stringable]
+        \\
+        \\a.Local : where [a.Stringable]
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+    defer test_env_b.deinit();
+    try test_env_b.assertNoErrors();
+    const publications = test_env_b.module_env.where_alias_declaration_publications.items.items;
+    try std.testing.expectEqual(@as(usize, 1), publications.len);
+    try std.testing.expectEqual(
+        ModuleEnv.WhereAliasDeclarationPublication.Outcome.ready,
+        publications[0].decodedOutcome().?,
+    );
+    try std.testing.expectEqual(@as(u32, 0), publications[0].dependency_rank);
+    try std.testing.expectEqual(@as(u32, 1), publications[0].expansions_len);
+}
+
+test "where alias - REPL with definitions publishes unreferenced declaration" {
+    const source =
+        \\a.Local : where [a.local : a -> Str]
+        \\
+        \\result = {}
+    ;
+    var test_env = try TestEnv.initReplWithDefs("Repl", source, "result");
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const publications = test_env.module_env.where_alias_declaration_publications.items.items;
+    try std.testing.expectEqual(@as(usize, 1), publications.len);
+    try std.testing.expectEqual(
+        ModuleEnv.WhereAliasDeclarationPublication.Outcome.ready,
+        publications[0].decodedOutcome().?,
+    );
+    try std.testing.expectEqual(@as(u32, 0), publications[0].dependency_rank);
+    try std.testing.expectEqual(@as(u32, 1), publications[0].expansions_len);
 }
 
 test "where alias - imported under a module qualifier" {

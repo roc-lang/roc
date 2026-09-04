@@ -55,7 +55,27 @@ const NominalType = types.NominalType;
 const NominalDecl = types.NominalDecl;
 const StaticDispatchConstraint = types.StaticDispatchConstraint;
 const InterpolationPartMetadata = types.InterpolationPartMetadata;
+const WhereMethodMarkerContract = types.WhereMethodMarkerContract;
+const WhereMethodMarkerBasis = types.WhereMethodMarkerBasis;
+const WhereMethodMarkerMetadata = types.WhereMethodMarkerMetadata;
+const WhereMethodMarkerPathStep = types.WhereMethodMarkerPathStep;
+const ConstraintEvidence = types.ConstraintEvidence;
+const ConstraintEvidenceHandle = types.ConstraintEvidenceHandle;
 const SourceDecl = types.SourceDecl;
+
+/// One journaled mutation of the nominal-declaration table. Insertions name
+/// both the stable append index and their exact position in the sorted lookup
+/// index; writes retain the complete prior declaration value.
+const NominalDeclUndo = union(enum) {
+    insert: struct {
+        decl_idx: NominalDecl.Idx,
+        sorted_index: usize,
+    },
+    write: struct {
+        decl_idx: NominalDecl.Idx,
+        old: NominalDecl,
+    },
+};
 
 /// Metadata belonging to a live union-find storage root.
 ///
@@ -158,6 +178,12 @@ pub const Store = struct {
     record_fields: RecordFieldSafeMultiList,
     tags: TagSafeMultiList,
     interpolation_parts: InterpolationPartMetadata.SafeList,
+    where_method_marker_contracts: WhereMethodMarkerContract.SafeList,
+    where_method_marker_bases: WhereMethodMarkerBasis.SafeList,
+    where_method_marker_path_steps: WhereMethodMarkerPathStep.SafeList,
+    /// Canonical module-local evidence-handle sets named by exact
+    /// static-dispatch constraint occurrences.
+    constraint_evidence_handles: collections.SafeList(ConstraintEvidenceHandle),
     static_dispatch_constraints: StaticDispatchConstraint.SafeList,
 
     /// The nominal declaration table: one entry per nominal declaration whose
@@ -175,21 +201,28 @@ pub const Store = struct {
     /// relocated; capacity persists across instantiations against this store.
     instantiate_scratch: instantiate.Scratch = .{},
 
-    /// Undo trail for speculative unification. While a probe is active
-    /// (`savepoint_active`), every in-place write to a slot, descriptor, checked
+    /// Undo trail for speculative unification. While at least one savepoint is
+    /// active, every in-place write to a slot, descriptor, checked
     /// representative, or structural rank that existed before the probe began
     /// is journaled as (index, old value); rollback replays the journal in
     /// reverse. Entries appended during the probe are undone by truncation, not
     /// journaled.
-    /// Probes never nest (they bracket leaf-level unification), so this is a
-    /// flag, not a depth.
+    ///
+    /// Savepoints are LIFO-nestable. The active baselines always belong to the
+    /// innermost savepoint, so an inner transaction journals writes to entries
+    /// created by its outer transaction as well as writes to older entries.
+    /// Committing an inner savepoint retains its undo suffix because an outer
+    /// rollback must still be able to restore the complete outer snapshot.
     savepoint_active: bool = false,
+    savepoint_depth: u32 = 0,
     savepoint_baseline_slots: u32 = 0,
     savepoint_baseline_descs: u32 = 0,
     slot_trail: std.ArrayListUnmanaged(SlotUndo) = .empty,
     desc_trail: std.ArrayListUnmanaged(DescUndo) = .empty,
     root_meta_trail: std.ArrayListUnmanaged(RootMetaUndo) = .empty,
     union_rank_trail: std.ArrayListUnmanaged(UnionRankUndo) = .empty,
+    nominal_decl_trail: std.ArrayListUnmanaged(NominalDeclUndo) = .empty,
+    savepoint_baseline_nominal_decls: u32 = 0,
 
     /// Init the unification table with default capacity.
     /// For production use with source files, prefer initFromSourceLen() which
@@ -226,6 +259,10 @@ pub const Store = struct {
             .record_fields = try RecordFieldSafeMultiList.initCapacity(gpa, child_capacity),
             .tags = try TagSafeMultiList.initCapacity(gpa, child_capacity),
             .interpolation_parts = try InterpolationPartMetadata.SafeList.initCapacity(gpa, child_capacity),
+            .where_method_marker_contracts = try WhereMethodMarkerContract.SafeList.initCapacity(gpa, 16),
+            .where_method_marker_bases = try WhereMethodMarkerBasis.SafeList.initCapacity(gpa, 16),
+            .where_method_marker_path_steps = try WhereMethodMarkerPathStep.SafeList.initCapacity(gpa, 32),
+            .constraint_evidence_handles = try collections.SafeList(ConstraintEvidenceHandle).initCapacity(gpa, 16),
             .static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, child_capacity),
 
             // nominal declaration table (modules typically declare few types)
@@ -263,6 +300,10 @@ pub const Store = struct {
         self.record_fields.deinit(self.gpa);
         self.tags.deinit(self.gpa);
         self.interpolation_parts.deinit(self.gpa);
+        self.where_method_marker_contracts.deinit(self.gpa);
+        self.where_method_marker_bases.deinit(self.gpa);
+        self.where_method_marker_path_steps.deinit(self.gpa);
+        self.constraint_evidence_handles.deinit(self.gpa);
         self.static_dispatch_constraints.deinit(self.gpa);
 
         // nominal declaration table
@@ -277,6 +318,7 @@ pub const Store = struct {
         self.desc_trail.deinit(self.gpa);
         self.root_meta_trail.deinit(self.gpa);
         self.union_rank_trail.deinit(self.gpa);
+        self.nominal_decl_trail.deinit(self.gpa);
     }
 
     /// Clone this store into fresh owned memory.
@@ -291,6 +333,10 @@ pub const Store = struct {
             .record_fields = try self.record_fields.clone(gpa),
             .tags = try self.tags.clone(gpa),
             .interpolation_parts = try self.interpolation_parts.clone(gpa),
+            .where_method_marker_contracts = try self.where_method_marker_contracts.clone(gpa),
+            .where_method_marker_bases = try self.where_method_marker_bases.clone(gpa),
+            .where_method_marker_path_steps = try self.where_method_marker_path_steps.clone(gpa),
+            .constraint_evidence_handles = try self.constraint_evidence_handles.clone(gpa),
             .static_dispatch_constraints = try self.static_dispatch_constraints.clone(gpa),
             .nominal_decls = try self.nominal_decls.clone(gpa),
             .nominal_decl_index = try self.nominal_decl_index.clone(gpa),
@@ -332,14 +378,28 @@ pub const Store = struct {
     /// `savepoint_baseline_*` because they are also the per-write journaling
     /// threshold.
     pub const Savepoint = struct {
+        depth: u32,
+        baseline_slots: u32,
+        baseline_descs: u32,
+        previous_baseline_slots: u32,
+        previous_baseline_descs: u32,
+        baseline_nominal_decls: u32,
+        previous_baseline_nominal_decls: u32,
         slot_trail_len: usize,
         desc_trail_len: usize,
         root_meta_trail_len: usize,
         union_rank_trail_len: usize,
+        nominal_decl_trail_len: usize,
+        nominal_decls_len: usize,
+        nominal_decl_index_len: usize,
         vars_len: usize,
         record_fields_len: usize,
         tags_len: usize,
         interpolation_parts_len: usize,
+        where_method_marker_contracts_len: usize,
+        where_method_marker_bases_len: usize,
+        where_method_marker_path_steps_len: usize,
+        constraint_evidence_handles_len: usize,
         static_dispatch_constraints_len: usize,
         verify_clone: SavepointVerifyClone = savepoint_verify_clone_init,
     };
@@ -351,11 +411,15 @@ pub const Store = struct {
         descs: std.MultiArrayList(Desc),
         root_metas: std.MultiArrayList(RootMeta),
         union_ranks: []u8,
+        nominal_decls: []NominalDecl,
+        nominal_decl_index: []NominalDeclIndexEntry,
         fn deinit(self: *VerifyClone, gpa: Allocator) void {
             gpa.free(self.slots);
             self.descs.deinit(gpa);
             self.root_metas.deinit(gpa);
             gpa.free(self.union_ranks);
+            gpa.free(self.nominal_decls);
+            gpa.free(self.nominal_decl_index);
         }
     };
 
@@ -376,11 +440,17 @@ pub const Store = struct {
         errdefer root_metas.deinit(self.gpa);
 
         const union_ranks = try self.gpa.dupe(u8, self.union_ranks.items.items);
+        errdefer self.gpa.free(union_ranks);
+        const nominal_decls = try self.gpa.dupe(NominalDecl, self.nominal_decls.items.items);
+        errdefer self.gpa.free(nominal_decls);
+        const nominal_decl_index = try self.gpa.dupe(NominalDeclIndexEntry, self.nominal_decl_index.items.items);
         return .{
             .slots = slots,
             .descs = descs,
             .root_metas = root_metas,
             .union_ranks = union_ranks,
+            .nominal_decls = nominal_decls,
+            .nominal_decl_index = nominal_decl_index,
         };
     }
 
@@ -403,29 +473,50 @@ pub const Store = struct {
     }
 
     fn createSavepointImpl(self: *Self, comptime take_clone: bool) Allocator.Error!Savepoint {
+        const baseline_slots = std.math.cast(u32, self.slots.backing.len()) orelse
+            return error.OutOfMemory;
+        const baseline_descs = std.math.cast(u32, self.descs.backing.items.len) orelse
+            return error.OutOfMemory;
+        const baseline_nominal_decls = std.math.cast(u32, self.nominal_decls.items.items.len) orelse
+            return error.OutOfMemory;
+        const depth = std.math.add(u32, self.savepoint_depth, 1) catch
+            return error.OutOfMemory;
         const verify_clone: SavepointVerifyClone =
             if (savepoint_verification == .clone_crosscheck and take_clone) vc: {
                 break :vc try self.cloneForSavepointVerification();
             } else savepoint_verify_clone_init;
-
         const savepoint = Savepoint{
+            .depth = depth,
+            .baseline_slots = baseline_slots,
+            .baseline_descs = baseline_descs,
+            .previous_baseline_slots = self.savepoint_baseline_slots,
+            .previous_baseline_descs = self.savepoint_baseline_descs,
+            .baseline_nominal_decls = baseline_nominal_decls,
+            .previous_baseline_nominal_decls = self.savepoint_baseline_nominal_decls,
             .slot_trail_len = self.slot_trail.items.len,
             .desc_trail_len = self.desc_trail.items.len,
             .root_meta_trail_len = self.root_meta_trail.items.len,
             .union_rank_trail_len = self.union_rank_trail.items.len,
+            .nominal_decl_trail_len = self.nominal_decl_trail.items.len,
+            .nominal_decls_len = self.nominal_decls.items.items.len,
+            .nominal_decl_index_len = self.nominal_decl_index.items.items.len,
             .vars_len = self.vars.items.items.len,
             .record_fields_len = self.record_fields.items.len,
             .tags_len = self.tags.items.len,
             .interpolation_parts_len = self.interpolation_parts.items.items.len,
+            .where_method_marker_contracts_len = self.where_method_marker_contracts.items.items.len,
+            .where_method_marker_bases_len = self.where_method_marker_bases.items.items.len,
+            .where_method_marker_path_steps_len = self.where_method_marker_path_steps.items.items.len,
+            .constraint_evidence_handles_len = self.constraint_evidence_handles.items.items.len,
             .static_dispatch_constraints_len = self.static_dispatch_constraints.items.items.len,
             .verify_clone = verify_clone,
         };
 
-        // Probes never nest; catch it loudly if that invariant is ever broken.
-        std.debug.assert(!self.savepoint_active);
         self.savepoint_active = true;
-        self.savepoint_baseline_slots = @intCast(self.slots.backing.len());
-        self.savepoint_baseline_descs = @intCast(self.descs.backing.items.len);
+        self.savepoint_depth = depth;
+        self.savepoint_baseline_slots = baseline_slots;
+        self.savepoint_baseline_descs = baseline_descs;
+        self.savepoint_baseline_nominal_decls = baseline_nominal_decls;
 
         return savepoint;
     }
@@ -438,11 +529,22 @@ pub const Store = struct {
     /// journaling.
     pub fn commitSavepoint(self: *Self, savepoint: *Savepoint) void {
         std.debug.assert(self.savepoint_active);
-        self.desc_trail.shrinkRetainingCapacity(savepoint.desc_trail_len);
-        self.slot_trail.shrinkRetainingCapacity(savepoint.slot_trail_len);
-        self.root_meta_trail.shrinkRetainingCapacity(savepoint.root_meta_trail_len);
-        self.union_rank_trail.shrinkRetainingCapacity(savepoint.union_rank_trail_len);
-        self.savepoint_active = false;
+        std.debug.assert(self.savepoint_depth == savepoint.depth);
+        std.debug.assert(self.savepoint_baseline_slots == savepoint.baseline_slots);
+        std.debug.assert(self.savepoint_baseline_descs == savepoint.baseline_descs);
+        std.debug.assert(self.savepoint_baseline_nominal_decls == savepoint.baseline_nominal_decls);
+        if (savepoint.depth == 1) {
+            self.desc_trail.shrinkRetainingCapacity(savepoint.desc_trail_len);
+            self.slot_trail.shrinkRetainingCapacity(savepoint.slot_trail_len);
+            self.root_meta_trail.shrinkRetainingCapacity(savepoint.root_meta_trail_len);
+            self.union_rank_trail.shrinkRetainingCapacity(savepoint.union_rank_trail_len);
+            self.nominal_decl_trail.shrinkRetainingCapacity(savepoint.nominal_decl_trail_len);
+        }
+        self.savepoint_depth -= 1;
+        self.savepoint_active = self.savepoint_depth != 0;
+        self.savepoint_baseline_slots = savepoint.previous_baseline_slots;
+        self.savepoint_baseline_descs = savepoint.previous_baseline_descs;
+        self.savepoint_baseline_nominal_decls = savepoint.previous_baseline_nominal_decls;
 
         if (savepoint_verification == .clone_crosscheck) {
             if (savepoint.verify_clone) |*vclone| {
@@ -461,6 +563,11 @@ pub const Store = struct {
 
     /// Undo everything done since `savepoint` was created.
     pub fn rollbackToSavepoint(self: *Self, savepoint: *Savepoint) void {
+        std.debug.assert(self.savepoint_active);
+        std.debug.assert(self.savepoint_depth == savepoint.depth);
+        std.debug.assert(self.savepoint_baseline_slots == savepoint.baseline_slots);
+        std.debug.assert(self.savepoint_baseline_descs == savepoint.baseline_descs);
+        std.debug.assert(self.savepoint_baseline_nominal_decls == savepoint.baseline_nominal_decls);
         // Replay journaled in-place writes in reverse so each pre-existing entry
         // lands back on its original value.
         var di = self.desc_trail.items.len;
@@ -495,21 +602,48 @@ pub const Store = struct {
         }
         self.slot_trail.shrinkRetainingCapacity(savepoint.slot_trail_len);
 
+        var ni = self.nominal_decl_trail.items.len;
+        while (ni > savepoint.nominal_decl_trail_len) {
+            ni -= 1;
+            const undo = self.nominal_decl_trail.items[ni];
+            switch (undo) {
+                .write => |write| self.nominal_decls.set(write.decl_idx, write.old),
+                .insert => |insert| {
+                    std.debug.assert(@intFromEnum(insert.decl_idx) + 1 == self.nominal_decls.items.items.len);
+                    const removed = self.nominal_decl_index.items.orderedRemove(insert.sorted_index);
+                    std.debug.assert(removed.decl == insert.decl_idx);
+                    self.nominal_decls.items.shrinkRetainingCapacity(self.nominal_decls.items.items.len - 1);
+                },
+            }
+        }
+        self.nominal_decl_trail.shrinkRetainingCapacity(savepoint.nominal_decl_trail_len);
+        std.debug.assert(self.nominal_decls.items.items.len == savepoint.nominal_decls_len);
+        std.debug.assert(self.nominal_decl_index.items.items.len == savepoint.nominal_decl_index_len);
+
         // Drop everything appended during the probe. The slot/desc baselines are
         // the store fields (also the journaling threshold); the rest come from
         // the savepoint.
-        self.slots.backing.items.shrinkRetainingCapacity(self.savepoint_baseline_slots);
-        self.descs.backing.items.shrinkRetainingCapacity(self.savepoint_baseline_descs);
-        self.root_metas.items.shrinkRetainingCapacity(self.savepoint_baseline_descs);
-        self.union_ranks.items.shrinkRetainingCapacity(self.savepoint_baseline_slots);
+        self.slots.backing.items.shrinkRetainingCapacity(savepoint.baseline_slots);
+        self.descs.backing.items.shrinkRetainingCapacity(savepoint.baseline_descs);
+        self.root_metas.items.shrinkRetainingCapacity(savepoint.baseline_descs);
+        self.union_ranks.items.shrinkRetainingCapacity(savepoint.baseline_slots);
         self.vars.items.shrinkRetainingCapacity(savepoint.vars_len);
         self.record_fields.items.shrinkRetainingCapacity(savepoint.record_fields_len);
         self.tags.items.shrinkRetainingCapacity(savepoint.tags_len);
         self.interpolation_parts.items.shrinkRetainingCapacity(savepoint.interpolation_parts_len);
+        self.where_method_marker_contracts.items.shrinkRetainingCapacity(savepoint.where_method_marker_contracts_len);
+        self.where_method_marker_bases.items.shrinkRetainingCapacity(savepoint.where_method_marker_bases_len);
+        self.where_method_marker_path_steps.items.shrinkRetainingCapacity(savepoint.where_method_marker_path_steps_len);
+        self.constraint_evidence_handles.items.shrinkRetainingCapacity(
+            savepoint.constraint_evidence_handles_len,
+        );
         self.static_dispatch_constraints.items.shrinkRetainingCapacity(savepoint.static_dispatch_constraints_len);
 
-        // Back to not speculating; savepoint_baseline_* are dead until the next create.
-        self.savepoint_active = false;
+        self.savepoint_depth -= 1;
+        self.savepoint_active = self.savepoint_depth != 0;
+        self.savepoint_baseline_slots = savepoint.previous_baseline_slots;
+        self.savepoint_baseline_descs = savepoint.previous_baseline_descs;
+        self.savepoint_baseline_nominal_decls = savepoint.previous_baseline_nominal_decls;
 
         if (savepoint_verification == .clone_crosscheck) {
             if (savepoint.verify_clone) |*vclone| {
@@ -540,6 +674,15 @@ pub const Store = struct {
         }
 
         std.debug.assert(std.mem.eql(u8, self.union_ranks.items.items, vclone.union_ranks));
+
+        std.debug.assert(self.nominal_decls.items.items.len == vclone.nominal_decls.len);
+        for (self.nominal_decls.items.items, vclone.nominal_decls) |a, b| {
+            std.debug.assert(std.meta.eql(a, b));
+        }
+        std.debug.assert(self.nominal_decl_index.items.items.len == vclone.nominal_decl_index.len);
+        for (self.nominal_decl_index.items.items, vclone.nominal_decl_index) |a, b| {
+            std.debug.assert(std.meta.eql(a, b));
+        }
     }
 
     /// In-place slot write. While a probe is active, journals the slot's previous
@@ -692,21 +835,43 @@ pub const Store = struct {
     /// (after the declared scheme was copied out of them) so the def's body
     /// check can generate the annotation again.
     pub fn resetVarToUnbound(self: *Self, target_var: Var, rank: Rank) Allocator.Error!void {
+        try self.ensureResetVarsCapacity(1);
+        self.resetVarToUnboundAssumeCapacity(target_var, rank);
+    }
+
+    /// Reserve the descriptor storage needed to detach `count` existing slots
+    /// with `resetVarToUnboundAssumeCapacity`. Resetting a slot appends one
+    /// descriptor/root-metadata pair but does not append a slot.
+    pub fn ensureResetVarsCapacity(self: *Self, count: usize) Allocator.Error!void {
+        self.assertNoSavepointActive();
+        const desc_capacity = std.math.add(usize, self.descs.backing.len(), count) catch
+            return error.OutOfMemory;
+        try self.descs.backing.ensureTotalCapacity(self.gpa, desc_capacity);
+        try self.root_metas.ensureTotalCapacity(self.gpa, desc_capacity);
+    }
+
+    /// Detach one existing slot after `ensureResetVarsCapacity` reserved the
+    /// whole reset batch. This is deliberately infallible so checker-owned
+    /// metadata retirement and annotation-slot detachment can commit together.
+    pub fn resetVarToUnboundAssumeCapacity(self: *Self, target_var: Var, rank: Rank) void {
+        self.assertNoSavepointActive();
         std.debug.assert(@intFromEnum(target_var) < self.len());
         const storage = self.resolveStorageRoot(target_var);
-        const desc_idx = try self.appendClass(.{
+        const desc_idx = self.descs.appendAssumeCapacity(.{
             .content = .{ .flex = Flex.init() },
             .rank = rank,
-        }, target_var);
+        });
+        const meta_idx = self.root_metas.appendAssumeCapacity(.{ .checked_var = target_var });
+        std.debug.assert(@intFromEnum(meta_idx) == @intFromEnum(desc_idx));
         if (target_var != storage.storage_var) {
             // `target_var` may be the old checked representative, or its
             // detached subtree may contain that representative. Keep the
             // remainder self-contained by selecting its storage root.
-            try self.setRootMeta(storage.desc_idx, .{
+            self.root_metas.set(rootMetaIdx(storage.desc_idx), .{
                 .checked_var = storage.storage_var,
             });
         }
-        try self.setSlot(Self.varToSlotIdx(target_var), .{ .root = desc_idx });
+        self.slots.set(Self.varToSlotIdx(target_var), .{ .root = desc_idx });
     }
 
     /// Set a type variable to the provided content
@@ -1086,9 +1251,477 @@ pub const Store = struct {
         return try self.interpolation_parts.appendSlice(self.gpa, slice);
     }
 
+    pub fn appendWhereMethodMarkerContracts(self: *Self, slice: []const WhereMethodMarkerContract) std.mem.Allocator.Error!WhereMethodMarkerContract.SafeList.Range {
+        return try self.where_method_marker_contracts.appendSlice(self.gpa, slice);
+    }
+
+    pub fn appendWhereMethodMarkerBases(self: *Self, slice: []const WhereMethodMarkerBasis) std.mem.Allocator.Error!WhereMethodMarkerBasis.SafeList.Range {
+        return try self.where_method_marker_bases.appendSlice(self.gpa, slice);
+    }
+
+    pub fn appendConstraintEvidenceHandles(
+        self: *Self,
+        handles: []const ConstraintEvidenceHandle,
+    ) Allocator.Error!ConstraintEvidence {
+        if (handles.len == 0) return .none;
+        for (handles, 0..) |handle, index| {
+            if (handle.decodedKind() == null or
+                (index != 0 and !ConstraintEvidenceHandle.canonicalLessThan({}, handles[index - 1], handle)))
+            {
+                std.debug.panic("constraint evidence handles were not strictly canonical", .{});
+            }
+        }
+        const start = self.constraint_evidence_handles.items.items.len;
+        _ = try self.constraint_evidence_handles.appendSlice(self.gpa, handles);
+        return .{ .start = @intCast(start), .len = @intCast(handles.len) };
+    }
+
+    pub fn sliceConstraintEvidenceHandles(
+        self: *const Self,
+        range: ConstraintEvidence,
+    ) []const ConstraintEvidenceHandle {
+        const start: usize = range.start;
+        const handle_len: usize = range.len;
+        if (start > self.constraint_evidence_handles.items.items.len or
+            handle_len > self.constraint_evidence_handles.items.items.len - start)
+        {
+            std.debug.panic("constraint evidence range escaped its handle pool", .{});
+        }
+        return self.constraint_evidence_handles.items.items[start..][0..handle_len];
+    }
+
+    /// Canonical union used only while a new constraint occurrence is being
+    /// authored. Existing ranges remain immutable.
+    pub fn mergeConstraintEvidence(
+        self: *Self,
+        a: ConstraintEvidence,
+        b: ConstraintEvidence,
+    ) Allocator.Error!ConstraintEvidence {
+        if (a.len == 0) return b;
+        if (b.len == 0) return a;
+        try self.constraint_evidence_handles.items.ensureUnusedCapacity(
+            self.gpa,
+            @as(usize, a.len) + @as(usize, b.len),
+        );
+        const a_handles = self.sliceConstraintEvidenceHandles(a);
+        const b_handles = self.sliceConstraintEvidenceHandles(b);
+        const start: u32 = @intCast(self.constraint_evidence_handles.items.items.len);
+        var ai: usize = 0;
+        var bi: usize = 0;
+        while (ai < a_handles.len or bi < b_handles.len) {
+            const next = if (bi >= b_handles.len or
+                (ai < a_handles.len and ConstraintEvidenceHandle.canonicalLessThan({}, a_handles[ai], b_handles[bi])))
+            blk: {
+                const value = a_handles[ai];
+                ai += 1;
+                break :blk value;
+            } else if (ai >= a_handles.len or ConstraintEvidenceHandle.canonicalLessThan({}, b_handles[bi], a_handles[ai])) blk: {
+                const value = b_handles[bi];
+                bi += 1;
+                break :blk value;
+            } else blk: {
+                const value = a_handles[ai];
+                ai += 1;
+                bi += 1;
+                break :blk value;
+            };
+            self.constraint_evidence_handles.items.appendAssumeCapacity(next);
+        }
+        return .{
+            .start = start,
+            .len = @intCast(self.constraint_evidence_handles.items.items.len - start),
+        };
+    }
+
+    fn whereMethodMarkerPath(
+        self: *const Self,
+        contract: WhereMethodMarkerContract,
+    ) []const WhereMethodMarkerPathStep {
+        const steps = self.where_method_marker_path_steps.items.items;
+        if (contract.path_start > steps.len or contract.path_len > steps.len - contract.path_start) {
+            std.debug.panic("where-method marker contract path was out of bounds", .{});
+        }
+        if (contract.positionOrNull() == null or contract.isWidened() == null or contract.isReady() == null) {
+            std.debug.panic("where-method marker contract had invalid metadata", .{});
+        }
+        _ = contract.hasProducer();
+        return steps[contract.path_start .. contract.path_start + contract.path_len];
+    }
+
+    /// Compare canonical marker refs by guarded path first and producer source
+    /// occurrence second. Keeping this in the type store gives checker-side
+    /// deduplication and the unifier one ordering implementation.
+    pub fn compareWhereMethodMarkerContracts(
+        self: *const Self,
+        a: WhereMethodMarkerContract,
+        b: WhereMethodMarkerContract,
+    ) std.math.Order {
+        const path_order = types.compareWhereMethodMarkerPathSlices(
+            self.whereMethodMarkerPath(a),
+            self.whereMethodMarkerPath(b),
+        );
+        if (path_order != .eq) return path_order;
+        if (!types.whereMethodMarkerNominalNamesMatch(
+            self.whereMethodMarkerPath(a),
+            self.whereMethodMarkerPath(b),
+        )) {
+            std.debug.panic("equal where-method marker paths carried different nominal declaration names", .{});
+        }
+        inline for (.{ "producer_owner_node", "producer_where_node", "producer_method_name" }) |field| {
+            const order = std.math.order(@field(a, field), @field(b, field));
+            if (order != .eq) return order;
+        }
+        return .eq;
+    }
+
+    fn whereMethodMarkerContractSlicesEquivalent(
+        self: *const Self,
+        a: []const WhereMethodMarkerContract,
+        b: []const WhereMethodMarkerContract,
+    ) bool {
+        if (a.len != b.len) return false;
+        for (a, b) |a_marker, b_marker| {
+            if (self.compareWhereMethodMarkerContracts(a_marker, b_marker) != .eq or
+                a_marker.position != b_marker.position or
+                a_marker.widened != b_marker.widened or
+                a_marker.ready != b_marker.ready)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    fn compareWhereMethodMarkerBases(
+        a: WhereMethodMarkerBasis,
+        b: WhereMethodMarkerBasis,
+    ) std.math.Order {
+        inline for (.{
+            "marker_offset",
+            "copy_step",
+            "source_constraint_index",
+            "source_contract_offset",
+        }) |field| {
+            const order = std.math.order(@field(a, field), @field(b, field));
+            if (order != .eq) return order;
+        }
+        return .eq;
+    }
+
+    fn whereMethodMarkerBasisLessThan(
+        _: void,
+        a: WhereMethodMarkerBasis,
+        b: WhereMethodMarkerBasis,
+    ) bool {
+        return compareWhereMethodMarkerBases(a, b) == .lt;
+    }
+
+    fn whereMethodMarkerBasisSlicesEquivalent(
+        a: []const WhereMethodMarkerBasis,
+        b: []const WhereMethodMarkerBasis,
+    ) bool {
+        if (a.len != b.len) return false;
+        for (a, b) |a_basis, b_basis| {
+            if (compareWhereMethodMarkerBases(a_basis, b_basis) != .eq) return false;
+        }
+        return true;
+    }
+
+    fn assertWhereMethodMarkerBasesCanonical(
+        self: *const Self,
+        metadata: WhereMethodMarkerMetadata,
+    ) void {
+        const markers = self.sliceWhereMethodMarkerContracts(metadata.markers);
+        const bases = self.sliceWhereMethodMarkerBases(metadata.bases);
+        if (markers.len == 0 and bases.len != 0) {
+            std.debug.panic("where-method basis range had no marker range", .{});
+        }
+        for (bases, 0..) |basis, index| {
+            if (basis.marker_offset >= markers.len) {
+                std.debug.panic("where-method basis named an out-of-range local marker", .{});
+            }
+            if (index != 0 and compareWhereMethodMarkerBases(bases[index - 1], basis) != .lt) {
+                std.debug.panic("where-method basis range was not canonical", .{});
+            }
+        }
+    }
+
+    /// Union the two parallel where-method certificate ranges carried by one
+    /// constraint. Basis offsets are remapped through marker coalescing before
+    /// their own sorted/deduplicated union. Both durable ranges are reserved
+    /// before either is appended, so a failure cannot install half of a
+    /// metadata pair.
+    pub fn mergeWhereMethodMarkerMetadata(
+        self: *Self,
+        a_metadata: WhereMethodMarkerMetadata,
+        b_metadata: WhereMethodMarkerMetadata,
+    ) Allocator.Error!WhereMethodMarkerMetadata {
+        return self.mergeWhereMethodMarkerMetadataWithRemaps(
+            a_metadata,
+            b_metadata,
+            null,
+            null,
+        );
+    }
+
+    /// The exact producer map for a marker-metadata union. When supplied, the
+    /// output slices must match the corresponding input marker count and are
+    /// filled with `input offset -> returned marker offset`, including the
+    /// identity and empty-range fast paths. Checker-owned lineage coordinates
+    /// consume these maps directly; they must never recover an offset by
+    /// comparing the post-merge marker graph.
+    pub fn mergeWhereMethodMarkerMetadataWithRemaps(
+        self: *Self,
+        a_metadata: WhereMethodMarkerMetadata,
+        b_metadata: WhereMethodMarkerMetadata,
+        a_remap_out: ?[]u32,
+        b_remap_out: ?[]u32,
+    ) Allocator.Error!WhereMethodMarkerMetadata {
+        self.assertWhereMethodMarkerBasesCanonical(a_metadata);
+        self.assertWhereMethodMarkerBasesCanonical(b_metadata);
+
+        const a = self.sliceWhereMethodMarkerContracts(a_metadata.markers);
+        const b = self.sliceWhereMethodMarkerContracts(b_metadata.markers);
+        if (a_remap_out) |remap| std.debug.assert(remap.len == a.len);
+        if (b_remap_out) |remap| std.debug.assert(remap.len == b.len);
+        if (std.meta.eql(a_metadata, b_metadata)) {
+            if (a_remap_out) |remap| {
+                for (remap, 0..) |*offset, index| offset.* = @intCast(index);
+            }
+            if (b_remap_out) |remap| {
+                for (remap, 0..) |*offset, index| offset.* = @intCast(index);
+            }
+            return a_metadata;
+        }
+        if (a.len == 0) {
+            if (b_remap_out) |remap| {
+                for (remap, 0..) |*offset, index| offset.* = @intCast(index);
+            }
+            return b_metadata;
+        }
+        if (b.len == 0) {
+            if (a_remap_out) |remap| {
+                for (remap, 0..) |*offset, index| offset.* = @intCast(index);
+            }
+            return a_metadata;
+        }
+
+        const owned_a_remap = if (a_remap_out == null) try self.gpa.alloc(u32, a.len) else null;
+        defer if (owned_a_remap) |remap| self.gpa.free(remap);
+        const owned_b_remap = if (b_remap_out == null) try self.gpa.alloc(u32, b.len) else null;
+        defer if (owned_b_remap) |remap| self.gpa.free(remap);
+        const a_remap = a_remap_out orelse owned_a_remap.?;
+        const b_remap = b_remap_out orelse owned_b_remap.?;
+
+        var merged_markers: std.ArrayListUnmanaged(WhereMethodMarkerContract) = .empty;
+        defer merged_markers.deinit(self.gpa);
+        try merged_markers.ensureTotalCapacity(self.gpa, a.len + b.len);
+
+        var ai: usize = 0;
+        var bi: usize = 0;
+        while (ai < a.len or bi < b.len) {
+            if (ai == a.len) {
+                b_remap[bi] = @intCast(merged_markers.items.len);
+                merged_markers.appendAssumeCapacity(b[bi]);
+                bi += 1;
+                continue;
+            }
+            if (bi == b.len) {
+                a_remap[ai] = @intCast(merged_markers.items.len);
+                merged_markers.appendAssumeCapacity(a[ai]);
+                ai += 1;
+                continue;
+            }
+            switch (self.compareWhereMethodMarkerContracts(a[ai], b[bi])) {
+                .lt => {
+                    a_remap[ai] = @intCast(merged_markers.items.len);
+                    merged_markers.appendAssumeCapacity(a[ai]);
+                    ai += 1;
+                },
+                .gt => {
+                    b_remap[bi] = @intCast(merged_markers.items.len);
+                    merged_markers.appendAssumeCapacity(b[bi]);
+                    bi += 1;
+                },
+                .eq => {
+                    if (a[ai].position != b[bi].position) {
+                        std.debug.panic("equal where-method marker refs had incompatible positions", .{});
+                    }
+                    const output_offset: u32 = @intCast(merged_markers.items.len);
+                    a_remap[ai] = output_offset;
+                    b_remap[bi] = output_offset;
+                    var combined = a[ai];
+                    combined.widened = @intFromBool(a[ai].isWidened().? or b[bi].isWidened().?);
+                    combined.ready = @intFromBool(a[ai].isReady().? or b[bi].isReady().?);
+                    merged_markers.appendAssumeCapacity(combined);
+                    ai += 1;
+                    bi += 1;
+                },
+            }
+        }
+
+        const a_bases = self.sliceWhereMethodMarkerBases(a_metadata.bases);
+        const b_bases = self.sliceWhereMethodMarkerBases(b_metadata.bases);
+        var merged_bases: std.ArrayListUnmanaged(WhereMethodMarkerBasis) = .empty;
+        defer merged_bases.deinit(self.gpa);
+        try merged_bases.ensureTotalCapacity(self.gpa, a_bases.len + b_bases.len);
+        for (a_bases) |basis| {
+            var remapped = basis;
+            remapped.marker_offset = a_remap[basis.marker_offset];
+            merged_bases.appendAssumeCapacity(remapped);
+        }
+        for (b_bases) |basis| {
+            var remapped = basis;
+            remapped.marker_offset = b_remap[basis.marker_offset];
+            merged_bases.appendAssumeCapacity(remapped);
+        }
+        std.mem.sortUnstable(
+            WhereMethodMarkerBasis,
+            merged_bases.items,
+            {},
+            whereMethodMarkerBasisLessThan,
+        );
+        var basis_write: usize = 0;
+        for (merged_bases.items) |basis| {
+            if (basis_write != 0 and
+                compareWhereMethodMarkerBases(merged_bases.items[basis_write - 1], basis) == .eq)
+            {
+                continue;
+            }
+            merged_bases.items[basis_write] = basis;
+            basis_write += 1;
+        }
+        merged_bases.items.len = basis_write;
+
+        const merged_markers_match_a = self.whereMethodMarkerContractSlicesEquivalent(merged_markers.items, a);
+        const merged_markers_match_b = self.whereMethodMarkerContractSlicesEquivalent(merged_markers.items, b);
+        const merged_bases_match_a = whereMethodMarkerBasisSlicesEquivalent(merged_bases.items, a_bases);
+        const merged_bases_match_b = whereMethodMarkerBasisSlicesEquivalent(merged_bases.items, b_bases);
+
+        const append_markers = !merged_markers_match_a and !merged_markers_match_b;
+        const append_bases = !merged_bases_match_a and !merged_bases_match_b;
+        if (append_markers) {
+            try self.where_method_marker_contracts.items.ensureUnusedCapacity(self.gpa, merged_markers.items.len);
+        }
+        if (append_bases) {
+            try self.where_method_marker_bases.items.ensureUnusedCapacity(self.gpa, merged_bases.items.len);
+        }
+
+        const markers = if (merged_markers_match_a)
+            a_metadata.markers
+        else if (merged_markers_match_b)
+            b_metadata.markers
+        else blk: {
+            const start: u32 = @intCast(self.where_method_marker_contracts.items.items.len);
+            self.where_method_marker_contracts.items.appendSliceAssumeCapacity(merged_markers.items);
+            break :blk WhereMethodMarkerContract.SafeList.Range{
+                .start = @enumFromInt(start),
+                .count = @intCast(merged_markers.items.len),
+            };
+        };
+        const bases = if (merged_bases_match_a)
+            a_metadata.bases
+        else if (merged_bases_match_b)
+            b_metadata.bases
+        else blk: {
+            const start: u32 = @intCast(self.where_method_marker_bases.items.items.len);
+            self.where_method_marker_bases.items.appendSliceAssumeCapacity(merged_bases.items);
+            break :blk WhereMethodMarkerBasis.SafeList.Range{
+                .start = @enumFromInt(start),
+                .count = @intCast(merged_bases.items.len),
+            };
+        };
+        return .{ .markers = markers, .bases = bases };
+    }
+
+    pub fn appendWhereMethodMarkerPathSteps(self: *Self, slice: []const WhereMethodMarkerPathStep) std.mem.Allocator.Error!WhereMethodMarkerPathStep.SafeList.Range {
+        return try self.where_method_marker_path_steps.appendSlice(self.gpa, slice);
+    }
+
     /// Append static dispatch constraints to the backing list, returning the range
     pub fn appendStaticDispatchConstraints(self: *Self, s: []const StaticDispatchConstraint) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {
         return try self.static_dispatch_constraints.appendSlice(self.gpa, s);
+    }
+
+    /// Number of descriptor slots whose checked-boundary constraint ownership
+    /// must be snapshotted before rebuilding the static-dispatch pools.
+    pub fn checkedBoundaryDescriptorCount(self: *const Self) usize {
+        return self.descs.backing.items.len;
+    }
+
+    /// Snapshot the exact constraint range of every current live flex/rigid
+    /// descriptor. `out` is indexed by descriptor index; `null` denotes either
+    /// dead descriptor history or a live descriptor kind that cannot own
+    /// constraints. This is allocation-free so the caller can build a complete
+    /// replacement graph off-side without touching the store.
+    pub fn snapshotCheckedBoundaryLiveConstraintRanges(
+        self: *const Self,
+        out: []?StaticDispatchConstraint.SafeList.Range,
+    ) void {
+        std.debug.assert(out.len == self.descs.backing.items.len);
+        @memset(out, null);
+        for (self.slots.backing.items.items) |slot| {
+            const desc_idx = switch (slot) {
+                .root => |idx| idx,
+                .redirect => continue,
+            };
+            const raw_desc: usize = @intFromEnum(desc_idx);
+            std.debug.assert(raw_desc < out.len);
+            const desc = self.descs.get(desc_idx);
+            const range = switch (desc.content) {
+                .flex => |flex| flex.constraints,
+                .rigid => |rigid| rigid.constraints,
+                .alias, .field_presence, .structure, .err => continue,
+            };
+            // Every live union-find storage root owns one distinct descriptor.
+            std.debug.assert(out[raw_desc] == null);
+            out[raw_desc] = range;
+        }
+    }
+
+    /// Infallible terminal half of the checked-boundary static-dispatch
+    /// rebuild declared in design.md. The caller has already built and
+    /// validated every replacement list and descriptor range. Swapping hands
+    /// the old owned lists back to the caller for destruction. Dead flex/rigid
+    /// descriptor history is deliberately stripped of ranges so serialization
+    /// cannot retain unreachable constraint authority.
+    pub fn commitCheckedBoundaryStaticDispatchRebuild(
+        self: *Self,
+        replacement_constraints: *StaticDispatchConstraint.SafeList,
+        replacement_constraint_evidence_handles: *collections.SafeList(ConstraintEvidenceHandle),
+        replacement_contracts: *WhereMethodMarkerContract.SafeList,
+        replacement_bases: *WhereMethodMarkerBasis.SafeList,
+        replacement_paths: *WhereMethodMarkerPathStep.SafeList,
+        remapped_live_ranges: []const ?StaticDispatchConstraint.SafeList.Range,
+    ) void {
+        std.debug.assert(!self.savepoint_active);
+        std.debug.assert(remapped_live_ranges.len == self.descs.backing.items.len);
+
+        for (remapped_live_ranges, 0..) |maybe_range, raw_desc| {
+            const desc_idx: DescStore.Idx = @enumFromInt(raw_desc);
+            var desc = self.descs.get(desc_idx);
+            switch (desc.content) {
+                .flex => |flex| {
+                    desc.content = .{ .flex = flex.withConstraints(maybe_range orelse .empty()) };
+                    self.descs.set(desc_idx, desc);
+                },
+                .rigid => |rigid| {
+                    desc.content = .{ .rigid = rigid.withConstraints(maybe_range orelse .empty()) };
+                    self.descs.set(desc_idx, desc);
+                },
+                .alias, .field_presence, .structure, .err => std.debug.assert(maybe_range == null),
+            }
+        }
+
+        std.mem.swap(StaticDispatchConstraint.SafeList, &self.static_dispatch_constraints, replacement_constraints);
+        std.mem.swap(
+            collections.SafeList(ConstraintEvidenceHandle),
+            &self.constraint_evidence_handles,
+            replacement_constraint_evidence_handles,
+        );
+        std.mem.swap(WhereMethodMarkerContract.SafeList, &self.where_method_marker_contracts, replacement_contracts);
+        std.mem.swap(WhereMethodMarkerBasis.SafeList, &self.where_method_marker_bases, replacement_bases);
+        std.mem.swap(WhereMethodMarkerPathStep.SafeList, &self.where_method_marker_path_steps, replacement_paths);
     }
 
     // sub list getters //
@@ -1096,6 +1729,16 @@ pub const Store = struct {
     /// Given a range, get a slice of vars from the backing array
     pub fn sliceVars(self: *const Self, range: VarSafeList.Range) []Var {
         return self.vars.sliceRange(range);
+    }
+
+    /// Allocation-free bounds check used before replaying serialized
+    /// producer-owned child ranges. Callers must not invoke `sliceVars` or
+    /// `getVarAt` on untrusted coordinates until this succeeds.
+    pub fn varRangeIsValid(self: *const Self, range: VarSafeList.Range) bool {
+        const start: usize = @intFromEnum(range.start);
+        const count: usize = range.count;
+        return start <= self.vars.items.items.len and
+            count <= self.vars.items.items.len - start;
     }
 
     /// Get an iterator over vars for the given range.
@@ -1155,6 +1798,18 @@ pub const Store = struct {
         std.debug.assert(offset < range.count);
         const idx: InterpolationPartMetadata.SafeList.Idx = @enumFromInt(@intFromEnum(range.start) + offset);
         return self.interpolation_parts.get(idx).*;
+    }
+
+    pub fn sliceWhereMethodMarkerContracts(self: *const Self, range: WhereMethodMarkerContract.SafeList.Range) []WhereMethodMarkerContract {
+        return self.where_method_marker_contracts.sliceRange(range);
+    }
+
+    pub fn sliceWhereMethodMarkerBases(self: *const Self, range: WhereMethodMarkerBasis.SafeList.Range) []WhereMethodMarkerBasis {
+        return self.where_method_marker_bases.sliceRange(range);
+    }
+
+    pub fn sliceWhereMethodMarkerPathSteps(self: *const Self, range: WhereMethodMarkerPathStep.SafeList.Range) []WhereMethodMarkerPathStep {
+        return self.where_method_marker_path_steps.sliceRange(range);
     }
 
     /// Given a range, get a slice of vars from the backing array
@@ -1237,11 +1892,7 @@ pub const Store = struct {
     /// Register a nominal declaration, or update it if its key is already
     /// present (a declaration is re-registered when its body is generated
     /// after predeclaration). Returns the declaration's stable index.
-    ///
-    /// Must not run inside a unification savepoint: the declaration table is
-    /// not journaled, so a rollback could not undo the registration.
     pub fn registerNominalDecl(self: *Self, decl: NominalDecl) Allocator.Error!NominalDecl.Idx {
-        std.debug.assert(!self.savepoint_active);
         std.debug.assert(decl.source.sourceDecl().present);
 
         const statement = decl.statement();
@@ -1255,19 +1906,87 @@ pub const Store = struct {
                 .gt => lo = mid + 1,
                 .eq => {
                     const existing = entries[mid].decl;
-                    self.nominal_decls.set(existing, decl);
+                    try self.setNominalDecl(existing, decl);
                     return existing;
                 },
             }
         }
 
-        const decl_idx = try self.nominal_decls.append(self.gpa, decl);
-        try self.nominal_decl_index.items.insert(self.gpa, lo, .{
+        try self.nominal_decls.items.ensureUnusedCapacity(self.gpa, 1);
+        try self.nominal_decl_index.items.ensureUnusedCapacity(self.gpa, 1);
+        if (self.savepoint_active) {
+            try self.nominal_decl_trail.ensureUnusedCapacity(self.gpa, 1);
+        }
+        const expected_decl_idx: NominalDecl.Idx = @enumFromInt(self.nominal_decls.items.items.len);
+        if (self.savepoint_active) {
+            self.nominal_decl_trail.appendAssumeCapacity(.{ .insert = .{
+                .decl_idx = expected_decl_idx,
+                .sorted_index = lo,
+            } });
+        }
+        const decl_idx = self.nominal_decls.appendAssumeCapacity(decl);
+        std.debug.assert(decl_idx == expected_decl_idx);
+        self.nominal_decl_index.items.insertAssumeCapacity(lo, .{
             .origin_module = decl.origin_module,
             .statement = statement,
             .decl = decl_idx,
         });
         return decl_idx;
+    }
+
+    /// Validate the nominal declaration/index table before persisted marker
+    /// paths use it for canonical-name or declaration-identity lookup.
+    pub fn validateNominalDeclSemanticState(
+        self: *const Self,
+        idents: *const base.Ident.Store,
+        module_identity_count: usize,
+        builtin_origin_identity: base.ModuleIdentity.Idx,
+    ) error{CorruptArtifact}!void {
+        const decls = self.nominal_decls.items.items;
+        const entries = self.nominal_decl_index.items.items;
+        if (entries.len != decls.len) return error.CorruptArtifact;
+
+        for (entries, 0..) |entry, entry_index| {
+            const origin_raw = @intFromEnum(entry.origin_module);
+            const decl_raw = @intFromEnum(entry.decl);
+            if (origin_raw >= module_identity_count or decl_raw >= decls.len) {
+                return error.CorruptArtifact;
+            }
+            if (entry_index > 0) {
+                const previous = entries[entry_index - 1];
+                if (NominalDeclIndexEntry.orderByKey(
+                    previous.origin_module,
+                    previous.statement,
+                    entry,
+                ) != .lt) return error.CorruptArtifact;
+            }
+
+            const decl = decls[decl_raw];
+            const source = decl.source.sourceDecl();
+            if (!source.present or
+                decl.origin_module != entry.origin_module or
+                source.statement != entry.statement or
+                @intFromEnum(decl.origin_module) >= module_identity_count or
+                decl.source.originIsBuiltin() != (decl.origin_module == builtin_origin_identity) or
+                decl.flags._unused != 0 or
+                @intFromEnum(decl.backing) >= self.len() or
+                !idents.validateExactIdx(decl.ident.ident_idx, false))
+            {
+                return error.CorruptArtifact;
+            }
+
+            const formal_count: usize = decl.formals.len();
+            if (formal_count != 0) {
+                const formal_start: usize = @intFromEnum(decl.formals.start);
+                const vars_len = self.vars.items.items.len;
+                if (formal_start > vars_len or formal_count > vars_len - formal_start) {
+                    return error.CorruptArtifact;
+                }
+                for (self.vars.items.items[formal_start..][0..formal_count]) |formal| {
+                    if (@intFromEnum(formal) >= self.len()) return error.CorruptArtifact;
+                }
+            }
+        }
     }
 
     /// Look up a nominal declaration by its key: the declaring module's
@@ -1306,20 +2025,48 @@ pub const Store = struct {
         return self.nominal_decls.get(idx).*;
     }
 
+    /// Resolve a producer-authored nominal marker step to its canonical
+    /// declaration. The path's display name is validated numerically against
+    /// the declaration table before any cross-module copier dereferences it as
+    /// an identifier. Semantic path equality remains origin+source based; this
+    /// check makes the retained diagnostic spelling deterministic.
+    pub fn canonicalNominalDeclForMarkerPath(self: *const Self, step: anytype) ?NominalDecl {
+        const source_decl: SourceDecl = @bitCast(step.source_decl);
+        if (!source_decl.present) return null;
+        const origin_module: base.ModuleIdentity.Idx = @enumFromInt(step.origin_module);
+        const decl_idx = self.lookupNominalDeclByKey(origin_module, source_decl.statement) orelse return null;
+        const decl = self.getNominalDecl(decl_idx);
+        if (decl.origin_module != origin_module or
+            !decl.source.sourceDecl().eql(source_decl) or
+            decl.formals.len() != step.arity or
+            @as(u32, @bitCast(decl.ident.ident_idx)) != step.name)
+        {
+            return null;
+        }
+        return decl;
+    }
+
     /// Overwrite a nominal declaration entry in place (used by copy_import to
     /// fill a reserved entry once its formals and backing have been copied).
-    pub fn setNominalDecl(self: *Self, idx: NominalDecl.Idx, decl: NominalDecl) void {
-        std.debug.assert(!self.savepoint_active);
+    pub fn setNominalDecl(self: *Self, idx: NominalDecl.Idx, decl: NominalDecl) Allocator.Error!void {
+        const prior = self.nominal_decls.get(idx).*;
+        std.debug.assert(prior.origin_module == decl.origin_module);
+        std.debug.assert(prior.statement() == decl.statement());
+        if (self.savepoint_active and @intFromEnum(idx) < self.savepoint_baseline_nominal_decls) {
+            try self.nominal_decl_trail.append(self.gpa, .{ .write = .{
+                .decl_idx = idx,
+                .old = prior,
+            } });
+        }
         self.nominal_decls.set(idx, decl);
     }
 
     /// Mark a nominal declaration invalid (malformed backing or invalid
     /// recursion). Applications of invalid declarations poison to err.
-    pub fn markNominalDeclInvalid(self: *Self, idx: NominalDecl.Idx) void {
-        std.debug.assert(!self.savepoint_active);
+    pub fn markNominalDeclInvalid(self: *Self, idx: NominalDecl.Idx) Allocator.Error!void {
         var decl = self.nominal_decls.get(idx).*;
         decl.flags.valid = false;
-        self.nominal_decls.set(idx, decl);
+        try self.setNominalDecl(idx, decl);
     }
 
     /// The number of registered nominal declarations.
@@ -1417,6 +2164,19 @@ pub const Store = struct {
         const trace = tracy.traceNamed(@src(), "typesStore.resolveVar");
         defer trace.end();
         return publicResolved(initial_var, self.resolveStorageRoot(initial_var));
+    }
+
+    /// Return the descriptor stored directly at one immutable producer-owned
+    /// root occurrence. Unlike `resolveVar`, this never follows redirects: a
+    /// proof ledger may use it only for a root which its producer guarantees
+    /// is never solver-consumed. `null` rejects an out-of-bounds or redirected
+    /// occurrence instead of recovering a shape from its current class.
+    pub fn immutableRootDescriptor(self: *const Self, var_: Var) ?Desc {
+        if (@intFromEnum(var_) >= self.slots.backing.len()) return null;
+        return switch (self.slots.get(Self.varToSlotIdx(var_))) {
+            .root => |desc_idx| self.descs.get(desc_idx),
+            .redirect => null,
+        };
     }
 
     /// Whether `var_` resolves through aliases to a function structure.
@@ -1680,6 +2440,10 @@ pub const Store = struct {
         record_fields: RecordFieldSafeMultiList.Serialized,
         tags: TagSafeMultiList.Serialized,
         interpolation_parts: InterpolationPartMetadata.SafeList.Serialized,
+        where_method_marker_contracts: WhereMethodMarkerContract.SafeList.Serialized,
+        where_method_marker_bases: WhereMethodMarkerBasis.SafeList.Serialized,
+        where_method_marker_path_steps: WhereMethodMarkerPathStep.SafeList.Serialized,
+        constraint_evidence_handles: collections.SafeList(ConstraintEvidenceHandle).Serialized,
         static_dispatch_constraints: StaticDispatchConstraint.SafeList.Serialized,
         nominal_decls: NominalDecl.SafeList.Serialized,
         nominal_decl_index: NominalDeclIndexEntry.SafeList.Serialized,
@@ -1700,6 +2464,10 @@ pub const Store = struct {
             try self.record_fields.serialize(&store.record_fields, allocator, writer);
             try self.tags.serialize(&store.tags, allocator, writer);
             try self.interpolation_parts.serialize(&store.interpolation_parts, allocator, writer);
+            try self.where_method_marker_contracts.serialize(&store.where_method_marker_contracts, allocator, writer);
+            try self.where_method_marker_bases.serialize(&store.where_method_marker_bases, allocator, writer);
+            try self.where_method_marker_path_steps.serialize(&store.where_method_marker_path_steps, allocator, writer);
+            try self.constraint_evidence_handles.serialize(&store.constraint_evidence_handles, allocator, writer);
             try self.static_dispatch_constraints.serialize(&store.static_dispatch_constraints, allocator, writer);
             try self.nominal_decls.serialize(&store.nominal_decls, allocator, writer);
             try self.nominal_decl_index.serialize(&store.nominal_decl_index, allocator, writer);
@@ -1724,6 +2492,10 @@ pub const Store = struct {
                 .record_fields = self.record_fields.deserializeInto(base_addr),
                 .tags = self.tags.deserializeInto(base_addr),
                 .interpolation_parts = self.interpolation_parts.deserializeInto(base_addr),
+                .where_method_marker_contracts = self.where_method_marker_contracts.deserializeInto(base_addr),
+                .where_method_marker_bases = self.where_method_marker_bases.deserializeInto(base_addr),
+                .where_method_marker_path_steps = self.where_method_marker_path_steps.deserializeInto(base_addr),
+                .constraint_evidence_handles = self.constraint_evidence_handles.deserializeInto(base_addr),
                 .static_dispatch_constraints = self.static_dispatch_constraints.deserializeInto(base_addr),
                 .nominal_decls = self.nominal_decls.deserializeInto(base_addr),
                 .nominal_decl_index = self.nominal_decl_index.deserializeInto(base_addr),
@@ -1733,19 +2505,54 @@ pub const Store = struct {
         /// Deserialize into a Store value with fresh memory allocation.
         /// The returned Store owns its memory and can be safely grown/mutated.
         pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!Store {
+            var slots = try self.slots.deserializeWithCopy(base_addr, gpa);
+            errdefer slots.deinit(gpa);
+            var descs = try self.descs.deserializeWithCopy(base_addr, gpa);
+            errdefer descs.deinit(gpa);
+            var root_metas = try self.root_metas.deserializeWithCopy(base_addr, gpa);
+            errdefer root_metas.deinit(gpa);
+            var union_ranks = try self.union_ranks.deserializeWithCopy(base_addr, gpa);
+            errdefer union_ranks.deinit(gpa);
+            var vars = try self.vars.deserializeWithCopy(base_addr, gpa);
+            errdefer vars.deinit(gpa);
+            var record_fields = try self.record_fields.deserializeWithCopy(base_addr, gpa);
+            errdefer record_fields.deinit(gpa);
+            var tags = try self.tags.deserializeWithCopy(base_addr, gpa);
+            errdefer tags.deinit(gpa);
+            var interpolation_parts = try self.interpolation_parts.deserializeWithCopy(base_addr, gpa);
+            errdefer interpolation_parts.deinit(gpa);
+            var where_method_marker_contracts = try self.where_method_marker_contracts.deserializeWithCopy(base_addr, gpa);
+            errdefer where_method_marker_contracts.deinit(gpa);
+            var where_method_marker_bases = try self.where_method_marker_bases.deserializeWithCopy(base_addr, gpa);
+            errdefer where_method_marker_bases.deinit(gpa);
+            var where_method_marker_path_steps = try self.where_method_marker_path_steps.deserializeWithCopy(base_addr, gpa);
+            errdefer where_method_marker_path_steps.deinit(gpa);
+            var constraint_evidence_handles = try self.constraint_evidence_handles.deserializeWithCopy(base_addr, gpa);
+            errdefer constraint_evidence_handles.deinit(gpa);
+            var static_dispatch_constraints = try self.static_dispatch_constraints.deserializeWithCopy(base_addr, gpa);
+            errdefer static_dispatch_constraints.deinit(gpa);
+            var nominal_decls = try self.nominal_decls.deserializeWithCopy(base_addr, gpa);
+            errdefer nominal_decls.deinit(gpa);
+            var nominal_decl_index = try self.nominal_decl_index.deserializeWithCopy(base_addr, gpa);
+            errdefer nominal_decl_index.deinit(gpa);
+
             return Store{
                 .gpa = gpa,
-                .slots = try self.slots.deserializeWithCopy(base_addr, gpa),
-                .descs = try self.descs.deserializeWithCopy(base_addr, gpa),
-                .root_metas = try self.root_metas.deserializeWithCopy(base_addr, gpa),
-                .union_ranks = try self.union_ranks.deserializeWithCopy(base_addr, gpa),
-                .vars = try self.vars.deserializeWithCopy(base_addr, gpa),
-                .record_fields = try self.record_fields.deserializeWithCopy(base_addr, gpa),
-                .tags = try self.tags.deserializeWithCopy(base_addr, gpa),
-                .interpolation_parts = try self.interpolation_parts.deserializeWithCopy(base_addr, gpa),
-                .static_dispatch_constraints = try self.static_dispatch_constraints.deserializeWithCopy(base_addr, gpa),
-                .nominal_decls = try self.nominal_decls.deserializeWithCopy(base_addr, gpa),
-                .nominal_decl_index = try self.nominal_decl_index.deserializeWithCopy(base_addr, gpa),
+                .slots = slots,
+                .descs = descs,
+                .root_metas = root_metas,
+                .union_ranks = union_ranks,
+                .vars = vars,
+                .record_fields = record_fields,
+                .tags = tags,
+                .interpolation_parts = interpolation_parts,
+                .where_method_marker_contracts = where_method_marker_contracts,
+                .where_method_marker_bases = where_method_marker_bases,
+                .where_method_marker_path_steps = where_method_marker_path_steps,
+                .constraint_evidence_handles = constraint_evidence_handles,
+                .static_dispatch_constraints = static_dispatch_constraints,
+                .nominal_decls = nominal_decls,
+                .nominal_decl_index = nominal_decl_index,
             };
         }
     };
@@ -1770,6 +2577,10 @@ pub const Store = struct {
             .record_fields = (try self.record_fields.serialize(allocator, writer)).*,
             .tags = (try self.tags.serialize(allocator, writer)).*,
             .interpolation_parts = (try self.interpolation_parts.serialize(allocator, writer)).*,
+            .where_method_marker_contracts = (try self.where_method_marker_contracts.serialize(allocator, writer)).*,
+            .where_method_marker_bases = (try self.where_method_marker_bases.serialize(allocator, writer)).*,
+            .where_method_marker_path_steps = (try self.where_method_marker_path_steps.serialize(allocator, writer)).*,
+            .constraint_evidence_handles = (try self.constraint_evidence_handles.serialize(allocator, writer)).*,
             .static_dispatch_constraints = (try self.static_dispatch_constraints.serialize(allocator, writer)).*,
             .nominal_decls = (try self.nominal_decls.serialize(allocator, writer)).*,
             .nominal_decl_index = (try self.nominal_decl_index.serialize(allocator, writer)).*,
@@ -1788,6 +2599,10 @@ pub const Store = struct {
         self.record_fields.relocate(offset);
         self.tags.relocate(offset);
         self.interpolation_parts.relocate(offset);
+        self.where_method_marker_contracts.relocate(offset);
+        self.where_method_marker_bases.relocate(offset);
+        self.where_method_marker_path_steps.relocate(offset);
+        self.constraint_evidence_handles.relocate(offset);
         self.static_dispatch_constraints.relocate(offset);
         self.nominal_decls.relocate(offset);
         self.nominal_decl_index.relocate(offset);
@@ -2254,6 +3069,62 @@ test "createSavepointVerifying cross-checks a probe-unify against a full copy" {
     try std.testing.expect(!store.savepoint_active);
 }
 
+test "nested savepoints roll back and commit at exact LIFO boundaries" {
+    const gpa = std.testing.allocator;
+
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const root = try store.fresh();
+    const initial_len = store.len();
+    const initial_content = store.resolveVar(root).desc.content;
+
+    var outer = try store.createSavepointVerifying();
+    try store.setVarContent(root, .err);
+    const outer_var = try store.fresh();
+    const outer_len = store.len();
+
+    // A caught inner failure restores the exact state at inner entry, including
+    // writes to entries created by the still-live outer transaction.
+    var inner = try store.createSavepointVerifying();
+    try store.setVarContent(root, .{ .flex = Flex.init() });
+    try store.setVarContent(outer_var, .err);
+    _ = try store.fresh();
+    store.rollbackToSavepoint(&inner);
+    try std.testing.expectEqual(outer_len, store.len());
+    try std.testing.expect(store.resolveVar(root).desc.content == .err);
+    try std.testing.expect(store.resolveVar(outer_var).desc.content == .flex);
+
+    // Continue the outer transaction after catching the inner failure. A
+    // committed inner mutation remains live, but its undo record must remain
+    // available to a still-outer rollback.
+    var committed_inner = try store.createSavepointVerifying();
+    try store.setVarContent(root, .{ .flex = Flex.init() });
+    store.commitSavepoint(&committed_inner);
+    try std.testing.expect(store.resolveVar(root).desc.content == .flex);
+
+    // A third level can commit into its parent; rolling that parent back must
+    // undo both its own work and the committed child's work without disturbing
+    // the enclosing transaction.
+    var middle = try store.createSavepointVerifying();
+    try store.setVarContent(root, .err);
+    var deepest = try store.createSavepointVerifying();
+    try store.setVarContent(outer_var, .err);
+    store.commitSavepoint(&deepest);
+    try std.testing.expect(store.resolveVar(outer_var).desc.content == .err);
+    store.rollbackToSavepoint(&middle);
+    try std.testing.expect(store.resolveVar(root).desc.content == .flex);
+    try std.testing.expect(store.resolveVar(outer_var).desc.content == .flex);
+
+    // Propagating failure through the outer boundary returns the store to the
+    // byte-exact state captured before any nested transaction began.
+    store.rollbackToSavepoint(&outer);
+    try std.testing.expect(!store.savepoint_active);
+    try std.testing.expectEqual(@as(u32, 0), store.savepoint_depth);
+    try std.testing.expectEqual(initial_len, store.len());
+    try std.testing.expect(std.meta.eql(initial_content, store.resolveVar(root).desc.content));
+}
+
 test "Store empty CompactWriter roundtrip" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
@@ -2416,7 +3287,7 @@ test "nominal declaration table: register, lookup, upsert" {
 
     // Validity flips in place.
     try std.testing.expect(store.getNominalDecl(idx_b).isValid());
-    store.markNominalDeclInvalid(idx_b);
+    try store.markNominalDeclInvalid(idx_b);
     try std.testing.expect(!store.getNominalDecl(idx_b).isValid());
 
     // Lookup through a nominal application resolves by (origin, statement).
@@ -2429,6 +3300,145 @@ test "nominal declaration table: register, lookup, upsert" {
     );
     const app = app_content.structure.nominal_type;
     try std.testing.expectEqual(idx_b, store.lookupNominalDecl(app).?);
+}
+
+test "nominal declaration savepoints restore inserts and updates at nested LIFO boundaries" {
+    const gpa = std.testing.allocator;
+
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const origin_0: base.ModuleIdentity.Idx = @enumFromInt(1);
+    const origin_1: base.ModuleIdentity.Idx = @enumFromInt(2);
+    const backing_a = try store.fresh();
+    const backing_b = try store.fresh();
+    const backing_c = try store.fresh();
+    const backing_d = try store.fresh();
+
+    const idx_a = try store.registerNominalDecl(try testNominalDecl(origin_0, 10, backing_a));
+    const idx_b = try store.registerNominalDecl(try testNominalDecl(origin_1, 20, backing_b));
+    const original_a = store.getNominalDecl(idx_a);
+    const original_b = store.getNominalDecl(idx_b);
+    const original_index = try gpa.dupe(NominalDeclIndexEntry, store.nominal_decl_index.items.items);
+    defer gpa.free(original_index);
+
+    // An inner commit retains both its own insertion and its updates to rows
+    // that existed at inner entry. The enclosing rollback must still undo the
+    // complete suffix in reverse sorted-index order.
+    var outer = try store.createSavepointVerifying();
+    var updated_a = original_a;
+    updated_a.backing = backing_c;
+    try std.testing.expectEqual(idx_a, try store.registerNominalDecl(updated_a));
+    const idx_d = try store.registerNominalDecl(try testNominalDecl(origin_1, 30, backing_d));
+
+    var inner = try store.createSavepointVerifying();
+    var updated_d = store.getNominalDecl(idx_d);
+    updated_d.backing = backing_a;
+    try store.setNominalDecl(idx_d, updated_d);
+    try store.markNominalDeclInvalid(idx_b);
+    _ = try store.registerNominalDecl(try testNominalDecl(origin_0, 5, backing_c));
+    store.commitSavepoint(&inner);
+    try std.testing.expect(!store.getNominalDecl(idx_b).isValid());
+    try std.testing.expect(store.nominal_decl_trail.items.len > outer.nominal_decl_trail_len);
+
+    store.rollbackToSavepoint(&outer);
+    try std.testing.expect(std.meta.eql(original_a, store.getNominalDecl(idx_a)));
+    try std.testing.expect(std.meta.eql(original_b, store.getNominalDecl(idx_b)));
+    try std.testing.expectEqualSlices(NominalDeclIndexEntry, original_index, store.nominal_decl_index.items.items);
+    try std.testing.expectEqual(@as(usize, 0), store.nominal_decl_trail.items.len);
+
+    // A caught inner failure restores the exact outer-current declaration,
+    // after which the outer transaction can commit its insertion. No undo row
+    // survives the final commit.
+    var committed_outer = try store.createSavepointVerifying();
+    const committed_idx = try store.registerNominalDecl(try testNominalDecl(origin_1, 30, backing_d));
+    const outer_decl = store.getNominalDecl(committed_idx);
+
+    var rolled_back_inner = try store.createSavepointVerifying();
+    var inner_update = outer_decl;
+    inner_update.backing = backing_a;
+    try store.setNominalDecl(committed_idx, inner_update);
+    _ = try store.registerNominalDecl(try testNominalDecl(origin_0, 5, backing_c));
+    store.rollbackToSavepoint(&rolled_back_inner);
+    try std.testing.expect(std.meta.eql(outer_decl, store.getNominalDecl(committed_idx)));
+    try std.testing.expectEqual(@as(?NominalDecl.Idx, null), store.lookupNominalDeclByKey(origin_0, 5));
+
+    store.commitSavepoint(&committed_outer);
+    try std.testing.expectEqual(committed_idx, store.lookupNominalDeclByKey(origin_1, 30).?);
+    try std.testing.expectEqual(@as(usize, 0), store.nominal_decl_trail.items.len);
+    try std.testing.expect(!store.savepoint_active);
+}
+
+test "nominal declaration savepoint registration is atomic at every allocation failure" {
+    const gpa = std.testing.allocator;
+    const origin: base.ModuleIdentity.Idx = @enumFromInt(1);
+    var induced_failures: usize = 0;
+    var reached_success = false;
+
+    // Use the failing allocator only for the operation under test. Store.init's
+    // independent multi-list construction is outside this transaction; the
+    // declaration, index, and trail buffers all still use the same backing
+    // allocator and are deinitialized normally after restoring `store.gpa`.
+    for (0..8) |fail_index| {
+        var store = try Store.init(gpa);
+        defer {
+            store.gpa = gpa;
+            store.deinit();
+        }
+        const backing = try store.fresh();
+        // Fill the initial declaration and sorted-index capacities so the
+        // final registration independently exercises both list growth
+        // boundaries as well as first allocation of the typed undo trail.
+        for (0..16) |statement| {
+            _ = try store.registerNominalDecl(try testNominalDecl(origin, @intCast(statement + 1), backing));
+        }
+
+        const before_count = store.nominalDeclCount();
+        const before_index = try gpa.dupe(NominalDeclIndexEntry, store.nominal_decl_index.items.items);
+        defer gpa.free(before_index);
+
+        var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = fail_index });
+        store.gpa = failing.allocator();
+        var savepoint = try store.createSavepoint();
+        const result = store.registerNominalDecl(try testNominalDecl(origin, 100, backing));
+        if (result) |inserted| {
+            try std.testing.expectEqual(@as(u32, @intCast(before_count)), @intFromEnum(inserted));
+            store.rollbackToSavepoint(&savepoint);
+            try std.testing.expectEqual(before_count, store.nominalDeclCount());
+            try std.testing.expectEqualSlices(NominalDeclIndexEntry, before_index, store.nominal_decl_index.items.items);
+            try std.testing.expectEqual(@as(usize, 0), store.nominal_decl_trail.items.len);
+            reached_success = true;
+            break;
+        } else |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expect(failing.has_induced_failure);
+            induced_failures += 1;
+            try std.testing.expectEqual(before_count, store.nominalDeclCount());
+            try std.testing.expectEqualSlices(NominalDeclIndexEntry, before_index, store.nominal_decl_index.items.items);
+            try std.testing.expectEqual(savepoint.nominal_decl_trail_len, store.nominal_decl_trail.items.len);
+            store.rollbackToSavepoint(&savepoint);
+        }
+    }
+    try std.testing.expect(reached_success);
+    try std.testing.expectEqual(@as(usize, 3), induced_failures);
+
+    // Updating a row is likewise all-or-nothing when its undo append fails.
+    var store = try Store.init(gpa);
+    defer store.deinit();
+    const old_backing = try store.fresh();
+    const new_backing = try store.fresh();
+    const idx = try store.registerNominalDecl(try testNominalDecl(origin, 1, old_backing));
+    const original = store.getNominalDecl(idx);
+    var replacement = original;
+    replacement.backing = new_backing;
+    var savepoint = try store.createSavepoint();
+    var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = 0 });
+    store.gpa = failing.allocator();
+    defer store.gpa = gpa;
+    try std.testing.expectError(error.OutOfMemory, store.setNominalDecl(idx, replacement));
+    try std.testing.expect(std.meta.eql(original, store.getNominalDecl(idx)));
+    try std.testing.expectEqual(savepoint.nominal_decl_trail_len, store.nominal_decl_trail.items.len);
+    store.rollbackToSavepoint(&savepoint);
 }
 
 test "nominal declaration table: CompactWriter roundtrip" {
@@ -2961,4 +3971,67 @@ test "source declaration overflow is rejected before mutating type store" {
     try std.testing.expectEqual(before_slots, store.len());
     try std.testing.expectEqual(before_descs, store.descs.backing.len());
     try std.testing.expectEqual(before_vars, store.vars.len());
+}
+
+test "where method marker semantic no-op merge reuses an existing range" {
+    const gpa = std.testing.allocator;
+    var store = try Store.initCapacity(gpa, 1, 1);
+    defer store.deinit();
+
+    const kind = @intFromEnum(WhereMethodMarkerPathStep.Kind.record_field);
+    const first_path = try store.appendWhereMethodMarkerPathSteps(&.{.{
+        .kind = kind,
+        .index = 0,
+        .arity = 0,
+        .name = 42,
+        .origin_module = 0,
+        .source_decl = 0,
+    }});
+    const second_path = try store.appendWhereMethodMarkerPathSteps(&.{.{
+        .kind = kind,
+        .index = 0,
+        .arity = 0,
+        .name = 42,
+        .origin_module = 0,
+        .source_decl = 0,
+    }});
+    const none = std.math.maxInt(u32);
+    const position = @intFromEnum(WhereMethodMarkerContract.Position.nested);
+    const first = try store.appendWhereMethodMarkerContracts(&.{.{
+        .producer_owner_node = none,
+        .producer_where_node = none,
+        .producer_method_name = none,
+        .position = position,
+        .widened = 1,
+        .ready = 1,
+        .path_start = @intFromEnum(first_path.start),
+        .path_len = first_path.len(),
+    }});
+    const second = try store.appendWhereMethodMarkerContracts(&.{.{
+        .producer_owner_node = none,
+        .producer_where_node = none,
+        .producer_method_name = none,
+        .position = position,
+        .widened = 1,
+        .ready = 1,
+        .path_start = @intFromEnum(second_path.start),
+        .path_len = second_path.len(),
+    }});
+    const marker_pool_len = store.where_method_marker_contracts.items.items.len;
+
+    const first_retained = try store.mergeWhereMethodMarkerMetadata(
+        .{ .markers = first, .bases = .empty() },
+        .{ .markers = second, .bases = .empty() },
+    );
+    try std.testing.expectEqual(first, first_retained.markers);
+    try std.testing.expectEqual(WhereMethodMarkerBasis.SafeList.Range.empty(), first_retained.bases);
+    try std.testing.expectEqual(marker_pool_len, store.where_method_marker_contracts.items.items.len);
+
+    const second_retained = try store.mergeWhereMethodMarkerMetadata(
+        .{ .markers = second, .bases = .empty() },
+        .{ .markers = first, .bases = .empty() },
+    );
+    try std.testing.expectEqual(second, second_retained.markers);
+    try std.testing.expectEqual(WhereMethodMarkerBasis.SafeList.Range.empty(), second_retained.bases);
+    try std.testing.expectEqual(marker_pool_len, store.where_method_marker_contracts.items.items.len);
 }

@@ -364,6 +364,17 @@ pub const BuildEnv = struct {
         if (self.root_url) |*url| url.deinit(self.gpa);
         if (self.main_url) |*url| url.deinit(self.gpa);
 
+        // The coordinator, its workers, queued tasks, and admission records all
+        // borrow the builtin environment and capability. Join/drain and destroy
+        // that complete borrower graph before releasing owned builtins.
+        if (self.coordinator) |coord| {
+            coord.deinit();
+            self.gpa.destroy(coord);
+        }
+        if (comptime trace_build) {
+            std.debug.print("[DEINIT] coordinator done\n", .{});
+        }
+
         // Deinit and free owned builtin modules. Borrowed builtins outlive this
         // BuildEnv and are released by their owner.
         if (self.owns_builtin_modules) {
@@ -373,15 +384,6 @@ pub const BuildEnv = struct {
 
         if (comptime trace_build) {
             std.debug.print("[DEINIT] builtin_modules done\n", .{});
-        }
-
-        // Deinit coordinator if present
-        if (self.coordinator) |coord| {
-            coord.deinit();
-            self.gpa.destroy(coord);
-        }
-        if (comptime trace_build) {
-            std.debug.print("[DEINIT] coordinator done\n", .{});
         }
 
         // Deinit cache manager if present

@@ -96,9 +96,9 @@ pub const CanonicalizeTask = struct {
     source_dir: []const u8,
     /// Dependency depth
     depth: u32,
-    /// Module environment (ownership transferred from coordinator)
+    /// Module environment retained by ModuleState while this task runs.
     module_env: *ModuleEnv,
-    /// Cached AST from parsing (ownership transferred)
+    /// Cached AST transferred from ModuleState only after enqueue succeeds.
     cached_ast: *AST,
     /// Real imported semantic envs available to canonicalization
     imported_modules: []const CanonicalizeImport,
@@ -116,10 +116,15 @@ pub const TypeCheckTask = struct {
     module_name: []const u8,
     /// Filesystem path (for diagnostics)
     path: []const u8,
-    /// Module environment (ownership transferred)
+    /// Module environment retained by ModuleState while this task runs.
     module_env: *ModuleEnv,
     /// Imported module environments (read-only pointers to completed modules)
-    imported_envs: []const *ModuleEnv,
+    imported_envs: []const *const ModuleEnv,
+    /// Owner-minted capabilities parallel to `imported_envs`.
+    imported_validations: []const check.Check.ValidatedModuleEnv,
+    /// Full semantic owner closure and exact parallel admission authorities.
+    owner_envs: []const *const ModuleEnv,
+    owner_validations: []const check.Check.ValidatedModuleEnv,
     /// Published checked artifact keys for direct imports, keyed by typed-CIR module index
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     /// Published checked artifacts currently available for exact-key lookup during checking finalization
@@ -148,6 +153,7 @@ pub const TypeCheckTask = struct {
 /// owner-module slice, which the worker frees after checking.
 pub const PlatformRequirementSurface = struct {
     env: *const ModuleEnv,
+    validated_env: check.Check.ValidatedModuleEnv,
     /// Exact owner closure of the platform root whose requirement types are
     /// copied into the app. Populated on the worker-task copy of the surface.
     owner_modules: []const *const ModuleEnv = &.{},
@@ -157,6 +163,7 @@ pub const PlatformRequirementSurface = struct {
     pub fn checkerInput(self: *const PlatformRequirementSurface) check.Check.PlatformRequirementInput {
         return .{
             .env = self.env,
+            .validated_env = self.validated_env,
             .owner_modules = self.owner_modules,
             .path = self.path,
         };
@@ -199,6 +206,33 @@ pub const WorkerTask = union(enum) {
             .type_check => |t| t.module_name,
             .post_check => null,
         };
+    }
+
+    /// Release only the payloads owned by an enqueued task that will never be
+    /// executed. Module environments remain owned by ModuleState. A queued
+    /// canonicalize task uniquely owns the parsed AST after enqueue commits.
+    pub fn cancel(self: *WorkerTask, allocator: Allocator) void {
+        switch (self.*) {
+            .parse => {},
+            .canonicalize => |task| {
+                allocator.free(task.imported_modules);
+                task.cached_ast.deinit();
+            },
+            .type_check => |task| {
+                allocator.free(task.imported_envs);
+                allocator.free(task.imported_validations);
+                allocator.free(task.owner_envs);
+                allocator.free(task.owner_validations);
+                allocator.free(task.imported_artifacts);
+                allocator.free(task.available_artifacts);
+                if (task.platform_requirements) |surface| {
+                    if (surface.owner_modules.len > 0) allocator.free(surface.owner_modules);
+                }
+                allocator.free(task.explicit_roots);
+            },
+            .post_check => @panic("post-check task remained queued during coordinator shutdown"),
+        }
+        self.* = undefined;
     }
 };
 
@@ -265,15 +299,25 @@ pub const TypeCheckedPublication = union(enum) {
 /// or explicitly deferred until platform/app relation finalization.
 pub const OwnedSemanticModuleData = struct {
     module_env: *ModuleEnv,
+    validated_module: check.Check.OwnedValidatedModuleEnv,
+    validated_module_owned: bool = true,
     publication: TypeCheckedPublication,
     publication_owned: bool = true,
 
     pub fn deinit(self: *OwnedSemanticModuleData) void {
-        if (!self.publication_owned) return;
-        switch (self.publication) {
-            .published => |*artifact| artifact.deinit(artifact.canonical_names.allocator),
-            .deferred => |state| state.deinit(),
+        if (self.validated_module_owned) self.validated_module.deinit();
+        if (self.publication_owned) {
+            switch (self.publication) {
+                .published => |*artifact| artifact.deinitRetainingModuleEnv(artifact.canonical_names.allocator),
+                .deferred => |state| state.deinit(),
+            }
         }
+    }
+
+    pub fn takeValidatedModule(self: *OwnedSemanticModuleData) check.Check.OwnedValidatedModuleEnv {
+        std.debug.assert(self.validated_module_owned);
+        self.validated_module_owned = false;
+        return self.validated_module;
     }
 };
 
@@ -302,16 +346,12 @@ pub const TypeCheckedResult = struct {
 pub const DeferredPublicationState = struct {
     allocator: Allocator,
     checker: check.Check,
-    /// Stable copy of the imported-env pointer slice needed to render any
-    /// diagnostics produced during deferred compile-time finalization.
-    imported_envs: []const *ModuleEnv,
     ctfe_options: eval.CompileTimeFinalization.Options,
     requirement_context: check.CheckedArtifact.PlatformRequirementContextKey,
     reported_problem_count: usize,
 
     pub fn deinit(self: *DeferredPublicationState) void {
         self.checker.deinit();
-        self.allocator.free(self.imported_envs);
         self.allocator.destroy(self);
     }
 };
@@ -493,7 +533,34 @@ pub const WorkerResult = union(enum) {
             .worker_oom => {},
         }
     }
+
+    /// Release an output that was never observed by the coordinator. This is
+    /// stronger than `deinit`: a successful parse result still uniquely owns
+    /// the newly allocated environment and AST until result handling commits.
+    pub fn cancelUnhandled(self: *WorkerResult, gpa: Allocator) void {
+        switch (self.*) {
+            .parsed => |*parsed| {
+                parsed.cached_ast.deinit();
+                destroyUnhandledModuleEnv(parsed.module_env);
+            },
+            .parse_failed => |*failed| {
+                if (failed.partial_env) |env| destroyUnhandledModuleEnv(env);
+                failed.partial_env = null;
+            },
+            else => {},
+        }
+        self.deinit(gpa);
+        self.* = undefined;
+    }
 };
+
+fn destroyUnhandledModuleEnv(env: *ModuleEnv) void {
+    const allocator = env.gpa;
+    const source = env.common.source;
+    env.deinit();
+    allocator.destroy(env);
+    if (source.len > 0) allocator.free(@constCast(source));
+}
 
 // Compile-time size assertions to catch unexpected growth of message types.
 // These types are copied between threads, so keeping them small is important

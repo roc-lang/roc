@@ -260,8 +260,9 @@ pub const Store = struct {
     /// counter, which cannot overlap with user-defined idents since those
     /// cannot start with a digit.
     pub fn genUnique(self: *Store, gpa: std.mem.Allocator) std.mem.Allocator.Error!Idx {
-        var id = self.next_unique_name;
-        self.next_unique_name += 1;
+        const id = self.next_unique_name;
+        const next_unique_name = std.math.add(u32, id, 1) catch return error.OutOfMemory;
+        try self.attributes.items.ensureUnusedCapacity(gpa, 1);
 
         // Manually render the text into a buffer to avoid allocating
         // a string, as the string interner will copy the text anyway.
@@ -270,15 +271,16 @@ pub const Store = struct {
         // The max u32 value is 4294967295 which is 10 digits
         var str_buffer = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
         // Special case for 0
-        if (id == 0) {
+        var render_id = id;
+        if (render_id == 0) {
             str_buffer[digit_index] = '0';
             digit_index -= 1;
         } else {
-            while (id > 0) {
-                const digit = id % 10;
+            while (render_id > 0) {
+                const digit = render_id % 10;
                 str_buffer[digit_index] = @as(u8, @intCast(digit)) + '0';
 
-                id = (id - digit) / 10;
+                render_id = (render_id - digit) / 10;
                 digit_index -= 1;
             }
         }
@@ -294,7 +296,7 @@ pub const Store = struct {
         };
 
         const expected_idx = self.attributes.items.items.len;
-        const attributes_idx = try self.attributes.append(gpa, attributes);
+        const attributes_idx = self.attributes.appendAssumeCapacity(attributes);
         if (comptime builtin.mode == .Debug) {
             std.debug.assert(@intFromEnum(attributes_idx) == expected_idx);
         } else if (@intFromEnum(attributes_idx) != expected_idx) {
@@ -306,7 +308,30 @@ pub const Store = struct {
             .idx = @truncate(@intFromEnum(idx)),
         };
 
+        self.next_unique_name = next_unique_name;
         return result;
+    }
+
+    /// Validate the identifier interner before any persisted `Idx` is used.
+    pub fn validateSemanticState(self: *const Store) error{CorruptArtifact}!void {
+        try self.interner.validateSemanticState();
+        if (self.attributes.items.items.len != @as(usize, self.next_unique_name)) {
+            return error.CorruptArtifact;
+        }
+    }
+
+    /// Validate that an identifier is either the exact NONE sentinel (when
+    /// permitted) or the exact start of an interned string whose packed
+    /// attributes agree with that string.
+    pub fn validateExactIdx(self: *const Store, idx: Idx, allow_none: bool) bool {
+        const raw: u32 = @bitCast(idx);
+        const none_raw: u32 = @bitCast(Idx.NONE);
+        if (raw == none_raw) return allow_none;
+        if (idx.idx == std.math.maxInt(u29)) return false;
+        const interner_idx: SmallStringInterner.Idx = @enumFromInt(@as(u32, idx.idx));
+        if (!self.interner.validateExactIdx(interner_idx)) return false;
+        const expected = Attributes.fromString(self.interner.getText(interner_idx));
+        return @as(u3, @bitCast(idx.attributes)) == @as(u3, @bitCast(expected));
     }
 
     /// Get the text for an identifier.

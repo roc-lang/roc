@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const base = @import("base");
 const can = @import("can");
 const check = @import("check");
 const collections = @import("collections");
@@ -27,6 +28,8 @@ pub const BuiltinModules = struct {
     /// compiler executable's static data.
     builtin_module: BuiltinModuleView,
     builtin_indices: BuiltinIndices,
+    /// Owner-minted admission capability for the immutable Builtin env.
+    validated_module: check.Check.OwnedValidatedModuleEnv,
     /// Self-describing frozen artifact whose sub-stores alias static embedded
     /// bytes. `deinit` tears down only the env wrapper, never the static backing.
     checked_artifact: CheckedModuleArtifact,
@@ -49,6 +52,8 @@ pub const BuiltinModules = struct {
         if (builtin.mode == .Debug) {
             try builtin_static.validateBuiltinIndices(builtin_module.env, indices);
         }
+        var validated_module = try check.Check.admitBuiltinOwned(allocator, builtin_module.env, indices);
+        errdefer validated_module.deinit();
 
         // The baked blob is the serialized artifact followed by a layout-version
         // trailer. Validate and strip it before relocating: a mismatch means the
@@ -74,6 +79,7 @@ pub const BuiltinModules = struct {
             .allocator = allocator,
             .builtin_module = builtin_module,
             .builtin_indices = indices,
+            .validated_module = validated_module,
             .checked_artifact = checked_artifact,
         };
     }
@@ -81,6 +87,53 @@ pub const BuiltinModules = struct {
     /// Clean up the small view objects. Static builtin bytes remain owned by the
     /// compiler executable for the process lifetime.
     pub fn deinit(self: *BuiltinModules) void {
+        self.validated_module.deinit();
         self.checked_artifact.deinit(self.allocator);
     }
 };
+
+test "BuiltinModules W6b semantic validation rejects invalid self identities" {
+    const allocator = std.testing.allocator;
+    const indices = compiled_builtins.builtinIndices(CIR);
+    var builtin_module = try builtin_static.moduleView(
+        allocator,
+        compiled_builtins.builtin_bin[0..],
+        "Builtin",
+        compiled_builtins.builtin_source,
+    );
+    defer builtin_module.deinit();
+
+    const saved_identity = builtin_module.env.self_module_identity;
+    builtin_module.env.self_module_identity = base.ModuleIdentity.Idx.NONE;
+    try std.testing.expectError(
+        error.CorruptArtifact,
+        check.Check.admitBuiltinOwned(allocator, builtin_module.env, indices),
+    );
+
+    builtin_module.env.self_module_identity = @enumFromInt(builtin_module.env.module_identities.count());
+    try std.testing.expectError(
+        error.CorruptArtifact,
+        check.Check.admitBuiltinOwned(allocator, builtin_module.env, indices),
+    );
+
+    builtin_module.env.self_module_identity = saved_identity;
+    var failing_allocator = std.testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
+    try std.testing.expectError(
+        error.OutOfMemory,
+        check.Check.admitBuiltinOwned(failing_allocator.allocator(), builtin_module.env, indices),
+    );
+    try std.testing.expect(!builtin_module.env.w6b_semantically_validated);
+
+    var admitted = try check.Check.admitBuiltinOwned(allocator, builtin_module.env, indices);
+    defer admitted.deinit();
+    try std.testing.expect(builtin_module.env.w6b_semantically_validated);
+    try std.testing.expectError(
+        error.CorruptArtifact,
+        check.Check.admitBuiltinOwned(allocator, builtin_module.env, indices),
+    );
+    try std.testing.expect(builtin_module.env.w6b_semantically_validated);
+    try std.testing.expectEqual(builtin_module.env, try admitted.capability().validate());
+    const borrowed_capability = admitted.capability();
+    admitted.releaseImportedBindingsForShutdown();
+    try std.testing.expectError(error.CorruptArtifact, borrowed_capability.validate());
+}

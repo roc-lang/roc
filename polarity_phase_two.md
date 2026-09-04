@@ -711,7 +711,7 @@ and `run-check-snapshots` run after W3, after W6b, and after W2b.
 6. (Closed 2026-09-03.) The 10121 harness tests pass on the stack; the CLI
    controls become fixtures under W4 so the two paths cannot drift.
 
-## 8. Handoff for the next agent (written 2026-09-03, end of the first execution session)
+## 8. Handoff for the next agent (updated 2026-09-09; W6b in progress)
 
 This section is self-contained: the session's scratchpad (research reports,
 probe programs, logs) does not survive, so everything a successor needs is
@@ -719,8 +719,8 @@ either here, in `design.md`, or in the repository.
 
 ### 8.1 Where the stack is
 
-On `main` `96c3b2fa`, bottom to top (jj change ids; every commit is
-described in full, with trailers):
+On `main` `96c3b2fa`, bottom to top (jj change ids; completed commits are
+described in full, with trailers; W6b currently has its provisional title):
 
 | Change | Item | State |
 |---|---|---|
@@ -730,14 +730,2251 @@ described in full, with trailers):
 | `tsrzvryw` | W2a | landed, implemented + adversarially reviewed; callable-node grounding only |
 | `wwnsvqrn` | W3 | landed, implemented + reviewed twice; full `run-test-zig` 5039/5046 (7 skipped) and `run-check-snapshots` clean on its tree |
 | `vrpryvko` | W4 | landed, implemented + reviewed; tests and fixtures only |
-| working copy | W6a | implemented; producer, lifecycle, codec dominance, serialization/recheck, `requires_record`, and combined LIR focused gates green |
+| `wrtzpoum` | option (e) decision | declared in design.md |
+| `ktlykkxv` | W6a | implemented; producer, lifecycle, codec dominance, serialization/recheck, `requires_record`, and combined LIR focused gates green |
+| `qpmsttws` | W6b | in progress; bounded copy/provenance, target-handoff, selected-owner fixes, and staged target OOM coverage reviewed and passing; invalid-import call retirement, contributor/settlement normalization, option-(e) rejection, adapters, and phase acceptance remain open |
 
-Bookmark `jared/polarity` still points at the plan commit `wlzsxolu`;
-nothing after the original plan commit has been pushed. To publish: move
-the bookmark to the top (`jj bookmark set jared/polarity -r ktlykkxv`,
-`--allow-backwards` is not needed for a forward move) and `jj git push`
-— only at Jared's explicit direction. Then refresh the PR description
-(W7).
+The local bookmark `jared/polarity` points at `wrtzpoum`; verify the remote
+bookmark before publication. Jared authorized finishing W6b, updating both
+design documents, describing the jj change, pushing, and updating the PR
+description on 2026-09-07. After that, pause before W2b. The driver alone
+controls jj and publication; implementers and reviewers do not change VCS
+state. W6b is not ready to publish as complete; the separately requested
+unfinished-checkpoint decision is recorded below.
+
+W6b checkpoint (2026-09-09):
+
+**Latest broadly rechecked bounded checkpoint: `c8b4a737` (general subtree
+invalidation retry, E2a/E2b, full-width CIR payloads, and the prior recovery
+matrix). Focused invalidation gate `34110` passes 7/7 steps and 6/6 tests;
+independent adversarial review accepts the bounded slice. Combined broader
+gate `50225` passes 10/10 steps and 59/59 tests (can 25, check 34).
+Full checker gate `30286` is running the compiled `c124f1eb` snapshot (only
+this progress document differs from code checkpoint `c8b4a737`). Its report
+is pending; observed test-process restarts indicate buffered crashes or
+timeouts, but do not yet identify the failing cases. W6b is unfinished and
+unaccepted as a whole; nothing has been pushed.**
+The newer E1 core checkpoint `b1298b89` is independently reviewed and passes
+the unchanged historical invalid-import call regression: gate `6580` succeeds
+7/7 steps and 2/2 tests (7 seconds/28 MB). Both recursive call owners, exact
+slot-zero lookup causes, retained call plans, and fresh-context replay are
+pinned. This is a targeted diagnostic-core milestone, not acceptance of the
+whole call/callee slice. E2a is now independently reviewed and accepted at
+`50d72f3e`: mixed-case retry `4609` passes 7/7 steps and 2/2 tests, then the
+complete focused gate `98603` passes 7/7 steps and 7/7 tests (35 seconds/28 MB).
+E2b real allocation-failure/retry coverage and temporary-diagnostic cleanup are
+now accepted at `645c29e7`, together with the independently reviewed full-width
+CIR payload dependency fix. Golden/size retry `92156` passes 32/32 steps and
+2/2 tests; regression gate `54470` passes 10/10 steps and 23/23 tests
+(canonicalizer 15, checker 8). The separate subtree-invalidation retry defect
+is now fixed and independently accepted at `c8b4a737`. This follows authentic
+fixture/topology acceptance at `6fec8731` (`49465`: 7/7 steps, 2/2 tests).
+The complete tests prove every measured direct and central allocation failure,
+exact metadata/ledger rollback or complete prefix commit, retry/idempotence,
+root-owned omission removal, authentic return cycles, and clean/retry equality
+through the actual checked-file completion/admission path. The broader recovery
+matrix is green on this source; the full checker baseline is running.
+The new owner tests pass the focused gate `73577` (10/10 steps, 4/4 tests).
+The broader gate `33921` on the same frozen source passes 10/10 steps and
+33/33 tests (can 11, check 22), including all six canonical where-ownership
+tests and the prior direct-binder, serialization, transaction, and malformed-
+source matrix. Independent review accepts the declaration, shared reader,
+canonical receiver/argument distinction, and complete agreed raw-guard cases.
+The real populated recovery fixture passes both canonical rebuilds and readonly/
+mutable serialization replay (`83266`, checker 2/2 including aggregator).
+The measured golden update independently passes its targeted rerun `22649`
+(25/25 steps, 2/2 tests). The initial combined run failed only at the old golden;
+it was not rerun as a whole after the targeted correction.
+Independent review accepts the three
+authentic source, activation/lookup, and completion transaction tests, including
+Probe rollback, measured OOM sweeps, exact retry/revisit, and published/pending
+diagnostic-state checks. Run `6400` passes 7/7 build steps and 4/4 tests
+(three tests plus aggregator, 21 seconds/25 MB). The two test-setup corrections
+are documented below: use the actual diagnostic stores, and initialize raw CIR
+type slots with the real production helper before entering the tested seam.
+
+Earlier accepted bounded evidence remains the lifecycle/shared-reader
+correction and combined 16-test can/check gate `36886`, plus all five
+functional direct-binder tests on `a42543f4` (`7691`: 6/6 including aggregator).
+Those results do not certify the still-open portions of W6b.
+
+The driver has now authorized bounded call/callee implementation (E), following
+the implementer's concrete plan and a separate read-only producer audit. Its
+first change declares the dual-range completion transaction in `design.md`;
+implementation must retain the exact call root and argument checking outcomes,
+publish the finite direct-binder operand cause, and wire the declared late
+callee retirement edges. `ExprCheckFrame.finish` queues an erroneous lookup
+but does not rewrite it: the call producer therefore consumes its exact pending
+lookup retirement and draft, while terminal admission requires the completed
+lookup singleton. Both retired-consumer and failure-reference capacities must
+be available before either semantic range is appended. This is not a claim
+that the earlier subtree-metadata invalidation is globally rolled back.
+The historical multi-family invalid-import source stays unchanged. Independent
+adversarial review, authentic allocation-failure/retry coverage, and focused
+runtime gates are still required; no E implementation acceptance is claimed.
+The tool's agent-thread limit currently prevents resuming the previous reviewer,
+so the driver has directly assigned the read-only producer auditor (which made
+no implementation edits) an independent adversarial review. Its preflight
+requires repeated lookup-tracking entries for one live expression to agree on
+the exact pattern and captured call token before either poisoning edge erases
+that expression. A first-match choice must not discard a later authoritative
+entry. It also preserves the nonrecursive split between basic callee-snapshot
+replay and full annotated-lookup failure validation.
+The E implementer now reports the core producer, both poisoning edges,
+dual-range completion, and local/checked-boundary/fresh validation written,
+with AST validation passing; the rebuild audit is still being finished.
+The driver has explicitly split verification: freeze and independently review
+the E1 core, then run the unchanged historical regression before finishing the
+E2 structural/corruption and authentic OOM/retry matrix. This isolates compiler
+integration failures before the larger test block; it does not waive any E
+acceptance requirement. No core build or runtime result is claimed yet.
+E1 snapshot `45838338` independently passes formatting and AST checks, and the
+driver confirms both historical provider/consumer source strings are unchanged.
+Its complete independent core review requests changes before the first build:
+the expression-poison sweep must publish the annotated-callee failure rather
+than assert that the use sweep already handled it; call completion must accept
+an exact pending lookup retirement as well as a completed one; terminal
+argument-plan references must not assume producer-time adjacency after rebuild;
+an unsupported erroneous sibling must not suppress qualifying direct-binder
+operand failures; and terminal replay needs the complete per-argument
+direct-lookup-retirement-to-call-failure inverse. The existing direct-lookup
+publication is the durable typed-outcome witness for that inverse, not a solved
+error descriptor. The reviewer also requires the historical assertions to name
+the exact recursive call owners, slot zero, and their own argument lookup causes.
+The nonrecursive callee validation split, existing DAG/remaps, dual-capacity
+reservation order, and disjoint relation-stamp states were otherwise reviewed.
+The driver has authorized this bounded correction, with its lifecycle/converse
+declaration first; another frozen independent review precedes the diagnostic
+runtime gate. E1 and E2 remain unaccepted, and nothing has been pushed.
+
+The corrected core snapshot `57546ba8` passed driver formatting/AST checks,
+kept both historical source strings byte-identical, and received independent
+approval for the historical diagnostic gate. All five review blockers were
+resolved; this approval did not accept E2 or whole W6b. Gate `8302` then passed
+compiler and builtin generation but failed the historical test (1 pass, 1
+crash): `call operand retirement lost its canonical call payload`. The
+canonical call reader requires a currently live expression tag for the callee,
+which conflicts with the declared late-callee retirement lifecycle once that
+lookup has been rewritten to `malformed`. The terminal call-argument reader
+also needs an audit for completed lookup retirements. A bounded producer-
+authority-preserving correction is now in progress, followed by independent
+review and the same targeted rerun; do not broaden the generic expression-tag
+predicate or treat arbitrary malformed nodes as authenticated expressions.
+No build is active, no E acceptance is claimed, and nothing has been pushed.
+
+The scoped lifecycle correction `45495b98` subsequently passed independent
+review, driver formatting/AST checks, and the unchanged-source comparison.
+Targeted rerun `53122` passed compiler/builtin generation and advanced beyond
+the payload check, but still crashed (1 pass, 1 crash) at
+`call operand retirement changed an exact formal`. The driver identified a
+concrete inconsistency in the new nonrecursive lookup-origin inverse: it
+requires the call-copy source to equal the binding-pattern variable before
+distinguishing ordinary local binding instantiation from predeclared annotation
+instantiation. The latter actually consumes the separately copied annotation
+scheme and authenticates it through its exact support-step destination. The
+implementer and independent reviewer are checking this origin-specific
+correction before another frozen review and exact rerun. At that point E1
+remained red and E2 had not begun.
+
+The origin-specific correction `b1298b89` then passed independent review and
+driver formatting/AST checks. It moves the pattern-source equality into only
+the ordinary local-binding arm, preserving all predeclared support-chain and
+attachment checks. Gate `6580` passes all 7 steps and both tests, including the
+unchanged historical regression, its exact call/lookup evidence assertions,
+fresh-context replay, and transient cleanup. The historical TEMP stderr is
+still present deliberately until E2b cleanup; it does not indicate a failed
+test. No build is active and no publication has occurred.
+
+E2 is split into two independently reviewed tasks. E2a covers authentic
+two-qualifying-argument and mixed-error
+calls; exact lookup-tracking duplicates/conflicts; coordinated sibling
+owner/slot/formal/cause corruption; missing, duplicate, and cross-owned failure
+and retired-consumer ranges; produced and fresh-context replay; the combined
+failure/retirement cycle negative; and byte-identical repeated canonical
+rebuilds. E2b covers real central-rewrite allocation failures and exact retries,
+including completing the call while its source lookup and annotation
+retirements are still pending, then completing those sources for terminal
+replay. It also removes the historical temporary diagnostics before E
+acceptance. The proposed authentic staging seam extracts the existing
+contiguous pre-poison `checkFileInternal` phase without changing its order;
+tests reuse that production phase rather than fabricate Expected rows or
+duplicate a long initialization sequence. The extraction itself requires
+mechanical-equivalence and independent review. E2a is now authorized and in
+progress; E2b has not started. E2a also pins the origin-specific rejection sides:
+wrong local binding source, wrong predeclared support destination, sibling
+support step, and mismatched annotation attachment.
+
+E2a was frozen at `8bbae310` after driver formatting/AST checks and verification
+that both historical regression source strings remained byte-identical. Gate
+`29349` passed six of seven tests, including the historical regression, the
+two-qualifying-operand/rebuild fixture, the coordinated corruption matrix,
+tracking authority, and call-origin negatives. The mixed preexisting-error
+fixture crashed at `a call operand publication changed an argument plan`.
+Independent adversarial review found this same single blocker and no second
+static defect in the bounded delta. The successful argument plan is intact:
+the publisher uses the generic live-child phase, which rejects the authentic
+canonical `.malformed` sibling despite the exact preexisting-runtime-error
+retirement carried by that argument's typed checking outcome. A narrow
+correction is now authorized: declare this producer phase in `design.md`,
+authenticate that exact typed cause and baseline node/diagnostic/payload, and
+retain all successful plan/formal/token checks and strict generic live-call
+validation. Rejection-side tests must pin missing and substituted authority.
+At that point E2a remained unaccepted and E2b had not started.
+
+The bounded mixed-producer correction `50d72f3e` passed driver formatting/AST
+checks, unchanged historical-source verification, and independent adversarial
+review. Its private producer phase retains a live callee and requires every
+malformed argument's exact canonical typed cause, unique legal preexisting
+retirement, and node/publication/diagnostic/payload inverse. Generic live-call
+validation and all successful plan/formal/token checks remain unchanged. The
+mixed-only retry `4609` is green (7/7 steps, 2/2 tests, 7 seconds/26 MB), followed
+by complete E2a gate `98603` on the same frozen source (7/7 steps, 7/7 tests,
+35 seconds/28 MB). E2a is accepted as this bounded test/recovery slice, not as
+whole W6b or even completion of E. E2b is now authorized and in progress:
+mechanical shared production pre-poison phase, authentic central-rewrite
+allocation-failure/retry tests with pending source retirements, and removal of
+temporary historical diagnostics. No build is active and nothing has been
+pushed; broad recovery and full checker gates still remain after E2b.
+
+E2b preparation exposed a separate required follow-up before broader acceptance:
+`markHoistInvalidatedExpr` inserts into the durable invalidated-expression map
+before fallibly appending to a local traversal queue. If that append or a later
+queue allocation fails, the local queue is discarded but inserted entries
+remain; retry treats them as already visited and can skip unfinished
+descendants. The driver, implementer, and independent read-only audit agree
+this is a real general retry defect affecting descendant literal plans, known
+or selected hoist roots, and omitted-default pruning. Permitting unrelated
+invalidation prefix effects in the R_C transaction rule does not permit a
+visited marker to suppress unfinished work. E2b continues with its scoped
+retirement-ledger contract and a genuine fixture with no such metadata; it
+must not prewarm, clear, reset, or reconstruct state to hide the issue, or
+claim whole-rewrite rollback/general subtree retry. A separate bounded
+design/implementation/review/test task must fix invalidation retry after E2b.
+Reserving one queue append before publishing one visited entry is not by
+itself sufficient: earlier queued entries are also lost on a later failure.
+Direct reads of main base `96c3b2fa` and W6a parent `d74784ef` contain the same
+faulty insertion/retirement/enqueue ordering: this defect predates the Polarity
+stack rather than belonging to a new E1/E2a producer change.
+A bounded independent design audit finds an off-side insertion-ordered
+deduplicating worklist suitable: collect the exact typed-CIR descendant edges,
+reserve the durable map, then infallibly publish the complete visited set,
+retire literal plans in discovery order, and compact omitted defaults. Literal
+retirement changes stamps and the side pool, not the topology being traversed;
+all traversal helpers are private to this invalidation boundary. The required
+new invariant is that durable map membership means a fully committed descendant
+closure, not merely an enqueued node. Discovery/reservation failure must leave
+logical invalidation state unchanged; a fully committed invalidation may remain
+if later R_C publication fails. This is preparation for the separate normative
+amendment and implementation, not acceptance of a fix.
+
+After E2b acceptance at `645c29e7`, the driver authorized that separate
+invalidation-retry task. The authentic fixture must retain both affected and
+unaffected selected roots, literal plans, and omitted-default rows across a
+branching call subtree; measured allocation failures must preserve logical
+metadata before commit and retry to the clean result. The implementation and
+normative amendment are in progress; no new invalidation gate has passed yet.
+The named runtime-error subtree invalidation rule and Rewrite Inventory entry
+are now written, and the ordered discovery/reserve/commit implementation is
+drafted. The driver requested a first frozen fixture-shape gate to verify the
+authentic arity-three call's selected roots, literal plans, and omitted-default
+owners before the exhaustive allocation-failure sweep. That staging does not
+reduce the final coverage or accept the production fix early.
+The first fixture slice froze at `de1f08be`; driver review caught two test-only
+fields accidentally inserted into `PendingInspectMethodUse`. The implementer
+moved them to the intended test topology struct, and the exact corrected
+snapshot is `c40bba22`. Driver format/AST checks pass. Focused gate `82241`
+compiles successfully but fails the fixture test with `expected 4, found 20`
+(1/2 tests pass). The exact assertion and the additional producer-owned rows
+must be accounted for before correcting the fixture expectation; no retry/OOM
+acceptance is claimed. The driver authorized only that diagnosis/correction
+and history-neutral size-comment wording before rerunning the same narrow gate.
+Independent producer accounting identifies twenty plans in seven contiguous
+groups: before-list (0–2), explicit-3 backing record (3–4), call (5–8), middle
+tuple (9–12), explicit-5 backing record (13–14), after-list (15–17), and
+explicit-9 backing record (18–19). The corrected fixture at `77481786` pins all
+six non-call owner/role/site ranges and the call's exact four-plan range, root,
+argument, formal, and token relations; it does not blindly relax the count.
+Targeted retry `84421` compiles but fails with `expected 3, found 1` (1/2 tests
+pass). Exact test-stage diagnostics and producer tracing are required before
+correcting that next fixture assumption. Both zero checker/type-problem
+assertions and an actual omitted-default owner for the root-predicate test are
+also required on the next thaw. The fixture and general retry fix remain
+unaccepted; broader recovery and full checker have not been rerun.
+Independent tracing explains the selected-root mismatch: the original bare
+survivor lookups defer binding selection until the enclosing block finishes,
+but its lexical-scope cleanup removes the known values before that flush. Only
+the middle tuple is selected. A proposed unreferenced top-level-constant
+replacement was rejected by the driver before building: `checkDef` explicitly
+suppresses nested hoists in ordinary compile-time roots. The approved authentic
+replacement puts each outside closed list beside an independent runtime `U64`
+formal in a tuple, forcing its eligible list child to be selected while live.
+It must prove three expression roots (no binding-root coverage claim), both
+runtime lookups' exact second-formal identity, and nine producer-owned plan
+groups (anticipated 26 rows, call start 8), without fabricating metadata. This
+replacement is still being implemented and has not passed its fixture gate.
+The runtime-sibling replacement subsequently froze at `6fec8731` and passed
+independent fixture/topology review. Targeted gate `49465` is green: 7/7 steps,
+2/2 tests (7 seconds/26 MB). Its actual producer state pins two outer formals,
+both runtime lookups, three statement coordinates, all twenty-six plans in
+nine exact groups (call range starts at 8), four omissions/four literal owners,
+three distinct map-authenticated null-pattern expression roots, empty binding
+and validation maps, zero checker/type problems, and the exact twelve-node
+call-subtree BFS. Selected-root publication indices are not guessed. The
+root-predicate assertion uses an actual published omitted-default owner.
+This accepts only the authentic fixture/topology slice. The driver has now
+thawed the source for measured exhaustive invalidation and central-rewrite
+allocation failures, exact metadata snapshots and retry/clean comparisons,
+idempotence, actual root-owned omission removal, authentic return-edge cycles,
+and terminal replay; the general invalidation fix remains unaccepted.
+For terminal coverage, the driver approved a mechanical extraction of the
+entire production suffix after `checkFileThroughPrePoison` into
+`checkFileFromPrePoison`: both poison sweeps through checked-file admission
+and `finishTypecheck`, preserving the pooled solver environment's lifetime
+and every operation's order. The rich invalidation fixture will use that
+shared suffix rather than a second hand-maintained cleanup sequence. This
+does not strengthen the older E2b test's explicitly staged replay claim.
+The full invalidation slice froze at `f1051eb9`; driver formatting/AST checks
+pass, and the shared suffix is byte-identical after exactly four `&env` to
+`env` substitutions. Independent preflight corrected the cycle fixtures to
+remain pre-admission and replaced a production-derived terminal oracle with
+an independently enumerated, unique 31-expression set; the surviving default
+literal is explicitly required to use `builtin_direct` resolution.
+Focused gate `55787` is red: 3/6 tests pass, including both authentic cycles.
+The rich fixture, omission, and exhaustive OOM tests stop at a newly added
+`erroneous_value_exprs` assertion (expected 2, actual 4), before the allocation
+sweeps run. All earlier fixture cardinalities remain unchanged. The author is
+tracing all four producer-owned keys for an exact oracle correction, not a
+blind count update. That correction froze at `c8b4a737`: the exact unique
+erroneous-expression set is the two direct lookup operands, their call, and
+the annotated outer/source lambda. Focused retry `34110` passes 7/7 steps and
+6/6 tests (35 seconds/33 MB), and the independent reviewer accepts the entire
+bounded invalidation slice without findings. The complete production tail,
+natural durable-map reservation failure, both central failure classes, exact
+inter-reservation failure, independent terminal 31-expression union, and final
+admission are now dynamically exercised. Combined broader gate `50225` passes
+10/10 steps and 59/59 tests (can 25 in 780 ms/6 MB, check 34 in 3 minutes/35 MB).
+This accepts the invalidation fix and refreshes the broader baseline, not W6b
+as a whole. The full checker gate is next; contributor migration has not begun.
+
+E2b froze at `650ed2c5` for independent review. Driver formatting/AST checks
+pass; the shared pre-poison phase is byte-identical after exactly seventeen
+`&env` to `env` substitutions, its outer lifecycle is unchanged, and both
+historical regression source strings remain byte-identical. Temporary
+historical logging is removed. Focused gate `46607` is red: the new authentic
+dual-range OOM test reaches terminal retry replay for allocation index zero,
+then its added clean-instance versus retry-instance serialized comparison
+differs at byte 142429 of equally sized 170436-byte buffers. The preceding
+rollback, intermediate retirement, local/fresh replay, and same-instance
+two-rebuild checks have been reached for that first case; the exhaustive sweep
+has not completed. Exact serialized-field/representation diagnosis and
+independent review are in progress. No assertion weakening, byte masking, or
+state reset is accepted without establishing the cause and correct contract.
+E2b remains unaccepted; no build or push is active at this diagnostic pause.
+
+The diagnostic-only follow-up initially failed to compile (`8115`); its bounded
+comptime-walker/inline-loop correction and alignment-safe header reads were
+independently reviewed at `0d3d0f75`. Rerun `40655` reaches the test and identifies
+the same first difference both before completion and after retry:
+`ModuleEnv.store.nodes`, live node row 8, payload byte 13 (serialized offset
+142429). Pending node count is 23 and completed count is 26, both with capacity
+1544. Thus this first difference predates the injected allocation failure;
+it is not evidence of retry damage. The exact active payload variant and the
+remaining differences still need attribution. Static inspection finds that
+the 16-byte external Node payload union has many 12-byte variants and is copied
+as a whole by `Node.setPayload`; that representation also exists at main base
+`96c3b2fa`. This is a concrete representation concern, not yet acceptance of a
+fix or permission to mask unused bytes in this test. All original assertions
+remain, the sweep still stops at allocation zero, and no push has occurred.
+
+The independent representation audit and implementer agree on the structural
+cause: `Node.init` zeroes the 16-byte payload, then constructing a smaller active
+external-union variant and assigning the whole union through `Node.setPayload`
+overwrites its inactive tail with undefined bytes. Both serialization and
+retirement `original_payload` snapshots consume all sixteen bytes; changing only
+the serializer or test comparator would leave an authority-record defect.
+A separate design-first producer-representation correction is now authorized
+before E2b can resume: every payload variant must explicitly cover all sixteen
+bytes with zero-default reserved fields, including Annotation's implicit tail.
+Exhaustive compile-time size and field-coverage checks must prevent recurrence;
+semantic field offsets and the overall Node payload footprint stay unchanged.
+Producer/independent-instance serialization tests and layout-fingerprint checks
+must accompany the fix. Keep E2b's complete cross-instance equality and require
+its pre-completion baseline too. No additional diagnostic-only run is needed
+before this structurally justified fix. The separate subtree-invalidation retry
+fix remains required afterward; neither dependency is accepted yet.
+
+The full-width payload correction froze at `0ecd0668` and passed independent
+adversarial review. All 124 variants explicitly cover sixteen bytes; exactly
+109 reserved-tail additions preserve every semantic field offset. The direct
+payload gate `53825` passes 1/1 test. Combined gate `96135` passes the three
+canonicalizer payload/NodeStore tests (422 ms/1 MB) and the E2b recovery gate
+(2/2 tests, 7 seconds/28 MB). The complete measured allocation-failure sweep,
+exactly one inter-reservation failure, source-pending intermediate proof,
+local/fresh replay, repeated rebuilds, and both pre-completion and terminal
+cross-instance byte equalities now pass without masks or temporary diagnostics.
+The combined command remains red only on recorded schema expectations:
+`CACHE_VERSION = 82` produces ModuleEnv fingerprint
+`69def018eb5816bbe41046fbbc3a71ad710403e88f5ac3336ced9c62b7c2a391`, and both native
+and wasm32 measure `ModuleEnv.Serialized` at 3520 bytes rather than 3448. The
+72-byte discrepancy is three existing W6b publication descriptors:
+`malformed_type_annotation_publications`, `body_annotation_attachments`, and
+`body_annotation_malformed_type_publications`, each 24 bytes. Node payload and
+Node sizes remain 16 and 20 bytes. Only the measured hash golden and this
+accounted-for size golden are authorized to change next; targeted retries and
+the E2a/NodeStore regression gates remain before acceptance of the complete
+dependency/E2b checkpoint. The separate invalidation retry fix is still next.
+
+The measured golden update froze at `645c29e7` and passed independent review.
+Targeted retry `92156` is green (32/32 steps, 2/2 tests), including native and
+wasm32 serialization sizes. The subsequent E2a/E2b and existing NodeStore/literal
+retirement regression gate `54470` is also green (10/10 steps, 23/23 tests:
+canonicalizer 15 in 433 ms/3 MB; checker 8 in 42 seconds/29 MB). This accepts
+E2b and its producer-representation dependency as bounded completed work,
+not whole W6b. Temporary diagnostics are removed and neither cross-instance
+byte assertion was weakened. The next implementation task is the separately
+audited off-side subtree-invalidation transaction, with its own normative
+declaration, authentic metadata-bearing OOM/retry tests, and independent review.
+No push, bookmark move, final commit description, or PR-body update has occurred.
+
+The E2a nonadjacent-plan positive is not claimed: the current producer reserves
+each call's root and argument plans contiguously, and canonical rebuilding
+groups those same-owner rows. Nested argument expressions produce plans owned
+by different nodes, not an authentic nonadjacent retired-call group. Tests
+must not fabricate a valid ledger permutation to claim otherwise. Terminal
+proof still follows the explicit retained consumer/formal indices, and the
+authentic repeated-rebuild test checks those exact references.
+
+The independently reviewed general expression-frame decomposition and unchanged
+depth-128 regression are accepted. Diagnostic run `86549` on
+`f52cae3a` records 190 lambda/closure entries before the crash: its exact binary
+reserves 85,608 bytes per `checkExpr` frame with a 16 MiB Mach-O stack budget.
+The staged fix extracts all 59 expression cases into typed, non-inlined
+helpers, retaining frame creation, original Expected timing, cleanup, and
+finalization in their existing order. It preserves the accepted transaction
+block byte-for-byte and removes deep-test temporary logging. Final independent
+adversarial review accepts all 59 arms, lifetime/Expected ordering, and the six
+required pointer-argument conversions. The exact reviewed files are applied;
+formatting and AST checks pass. Run `20681` passes 7/7 steps and 5/5 tests
+(unchanged depth 128, three transactions, aggregator; 28 seconds/31 MB).
+The exact compiled binary reserves 7,264 bytes for `checkExpr`, 11,728 for its
+lambda helper, and 800 for its closure helper, with the unchanged 16 MiB Mach-O
+stack. The broader previous functional/shared-reader gate `5300` also passes
+10/10 steps and 24/24 tests (can 4, check 20; check 2 minutes/32 MB).
+This accepts the bounded stack fix, not unlimited recursion or whole W6b.
+
+The bounded direct-binder source, lookup, completion, deep replay, raw-reader,
+receiver/owner inverse, and canonical/serialization slices are accepted.
+Call/callee
+retirement, contributor/settlement tracking, option-(e) rejection, lowering
+adapters, and whole-phase acceptance also remain open. Jared asked about a
+checkpoint push; the bounded transaction/deep-regression/review threshold now
+passes, including the broader focused regression set. Root has asked whether
+to publish this explicitly unfinished W6b checkpoint while implementation
+continues. The status question has not itself authorized a partial push.
+The existing draft PR remains #10434 on `jared/polarity`; its old description
+has been read but not changed. Details and exact run history follow.
+
+Earlier bounded prerequisite history: the
+provider/owner and synthetic-binding journal corrections have useful focused
+coverage. The sole-target default handoff and corrected fixture helper have
+passed independent review and all six original/new lifecycle regressions now
+pass, including signature rollback and a genuine non-null default-child
+parent. The share-cut correction now passes independent review, 6/6 focused
+instantiator tests, and 4/4 focused checker tests, resolving the weak-receiver
+and cap-free generational-discharge crashes. The selected-owner correction
+now also passes nested-Try and the complete recursive matrix: combined run
+`73206` has 21/23 passing tests, with only two new invalid-export fixtures
+still being corrected. Independent production review has no remaining
+blocker under the explicitly bounded atomic selection-input contract. Owner
+fixture acceptance and version-80 serde/hash verification now pass in `4265`:
+28/28 steps, 6/6 tests. The fixture truthfully covers a nominal receiver-
+extension and its namespace's identical binding; no external-alias positive
+is claimed. Staged default-target calibration passes independent review and
+the combined owner/recursive/default checker run `68496`: 7/7 steps, 24/24
+tests. It measures 58 allocations in the scoped compatibility transaction;
+the runtime-calibrated finite failure sweep now passes independent review and
+root run `93726` (7/7 steps, 2/2 tests). The reviewed shared immutable Builtin
+setup then passes combined run `88439`: 7/7 steps, 24/24 tests, 2 minutes /
+33 MB, including the sweep and full owner/recursive/default matrix. Every
+consumer checker remains fresh. This bounded allocation-failure slice is
+complete. The historical invalid-import regression is now restored and its
+call-retirement failure is dynamically localized: the first argument is
+erroneous after parameter lookup, and ordinary-call retirement loses the
+already-published call-formal evidence before any successful relation stamp.
+The active design-first repair must publish the malformed where-alias's exact
+receiver cause, transport it through the formal/binder/lookup relation, and
+preserve the call's successful shape/formal evidence under a distinct typed
+retirement authority. The malformed-alias publisher alone is now reviewed and
+passing; lookup/call transport is still being implemented. An annotation-wide
+cause must not poison unrelated parameters. The broader default-use lifecycle extension still has the
+adversarial findings inventoried below. No full checker-module gate has
+completed on this tree.
+
+- The driver resumed coordination after a service interruption. No build was
+  active, and all temporary diagnostics had been removed. Only formatting and
+  AST checks certify the latest source as a whole. Do not repeat the intervening
+  fixture-only experiments or infer producer coverage from syntax.
+- Default template roots now name the first target attempt, with canonical
+  `reserved_0`, rather than a speculative SchemeUse. Committed children retain
+  their actual SchemeUse. Exact Builtin owner/method lookup, identifier guards,
+  durable cache-independent provider lookup, and journaled imported synthetic
+  binding classification remain in place.
+- A later, design-first change unconditionally roots committed
+  `default_method_use` children. It is **not dynamically complete**. Exact
+  diagnostic run `81416` supersedes the earlier movement hypothesis from
+  `93163`: both selected movement subgraphs survive canonical rebuilding
+  correctly. The bad call's live CIR payload has legitimately become
+  `e_runtime_error`; `validateSelectedReceiverAnchorContext` incorrectly
+  rereads that payload after immutable source validation has already passed.
+  Snapshot `c009e860` changes every anchored arm to validate its unique
+  immutable `DispatchSettlementSource`, preserving anchor, handle, receiver,
+  movement, and uniqueness checks. Independent sol-ultra adversarial review
+  found no blocking issue in this bounded production fix. This follows the
+  existing source-lifetime rule and requires no new solver rewrite.
+  Initial runs exposed test-only issues: `94167` expected one diagnostic but
+  received three, and `82689` used `std.meta.eql` on an untagged union payload.
+  Snapshot `38001be4` corrects the comparison and retains the unchanged Roc
+  fixture as an honest nominal-dispatch retirement regression. It pins one
+  `plus` arity mismatch, two literal-default warnings, both live and retired
+  immutable sources, and byte-identical repeated boundary rebuilding. A second
+  independent adversarial review accepted this test-only delta. Combined
+  traced run `98717` passed all four named regressions (5/5 with aggregator,
+  7/7 build steps): live source corruption, copied-component corruption,
+  retired source/rebuild, and the original discarded numeric specialization.
+  This bounded validator slice is accepted. The unfiltered traced run `63128`
+  was intentionally interrupted after slow allocation-failure cases, without
+  a completed result. Untraced Debug run `4990` was also intentionally
+  interrupted at 71/1,349 after sampling exposed an admission-performance
+  defect; neither interrupted run is a pass. Progress counters do not certify
+  individual passes because failures may be buffered until the final summary.
+  The future normalized ledger is not needed to explain the fixed anchor bug.
+- Read-only sampling of the exact checker process found every sampled stack
+  in repeated Builtin admission's `SmallStringInterner.validateSemanticState`
+  prior-cell text-comparison loop. This is a quadratic validation cost, not
+  an allocation-failure iteration in the displayed test. A bounded sol-ultra
+  implementation replaced the global pairwise scan with preflight plus
+  exact per-entry hash-probe validation, preserving allocation-free rejection
+  of duplicate text/cells, missing entries, invalid offsets, and broken probe
+  chains. The analogous redundant serial-interner occurrence scan is in scope.
+  No Builtin validation is skipped or replaced with a trust-cache shortcut.
+  Snapshot `d5853c8e` preserves exact admission with a first-match bijection:
+  every entry must resolve to its own exact offset/id, with equal entry and
+  occupied-cell counts. Collision-chain cost remains; the unconditional
+  all-pairs scan is gone. The combined focused run `92407` completed green:
+  13/13 build steps, 32/32 tests, comprising 30 interner tests (332 ms) and the
+  previously sampled checker test plus aggregator (27 s). Coverage includes
+  duplicate and missing entries, equal text at distinct offsets, empty texts,
+  wrapped probes, malformed offsets/ranges/counts, lifecycle rollback and
+  serialization, and 24,000/12,000-entry valid tables. Independent sol-ultra
+  adversarial review accepted this base-only slice with no blocking findings:
+  the preflights make all later dereferences safe, and the equal-count exact
+  lookup relation preserves the deleted uniqueness checks. It remains
+  allocation-free, immutable, and format-neutral. Full untraced checker run
+  `9752` was started on the
+  unchanged source, then deliberately interrupted after a second profile:
+  2,148/2,148 samples were in fresh Builtin admission's
+  `validateExpectedCallPlans`, predominantly its nested whole-plan scans.
+  The suite was progressing between tests, but this is another measured
+  W6b admission-performance defect. Run `9752` exited 130 without a completed
+  test summary and is **not a pass**. Its exact owned process group was checked
+  before interruption; all three build/test processes subsequently exited.
+  The bounded call-plan slice at `4b09afa3` uses existing canonical
+  call/formal/token authority to remove redundant scans. Focused run `76466`
+  completed with 10/11 tests passing; the sole failure is the new large-group
+  fixture's `BuilderBox.wrap` body returning a structural record where its
+  annotation requires the nominal wrapper. This is not a green gate.
+  Adversarial review also found an unjustified stronger check in that slice:
+  not every raw live call node has reached call-shape publication. For example,
+  canonicalization can reject a record builder after canonicalizing its field
+  expressions, leaving unreachable child calls in the node store. The driver
+  has requested removal of that newly added raw-call/root converse, an authentic
+  rejected-parent regression, and correction of the nominal fixture. Existing
+  token validation and exact root/formal/argument relations must remain intact.
+  The optimization must preserve allocation-free admission, exact ownership,
+  and zero-argument behavior; no new cache, schema, or validation bypass is
+  authorized. That intermediate slice was unaccepted; the subsequent
+  corrections and verification below supersede its status. The known false
+  default-owner fixture still must be corrected before a full checker rerun.
+  Correction `59c13262` removes only the unjustified raw-call/root converse,
+  fixes the record literal to `{ value: value }`, and adds a real missing-`map2`
+  record-builder regression asserting exactly two orphaned child calls and
+  successful call-plan admission. Independent sol-ultra correction review
+  accepted this delta; the existing token converse and ordered root/formal
+  bijection remain intact. Corrected focused run `29097` completed with 11/12
+  tests passing: the large-group fixture passed, but the orphan regression
+  panicked during initialization (`checked module produced invalid call
+  Expected plan topology`) before its assertions. This is not a green gate.
+  The next narrow diagnosis is the existing shared snapshot predicate's
+  requirement for a nonzero checker-authored call relation even when called
+  by the checker-independent canonical-token validator. Canonicalization
+  explicitly creates calls with that optional relation absent; only checking
+  publishes it. Canonical topology and checked-root validation must preserve
+  that phase distinction, with the established-root nonzero requirement still
+  pinned by a negative test. No guessed reachability or missing-plan recovery
+  is permitted.
+  Correction `fd2e9f76` separates canonical topology decoding from the existing
+  checked-call snapshot's nonzero-relation requirement. Only token validation
+  uses the canonical helper; all prior checked/root/retirement consumers retain
+  the existing stamp check. Independent sol-ultra review accepted the bounded
+  correction. Targeted run `67721` completed green: 3/3 tests (two named tests
+  plus aggregator), checker runner 14 seconds. The authentic orphan case now
+  reaches its assertions; the corruption test removes a real checked call's
+  stamp and requires tokens to remain valid while call-plan admission rejects
+  it, then restores the positive state. Unchanged-source broader six-filter
+  run `28353` also completed green: 12/12 tests, checker runner 1 minute,
+  checker compile 59 seconds, with Builtin prerequisites cached. The bounded
+  call-plan performance and phase-boundary correction slice is accepted.
+  The unconditional nested scans are removed; the multi-test runtime is not
+  a like-for-like speed measurement against the earlier single-test run.
+  No completed full checker gate is claimed. The next dispatched sol-ultra
+  task is fixture-only: authentic accepted copied default, rejected-first
+  cache seed followed by accepted reuse, and same-decision/same-method
+  distinct-offset committed children. Snapshot `550de3c0` contains that
+  test-only patch. It replaces the false owner fixture with the bare `f`
+  arithmetic copy, and adds rejected `bad`/accepted `good` reuse and
+  same-decision two-offset fixtures. Helpers tie exact contributor copy steps
+  and SchemeUses to raw named assignment-pattern roots, not the potentially
+  retired use node. Assertions cover actual method offsets, exact child slots
+  and raw callables, rejection arities, root/use counts, diagnostics, and
+  cache-cleared byte-identical rebuilding. Formatting and AST checks pass;
+  independent sol-ultra review accepted the fixture-only patch as honest,
+  without a helper or test-quality blocker. Targeted run `92762` is RED:
+  1 pass / 3 crashes (including aggregator); all three initializers panic at
+  `checked module produced invalid marker-copy source authority` before any
+  new assertion runs. No dynamic lifecycle acceptance is claimed. Preserve
+  all three source inputs and localize the accepted-owner fixture's exact
+  failing row/predicate before a production change. The aggregate validator
+  also calls `validateSelectedMethodDecisionsContext`; its selected-only
+  movement/evidence ownership converse is a candidate to audit alongside the
+  cross-root provider checks, not an established cause. No full checker run is
+  active, and these fixtures must not be weakened to avoid the failure.
+  Diagnostic snapshot `314fca99` adds temporary stage/row labels only; accepted
+  owner-only run `32230` completed but its output was lost during context
+  compaction, so it establishes no result. Root's unchanged-source rerun
+  `50247` failed compilation: a temporary print referenced the nonexistent
+  top-level `DispatchSettlementSource.original_node_kind` field. No fixture
+  executed in that run. Correct that diagnostic only, then repeat the same
+  owner filter with output chunks preserved before display. Corrected
+  diagnostic snapshot `9b4dcce0`, root run `64954`, completed RED (1 pass /
+  1 crash): only `TEMP default-source stage=selected-decisions` fired.
+  Cross-provider checks passed; neither the source-row nor final orphan
+  discriminators fired. The exact earlier false return inside
+  `validateSelectedMethodDecisionsContext` still needs line-level isolation.
+  Diagnostic snapshot `f6d8bc6d` labels every false exit in that validator
+  with its source line and relevant row; compound decision predicates include
+  guarded raw-coordinate details. Formatting and AST checks pass. Root's
+  identical owner-only run `56299` completed RED (1 pass / 1 crash). The exact
+  failing predicate at diagnostic line 7602 is decision 0's
+  `matching_dispatch_uses != 1`: two `dispatch_target` SchemeUses have the same
+  raw `slot_data` callable, while `owner_binding_matches` is true. The loop
+  counts raw callable alone. Trace both exact publication lifecycles before
+  deciding whether the producer duplicated a committed use or the inverse
+  chose an invalid uniqueness domain; no relaxation or deduplication is
+  authorized by this diagnostic. The selected-only movement ownership gap
+  is not this observed predicate. All chunks were preserved before display;
+  no production behavior or fixture changed. Independent review accepted
+  the TEMP patch as diagnostic-only and found complete false-exit coverage
+  with preserved predicate order and guarded diagnostic reads.
+  Narrow diagnostic snapshot `87f50586` additionally prints both matching
+  SchemeUses and their exact owning copy-step/default/selected coordinates;
+  root run `23403` completed RED (1 pass / 1 crash), confirming both exact
+  producers: SchemeUse 1 at node 10/raw callable 240/scheme root 252 belongs
+  to step 4 `default_method_use`, default decision 0/offset 0/root step 3;
+  SchemeUse 2 has the same node/callable/root and belongs to step 5
+  `scheme_use`, selected decision 0/constraint 2/root step 3/use step 5.
+  Static producer tracing identifies the missing
+  handoff: successful default compatibility commits its method copy and
+  dispatch-target SchemeUse but never populates
+  `dispatch_target_instantiations/by_fn_var`; its immediate ordinary-queue
+  replay can therefore create a second selected target for the same raw edge.
+  The proposed correction shares exact preflight and atomic target publication
+  between selected and default paths, preserving the default child as the sole
+  method copy. It must preserve parent lineage, canonical state/growth checks,
+  rejected-probe/OOM rollback, and exact target-binding identity. Independent
+  review initially treated the two rows as legitimate proof/executable uses,
+  then withdrew that interpretation against the normalized single-settlement
+  inverse and the documented sole-target contract. No consumer-uniqueness
+  relaxation or new compatibility-only SchemeUse class is planned. The
+  production correction is now assigned to the sol-ultra implementer. Amend
+  the design before code to state the actual default target-selection timing:
+  the default target is latched while the receiver is flex, unlike ordinary
+  concrete selection. Share preflight/commit without guessing a post-unify
+  shape, and preserve lineage termination and deferred-child ordering. Tests
+  must assert one target SchemeUse/cache entry owned by the default child,
+  no second selected decision, exact ordinary replay reuse, rejected
+  arity/signature/OOM cleanup, siblings, and derived parent/state behavior.
+  Source and fixtures are not yet fixed; no production acceptance is claimed.
+  The chosen timing rule is now declared in `design.md`: capture the actual
+  current receiver/callable state immediately before the first per-edge target
+  copy and unification, whether still flex or already grounded by a latched
+  sibling. Every new edge, including a parentless edge, records its digest.
+  A cache hit preserves the first producer's target/provenance. The core
+  shared preparation/publication refactor and one-target assertions for the
+  original three fixtures are being implemented; temporary diagnostics must
+  be removed before the first core freeze. First run those three regressions,
+  then add the complete signature/OOM/lineage coverage and rerun the existing
+  recursive-dispatch/finite-chain matrix. The proposed authentic lineage
+  fixture is `Parent.make : Parent -> a` with written `a.from_numeral` and
+  `a.plus` requirements and a discarded call result. Its copied plus edge
+  should default with the make edge as its recorded parent. A plus-only where
+  requirement is not arithmetic-defaultable; the from_numeral hook is
+  essential. The fixture is not dynamically verified yet.
+  Core snapshot `4a47583a` freezes the shared target preparation/publication,
+  default cache handoff, exact cache-hit parent/binding checks, restored
+  enclosing evidence-target context, and sole-target assertions in all three
+  original fixtures. The bad-arity case additionally requires no target
+  list/map row or dispatch-target SchemeUse. All TEMP diagnostics are removed;
+  formatting and AST checks pass. `git diff --check` is unavailable in this
+  jj workspace and is not a verified whitespace check. Root three-filter
+  run `14544` completed RED (1 pass / 3 failures, not crashes): all three
+  initializers now pass the former source-authority panic and fail an
+  assertion `expected 5, found 7`. Root and reviewer identified the shared
+  helper's invalid raw/canonical comparison:
+  `testDefaultDecisionForBinding` correctly selects `use.scheme_root ==
+  raw_pattern`, but incorrectly compares that raw pattern with canonical
+  `step.source_root_var`. The producer/rebuilder explicitly distinguishes
+  those coordinates. The test-only correction must validate ranges, follow
+  the step's named root occurrence, assert its raw source is the exact pattern,
+  then follow its canonical pair and assert the step-root and resolved-source
+  relations. No shape search or numeric-expectation substitution is allowed.
+  All output chunks were preserved. Independent sol-ultra core review found
+  no production blocker on that exact snapshot. Test-only snapshot `0d1fdf49`
+  corrects the helper with bounded raw-occurrence/canonical-pair checks;
+  production and design are unchanged from `4a47583a`. Root's identical
+  three-filter rerun `68687` completed GREEN (7/7 build steps, 4/4 tests
+  including the runner; test execution 21 seconds / 25 MB peak RSS), with
+  every output chunk preserved before display. Independent sol-ultra review
+  accepted the helper correction with no issue.
+  Signature rollback, forced OOM at the real transaction owner, non-null lineage,
+  reverse cache reuse, and the existing recursive-dispatch matrix remain
+  required before this bounded slice is accepted. The implementer is now
+  adding that coverage and clarifying the design's distinction between the
+  immutable pre-copy digest and growth comparisons over stored raw vars.
+  Coverage review corrected an impossible test demand: `beginCommitProbe`
+  rejects any enclosing solver Probe, not only another CommitProbe. Do not
+  wrap default compatibility in an extra Probe or relax that invariant.
+  Its production CommitProbe owns rollback of inner marker-copy effects.
+  Allocation-failure tests must exercise that real lifecycle, including legal
+  root-only precommit state and exact child/SchemeUse/target atomicity.
+  Coverage snapshot `39f52c74` adds a same-arity bad-then-good signature
+  regression with an explicitly annotated `Str` operand, authentic non-null
+  default-child parent lineage, and reuse of a real selected `Dec.plus` target
+  through the shared cache lookup helper. The reverse test does not invoke the
+  entire default-compatibility pipeline. The sole-default helper additionally
+  checks ordinary-worklist settled consumption. Formatting and AST checks
+  pass; root's new-three-filter run `33032` and the independent exact-delta
+  review were started together. Run `33032` completed RED (2/4 tests passed,
+  2 failed, no crashes): the reverse-cache helper test passed; the parent
+  source parsed `Parent.Value.make` as associated lookup and reported Does
+  Not Exist; the signature test returned `TestUnexpectedResult` without an
+  identified assertion because stack tracing was disabled. Do not attribute
+  the latter to production before locating its exact failure. Rerun the
+  original three fixtures with the recursive
+  matrix because the shared helper gained that assertion. Forced-OOM coverage
+  is not implemented yet. Design prose now distinguishes immutable digest
+  repetition from growth over stored raw vars and states the embedding
+  direction precisely; no production code changed in this coverage slice.
+  The coverage review confirms the authentic parent/re-drive and signature
+  fixtures, but requires a test-quality correction to reverse lookup: select
+  the complete decision and exact SchemeUse first, then consume its authored
+  `constraint_index`; do not assume the entire constraint-history pool is
+  unique by raw callable. Rename that test to describe shared-cache helper
+  coverage, and assert the retained negate sibling's offset precedes the
+  rejected plus offset. Corrected snapshot `85f7ccf8` applies those changes
+  and uses `(Parent.Value).make()` for value dispatch. Formatting and AST
+  checks pass; root's focused new-three run `91187` with
+  `-Ddebug-gpa-traces` is active to identify the signature assertion. This
+  flag is for focused diagnosis, not the default for broad suites. Review
+  includes the exact correction delta; no production change was made.
+  Independent review accepts the corrected static coverage and design prose;
+  the signature assertion and corrected parent fixture still need dynamic
+  results. The reviewed finite OOM plan uses unchecked source `main = 5 + 6`,
+  normal expression-checking producers before finalization, and the exact
+  lhs literal-creation driver plus introduced constraint. Measure the
+  allocation delta of `checkFlexVarConstraintCompatibility` once with failures
+  disabled and resize failure forced, then recreate the staged source and
+  fail each allocation in that measured operation. Route checker, type-store,
+  and CIR allocators only around compatibility; construct the staged Env with
+  the disabled failing allocator and keep that allocator alive through all
+  deinitialization. Do not overwrite the managed variable-map allocator:
+  `beginProbe` moves the old map aside and clones its live replacement with
+  the current checker allocator; rollback restores the original map.
+  Check child/SchemeUse/target atomicity and real probe, evidence-site, and Env
+  restoration; allow legal pre-probe decision/import-root state and capacity
+  changes. This tests the shared transaction from an authentic ordinary
+  literal, not specialization materialization; full-source specialization
+  regressions supply that separate lifecycle coverage. No broad `checkFile`
+  sweep, synthetic postcheck cache mutation, or new test hook is planned.
+  The final read-only staging audit confirms the exact setup: save the
+  canonical `main` binop and lhs before `checkExpr`, match the aligned
+  literal-creation ledger by that lhs source node, and obtain the active plus
+  constraint/offset from its producer provenance rather than hardcoding a
+  raw variable or range offset. Calibration first runs as a named success
+  regression. Snapshot all Env rank-list/deferred lengths, probe and interner
+  depths, evidence site, problems/snapshot marks, derivations, and SchemeUses;
+  allow only complete phase-appropriate decision/import-root state before the
+  target transaction. Require an induced failure after the exact root exists
+  but before any child/target is retained. Add an unchecked borrowed-admitted-
+  Builtin fixture API only if calibration demonstrates repeated admission cost.
+  Traced run `91187` completed RED (2/4 tests passed, 2 failed, no crashes).
+  Signature now stops at the newly added `bad_negate.offset < bad_plus.offset`
+  assertion, so it has not yet exposed the original `39f52c74` signature
+  failure. The corrected parent source checks cleanly but has no plus
+  `default_method` root; the fixture's assumed default topology is unproved.
+  Shared-cache reuse passes. The next diagnostic-only patch will print exact
+  constraint/root/child/target topology and observe, rather than stop at, the
+  disproven order assertion so tracing can reach the original failure. No
+  acceptance follows from that temporary bypass; retain sibling assertions
+  and remove all TEMP observations before the eventual clean rerun. No
+  production bug has been established by these fixture failures.
+  Diagnostic snapshot `91627c01` is running as traced two-filter session
+  `28160`. The offset observation and parent topology dump are in the intended
+  fixtures, but the full signature topology call accidentally landed in the
+  older arity-rejection test and will not execute in this run. Keep the useful
+  original-signature stack/offset and parent outputs distinct from that missing
+  dump. Review confirms production is unchanged; the test-only helper also
+  prints unchecked start-plus-length sums, safe for these already validated
+  fixtures but not a generally corruption-safe diagnostic. Every TEMP site
+  must be removed before acceptance.
+  Run `28160` completed RED (1/3 tests passed, 2 failed, no crashes). It
+  identifies the original signature failure exactly: the snapshot helper
+  rejects `rejected_args[1]` as `Str`; both outer arities, expected `Dec`
+  argument, bad-plus absence, good-plus root reuse, and negate-child target
+  assertions pass before it. Inspect the rejected argument's actual snapshot
+  representation before changing that check. The bad decision has plus
+  offset 0 and negate offset 1: negate proves successful later continuation,
+  not preservation of an earlier sibling. The clean parent fixture has zero
+  default decisions and three target rows: local make raw callable 293, then
+  Builtin from_numeral 298 and plus 304, both with parent 293 and complete
+  selected decisions. It establishes parent lineage but takes ordinary
+  selection, not the required default-child path. Keep that distinction; an
+  inferred arithmetic-only target signature is a candidate replacement to
+  investigate, not yet a verified fixture. No production defect is proven.
+  Corrective/diagnostic snapshot `d21034e5` removes the entire broad TEMP
+  helper and its misplaced call. Signature asserts plus precedes negate,
+  describes later continuation, and keeps one bounded snapshot-content /
+  formatted-value print immediately before the still-failing `Str` check.
+  Parent now uses inferred `make = |_| { my_dec = 7.Dec; |x| x + my_dec }`
+  with direct tuple discard of `(Parent.Value).make()` alongside the inspect
+  closure. Static tracing establishes a copied nonliteral desugared-plus
+  instantiation candidate with the make parent; the unchanged assertions
+  still require an actual default child, not an ordinary-parent substitute.
+  Root's traced two-filter session `96488` is active. Independent review
+  accepts this exact correction; dynamic pinning behavior and the rejected
+  snapshot representation remain pending. Formatting and AST checks pass.
+  Run `96488` completed with 2/3 tests passing and one signature-fixture
+  failure. The authentic non-null default-parent fixture passes all its
+  default-root/child/sole-target/derivation/re-drive assertions. The signature
+  snapshot is a nominal with formatted bytes `83,116,114` (`Str`), but its
+  helper compares the unqualified `idents.str`. The ModuleEnv constants
+  distinguish `Str` from `Builtin.Str`; `idents.dec_type`, already used by
+  the expected argument check, is likewise qualified (`Builtin.Num.Dec`).
+  Verify the imported nominal producer and correct the expected Str identifier
+  to the exact qualified constant, not an either-name fallback. Remove the
+  remaining TEMP print and rerun original/new fixtures plus the recursive and
+  deep finite-chain matrix without allocation stack tracing. No production
+  change is required by the evidence so far.
+  Clean coverage snapshot `29ace3cb` applies only the exact qualified
+  `builtin_str` correction and removal of the last TEMP print after `d21034e5`.
+  Independent review verifies that declaration/snapshot coordinate; formatting
+  and AST checks pass and Check.zig contains no TEMP diagnostics. Root's
+  untraced combined session `64442` is active: original three default fixtures,
+  three new signature/parent/shared-cache tests, `check type - dispatch -`,
+  and the deep finite nested requirement-chain resource test. Final bounded
+  coverage review is active. Forced-OOM implementation is next, not included
+  or certified by this run; whole W6b remains unfinished and unpublished.
+  Session `64442` completed RED: 17/20 tests passed and 3 crashed. All six
+  original/new lifecycle tests and the deep finite-chain resource test pass.
+  The failing recursive-matrix cases are `nested Try interpolation reports
+  recursive dispatch` (invalid marker-copy source authority), `weak receiver
+  grounded by a later requirement discharge stays legal`, and `cap-free
+  generational discharge across pending scheme requirements` (both: one
+  instantiated source constraint mapped to two destination constraints).
+  Root's exact-three traced rerun `55042` is active on unchanged `29ace3cb`
+  source. The implementer is tracing the mapping failures; the independent
+  reviewer is tracing nested-Try authority. No production attribution or
+  invariant relaxation is justified before exact stacks/producer evidence.
+  Resolve these targeted failures before returning to the combined matrix;
+  the reviewed staged OOM calibration/sweep is deferred, not waived.
+  Traced session `55042` completed RED (1/4 tests passed, 3 crashed). Both
+  mapping crashes originate in `canonicalizeWhereMarkerInstantiationConstraintPairs`
+  via `publishLocalWhereMarkerCopyStep` →
+  `instantiateBindingVarWithMarkerCopyInternal` →
+  `instantiateExpectedCallBindingVar` → `instantiateExpectedCallCalleeForFrame`,
+  not the similarly worded predeclared-annotation event check. Nested-Try
+  fails inside `validateSelectedMethodDecisionsContext` as reported by the
+  source-namespace validator; its exact inner predicate still needs isolation.
+  No build is active at this checkpoint. The implementer owns any diagnostic
+  edits in Check.zig; the reviewer supplies the independent nested-Try trace.
+  Retain all existing tests and validation rules while identifying exact
+  colliding constraint pairs/components and the selected-decision false exit.
+  Static mapping trace identifies the concrete collision path: a weak
+  descriptor-owned constraint S is also stored directly by a `.creation`
+  TypeScheme requirement capture. Requirement-receiver ingress ordinal 0
+  takes the rank-share cut and records S→S; its independent callable ingress
+  appends copied D and records S→D. A diagnostic must pin those rows and
+  ingress witnesses before production correction. The implementer proposes
+  giving creation captures a distinct detached occurrence C (S→S and C→D),
+  but this remains unapproved pending design, marker/evidence movement,
+  terminal ownership, liveness, and Probe/OOM review. Do not merely suppress
+  either row or relax the functional assertion. The same diagnostic freeze
+  should identify every false exit in selected-method validation without
+  changing predicate order, so nested-Try is localized in one run. The outer
+  source-namespace stack does not prove the inner validator source loop passed.
+  Diagnostic snapshot `59c093ef` is frozen and running as root traced
+  exact-three session `80909`. It labels every selected-context false exit,
+  preserves the dispatch-use/owner-binding short circuit, and dumps conflicting
+  source/destination constraint rows plus exact requirement-ingress witnesses
+  before the unchanged canonicalizer. Independent adversarial review accepts
+  it for diagnosis only: additional reads are bounds-guarded, witness
+  coordinates are printed without dereference, and no validation or mutation
+  semantics changed. All TEMP code must be removed before acceptance.
+  Capture detachment remains a proposal: distinguish raw-variable
+  functionality from constraint-pair identity/primary-witness coverage and
+  verify full terminal ownership rather than preserving one assertion alone.
+  Session `80909` completed RED (1/4 tests passed, three crashes). Both
+  constraint collisions are now dynamically pinned: requirement receiver
+  ingress ordinal 0 is exact raw identity and contributes S→S, while its
+  paired function ingress contributes S→D. The receiver has no primary
+  static-dispatch function witness for S→S. The implementer is auditing the
+  narrower producer correction: a virtual requirement-receiver identity cut
+  publishes its endpoint occurrence, not descriptor-owned constraint-copy
+  identities; ordinary structural share cuts retain their identity proofs.
+  Capture-time cloning is not approved or implemented. Nested-Try fails
+  specifically in `selectedReceiverOwnerBindingMatches`: decision 4,
+  constraint 6, raw callable 413, receiver 412, whose current content is
+  `err`, with provider type/definition 17457. The independent reviewer is
+  tracing the immutable selection authority needed across error poisoning.
+  No build is active; no validator weakening or publication is authorized by
+  these diagnostic results. Remove all diagnostic labels before acceptance.
+  The completed static audit supersedes both capture cloning and source
+  reservation proposals: `recordIdentityConstraintProofs` overpublishes
+  descriptor constraint pairs at every terminal share cut. Those cuts do not
+  traverse the constraints and therefore cannot author their required primary
+  function witnesses. The approved bounded correction removes that helper and
+  both share-cut calls, retaining the exact raw occurrence and typed cut
+  witness. Fresh structural copies and detached function ingresses retain
+  their actual constraint-pair publication. Tests must distinguish both
+  share-leaves/rank cuts from fresh and memoized copies, including a detached
+  callable which mentions the shared receiver again. This is an untested
+  implementation task at this checkpoint, not an accepted result.
+  The independent review also specifies the selected-owner correction:
+  persist the exact nominal/alias selection input's module identity and source
+  declaration inline in `SelectedMethodDecision`, passed from the producer
+  before target work. Both selected root-origin replay and terminal selected
+  context replay must use that immutable owner tuple, not the receiver's
+  post-error descriptor. The existing exact raw receiver-anchor and movement
+  inverse remains mandatory. Reserved rows carry `none`; completed rows require
+  bounded, valid owner coordinates and the exact owner/method/provider binding
+  relation. Rebuild retains the tuple unchanged, and serialization/schema tests
+  must cover it. The authentic nested-Try error is the positive; wrong owner,
+  declaration, provider binding, and raw receiver are rejection cases. This
+  follow-on implementation has not begun at this checkpoint.
+  Clean share-cut snapshot `6e869f7f` removes the overpublication and all TEMP
+  diagnostics. It also rejects local equal-index constraint pairs at producer
+  canonicalization and artifact admission; cross-module equal integer indexes
+  remain distinct namespace occurrences. Each admitted pair now requires one
+  copied source. Three new types tests pin both terminal sharing policies and
+  fresh/memoized copy publication; the detached scheme fixture now attaches S
+  to its shared receiver and checks the sole S→D pair plus an injected S→S
+  rejection. Root types session `86381` completed GREEN: 4/4 steps, 6/6 tests
+  under `instantiator proof:`. Root traced checker session `40510` is active
+  on this frozen source: detached-source converse, weak receiver, and cap-free
+  generational discharge. Independent final review of the bounded diff is
+  active. The forged S→S test pins identity rejection (the early equality guard
+  now rejects it before the primary-function converse); do not claim that test
+  isolates the latter predicate. Nested-Try owner authority remains next.
+  Session `40510` completed GREEN: 7/7 steps, 4/4 tests, 21 seconds / 30 MB
+  test-runner peak. The share-cut slice is accepted after independent final
+  review: the two local pair producers both append fresh constraints, the
+  local canonicalizer cannot see cross-module pairs, and equal numeric
+  cross-module indexes remain valid. Source `6e869f7f` is the latest tested
+  production checkpoint. No build remains active. The agents now exchange
+  implementation/review roles for the selected-owner snapshot task described
+  above; the full recursive matrix and handoff OOM sweep still follow it.
+  Selected-owner snapshot `ee5bfcdd` is frozen for the first serialization/hash
+  gate (`99546`, compile-module filters for the W6b table roundtrip and
+  `MODULE_ENV_VERSION_HASH golden value`). It adds inline owner coordinates,
+  threads the original matched nominal/alias tuple through selection, replaces
+  both live-descriptor consumers, extends the exact-owner corruption fixture
+  and nested-Try positive, adds nonempty static/mutable/OOM serde coverage, and
+  advances cache version to 79. The old hash golden deliberately awaits measured
+  output. Final adversarial review found a blocker: owner-key lookup does not
+  itself prove that the source-declaration coordinate names an alias/nominal
+  statement. Add `ownerModuleEnvSourceDeclMatches` before the binding lookup,
+  with forged owner-key/non-type and out-of-range corruption coverage, after
+  the active run ends. The test helper was already corrected to execute terminal
+  validation independently even when root-authority lookup rejects. No owner
+  implementation acceptance or recursive-matrix pass is claimed yet.
+  Session `99546` completed at a compile error, before either test ran:
+  `src/compile/test/module_env_test.zig:629` initializes `WhereMethodSource`
+  without its required `source_ordinal`. No hash bytes or serde result were
+  measured. The implementer is correcting that schema-stale fixture explicitly
+  alongside the declaration guard and a coordinated provider-key/owner-tuple
+  negative. Root will rerun the same two compile-module filters after review;
+  no build is currently active.
+  Correction snapshot `bf45ff14` adds the bounded alias/nominal owner-declaration
+  guard before lookup, a one-past-end declaration negative, and a coordinated
+  finalized-provider-key/selected-owner mutation. The latter first proves that
+  the unguarded lookup still returns the original exact binding, then requires
+  both contextual validators to reject; full provider entries/order flags and
+  the decision coordinate are restored afterward. The stale serde fixture now
+  explicitly supplies `source_ordinal = 0`. Root's identical compile-module
+  rerun `73784` is active on frozen source; corrective review is active and the
+  cache hash golden remains unmeasured.
+  After that run, add the non-NONE one-past-end module-identity negative and
+  an authentic external alias-owner positive. The reviewer identified the
+  supported route: an empty-tag extension namespace declares a method whose
+  first receiver annotation is a transparent alias; alias-associated blocks
+  are not valid syntax. The existing alias-growth matrix uses backing/local
+  methods and is not evidence for external alias owner-field publication.
+  Session `73784` completed with 2/3 tests passing; the W6b static/mutable
+  roundtrip and its exhaustive mutable-deserialization allocation-failure
+  checks pass. The only failure is the deliberately stale hash golden. Measured
+  module-env hash at cache version 79 is
+  `b285b4176f97ddc225f1c48dd0eb383a9e9625b7afb7eb9b3b29229c14eca1ee`.
+  Independent corrective review accepts the declaration guard and its
+  guard-isolating negative. The implementer is updating the golden and adding
+  the two remaining owner-coverage cases before the same compile-module rerun;
+  the selected-owner checker regressions have not yet run. No build is active.
+  Final owner-coverage snapshot `c5852805` updates the measured hash golden,
+  adds the non-NONE one-past-end identity negative, and adds
+  `selected method decision preserves its imported alias owner`. The alias
+  fixture uses receiver-extension registration and asserts a nonempty sole
+  selected decision with the provider identity, alias declaration (not its
+  nominal backing), exact binding, and both contextual validators. Root's
+  same-filter compile rerun `53835` completed GREEN: 25/25 build steps and
+  3/3 tests, including static/mutable serialization and allocation-failure
+  coverage. Final review found another owner-authentication blocker: Can
+  registers the alias fixture's exact same implementation under both the
+  `Alias` receiver-extension key and the `Extensions` declaration-owner key.
+  Binding equality therefore cannot distinguish a corrupted owner coordinate
+  retargeted to the other valid declaration. This snapshot is not accepted.
+  The bounded correction captures the exact canonical provider `method_defs`
+  entry index at the original owner-key lookup and retains it in the selected
+  decision. Admission requires that indexed producer-authored registration's
+  owner, method, and binding to match; it must not reconstruct the owner from
+  solved types or disallow legitimate declaration-owner rejected selections.
+  Tests must independently corrupt the owner and registration index, cover
+  missing/out-of-range indices, and retain an authentic rejected namespace
+  selection. Design/schema/serde updates and independent adversarial review
+  accompany the correction. No build is active while implementation proceeds.
+  The selected-marker owner matrix, nested-Try recursive regression, and alias
+  positive still precede the full recursive matrix and staged handoff OOM sweep.
+  Correction snapshot `d2c40cb1` adds the exact canonical registration lookup
+  result, threads its index through prepared/cached targets and complete
+  selected decisions, and authenticates that index in both contextual
+  validators. Missing/out-of-range and independent alias/namespace-coordinate
+  negatives are present; the forged non-type-key negative carries its exact
+  post-sort index to continue isolating the declaration guard. An authentic
+  rejected namespace selection retains its declaration-owner row. Nonempty
+  serde includes the field, cache version is 80, and the hash golden awaits
+  measurement. Root's combined untraced checker run `36386` is active on frozen
+  source: the three owner fixtures, all twelve recursive-dispatch cases, deep
+  finite-chain resource regression, and six default-target lifecycle cases.
+  Independent adversarial review is active; no dynamic owner acceptance yet.
+  Run `36386` stopped at compilation before tests: the new namespace fixture's
+  `problem` capture shadows Check's imported module. The immediate correction
+  renames that test capture. Review also identified a documentation-only
+  conflation: the post-check `(MethodOwner, MethodNameId)` registry does not
+  return canonicalization's `MethodBinding`/provider row. Restore that registry
+  paragraph and keep the indexed lookup rule explicitly attached to checker
+  `ModuleEnv.method_defs`. No production behavior change is required by either
+  finding. The identical checker matrix follows the corrected freeze.
+  Snapshot `37d1d88f` contains only that test-capture rename and stage-specific
+  design correction on top of `d2c40cb1`. Root's identical combined checker
+  rerun `73206` is active on frozen source. Final review is confirming this
+  snapshot; the version-80 hash golden remains intentionally stale until the
+  compile-module measurement.
+  Run `73206` completed RED: 21/23 tests passed, two failed, no crashes. All
+  twelve recursive-dispatch cases (including nested-Try), the 80-layer finite
+  chain, all six default-target lifecycle regressions, and the original exact
+  owner corruption fixture pass. Thus all three original recursive crashes
+  are resolved on this production snapshot. The new imported-alias fixture
+  fails because `Alias` is not exposed by its headerless provider; the rejected
+  namespace fixture likewise has one canonicalization error. Correct both
+  providers with explicit module exports, preserving their authentic
+  receiver-extension registration and all assertions, then rerun those two
+  failing filters before the combined matrix. The production fix does not
+  change for these source-fixture errors.
+  Review clarified the bounded ownership contract: owner tuple plus canonical
+  provider-row index is the atomic checker-authored selection input. Admission
+  rejects independent substitution of either coordinate and validates the
+  selected canonical registration; it does not independently reconstruct the
+  receiver's pre-poison owner. The raw anchor and movement proof authenticate
+  the exact occurrence separately. A jointly consistent replacement tuple/row
+  is not rejected by this bounded contract; moving the same assertion into a
+  second ledger would supply no new earlier authority. State that limit in
+  the design rather than claiming a stronger inverse. Normalized settlement
+  work remains separately required. Source is thawed for those fixture and
+  documentation corrections; no build is active.
+  Correction `a4b4ab42` explicitly exports `Base`, `Alias`, and `Extensions`
+  from both new providers without changing registrations or assertions, and
+  clarifies the bounded selection contract in design.md. Independent final
+  static review accepts the complete owner-registration slice with no
+  production blocker: exact lookup/cache identity, bounded dual admission,
+  reserved/complete lifecycle, recursion rule, rebuild/probe/serde ownership,
+  and corruption-test scope are verified. Root's exact two-failure rerun
+  `73769` is active on frozen source; dynamic acceptance and version-80
+  serialization/hash verification remain pending.
+  Run `73769` completed RED: 1/3 passed, both fixtures stopped at provider
+  `assertNoErrors` because explicit module headers emit the expected sole
+  `Module Header Deprecated` diagnostic. Neither consumer executed. The next
+  test-only correction retains this still-supported explicit-export form,
+  asserts exactly that provider diagnostic plus zero checker problems, and
+  preserves every strict consumer assertion. This does not suppress other
+  diagnostics, alter registration topology, or change production code. The
+  existing imported-partial-scheme regression uses the same supported header
+  form. Rerun the same two filters after the corrected freeze.
+  Snapshot `f34b49ef` pins exactly the sole provider deprecation diagnostic
+  and zero raw checker/type problems in both fixtures. Independent review
+  accepts this delta: no diagnostics are suppressed, and both consumers'
+  strict assertions remain unchanged. Root's identical two-filter run `8365`
+  is active on frozen source. Disk preflight has ample free space; no disk-use
+  error or cache deletion has occurred.
+  Run `8365` completed RED: 2/3 tests passed. The rejected namespace fixture
+  now passes its exact method-type diagnostic, declaration-owner registration,
+  and both contextual validators. The alias fixture reaches its consumer but
+  reports `Missing Method` on `Base`: initializing an annotated alias value
+  from the concrete backing constructor resolves away the transparent alias
+  before dispatch. Correct the fixture to dispatch through an explicitly
+  annotated alias function parameter, without that prior backing-value
+  unification. Preserve the sole selected decision and all held-coordinate
+  corruption assertions; do not change alias typing or manufacture receiver
+  state. Rerun this remaining failure first. The next implementer is drafting
+  the staged OOM calibration outside the repository while source gates run;
+  it is not applied or tested yet.
+  Snapshot `d03819dc` changes only the alias fixture's consumer to
+  `out : SelectedAliasProvider.Alias -> [One]` and
+  `out = |value| value.run()`, retaining every registration/decision/corruption
+  assertion. Root's alias-only rerun `95961` is active on frozen source;
+  independent correction review is active. The namespace positive already
+  passed in `8365`; do not count the pending alias run as a pass.
+  Run `95961` completed RED: 1/2 tests passed. The parameter variant also
+  reports `Missing Method` on `Base`; the claimed alias-selection ingress is
+  disproven. Stop fixture guesses. Read-only tracing identifies why ordinary
+  value dispatch cannot pin this case: both `mkReceiverDispatchConstraint` and
+  `mkTypeMethodCallConstraint` unify a newly constrained flex with the
+  receiver; unification explicitly directs a constrained-flex/alias relation
+  to the alias backing. Type-directed syntax alone therefore does not solve
+  this. The agents are auditing other real deferred-constraint producers before
+  any further fixture edit. If no authentic external alias selection exists,
+  the same-binding corruption regression should instead use a real nominal
+  receiver-extension key and its namespace key, not change alias typing or
+  manufacture solver state. Root's independent compile-module serde/hash
+  measurement `28145` is active on unchanged `d03819dc`; repository source
+  remains frozen during this read-only diagnosis.
+  Run `28145` completed with 2/3 tests passing: version-80 static/mutable
+  serialization and exhaustive mutable-deserialization allocation failures
+  pass; only the deliberately stale golden fails. Measured hash:
+  `5811839cadd809780e4dd04848db8f0c882bfc460662c21c077353dac4ae6a24`.
+  Driver decision: the owner-authentication bug requires identical bindings
+  under two distinct canonical owner keys, not an external alias selection
+  specifically. Replace the invalid alias-positive fixture with an authentic
+  nominal `Base` receiver-extension registration under `Extensions`; require
+  the exact Base row, identical binding under the namespace row, and both
+  held-coordinate corruption rejections. This retains the actual bug coverage
+  without changing alias semantics or claiming an unproved alias ingress.
+  The already-green rejected namespace fixture keeps its Alias signature.
+  Broader alias-producer exploration is not an acceptance requirement for this
+  bounded correction. The implementer is making that test-only change and
+  updating the measured hash golden; no build is active.
+  Snapshot `48d3aa97` implements the truthful nominal receiver-extension
+  fixture (`selected method decision preserves its exact receiver-extension
+  row`) and the measured version-80 hash golden. It keeps the same-binding
+  two-row setup, independently corrupts the Base owner and namespace row
+  index, checks both contextual validators, and preserves the already-green
+  rejected namespace fixture. No production code changed. Root's single
+  focused check+compile build `4265` is active on frozen source with those
+  two owner filters and the W6b serde/hash filters; independent delta review
+  is active. The failed alias fixtures establish backing dispatch for their
+  attempted routes, not global unreachability of the checker alias branch.
+  Run `4265` completed GREEN: 28/28 build steps, 6/6 tests. Checker owner
+  fixtures pass (3 tests with aggregator, 15 seconds / 26 MB); compile
+  serialization/hash tests pass (3 tests, 1 second / 3 MB), including exhaustive
+  mutable-deserialization OOM coverage. Independent final adversarial review
+  accepts `48d3aa97`; the selected-owner/registration correction is complete
+  as a bounded prerequisite. All three original recursive crashes already
+  passed on its unchanged production code in `73206`. The agents now exchange
+  roles for authentic staged default-target OOM calibration: the former
+  reviewer implements, the former implementer reviews, and root alone runs
+  builds and jj. A scratch directory was reserved at
+  `/private/tmp/w6b-oom-kPfBID`, but the final test was applied directly in the
+  repository after the source thaw; no scratch implementation was used.
+  Calibration/success is first, finite measured allocation-failure coverage
+  follows; no new compiler behavior or test hooks are authorized. Root will
+  repeat the owner/recursive/default matrix alongside the calibration test.
+  Snapshot `34d5b641` adds the authentic staged calibration test and a
+  test-only allocator-routing helper. It stops normal expression checking
+  before default finalization, drives the exact lhs numeral's `plus`
+  compatibility edge, and checks the transient decision, cached imported
+  root, committed child/SchemeUse, and sole raw-edge target. Independent
+  adversarial review accepts the corrected raw-occurrence versus canonical-
+  pair assertions and allocator lifetime. Root run `68496` completed GREEN:
+  7/7 steps, 24/24 tests, 2 minutes test runtime / 33 MB, including the full
+  owner/recursive/default matrix. Calibration measured 58 allocations. The
+  finite sweep is now authorized on thawed source, using runtime calibration
+  and a fresh authentic staged checker for every failure index. It must remove
+  the temporary allocation-count print and prove exact rollback while allowing
+  complete pre-transaction draft/imported-root support to remain; calibration
+  alone is not OOM acceptance.
+  The finite sweep is implemented under `staged default target compatibility
+  is atomic across every routed allocation`. It uses identical module/source
+  setup and the same resize-failure boundary for calibration and every fresh
+  injection. Review requires exact per-rank/deferred/diagnostic/snapshot/
+  SchemeUse/derivation rollback, no partial target or child, and only a complete
+  authenticated imported root as a permissible copy-step suffix. Final static
+  review also requires the two exact transient contributor entries (explicit
+  driver plus seeded lhs registration) and the lhs-only registration assignment;
+  that tightening is complete and independently accepted. Frozen snapshot
+  `4ba47cf3` failed root's focused run `39352` at compile time, before tests:
+  the new region-length snapshot/assertion used `.items.len` on a SafeList
+  instead of `.items.items.len`. The implementer is correcting those exact
+  field accesses before rerunning the same filter; dynamic OOM acceptance
+  remains pending. No production behavior changed in this test slice.
+  Snapshot `f5859e5c` corrects the two SafeList accesses and passes independent
+  delta review. Root run `19689` compiled and executed, then failed the sweep
+  with `expected 221, found 224` (1/2 tests passed including aggregator; no
+  stack trace). The exact assertion and failure index are not yet localized;
+  do not label this a production rollback defect or relax the assertion based
+  on that number alone. The next focused patch adds bounded diagnostics and
+  the independently reviewed phase-aware pair/occurrence/witness suffix checks:
+  no imported root means unchanged lengths, while a surviving root must own
+  the complete new suffix of each pool. Root import precedes CommitProbe, so
+  complete imported support may legitimately survive a later failure.
+  Independent producer audit establishes that unconditional region-length
+  equality is invalid in the surviving-root phase: the imported-root Probe
+  commits `postProcessCopiedVars` / `fillInRegionsThrough` before the child
+  CommitProbe. The 221-to-224 result is consistent with that three-variable
+  root prefix, though its original assertion was not labeled. Replace the
+  invalid unconditional check with exact phase-aware type/region bounds
+  authenticated by the surviving root's raw destination occurrence prefix;
+  absent root still requires unchanged lengths. A bounded failure-index/stage
+  diagnostic will localize any remaining failure. No production fix is
+  justified by this result.
+  Snapshot `3767f007` implements the independently accepted phase-aware
+  correction and exact three-pool suffix checks. The imported copy allocates
+  one append-only destination prefix, and the speculative child allocates
+  strictly afterward: bounding every root destination below by the baseline
+  and equating its maximum-plus-one with both type and region ends excludes
+  leaked child variables. This test does not re-prove interior occurrence
+  completeness, which belongs to canonical copy-proof validation. Permanent
+  error-only allocation-index/stage context replaces the TEMP diagnostic.
+  Root focused run `93726` completed GREEN: 7/7 steps, 2/2 tests, 6 minutes
+  test runtime / 24 MB. The finite routed-allocation sweep now passes its
+  dynamic and independent review gates. No production behavior changed.
+  That measured repeated-admission cost justifies the preapproved thin
+  `TestEnv.initUncheckedWithAdmittedBuiltinForTesting` wrapper. Reviewed
+  scratch patches create/admit one immutable Builtin source outside all
+  consumers and use the same unchecked wrapper for calibration and every
+  fresh failed checker; no consumer graph is reused and no admission is
+  bypassed. Root caught and the implementer corrected a scratch local-name
+  collision (`prepared_builtin_indices` versus the later checker-derived
+  proof value) before application. Source is thawed only for this two-file
+  test-setup optimization, followed by the sweep plus complete owner/
+  recursive/default matrix. The next production task remains the exact
+  historical invalid-import call-retirement regression.
+  Snapshot `a69a5965` applies the reviewed shared-admission setup. The new
+  unchecked wrapper delegates to the existing prepared-Builtin path with
+  borrowed ownership; the outer test explicitly owns the view and validated
+  capability, and every calibration/failure consumer is separately allocated
+  and deinitialized. Applied delta review is clean. Root's combined 24-test
+  sweep/owner/recursive/default gate `88439` completed GREEN: 7/7 steps,
+  24/24 tests, 2 minutes test runtime / 33 MB. The bounded finite OOM slice
+  and its setup optimization are complete and independently accepted. Agents
+  now exchange roles for the historical invalid-import regression: first
+  apply the exact saved source and bounded formal-owner diagnostics from
+  `/private/tmp/invalid_import_call_retirement_diag.patch`, then identify the
+  actual failing predicate before any production/schema correction. Source
+  is thawed to that implementer; root continues to own all builds and jj.
+  Snapshot `0656679f` restores the exact historical invalid-import source in
+  `invalid imported where alias retires checked call formals without losing
+  producer authority` and adds bounded read-only diagnostics at every failing
+  call-formal replay stage, including guarded owner regions and token lookups.
+  Independent review accepts this diagnostic-only increment; no predicate,
+  schema, or typing rule changed. Root focused run `82818` reproduced the
+  crash: owner node 25, source bytes 127..147 (`second(value, 1.U64)` inside
+  `first`), is `.malformed`; root plan 4 / argument plan 5 retain
+  `call_root` / `not_projected` / `call_shape_ready`, but the owner snapshot
+  is absent and there are zero matching retirement or ambiguity rows. The
+  first failed predicate is therefore now dynamically identified, not merely
+  suspected from static code. The exact originating error branch/cause still
+  needs tracing before production implementation; callee poisoning, argument
+  relation failure, erroneous operands, and later enclosing retirement must
+  not be conflated. Source is thawed for that bounded diagnosis/design work.
+  Exact final Can/checker diagnostic counts remain intentionally
+  unclaimed until observed; the current harness only checks the historical
+  `Type Not Exposed` presence if initialization returns.
+  Snapshot `933528f0` adds the independently reviewed causal discriminator:
+  the existing ordinary-call error branch reports its exact callee/argument
+  flags and failing relation slot, and the separate call-shape-error queue
+  branch has its own label. Argument and owner-region reads remain bounded;
+  no predicate or mutation order changes. Root same-filter run `40664`
+  reproduces the crash and identifies the real branch: both owner 25
+  (`second(value, 1.U64)`) and owner 53 (`first(value, 1.U64)`) have established
+  call shapes, no call-shape problem, no erroneous callable type, and no
+  argument-relation failure. Their `args_did_err` is true because slot 0's
+  `value` lookup (node 23 / 51) is in both producer-authored error-flag channels;
+  slot 1's typed integer is clean. The callee's returned typed status is
+  established/inactive CauseOwner, even though its later dense flag is true.
+  The erroneous-operand helper retires the call before its successful relation
+  stamp; the subsequent owner replay still finds no retirement. The next
+  bounded task traces the exact producer/cause of the erroneous lookup and
+  declares the explicit ordinary-call operand-retirement mechanism before
+  implementation. Neither a flag alone nor a solved `.err` supplies the
+  durable cause. This is confirmed diagnosis, not a passing regression claim.
+  The first bounded source-side repair is snapshot `464b5009`: the exact
+  malformed where-alias target now goes through the existing
+  `annotation_malformed_type` publisher with its unchanged `GenTypeAnnoCtx`
+  before the same owning rigid is poisoned. It introduces no new schema or
+  binder/call authority. Independent adversarial review found no issue in this
+  bounded production/design delta. Root run `99667` completed with 8/9 tests
+  passing: all seven prior annotation/suppression/sibling/transaction/causal-DAG
+  regressions and the aggregator passed; the new no-call invalid-import
+  fixture failed `expected 1, found 2`. The exact assertion/count must be
+  localized before changing expectations; dynamic acceptance is pending.
+  Test-only snapshot `5fa14e4e` adds bounded error-only count labels. Its
+  same-test run `84696` completed red (1/2 including the aggregator) and
+  identifies the first failed assertion as the canonical diagnostic count:
+  the exact stream is `type_not_exposed`, then `undeclared_type`. No ledger
+  cardinality assertion was reached. The fixture must pin both diagnostics
+  and authenticate the malformed alias's own diagnostic rather than assuming
+  it is the separate import-exposure diagnostic. No production change was
+  made in response to this test failure. Corrected fixture snapshot `e21af699`
+  pins both ordered diagnostic titles and the malformed alias's exact
+  `undeclared_type` diagnostic; all publisher-local `TEMP` labels are removed.
+  Independent review accepted that correction, and root run `92399` passed
+  7/7 steps and 2/2 tests (7 seconds / 25 MB). With the unchanged production
+  delta's seven existing named regression tests passing in `99667`, this
+  bounded malformed-alias publisher slice is complete and accepted.
+  The next authorized implementation is the explicit direct-binder path:
+  select the exact published malformed-alias failure for the exact direct
+  function formal and root assignment pattern, propagate it through a scoped
+  binder status, reserve and complete a typed lookup retirement before that
+  lookup is erased, and let the call-operand failure cite that lookup
+  retirement. A distinct ordinary-call retirement preserves successful
+  root/argument plans and ExpectedCallFormal rows with the original zero
+  relation stamp; live and ambiguity-retired calls retain their nonzero stamp
+  requirement. Canonicalization has two exact lambda-owner forms. A
+  capture-free bare lambda is retired directly, so its annotation retirement's
+  original lambda payload supplies the argument span. A captured closure's
+  original payload names its still-live lambda: the closure checker
+  unconditionally removes the lambda's queued retirement as the left operand
+  of `and`, including checked-error outcomes. Validators must replay both
+  closed source forms against fresh canonicalization, and tests must pin both
+  lifetimes rather than assume every function has a closure wrapper.
+  Multiple malformed aliases may own one direct formal, so transport must
+  retain the exact selected upstream failure rather than require a unique
+  matching cause in the annotation retirement. Nested/destructured binders
+  cannot inherit this direct-root arm; clean sibling parameters and fields
+  must remain unaffected. Implementation of this downstream slice is in
+  progress; it has not reached a frozen build or independent acceptance.
+  A second source-lifetime edge is now explicit: the malformed annotated
+  binding's callee lookup is also erased, while call-instantiation replay
+  requires its exact original binding pattern. Predeclared recursive calls
+  can precede checking that binding's body, so their established lookup
+  outcome must not borrow a future failure. The declared late
+  `annotated_binding_lookup_checked_error` arm instead publishes at the
+  existing destructive lookup-rewrite hook, after body sources exist and
+  before erasing the exact payload. It cites the canonical body-malformed
+  attachment and already-authored annotation failure/retirement, preserving
+  checking order and requiring exact call-callee position authority. At
+  producer time the annotation retirement may still be pending or may
+  already be completed by an earlier sweep; terminal admission requires its
+  complete cause range. This is an additional unaccepted part of the same
+  historical regression repair, not a change to the original lookup's typed
+  outcome. Shared call retirement completion must stage both owned-consumer
+  and failure-reference ranges before committing either half, so allocation
+  failure cannot strand a partial retirement.
+  Driver recovery snapshot `954d63d8` records the still-unverified downstream
+  edits (four-file delta from `e21af699`, including this plan). It is not a
+  frozen build or acceptance checkpoint; implementation continued afterward.
+  In-progress review requirements include: exact singleton lookup failure
+  ownership; the source annotation retirement's closed lifecycle; reuse of an
+  already-published late lookup draft after completion OOM; and explicit
+  Kahn/readiness/remapping of the direct-binder subject's failure-index
+  predecessor (other direct phases use different local-record namespaces).
+  The driver caught a lambda-argument indirection defect: `args_start/len`
+  select `NodeStore.index_data`, not a contiguous range of pattern nodes.
+  That correction is now in the live edits, but untested. Fresh-source replay
+  must also compare the referenced closure/lambda argument and annotation
+  formal data, not only equal outer node payload words. New annotation and
+  where-owner span reads need their own bounded access checks; existing
+  attachment validation does not certify those ranges. The reviewer derived
+  an authentic staged call-completion OOM test using a malformed-where
+  annotated lambda and an immediately invoked identity lambda, with real
+  lookup retirement before the live zero-stamp call's completion; this is a
+  test recipe, not an executed result. A smaller lookup-only dynamic
+  checkpoint is permitted if it can be isolated cleanly; the original
+  historical call regression remains mandatory afterward.
+  Lookup-only diagnostic snapshot `4f39ea7c` freezes the direct-binder
+  producer, local/fresh admission, Kahn/remapping, Probe state, and new test
+  `invalid where alias direct binder lookup retains its exact checked error`.
+  Annotated-binding late poisoning and ordinary-call operand retirement remain
+  unwired; their reserved schema/helpers are not accepted. Cache semantics
+  advance to version 81; the hash golden still awaits an observed compile
+  result. Root combined can/check run `41690` stopped before tests (1/10 build
+  steps) with four compile errors: one untagged `Node.Payload` comparison,
+  two incorrect `ExprLambda` type qualifications, and one missing failure-kind
+  switch arm. The implementer is correcting those exact errors before a
+  same-filter rerun. Formatting/AST success did not establish compilation or
+  dynamic acceptance. Existing historical-call `TEMP` labels remain pending
+  that separate repair and must be removed before production acceptance.
+  Compile-corrected snapshot `4bcdf53f` replaces untagged-union comparisons
+  with active typed payload comparisons and fixes the type qualifications and
+  missing enum arm. Same-filter run `86128` still stops before tests (1/10
+  steps), now with one error: the lambda-argument index-table entry is already
+  `u32` and must not be passed through `@intFromEnum`. That exact correction is
+  the next rerun; neither diagnostic run is a passing semantic gate.
+  One-line corrected snapshot `142dffb8` passes compilation. Root run `85305`
+  completes with 8/10 steps and 4/5 tests passing: can's exhaustive table and
+  aggregator pass, as do the prior malformed-source fixture and check
+  aggregator. The new direct-binder fixture aborts during initialization with
+  `checked module produced invalid contextual W6b semantic data`. Source is
+  thawed; no build is active at this checkpoint. Root and reviewer traced the
+  lifecycle mismatch: cold `validateProducedW6bState` supplies the already
+  rewritten module as `ImportResolution.resolution_env`, while the new
+  snapshot comparison expects untouched canonical nodes. The approved bounded
+  repair uses an explicit private replay-context tag: produced validation
+  retains local failure/retirement/source checks without comparing original
+  snapshots to final runtime-error nodes; independent fresh-canonical replay
+  compares both source and lookup snapshots; admitted-cache replay rejects
+  this malformed recovery family. The latter is already excluded by
+  `validateCleanCacheW6bState`, which rejects malformed type/body-publication
+  pools before either cache admission route. Do not invent an admitted
+  snapshot reconstruction mechanism or use pointer identity as a blanket
+  validation bypass. Import/provider checks remain active in every mode.
+  Review also found a remaining local unchecked `annotation.anno` access:
+  factor a guarded formal-at-slot helper covering root/tag, function type
+  node/tag, argument index span, slot, and rigid formal node/tag, and pin
+  out-of-range/wrong-tag/span corruption rejection. These fixes and further
+  direct-binder coverage are not implemented or accepted at this checkpoint.
+  The end-to-end bounds audit subsequently found that the common body-
+  publication predicate calls `ModuleEnv.annotationOwnsMalformedTypePublication`
+  before the new formal helper; its recursive annotation ownership traversal
+  also trusts type-node and span coordinates. Guarding only the new helper
+  would hide that earlier admission failure. The shared topology/ownership
+  boundary and real entrypoint corruption tests must be addressed, including
+  cycle safety without an arbitrary depth heuristic. Review is considering
+  the exact role of the canonical joined publication versus contextual fresh
+  replay before choosing the smallest sound repair. The private lifecycle
+  tag is being wired, but generic `supplied`/`empty` constructors must not
+  accidentally grant producer trust to artifact admission; in particular,
+  `admitBuiltinOwned` is an untrusted entrypoint without the ordinary clean-
+  cache gate. Neither this shared-boundary work nor the lifecycle repair has
+  a new test result yet.
+  The bounded implementation now targets stack-safe monotonic structural
+  ascent, not a fresh global scan at each ancestor. Canonical TypeAnno
+  structural children are emitted before their parents; identity references
+  remain excluded. The producer invariant and malformed-coordinate rejection
+  need independent review and tests before this replacement is accepted.
+  Root and reviewer also confirmed that `WhereClauseOwner.owned_by_annotation`
+  is a canonical transitive reachability result: main-annotation introductions
+  seed the closure, and written method signatures or alias arguments extend
+  it through locally declared rigids. Requiring every owned receiver to occur
+  directly in the main type tree would reject legitimate constraint-only
+  rigids. Preserve the published owner authority and clarify the narrower
+  existing design wording. Any early artifact-admission preflight must remain
+  allocation-free and avoid solved-type reads; the full clean-cache validator
+  still belongs after structural validation because it dereferences raw type
+  variables. These are review requirements, not new passing results.
+  The live implementation now contains guarded structural-edge readers,
+  monotonic membership ascent, bounded attachment/annotation storage reads,
+  and shared malformed-alias selectors. It also names cold contexts
+  `producedSupplied`, separates independent fresh replay, and uses
+  `recovery_forbidden` for Builtin admission and admitted-cache republishing.
+  Both public artifact entrypoints reject recovery publication pools before
+  deep validation, while the full clean-cache check remains afterward.
+  Terminal checking now asserts that both direct-formal source and active-
+  binder transport lists are empty. These edits are still unbuilt. Remaining
+  pre-freeze review findings concern preserving written clause order in the
+  first-source selector, avoiding repeated quadratic owner-list membership
+  counts, and ensuring short-circuit membership queries are not mistaken for
+  certificates for later typed reads. A tooling interruption ended the
+  implementation agent's turn; the driver resumed the same bounded task with
+  all existing workspace edits preserved. No validation result or accepted
+  checkpoint changed because of that interruption.
+  Frozen diagnostic snapshot `8b367d9f` completed root checker-only run `64095`
+  successfully: 7/7 build steps, 2/2 tests (the bare direct-binder regression
+  and checker aggregator), with 7 seconds/25 MB for test execution. This fixes
+  the cold contextual-validation crash observed in `85305`; it is not bounded
+  lookup acceptance or whole-W6b acceptance. Independent review requires two
+  follow-up fixes: `bodyAnnotationMalformedTypePublicationIsLocallyValid` must
+  explicitly validate the actual attachment payload, not merely binary-search
+  a matching ledger tuple; and checking each owner's written subsequence must
+  not restart a full written-list scan, which is quadratic for many singleton
+  owners. Use exact ordered membership and pin both contracts directly.
+  A stale design sentence must distinguish the structural lookup occurrence
+  from its non-structural payload reference. Source is thawed for these
+  bounded fixes and straightforward exact-count/empty-transient assertions;
+  the shared ownership regression gate and expanded direct-binder acceptance
+  matrix remain to run afterward.
+  Review-fix snapshot `b71614b8` restores the attachment helper's explicit
+  payload replay, replaces per-owner full scans with ordered binary lookup,
+  adds a direct coordinated-wrong-body rejection/restore check and ordered-
+  membership cases, and pins the bare fixture's exact two failures, two
+  retirements, two references, zero checker/type problems, and empty transient
+  lists. Independent static review accepted that bounded correction. Root
+  focused can/check run `41926` completed with 15/16 tests passing: all four
+  can tests pass, and check has eleven passes and one failure in
+  `malformed where clauses publish source ordinals and reject retargeted
+  authority`. The strengthened bare fixture passes. This is not a green
+  shared-boundary gate. Source is thawed for exact diagnosis; the next run must
+  isolate the failing checker test. Root's leading hypothesis is its final
+  mutation of an unrelated written clause: the existing test deliberately
+  keeps the selected malformed failure locally exact while fresh replay
+  rejects the changed complete span, but the new generic where-membership
+  helper now enforces whole-span ordering. Preserve the declared local-versus-
+  contextual contract rather than simply weakening the regression. Strict
+  written-order authentication remains required for first-source selection.
+  Narrow correction `3b9f7dd3` removes only whole-span ordering enforcement
+  from generic selected-where membership; bounds/tag checks remain, as do
+  strict ordering at every order-sensitive first-source/TypeAnno consumer.
+  The original regression is unchanged. Independent review accepted this
+  local-versus-fresh boundary. Isolated root run `53719` passes 7/7 steps and
+  2/2 tests (14 seconds/24 MB); the subsequent unchanged-source full focused
+  rerun `36886` passes 10/10 steps and 16/16 tests (can 4, check 12; checker
+  execution 1 minute/26 MB). The lifecycle/shared-reader correction and bare
+  direct-binder case are now an accepted bounded checkpoint, not completion
+  of the complete direct-lookup slice or W6b.
+  Source is thawed for the next bounded functional tests: an authentic captured
+  annotation owner, an outer direct binder used inside a nested closure,
+  repeated/destructured/clean-formal exclusions, and two malformed aliases
+  selecting the exact source-ordered first cause while retaining both source
+  failures. These fixtures contain no calls and must pin owner/pattern/formal
+  topology, exact diagnostics and row counts, zero checker/type problems,
+  local/fresh replay, and closed transient lists. Deep valid/corrupt-boundary
+  cases, Probe/OOM/retry, canonical replay, and actual failure/retirement
+  static/mutable roundtrips remain separate mandatory direct-slice gates.
+  The existing compile-module W6b roundtrip test does not populate these
+  failure/retirement tables; rerunning it alone cannot establish that new
+  coverage. The version-81 hash golden still awaits an observed measurement.
+  Functional-test snapshot `3ab74567` adds the four no-call fixtures and
+  passed independent adversarial static review. Root run `17942` completed
+  with 4/6 tests passing (the aggregator plus bare, nested-closure, and
+  source-ordered multiple-alias cases). Captured-owner and exclusion cases
+  stopped at their exact canonical-diagnostic counts: respectively expected
+  2/found 3 and expected 5/found 7. Their subsequent ledger assertions have
+  not run. Source is thawed only to identify the actual additional reports
+  and correct the fixtures' diagnostic expectations without suppressing
+  reports or changing their required topology; isolate those two tests next.
+  The new functional slice is not yet accepted, and the last accepted
+  bounded production checkpoint remains `3b9f7dd3`.
+  Corrected snapshot `a42543f4` adds only the missing exact `Unused Variable`
+  expectations for local `first` and formal `direct`/`bad`, plus actual-title
+  reporting on diagnostic-count mismatch in the test helper. No Roc fixture
+  or production behavior changed. Independent review accepted that correction.
+  Isolated root run `83399` passes 7/7 steps and 3/3 tests (14 seconds/26 MB),
+  proving the exact report order and all downstream provenance assertions.
+  Unchanged-source full direct-binder group `7691` passes 7/7 steps and 6/6
+  tests (34 seconds/26 MB). This functional slice is accepted; W6b remains
+  unfinished. Source is thawed for the separate authentic direct-source,
+  lookup publication, and lookup completion Probe/OOM/retry task. Prefer the
+  existing `declareWhereAliasConstraints` producer seam; its final legal
+  `markErroneous` has no injectable allocation at probe depth zero, so do
+  not invent a post-publication mark failure. Lookup tests must calibrate a
+  real append-capacity boundary using distinct canonical lookup expressions,
+  not fabricate rows or mutate capacities. Completion is outside Probe.
+  The minimal activation refactor now passes independent static review: the
+  existing lambda call passes the same annotation, source-suffix start, and
+  ownership fields through a private value scope; predicates and timing are
+  unchanged. New transaction tests are still being written and are unbuilt.
+  Incremental root review caught test-only confusion between a durable
+  annotation failure's diagnostic cause and its transient result's retirement
+  cause, an invalid generic comparison of opaque union payloads, a bounded
+  allocation loop that must become a measured exhaustive sweep, and missing
+  successful retry assertions on each failed instance. The live source test
+  now corrects the cause distinction/comparison, measures allocation count,
+  and retries/revisits every failed instance; these edits remain unbuilt and
+  await final independent review. Exact consumer diagnostics, empty activation
+  state in the source-only test, and post-retry erroneous content are also
+  requested assertions. Lookup/Probe/completion tests are still being written.
+  The second
+  sol-ultra agent is implementing test-only deep/bounds coverage at EOF in
+  parallel; the two agents will cross-review the disjoint tasks. Deep recovery
+  validation must exercise actual local/fresh and TypeAnno ownership entry
+  points: early clean-cache rejection cannot certify those deeper reads.
+  The EOF deep/bounds task is now written: its 128-level fixture explicitly
+  traverses fresh closures and both TypeAnno return chains, queries the deepest
+  structural rigid-lookup occurrence, and restores after candidate-tag,
+  fresh-index/span/attachment-coordinate, and deep-return-cycle mutations.
+  The cycle is tested at the membership reader, not as a promise that failure
+  replay validates unrelated syntax. Independent cross-review is active;
+  `zig fmt --check` passes, but no build has run. The transaction slice now
+  contains source and lookup publication tests; completion coverage remains
+  in progress. A further fixture correction must distinguish the where-alias
+  receiver's canonical lookup occurrence from the introducing formal identity
+  and prove the exact authored owner entry. Both agents must freeze before
+  root runs any gate.
+  The deep test's independent review requests one accepted strengthening:
+  invoke `validateExpectedFailureRetirementLocal` while the candidate formal
+  tag is corrupt, before restoration. The proposed requirement that fresh
+  failure context reject an unrelated deep-return cycle is not its declared
+  contract; that negative belongs to the actual deepest-membership reader.
+  B remains a bounded deep-positive/five-category corruption slice. Before
+  complete direct-lookup acceptance, audit broader raw side-table coverage
+  against existing tests: candidate function-argument spans, captured-owner
+  closure-data/lambda coordinates, owner/clause/written tags and spans, and
+  fresh lambda-argument/pattern coordinates. Add genuinely missing coverage
+  rather than claiming the five new mutations exhaust those fields.
+  Frozen snapshot `949c1e09` contains that independently reviewed B test plus
+  unaccepted A source/lookup transaction work. Root B-only run `4747` crashes:
+  1/2 tests pass (aggregator), and the deep test aborts with a segmentation
+  fault before any `errdefer` stage label. It is not a passing deep checkpoint.
+  The cached test binary's LLDB launch was rejected by macOS's non-interactive
+  debugger permission policy; no stack was captured. Only temporary test-stage
+  markers are thawed to distinguish parsing, canonicalization, checker entry,
+  and the bounded validation mutations. Keep the 128-level source unchanged,
+  remove the diagnostic markers before acceptance, and diagnose the actual
+  crashing stage rather than reducing depth or inferring a stack overflow.
+  Diagnostic run `24459` on frozen `31a3f09b` completes with 1/2 tests passing
+  (aggregator) and the same abort. Its temporary markers prove parsing,
+  canonicalization, and checker initialization complete; the crash is inside
+  `checkFile`, before its return or fresh replay initialization. Static LLDB
+  disassembly of that exact binary shows an 85,528-byte `checkExpr` stack frame;
+  the shell stack limit is 8,192 KB. This establishes significant recursive
+  stack pressure, not yet the precise dynamic crashing operation. The next
+  diagnostic distinguishes recursive expression descent from earlier checking
+  stages without lowering the fixture depth or changing stack limits.
+  The second diagnostic increment adds exact-module-gated `checkFile` phase
+  and `checkExpr` node/tag entry markers. Independent review accepts it as
+  observation-only, and formatting/AST checks pass; all temporary markers
+  remain removal-required before acceptance.
+  Run `86549` on frozen `f52cae3a` is also red (1/2 tests, aggregator passes).
+  Every setup phase and annotated predeclaration finishes; group 0 enters
+  190 alternating lambda/closure `checkExpr` calls, ending at lambda 585 then
+  closure 722 before aborting. No innermost lookup or terminal reader runs.
+  That exact binary's prologue reserves 85,608 bytes per `checkExpr` call, and
+  `otool` reports `LC_MAIN.stacksize = 16777216` (16 MiB). The earlier shell
+  limit is therefore not the executable's actual budget. The observed
+  recursion consumes about 16.26 MB in expression frames alone. Prepare a
+  semantics-preserving expression-kind frame decomposition, preserving frame
+  begin/finish, evaluation order, and cleanup scopes; do not lower fixture
+  depth or raise the stack budget. The transaction test agent resumes its
+  separate completion test during this bounded production refactor.
+  The approved refactor extracts all 59 expression-kind bodies into exact
+  typed, non-inlined helpers. `checkExpr` retains the original frame creation,
+  cleanup, and finalization around a call-only typed dispatch. Each helper
+  receives the existing frame and snapshotted payload; its original branch
+  cleanup still precedes frame finalization. This is a general stack isolation
+  change, not a special deep-lambda execution path. Independent review must
+  compare all moved bodies, followed by unchanged-budget disassembly and the
+  original depth-128 regression plus broader checker coverage. No intermediate
+  extraction tranche certifies the deep test.
+  A's implementation is now written and AST-clean: source publication,
+  activation/lookup publication with Probe rollback and retry/revisit, and
+  lookup-retirement completion. Each OOM sweep uses a measured allocation
+  count and fresh authentic unchecked consumer per failure point. Completion
+  injection targets only the real completion producer; failure preserves all
+  logical prefixes and the live lookup, and retry uses the central executable
+  rewrite. The upstream annotation retirement deliberately remains pending in
+  this transaction test, so it does not assert whole-module terminal validity.
+  Independent review of the complete tests and transaction contract is pending;
+  no dynamic A run has occurred. A freezes its block while B performs the
+  mechanical expression-kind extraction.
+  Snapshot `40ae9ac0` records all three A tests before that extraction. Root
+  runs the isolated three-test gate `4070` while B stages its transform only
+  under `/private/tmp`, outside the frozen build inputs. The gate stops at
+  compilation with two reported errors: lookup/completion assertions use
+  nonexistent `cir.store.diagnostics` (seven occurrences in the new block).
+  Published diagnostics are `ModuleEnv.diagnostics`; newly added diagnostics
+  live in `NodeStore.scratch.diagnostics` until publication. The limited A fix
+  must preserve diagnostic-state assertions against those actual stores, not
+  merely count the already-published span. No A test has executed. B must
+  preserve this newer A correction when applying its staged whole-file
+  transform; both independent reviews and focused reruns remain required.
+  The compile correction is test-only: `DirectBinderDiagnosticState` snapshots
+  the published diagnostic span and an owned copy of pending scratch indices,
+  and compares both after the transaction. Snapshot allocation occurs before
+  failure injection. All seven nonexistent-field accesses are removed;
+  formatting and AST checks pass. Rerun the isolated A gate before applying
+  the staged stack refactor.
+  Corrected snapshot `1cc4f7d8` compiles in run `45172`, but all three A tests
+  abort with `reached unreachable code` (1/4 tests passes, aggregator only).
+  The unchanged pre-extraction baseline isolates this from B's stack refactor.
+  Root and A are auditing the shared unchecked fixture setup: `TestEnv`'s
+  unchecked path only initializes `Check`, whereas the real `checkFile` fills
+  raw CIR type slots before annotation generation, and other authentic staged
+  tests explicitly perform that preparation. Prove the exact missing
+  prerequisite and preserve measured OOM boundaries; do not rerun whole-file
+  checking or construct substitute types. B's independent A/design review is
+  statically accepted with no blockers, but these runtime crashes remain open.
+  The bounded setup correction is now written and independently accepted:
+  `prepareDirectBinderTransactionCheckerForTest` invokes the real
+  `ensureTypeStoreIsFilled` before source calibration and every fresh failure
+  instance, and before shared lookup/completion source staging. It asserts
+  exact region/type-store size, owner/formal bounds, and the formal's root,
+  outermost-flex initial state. No surrounding file check, Builtin copy,
+  fabricated formal type, or injected-allocation boundary changes. Formatting
+  and AST checks pass. The corrected gate `6400` on `5a890403` now passes
+  7/7 build steps and 4/4 tests (three transactions plus aggregator), in
+  21 seconds with 25 MB peak test RSS. With the independent review accepted,
+  this bounded transaction task is complete; whole W6b remains open.
+  B's stack extraction stays in `/private/tmp`. Root independently matches all
+  59 moved bodies at token level (including quoted-string contents), while A's
+  staged review catches old `&frame` arguments which would become double
+  pointers inside the new helpers. The exact corrected count is six (one
+  optional pending-predeclared frame and five direct callee calls); the initial
+  count of seven included an unrelated site outside the extraction. Those
+  six must become the existing pointer;
+  wrapper calls still take `&frame`. Preserve original child-Expected creation
+  timing and remove all deep-test TEMP markers before applying the final patch.
+  Final independent adversarial review accepts the complete staged extraction:
+  59 original arms map one-to-one to 59 non-inlined typed helpers, all original
+  bodies match except the six required pointer conversions, and all cleanup
+  scopes unwind before the unchanged wrapper finalization. The 22 consumers
+  receive the original wrapper-time child Expected; only the three original
+  consumers receive outer Expected. B applies exactly the reviewed files and
+  freezes source. Both files pass formatting and AST checks; the accepted A
+  block remains byte-identical (68,267 bytes, SHA256
+  `679806b3e0e95fdedddb3927b5629c7ba36ec0d6b6d4557bec8dee988eb91f2b`).
+  All deep-test temporary logging is removed; historical call diagnostics
+  remain for the separate unresolved task. Root next runs unchanged depth 128
+  with the three accepted A transaction tests, then inspects actual generated
+  frame sizes and the unchanged executable stack budget.
+  Snapshot `5f951c47` now passes that gate (`20681`: 7/7 steps, 5/5 tests,
+  28 seconds/31 MB). Static disassembly of the exact test binary
+  `.zig-cache/o/0f4299151582858a76978e286776cc57/check` shows `checkExpr`
+  frame `0x1c60` (7,264 bytes), lambda helper `0x2dd0` (11,728 bytes), closure
+  helper `0x320` (800 bytes), and `LC_MAIN.stacksize` still 16,777,216 bytes.
+  The independent reviewer and implementer accept this bounded result.
+  Broader gate `5300` on the same frozen source passes 10/10 steps and
+  24/24 tests (can 4, check 20, including all direct-binder tests and the prior
+  malformed-source/ownership/lifecycle matrix). The next implementation task
+  is authentic populated failure/retirement serialization and canonical
+  rebuild idempotence; late call retirement and the other W6b work remain open.
+  That serialization task is now written by A and frozen for B's independent
+  review. Test `invalid where alias direct binder recovery rebuilds and
+  serializes canonically` uses the accepted bare hidden-Status fixture and a
+  distinct fresh canonical module. It pins the real FA/FL/RA/RL/ref and source
+  publication relationships, performs two serialized-byte rebuild comparisons,
+  validates an aligned imported-module blob, checks six populated table headers,
+  and replays exact semantics and complete bytes after readonly `deserializeInto`
+  and mutable `deserializeWithMutableTypes`. Readonly cleanup frees only its
+  owned import map/runtime map/environment; mutable cleanup uses the cache
+  destructor. The independent reviewer requires and accepts explicit empty
+  transient-list assertions after each rebuild, since serialized bytes cannot
+  detect checker-local leaks. Final static review, formatting, and AST checks
+  pass. Snapshot `b523751b` passes the real checker serialization test in run
+  `83266` (2/2 including aggregator, 7 seconds/27 MB). The combined check/compile
+  gate is red only at the old cache hash golden (26/28 steps, 3/4 tests):
+  CACHE_VERSION 81 measures
+  `372f9d28e8533a984821e46372ce1b12f4e58c11e474040aafe11bc7daeddfe3`.
+  Root authorizes A to replace only the golden with those measured bytes;
+  independent comparison now accepts the exact 32-byte edit with version 81
+  unchanged. The targeted hash rerun `22649` on `31459e1d` passes 25/25 steps
+  and 2/2 tests (1 second/1 MB test RSS). The bounded C serialization/idempotence
+  task and measured golden update are accepted; the initial combined gate was
+  not rerun wholesale after its isolated hash correction. No
+  production changes were needed for the serialization/idempotence test.
+  A separate raw-reader contract audit
+  confirms one remaining selected-clause consistency obligation:
+  `NodeStore.whereClauseSpanFrom` groups each clause exactly by its receiver
+  declaration (direct rigid or lookup ref); alias arguments affect transitive
+  `owned_by_annotation` reachability, never that clause's owner group. The
+  selected malformed-alias replay must therefore compare the clause receiver's
+  identity with its published `WhereClauseOwner.rigid_var`. This is validation
+  of an explicit producer-authored inverse, not reconstruction of ownership.
+  The current selector does not compare them. A bounded follow-on task must
+  declare that inverse explicitly and test candidate/fresh disagreement, while
+  retaining positive generic membership for identity-reference leaves.
+  B has now declared the inverse in design.md and written the shared-reader
+  helper `listedWhereClauseReceiverOwner`. It validates method/effectful or
+  alias receiver encoding and reuses the guarded self-membership reader for
+  rigid/lookup syntax, padding, and reference bounds; the identity comparison
+  precedes the reachability `continue`. The initial patch now has canonical
+  test `where clause owner rows preserve exact normalized receivers` and
+  authentic two-formal test `invalid where alias direct binder owner inverse
+  rejects sibling and bounded coordinates`; formatting and AST checks pass.
+  A is reviewing the final declaration/helper/tests. Root also requires an
+  explicit mapping of the agreed remaining raw-guard matrix to existing/new
+  tests: the initial ten groups do not silently discharge untested pattern,
+  owner, alias, attachment, or fresh-span cases. No runtime or final-review
+  acceptance of this D patch is claimed.
+  The mapping now reuses the prior deep/bare formal, written-span, attachment-
+  body, and return-cycle checks. B is adding exactly the remaining selected
+  pattern-index, owner flag/rigid/padding, written-entry tag, alias receiver/
+  target, attachment node/annotation bounds, and fresh function-span cases to
+  the same two-formal fixture. Each temporary edit is restored before assertions.
+  Those additions are now complete. The independent reviewer also requires
+  a distinct third rigid in the canonical alias-argument fixture, so an
+  argument-as-owner implementation cannot pass accidentally; the separate
+  detached unowned row remains intact. Final static review accepts the complete
+  declaration, production helper, canonical fixture, and reconciled checked/
+  fresh matrix. No solved-graph mutation, inferred owner, or global partition
+  claim was added. The exact two-test dynamic gate is next.
+  Snapshot `4631e7ad` passes that focused gate (`73577`: 10/10 steps, 4/4
+  tests; can 2, check 2 including aggregators; checker 7 seconds/25 MB).
+  The broader regression gate `33921` on the same frozen source passes
+  10/10 steps and 33/33 tests (can 11 in 762 ms/5 MB, check 22 in
+  2 minutes/33 MB). It includes the entire six-test canonical ownership file
+  and the prior direct-binder/deep/serialization/transaction/malformed-source
+  set. D is accepted; no remaining case from its reconciled matrix is being
+  deferred implicitly.
+  The next bounded task is call/callee retirement. A is preparing its explicit
+  producer/draft-driven completion design read-only, with a bounded child
+  producer audit; B remains the independent implementation reviewer. The call
+  transaction must first be stated explicitly in design.md: both consumer and
+  failure-reference ranges precede any call retirement stamp, draft removal,
+  or erasure. Current sequential aggregate/ineligible completion is not that
+  transaction, and the existing ineligible helper rejects the call producer.
+  The declaration is an inverse only for clauses actually listed in an owner
+  row, not a claim that all written clauses form a complete unique partition.
+  Both values of `owned_by_annotation` retain the inverse; the bit remains
+  canonicalization's explicit transitive reachability result.
+  The historical call-retirement regression remains separate and unresolved.
+  Remove every `TEMP default-source` and
+  related selected-context label before production acceptance. The independent
+  static audit established a separate ownership gap: selected-anchor move and
+  terminal-evidence inverses are still selected-decision-only, and rebuilding
+  likewise skips selected handles in generic movement closure. A retained
+  default-owned chain can therefore be rejected or pruned despite retention
+  of its default child/decision constraint. Immutable `DispatchSettlementSource`
+  proves creation, not complete terminal consumption, so it cannot justify a
+  validator exclusion. The declared normalized settlement event owns that
+  complete inverse; any earlier terminal-consumer implementation would need
+  equally explicit exact decision/offset and full movement closure. This
+  structural gap is not yet the dynamically identified `92762` predicate.
+  The zero-argument corruption test replaces one root with a duplicate other
+  root; it tests exact uniqueness/order, not deletion of an otherwise
+  unreferenced zero-argument root in isolation.
+- Review also rejects the missing default-root first-attempt inverse: the
+  current checks establish a compatible decision/offset and exact Builtin
+  binding, but do not independently bind the root to the target that seeded
+  it. A same-method sibling offset or later compatible decision can be
+  substituted. The planned `DefaultMethodTarget`/`DefaultMethodInstantiation`
+  needs an explicit cache-seed/target inverse that also represents a rejected
+  first attempt with no instantiation. Read-only design review recommends
+  keeping the existing cache-support root as seed identity: the six finite
+  imported-method root kinds are produced exclusively by the cache-miss
+  helper. That helper must return producer-authored `inserted` versus `reused`
+  evidence; the target records a closed pre-import rejection, seeded root, or
+  reused root outcome. A new parallel seed pool is not needed. Root uniqueness
+  must compare the actual explicit provider/template authority even when one
+  reference uses the Builtin namespace and another a semantic dependency.
+  Generated, inspect, associated, and candidate first-consumer authorities
+  still need exact attempt identities: predicted future SchemeUse/derivation
+  rows may never be committed, and matching only MethodBinding is insufficient.
+- Separate remaining integrity requirements are the exact committed child
+  SchemeUse/constraint consumer inverse and read-only cache admission of
+  default contributor ownership (fresh rebuilding checks it, current admission
+  does not). None is certified by the provider/owner fix.
+- Passing focused evidence includes corrected decision-owned selected anchors,
+  real candidate-compatibility synthetic-binding rollback with a fresh consumer
+  per failure index and forced resize failure, both codec import fixtures,
+  copied-literal corruption checks, and resize-inclusive exhaustive boundary
+  rebuild rollback. The latter fixture has no default root/child and therefore
+  does not cover the new default-retention path. Add that allocation-failure
+  coverage once an authentic default topology passes. The original
+  `Discarded unpinned arithmetic specialization validates the default method
+  type` regression now passes in the named combined run `98717`.
+- Authentic accepted/rejected-first default lifecycle coverage remains open:
+  the owner test has no expected default root, while the unchanged bad-then-good
+  source is now correctly tested as nominal dispatch retirement, not as a
+  default cache test. Review additionally requires a non-root decision-constraint
+  identifier mutation, exact dispatch-target slot/constraint checks, proof
+  that a rejected attempt leaked no SchemeUse, and exact candidate-probe
+  coverage in the cache-free OOM fixture. No new typing-policy choice is needed.
+- A bounded read-only fixture audit derived genuine default-path tests from
+  the original numeric regression: change its `7.U64` RHS to `7.Dec` for the
+  accepted case; use `-x` as an arithmetic trigger alongside independent
+  dot-call `plus` constraints for rejected-first/reuse and same-decision
+  sibling-offset cases. Dot calls alone do not trigger arithmetic defaulting,
+  explaining the earlier failed fixture approaches. These proposed fixtures
+  are dynamically unverified; assertions must follow exact producer records
+  rather than fixed decision indices or constraint offsets.
+
+Earlier implementation and verification history follows; passing intermediate
+subsets below do not override this latest checkpoint.
+
+- Implemented prerequisites include exact copy-step/source evidence, expected
+  consumption and retirement evidence, call-formal and external-cache token
+  ownership, method-output publication, loop/where/copied constraint sources,
+  canonical boundary rebuilding, and serialization/cache admission checks.
+  Expected-failure producer coverage and terminal settlement coverage are not
+  yet complete. A read-only producer audit found four complete annotation
+  failure paths (`malformed_type`, `malformed_where`, `invalid_tag_child`,
+  `builtin_not_type`), one real aggregate-relation failure path still needing
+  focused producer tests, and 21 schema kinds without production publication.
+- The last completed copy-transaction matrix passed 11/11 checker tests and
+  4/4 compile/cache tests. It covers generic, nominal, binding, and authentic
+  platform copy allocation failures, cold first-import rollback, copied-source
+  correctness, boundary allocation failures, and cold/warm admission. Public
+  cross-module copies have three non-nesting entry points. Checker probes own
+  Store state, both interners, identity displays, and the original variable-map
+  allocation, as well as proof/cache journals.
+- Copied-open-literal group/event schema, local and cross-module producers,
+  and ModuleEnv lifecycle support are implemented. The stale provisional-step
+  failure is fixed: predeclaration rebases group coordinates, and terminal
+  reachability includes event handles and moves in its fixpoint. The focused
+  `copy_import` run passed 7/7 build steps and 11/11 tests after those fixes.
+  New admission, corruption, repeated-boundary, and OOM regressions are being
+  integrated. Audit also disproved the new blanket prohibition on literals
+  inside binding-codec component graphs: only the detached outer requirement
+  is guaranteed nonliteral. Nested receiver/function groups now use their
+  existing component tags, and an explicit mapping-origin record authenticates
+  reuse from the binding root or an earlier component, including later
+  requirement ordinals. A focused run passed 11/13 tests: structural
+  binding-copy/OOM coverage passed, while both new real-source import fixtures
+  reached a contributor-handle mismatch. Its exact cause was a scheme candidate
+  retaining a by-value constraint before copy publication attached evidence.
+  Candidates now retain only the producer-owned pool index. The narrow rerun
+  passed 1/3 tests and advanced past that failure; it exposed a missing export
+  in one fixture and a reused literal incorrectly treated as freshly copied
+  in the other. The latter occurs while generated-codec finalization opens
+  `Wrap`'s nominal backing: its formal `b` is substituted with the existing
+  seed argument. The instantiator now records that actual substitution cut in
+  a transient reuse ledger; checker bookkeeping consumes the ledger and leaves
+  the seed's literal/dispatcher/rank/region ownership unchanged. No copy origin
+  is invented, and no solved-graph probe reconstructs the substitution. The
+  combined checker regression batch on snapshot `4c780d48` returned 23 tests:
+  16 passed, 3 failed, 4 crashed. Four lifecycle fixtures registered literals
+  after `initExpr` had finalized checking; they need genuine pre-check setup,
+  not a reset of the freeze flag. The two provider fixtures used deprecated
+  module headers and need modern type-module associated exports. The
+  predeclaration fixture passed its source/group assertions but reused an OOM
+  rollback snapshot after a successful rebuild. Its first failing assertion
+  compares backing pointers, which a successful replacement is allowed to
+  change. Keep exact pointer/capacity/byte preservation for rollback; test
+  successful-rebuild idempotence separately through canonical contents and
+  serialization. No production content drift is established by that pointer
+  failure. Separate frozen-snapshot type tests passed 6/6 and copied-literal
+  serialization tests passed 3/3. The append-invalidated deduplication iterator
+  now uses the append-safe constraint iterator; final-codec requeue retains
+  the exact source index and publishes evidence movement.
+- The test-only correction snapshot `d14de740` preserves strict provider
+  diagnostics, uses unchecked lifecycle setup for isolated producer tests, and
+  compares complete canonical ModuleEnv serialization for successful rebuild
+  idempotence. Its eight-target rerun returned 9 tests including the aggregator:
+  5 passed, 1 failed, 3 crashed. `one local copied open receiver`, Probe
+  rollback, boundary remapping, and predeclaration idempotence now pass. The
+  corruption test omitted final BFS canonicalization before asking final-form
+  admission; restore that setup and retain every negative mutation. Both modern
+  type-module codec fixtures reach `one copy step repeated an open-literal
+  destination occurrence`. The adversarial review confirmed a production
+  blocker: raw destinations need not be unique across the complete occurrence
+  relation. Defaulting registration must consume the explicit copied group's
+  owning occurrence, not reconstruct it by searching destination equality.
+  The boundary OOM fixture's synthetic graph
+  insertion before real `checkFile` instead crashes with
+  `Arrays out of sync: type_nodes=4 region_nodes=101`. It must use genuine
+  source-produced literal copies/moves for its first successful check, then
+  retain exhaustive pointer/capacity/byte-exact rebuild rollback assertions.
+  The fresh sol-ultra adversarial review rejected snapshot `4c780d48` for the
+  driver defect, found no other confirmed production blocker in its bounded
+  pass, and confirmed that the synthetic mixed-literal callable is not a valid
+  full-check fixture. The implementer is
+  correcting these three red targets; source will be frozen again for the
+  focused rerun and follow-up review. A clean full checker-module gate is still
+  required before contributor/settlement work. Earlier passing matrices do not
+  certify the current working tree.
+- Corrective snapshot `ad47cf76` drives cross-module literal registration from
+  the exact step-owned groups and their receiver occurrences, separately from
+  allocation-range region bookkeeping. Both real codec fixtures now assert
+  repeated destination occurrences with one exact owning group. The four-target
+  rerun returned 5 tests including the aggregator: 4 passed, 1 crashed. Both
+  codec fixtures and the corruption fixture passed. The OOM fixture now uses
+  real `make_zero` instantiations, but its first check reaches
+  `checked-boundary call formal lost its producer witness` before any OOM
+  injection. Its headerless provider also needs an explicit valid main-type
+  export; absence of printed diagnostics before a checker panic does not prove
+  successful import checking. Diagnose the exact rejected formal and validate
+  the source export before attributing this to the call sites. Do not remove
+  valid calls merely to avoid the invariant. Follow-up adversarial review is
+  active; this slice and full W6b remain unaccepted.
+- The group-driven correction subsequently passed its bounded static review.
+  Changing the OOM provider to the genuinely exported `Status` main type while
+  preserving all three `make_zero` calls made the first terminal check complete.
+  The OOM-only diagnostic run returned 2 tests including the aggregator: 1
+  passed, 1 failed at an as-yet-unlocalized assertion. No production call-formal
+  change was needed to check the valid program. Keep the unexposed-where-alias
+  variant as a required error-retirement regression: its call-formal boundary
+  panic is not an acceptable response to invalid source and must be resolved
+  before W6b publication, even if its producer fix belongs to the later
+  Expected-failure slice. The original failing input is preserved in snapshot
+  `ad47cf76`: the provider named `BoundaryOomA` contains only
+  `a.Status : where [a.status : a -> [Off, On]]`, without exporting `Status`;
+  the consumer imports `BoundaryOomA exposing [Status]` and its mutually
+  recursive `first`/`second` signatures use `where [a.Status]`. The valid OOM
+  fixture instead names the provider `Status` and imports its main type. Keep
+  those inputs distinct. The old panic comes from the preterminal
+  `expectedCallFormalMatchesPlans` check, before canonical formal sorting;
+  its exact rejected coordinate still requires dynamic diagnosis. A subsequent
+  static audit established a separate call-retirement coverage gap: successful
+  callable-shape checking publishes root/argument plans and formals before
+  argument checking; an operand/type failure can then retire the call without
+  publishing its checker relation or reserving the immutable call retirement
+  recognized by `expectedCallOwnerSnapshot`. Ordinary call retirement currently
+  lacks the snapshot authority that ambiguity retirement supplies. This is a
+  real lifecycle gap, but its attribution to a particular call in the old
+  invalid-import fixture remains unproved. The minimum dynamic discriminator
+  is the failing formal's exact owner tag, optional relation field, and matching
+  retirement rows, followed by the actual failed helper predicate. Do not
+  replace that evidence with a solved-type or reachability guess. The valid
+  OOM fixture still needs a clean exhaustive
+  rollback run, followed by removal of temporary diagnostics and re-review.
+- The assertion-localization run confirmed valid source and populated formal,
+  token, cache-seed, loop, copied-group, and copied-event inventories, but zero
+  copied-literal moves: independent `make_zero` calls preserve separate
+  constraint occurrences. The next fixture uses four independent calls as
+  elements of one list so ordinary element unification produces the required
+  evidence movement. This is a test-coverage correction, not permission to
+  fabricate movement or weaken the rollback checks.
+- The homogeneous-list fixture produced nine real copied-literal moves, then
+  the repeated rebuild reached `cross-module marker-copy step lost its exact
+  producer provider`. Boundary provider lookup still consulted transient
+  import/method caches for some root kinds, although their preterminal step ids
+  are not rebased. The correction uses the existing typed durable
+  `whereMarkerCrossRootAuthority` shared with admission and checks the exact
+  raw source root. Cache-cleared repeated rebuild and exhaustive OOM coverage
+  are being finalized; no transient-cache fallback may remain.
+- Snapshot `f6c57bf8` failed the OOM fixture before injection. The traced rerun
+  (`-Ddebug-gpa-traces`) located the failure at the assertion requiring a
+  relocated default-method cache entry. The fixture's literal-only default
+  does not establish such an entry; the earlier attribution of the provider
+  panic to a default-method root was an inference, not an observed fact.
+  Preserve the real imported where-alias authority and clear the transient
+  caches, without asserting incidental default-cache topology. Independent
+  review also found a genuine bug in the shared authority's `default_method`
+  arm: `builtin_decl_index` is the owner declaration, not the method's
+  `provider_type_node`. Validate the exact owner/module/method binding tuple
+  and pin it with a real arithmetic default-method positive and wrong-owner
+  corruption regression. The OOM test's successful-allocation cleanup must
+  remain inside its loop-local failing allocator's lifetime even if a later
+  assertion fails. These corrections are underway; the static acceptance of
+  the provider change was withdrawn, and no full checker gate has passed yet.
+- Snapshot `62e850ec` replaces the cross-domain equality with the exact
+  Builtin owner/method lookup, validates decision targets with the shared
+  default classifier and explicit Builtin indices, and guarantees successful
+  OOM teardown within the failing allocator's lifetime. Its traced five-target
+  batch returned 6 tests including the aggregator: 4 passed, 1 failed, 1
+  crashed. Both codec fixtures and the corruption matrix passed. All produced
+  cross-step providers resolved after cache clearing, but the OOM test then
+  failed an unsupported assertion that a literal
+  `external_where_alias_receiver` origin remained in the canonical inventory.
+  Collect the actual origin kinds instead of guessing another tag. The new
+  real arithmetic-default fixture crashed during its initial check at
+  `default-method marker-copy origin escaped its exact decision anchors`.
+  Audit found that a default root records a predicted SchemeUse index outside
+  the compatibility probe, while rejection rolls back the only producer of
+  that use; confirm the exact failing coordinates and correct the authority,
+  never fabricate a use or retarget a sibling. Review also requires validating
+  the selected constraint's identifier before the new cross-module name lookup
+  so corrupt marker-free constraints return `CorruptArtifact`, not panic.
+  The current slice remains unaccepted and no OOM-injection success is claimed.
+- Diagnostic snapshot `f0c49c50` was rerun with captured output after the first
+  diagnostic build's execution handle was lost. The captured run returned
+  3 tests including the aggregator: 2 passed, 1 crashed. The exhaustive OOM
+  test passed with real copied-literal movement, cleared transient caches,
+  strict pointer/capacity/byte rollback, and successful final replacement.
+  The actual former-cache-fallback origin is `candidate_probe_method_root`;
+  the other produced cross roots were external cache seeds and selected-method
+  roots. The default failure was exactly `decision=0/1, offset=0/1, use=1/1`,
+  confirming the predicted use was rolled back. The correction will make a
+  default cache root name its first target attempt, not a speculative SchemeUse;
+  only a committed child use carries a SchemeUse. This matches the existing
+  target-versus-instantiation distinction in design.md. All temporary prints
+  must be removed before the next verification and review; this diagnostic
+  snapshot is not publishable.
+- The same audit found an independent probe rollback bug:
+  `importedMethodSchemeFromSource` directly inserts a synthetic binding flag,
+  bypassing `markBindingSchemeVar` and its mutation journal. A cold cache miss
+  inside a candidate compatibility probe can therefore retain classification
+  for a rolled-back type variable. Use the journaled producer within the
+  existing transaction and pin an authentic outer-probe rollback, including
+  allocation failure. No compatibility-probe/diagnostic redesign is needed.
+- The default-terminal-authority slice must additionally prove the exact
+  decision/constraint consumer inverse for every committed
+  `default_method_use`. Existing checks only bound the nominated SchemeUse and
+  compare its resolved scheme root with the cached template; sibling uses of
+  that same template are not distinguished. Pin unrelated valid use retargets,
+  same-template sibling use swaps, and decision/offset swaps. Provider/owner
+  authentication does not establish this per-use relation. The rejected
+  first-attempt root issue above may require its schema correction earlier;
+  the complete terminal certification remains a W6b publication requirement.
+- The contributor design audit found that a literal-only group domain is
+  incomplete. An arithmetic-only copied candidate can default without literal
+  events, and an ordinary nondefaultable copied candidate can later merge with
+  a separate literal. Amend the design before migration to an exact
+  `CopiedConstraintDriverGroup`: copy-time literal registration, instantiation
+  candidate registration, or both, with a possibly empty literal-event range.
+  This is not a copy-time defaultability classification or a claim of fresh
+  receiver allocation; detached scheme requirements can reuse their receiver
+  while copying the exact constraint. Preserve every producer token when
+  ambiguity judgment candidates deduplicate. Pending group identity includes
+  the component/ordinal and exact constraint ranges, not just the receiver
+  pair. The initial nonliteral binding-codec outer ingress still has no such
+  candidate; its later local scheme use owns the single-step requirement group.
+  Admission needs a new explicit `flex_fresh_flex_copy` witness action at the
+  instantiator's initial source-flex allocation: today's `traverse` also means
+  memoized reuse and cannot certify creation. Attached candidate groups replay
+  this action or `rigid_fresh_flex_cut`, the exact local policy, and their
+  nonliteral constraint offsets. Detached candidate groups instead replay the
+  paired requirement-ingress witnesses, retaining the exact ordinal through
+  transient registration. Literal detached requirements are not produced
+  today: ordinary requirement capture drops literals, and imported outer
+  codec requirements are nonliteral. Do not broaden admission by guessing such
+  an arm. This bounded design review is complete, without dynamic tests; the
+  design amendment and contributor implementation have not begun.
+- The follow-up read-only migration map identifies these concrete surfaces:
+  `registerInstantiatedAttachedDispatch` must receive the explicit source and
+  destination constraint ranges from `instantiateVarHelp` and predeclared
+  replay. `InstantiatedSchemeDispatchRequirement` must retain the ordinal
+  already available in `copySchemeDispatchRequirements`, so
+  `registerInstantiatedSchemeRequirement` can author the exact detached token
+  after its single constraint append. `recordAmbiguityCandidate` must union
+  incoming tokens even on dedup and after assignment to a default draft;
+  preserve its separate legacy driver for ambiguity/retirement authority.
+  An append-only candidate-indexed token pool avoids unjournaled edits to
+  contiguous ranges, but every assignment to pre-probe state still needs an
+  exact rollback journal. In `instantiate.zig`, only the initial source-flex
+  allocation authors `flex_fresh_flex_copy`; memoized `var_map` reuse remains
+  `traverse`. Translate and admit that action in the closed policy/auxiliary
+  switches. `publishLocalWhereMarkerCopyStep` publishes and binds exact groups;
+  update both pending-driver bind helpers and their eight wrapper/replay
+  callsites. Do not use receiver-only reverse lookup as group identity.
+  `registerPublishedCopiedOpenLiteralGroups` registers only event-bearing
+  groups and passes their authored ids. `registerDefaultDecisionDraft`,
+  `judgeAmbiguityCandidate`, and `durableDefaultDecisionContributor` consume
+  the complete token union. Local admission needs the exact attached-creation
+  or detached-ingress converse; cross-provider admission remains literal-only.
+  Candidate registration is exhaustive at those qualifying local producer
+  hooks, so the amended design must state that converse explicitly rather
+  than treating a registration bit or final shape as proof. Rebuild
+  reachability follows contributor group to owning step; relocation consumes
+  the existing `copied_literal_group_map` and re-sorts contributors afterward.
+  Include predeclared in-place rebase, ModuleEnv static/mutable serde and
+  savepoints, Check Probe, `CheckedBoundaryStateSnapshot`, and
+  `CrossModuleCopyTransaction` in the migration and OOM audit. The map is
+  preparation only; none of this migration is implemented or dynamically
+  accepted yet.
+- The read-only contributor design-amendment map is complete. Update both
+  declarations (the copy-inventory prerequisite and the duplicate normalized
+  schema), the exact ModuleEnv pool inventory, default-contributor prose,
+  and publication/rebuild order together. The group/pool become
+  `CopiedConstraintDriverGroup` / `copied_constraint_driver_groups`; literal
+  event and disposition names stay unchanged. Empty event ranges retain the
+  current gapless event cursor. Preserve literal-only settlement/pin rules;
+  do not broaden event consumers to arithmetic-only candidate groups. The
+  rigid-substitution exclusion must cover driver-group/candidate/event
+  authorship, and the old blanket raw-receiver-identity exclusion must retain
+  the exact detached-requirement exception. This is preparation, not a design
+  amendment or implementation acceptance.
+- A follow-up read-only sequencing audit identifies the smallest next code
+  prerequisite after the normative amendment: append `flex_fresh_flex_copy`
+  to both witness enums, emit it only for the initial local source-flex
+  allocation, and retain `traverse` on memoized reuse. Its policy validation
+  must cover every local policy whose flex branch actually allocates,
+  including ranked variants, `all_fresh_rigid_preserve`, and
+  `all_fresh_flex_preserve`; cross/share-leaf paths remain excluded. This
+  witness-action domain must not be confused with the narrower qualifying
+  candidate-registration converse. Pin allocation versus revisit and rejected
+  policies before migrating groups. The rename, local producer/token union,
+  and inverse admission must be combined wherever splitting them would
+  contradict the declared group semantics; durable contributor group ids and
+  rebuild remap/resort follow with their complete inverse. The missing
+  requirement ordinal and attached source-constraint range already exist at
+  their callers but are discarded by transient interfaces; no new semantic
+  inference is needed. Rerun E's historical/formal/rebuild gates because the
+  new action changes expected-call copy witnesses too. This is sequencing
+  preparation only, not contributor implementation or acceptance.
+- Full checker baseline `30286` remains pending on compiled snapshot
+  `c124f1eb`; it is not a green gate. Read-only one-second stack samples show
+  progress between ordinary integration tests, from the function-payload
+  tag-union case to the recursive-nominal wrong-type case. Both samples were
+  inside fresh Builtin admission. The first found source/anchor all-pairs
+  validation; the second found branch-plan validation. Every ordinary
+  `TestEnv` fixture currently owns and admits its fresh Builtin view. No
+  validation has been skipped, no trust cache introduced, and no test process
+  interrupted. The source/anchor audit found no existing global source order
+  suitable for a linear merge: only anchors are currently sorted, while
+  source rebuilding retains input order. A temporary source-order schema
+  migration was therefore not authorized; preserve the exact inverse when
+  implementing the planned normalized settlement structure.
+- Independent review requested corrections to the read-only contributor
+  proposal before implementation: explicit step-local static/detached
+  primary-witness joining with the composite outer binding-codec exclusion;
+  literal classification from source constraints rather than output
+  registration; exact six-word contributor serialization; and explicit
+  pending-token binding and rollback. Root additionally pinned preservation
+  of existing non-traverse root-cut witnesses and the timing of pending
+  tokens before group publication. The author has supplied revised normative
+  text, including the existing rigid-cut behavior, and final proposal review
+  is pending. No witness or contributor migration is implemented yet.
+  After approval, preparation may overlap execution of the already-compiled
+  baseline binary: its result remains attributed only to `c124f1eb`, never
+  to subsequent edits. Only the driver may start builds, and no second build
+  starts before this gate completes.
+- Remaining after that slice: contributor migration; exact terminal target,
+  rejection, and generalization authorities; normalized settlement events;
+  option (e)'s deferred readiness and pre-unification nested-row rejection;
+  checked-to-Boxy/Monotype transport; direct-result/Try adapters at template
+  completion; missing call-formal positives; final schema/version updates;
+  full verification and independent adversarial review. W2b, W7, and W8 have
+  not started.
+
+The remaining option-(e) checker work has an audited integration route:
+replace the target-wait boolean with a closed `none` / `target_def` /
+`where_settlement` reason; wait for readiness of an entire deferred constraint
+range before processing any member; drain after all owners in a recursive SCC
+have finalized widening and before generalization. Inspect the exact selected
+method's output paths immediately before target instantiation/unification in
+nominal/alias selection and candidate/default compatibility. Candidate checks
+must propagate waiting, not turn it into rejection. The four annotation-owner
+finish paths need the post-finalization drain. Use the existing output-row
+enumerator and guarded semantic paths; terminal `MethodOutputPublication` is
+unavailable for same-SCC rejection. Add the dedicated diagnostic and rejected
+dispatch recovery. The semantic check can be implemented independently, but
+its durable attribution must use the planned normalized settlement events.
+
+A read-only lowering audit also confirmed that `MethodOutputPublication` and
+`ResultRowWideningUse` have no downstream consumers yet. Project exact selected
+binding capability into method targets and exact per-use authorization into
+call/iterator plans; shared evidence nodes are not per-use authority. Validate
+authorization before any specialization or worker-cache lookup. Preserve the
+planned one-adapter-per-`(template, requested type)` sharing: the audit did not
+find a valid collision requiring per-use proof ids in cache keys. Generalize
+direct/Try-ok/Try-err/Try-both relations and use request-derived payload types.
+Preserve capture-aware local targets and explicit provenance through constant
+storage/restoration. Local attached-method capture reachability is already
+pinned by `eval_tests.zig`'s `generic dispatch preserves each capturing local
+method context` fixture (`make` declares `Local.get` capturing `offset`), and
+`static_dispatch_registry.zig` publishes its exact local binder, expression,
+and declaration-context anchor. A widened closed-result variant must retain
+that context. Boxy's `plan.zig` `dispatchMethodTargetLookup` still rejects
+`local_proc` for direct dispatch (the ordinary method-worker helper already
+supports nested-expression sources; that does not establish this direct-call
+ingress). Both direct call and iterator analysis use the rejecting helper.
+Thus nested-worker ingress is a concrete W6b prerequisite to verify and support,
+not an unreachable-target assumption. No new runtime test of that variant has
+run yet. Adapter-value reachability through ConstStore still needs concrete
+verification. Test both
+lowering strategies (`--specialize=yes` and `--specialize=no`) as well as both
+interpreter/dev execution backends; testing execution backends alone does not
+cover both lowerers. No lowering implementation or test run was performed by
+that audit.
+
+The three existing W6b CLI fixtures remain unregistered in the parallel CLI
+runner. Their presence is not execution coverage. In particular,
+`QuestionClosedImpl.roc` returns only `Ok("hit")`; its current assertion cannot
+demonstrate re-tagging of an actual closed error-row value. Adapter acceptance
+must add executed `Err` cases as well as the planned Try-ok/Try-err/Try-both
+width matrix, and register the cases for both lowerers and execution backends.
+
+Transport producer coordinates reconfirmed on `6e869f7f`: in
+`static_dispatch_registry.zig`, `MethodRegistry.build` still has the exact
+`entry.value` MethodBinding when it creates `MethodTarget`, before discarding
+the binding's type-node coordinate. `StaticDispatchPlanTable` construction
+still has each raw `constraint_fn_var` when it creates `StaticDispatchCallPlan`;
+iterator calls have their separate plan records. These are the projection
+points for implementation capability and per-use authorization, respectively.
+`checked_artifact.zig` still publishes only `hosted_try_adapter` on hosted
+procedure templates. Monotype's `instantiateTargetFromPlanNode` and
+`methodTargetNodeFromPlan` still apply exact interface relations, and template
+completion adapts only the hosted arm. The new normative Result-Row Widening
+Adapter section remains to be written before that implementation; today's
+Polarity lowering note is forward-looking. No downstream code was changed by
+this reconfirmation.
 
 ### 8.2 The working agreement Jared set (binding)
 
@@ -748,10 +2985,10 @@ the bookmark to the top (`jj bookmark set jared/polarity -r ktlykkxv`,
 - Per item: one implementer, then one adversarial reviewer on the diff,
   then the implementer applies the review's fixes, then finalize. The
   reviewer does not edit source.
-- **If an implementer or reviewer finds anything the plan does not
-  anticipate, stop, take it to Jared, and do not continue that item
-  until Jared answers.** Do this even for good news (W4/W5 collapsing
-  was handled this way).
+- Continue routine implementation and proof-design decisions autonomously.
+  Ask Jared only if an implementer or reviewer finds a typing or lowering
+  policy not covered by the accepted plan. The later autonomy instruction
+  supersedes the original session's stop-for-every-unanticipated-finding rule.
 - Production quality, not a prototype; long-term compiler health over a
   local optimum. Every behaviour change is a declared rule in
   `design.md` and is pinned by tests at each level it touches.
@@ -762,8 +2999,10 @@ the bookmark to the top (`jj bookmark set jared/polarity -r ktlykkxv`,
 
 ### 8.3 What is next, in order
 
-W6a is implemented and its focused verification is complete. Next: W6b → W2b (also owns the optional-field
-stored-codec fixtures, Appendix A) → W7 → W8. Each
+W6a is implemented and its focused verification is complete. Finish W6b,
+complete independent review, update the docs and publish, then pause for Jared
+before W2b (also owns the optional-field stored-codec fixtures, Appendix A).
+The remaining order is W2b → W7 → W8. Each
 section above is the specification; the "Landed" notes on W2a/W3/W4
 show the level of detail expected in a commit and what the reviewers
 looked for. Verification matrix in §4.
@@ -810,15 +3049,16 @@ Facts that were only in the lost scratchpad and matter for W6:
 - Never run a state-changing jj command (`new`, `commit`, `describe`,
   `squash`, `edit`, `abandon`, `rebase`, `restore`, `undo`, `bookmark`,
   `git push`, `workspace`). Reads: `jj --ignore-working-copy ...`. Note
-  `--ignore-working-copy` shows the LAST SNAPSHOT: run plain `jj status`
-  once first so uncommitted edits are visible to `diff -r @`.
+  `--ignore-working-copy` shows the LAST SNAPSHOT: ask the driver to snapshot
+  before diff-based review. Subagents do not run plain `jj status` either.
 - Builds are slow (`zig build roc` and full suites can exceed 10
-  minutes). Run long commands in the background with a log file. NEVER
-  end a turn while a background build or test is running: wait with a
-  polling loop in a foreground call with a long timeout
-  (`until ! pgrep -f 'zig build roc' >/dev/null; do sleep 20; done; tail <log>`),
-  repeating the call if it times out. Report only when every
-  verification result is in hand.
+  minutes). Coordinate one long Zig build at a time on stable source. Use a
+  foreground execution session and poll it in waits of at most 60 seconds;
+  keep the driver informed. Do not edit while a build is consuming source,
+  and do not end a task with a build still running. Report only actual results.
+  A sandbox `PermissionDenied` is not disk exhaustion: retry the unchanged
+  command through the approval mechanism. Only an actual disk-use error
+  authorizes the driver to remove the exact workspace `.zig-cache` directory.
 - Smallest module-scoped step first, then widen. Step names:
   `zig build run-test-zig-module-<module> -- --test-filter "<name>"`
   (`check`, `postcheck`, …), `run-test-zig-lir-inline`,

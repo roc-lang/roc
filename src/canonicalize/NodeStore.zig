@@ -803,7 +803,15 @@ pub fn setRegionAt(store: *NodeStore, node_idx: Node.Idx, region: Region) void {
     store.regions.set(idx, region);
 }
 
-fn literalDispatchKindForTag(tag: Node.Tag) ?LiteralDispatchPlan.Kind {
+pub const LiteralOccurrenceKind = enum {
+    expr,
+    pattern,
+};
+
+/// The exact literal-dispatch class authored by one CIR node tag. This is a
+/// closed tag projection: callers validating durable provenance must not infer
+/// a literal kind from a node-name prefix or from the node's solved type.
+pub fn literalDispatchKindForTag(tag: Node.Tag) ?LiteralDispatchPlan.Kind {
     const literal_tag = narrowNodeTag(LiteralNodeTag, tag) orelse return null;
     return switch (literal_tag) {
         .expr_num,
@@ -823,6 +831,32 @@ fn literalDispatchKindForTag(tag: Node.Tag) ?LiteralDispatchPlan.Kind {
         .expr_string,
         .pattern_str_literal,
         => .quote,
+    };
+}
+
+/// Whether an exact literal-dispatch CIR node is an expression or pattern.
+/// Interpolation is not a `LiteralNodeTag`; its checker path handles the exact
+/// `.expr_interpolation` tag separately.
+pub fn literalOccurrenceKindForTag(tag: Node.Tag) ?LiteralOccurrenceKind {
+    const literal_tag = narrowNodeTag(LiteralNodeTag, tag) orelse return null;
+    return switch (literal_tag) {
+        .expr_num,
+        .expr_frac_f32,
+        .expr_frac_f64,
+        .expr_dec,
+        .expr_dec_small,
+        .expr_num_from_numeral,
+        .expr_typed_int,
+        .expr_typed_frac,
+        .expr_typed_num_from_numeral,
+        .expr_string,
+        => .expr,
+        .pattern_num_literal,
+        .pattern_small_dec_literal,
+        .pattern_dec_literal,
+        .pattern_num_from_numeral_literal,
+        .pattern_str_literal,
+        => .pattern,
     };
 }
 
@@ -2936,6 +2970,48 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
+pub fn ensureCallExprCapacity(store: *NodeStore) Allocator.Error!void {
+    std.debug.assert(store.nodes.len() == store.regions.len());
+    const node_count = std.math.add(u32, store.nodes.len(), 1) catch return error.OutOfMemory;
+    try store.span2_data.items.ensureUnusedCapacity(store.gpa, 1);
+    try store.nodes.ensureTotalCapacity(store.gpa, node_count);
+    try store.regions.items.ensureUnusedCapacity(store.gpa, 1);
+}
+
+/// Append one already-preflighted call node without any fallible operation.
+/// `ModuleEnv.addExpr` owns the matching call-token preflight and is the sole
+/// caller, so the call span/node/region and token group publish atomically.
+pub fn addCallExprAssumeCapacity(
+    store: *NodeStore,
+    expr: CIR.Expr,
+    region: base.Region,
+) CIR.Expr.Idx {
+    const call = switch (expr) {
+        .e_call => |call| call,
+        else => std.debug.panic("non-call expression used the call append path", .{}),
+    };
+    std.debug.assert(store.nodes.len() == store.regions.len());
+
+    const span2_idx: u32 = @intFromEnum(store.span2_data.appendAssumeCapacity(.{
+        .start = call.args.span.start,
+        .len = call.args.span.len,
+    }));
+    var node = Node.init(.expr_call);
+    node.setPayload(.{ .expr_call = .{
+        .func = @intFromEnum(call.func),
+        .args_span2_idx = span2_idx,
+        .called_via = @intFromEnum(call.called_via),
+        .constraint_fn_var_plus_one = if (call.constraint_fn_var) |var_|
+            @intFromEnum(var_) + 1
+        else
+            0,
+    } });
+    const node_idx = store.nodes.appendAssumeCapacity(node);
+    const region_idx = store.regions.appendAssumeCapacity(region);
+    std.debug.assert(@intFromEnum(node_idx) == @intFromEnum(region_idx));
+    return @enumFromInt(@intFromEnum(node_idx));
+}
+
 pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator.Error!CIR.Expr.Idx {
     var node = Node.init(undefined); // tag set below in switch
 
@@ -5604,6 +5680,16 @@ pub fn addMalformed(store: *NodeStore, diagnostic_idx: CIR.Diagnostic.Idx, regio
     return malformed_nid;
 }
 
+/// Returns whether an index names an in-bounds node that getDiagnostic can reconstruct.
+pub fn isDiagnosticIndex(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) bool {
+    const node_int = @intFromEnum(diagnostic);
+    if (node_int >= store.nodes.len()) return false;
+
+    const node_idx: Node.Idx = @enumFromInt(node_int);
+    const node = store.nodes.get(node_idx);
+    return narrowNodeTag(DiagnosticNodeTag, node.tag) != null;
+}
+
 /// Retrieves diagnostic information from a diagnostic node.
 ///
 /// This function extracts the stored diagnostic data from nodes with .diag_* tags.
@@ -6328,6 +6414,168 @@ pub const Serialized = extern struct {
         };
     }
 };
+
+fn appendCanonicalPayloadRepresentationNodesForTest(
+    store: *NodeStore,
+    prior_byte: u8,
+) Allocator.Error!void {
+    var variable = Node.init(.expr_var);
+    @memset(std.mem.asBytes(&variable.payload), prior_byte);
+    variable.setPayload(.{ .expr_var = .{ .pattern_idx = 0x1122_3344 } });
+    _ = try store.nodes.append(store.gpa, variable);
+    _ = try store.regions.append(store.gpa, Region.zero());
+
+    var structural_hash = Node.init(.expr_structural_hash);
+    @memset(std.mem.asBytes(&structural_hash.payload), prior_byte);
+    structural_hash.setPayload(.{ .expr_structural_hash = .{
+        .value = 0x2233_4455,
+        .hasher = 0x3344_5566,
+    } });
+    _ = try store.nodes.append(store.gpa, structural_hash);
+    _ = try store.regions.append(store.gpa, Region.zero());
+
+    var segment = Node.init(.field_access_segment);
+    @memset(std.mem.asBytes(&segment.payload), prior_byte);
+    segment.setPayload(.{ .field_access_segment = .{
+        .name = 0x4455_6677,
+        .mode = @intFromEnum(CIR.Expr.FieldAccessMode.optional),
+    } });
+    _ = try store.nodes.append(store.gpa, segment);
+    _ = try store.regions.append(store.gpa, Region.zero());
+
+    var annotation = Node.init(.annotation);
+    @memset(std.mem.asBytes(&annotation.payload), prior_byte);
+    annotation.setPayload(.{ .annotation = .{
+        .anno = 0x5566_7788,
+        .where_span2_idx = 0x6677_8899,
+        .name_region_span2_idx = 0x7788_99aa,
+        .flags = .{
+            .has_where = true,
+            .mentions_type_var = true,
+            .introduces_type_var = true,
+            .contains_underscore = true,
+            .has_name_region = true,
+        },
+    } });
+    _ = try store.nodes.append(store.gpa, annotation);
+    _ = try store.regions.append(store.gpa, Region.zero());
+}
+
+fn serializeNodeStoreBytesForTest(
+    gpa: Allocator,
+    store: *const NodeStore,
+) Allocator.Error![]u8 {
+    var writer = CompactWriter.init();
+    defer writer.deinit(gpa);
+
+    const serialized = try writer.appendAlloc(gpa, NodeStore.Serialized);
+    try serialized.serialize(store, gpa, &writer);
+    const buffer = try gpa.alloc(u8, writer.total_bytes);
+    errdefer gpa.free(buffer);
+    _ = writer.writeToBuffer(buffer) catch unreachable;
+    return buffer;
+}
+
+test "NodeStore payload serialization ignores prior storage bytes" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var first = try NodeStore.init(gpa);
+    defer first.deinit();
+    var second = try NodeStore.init(gpa);
+    defer second.deinit();
+    try appendCanonicalPayloadRepresentationNodesForTest(&first, 0xa5);
+    try appendCanonicalPayloadRepresentationNodesForTest(&second, 0x5a);
+
+    try testing.expectEqual(@as(usize, 4), @offsetOf(Node.Payload.FieldAccessSegment, "mode"));
+    try testing.expectEqual(@as(usize, 12), @offsetOf(Node.Payload.Annotation, "flags"));
+    try testing.expectEqual(first.nodes.len(), second.nodes.len());
+    var node_indices = first.nodes.iterIndices();
+    while (node_indices.next()) |node_idx| {
+        const first_node = first.nodes.get(node_idx);
+        const second_node = second.nodes.get(node_idx);
+        try testing.expectEqual(first_node.tag, second_node.tag);
+        try testing.expectEqualSlices(
+            u8,
+            std.mem.asBytes(&first_node.payload),
+            std.mem.asBytes(&second_node.payload),
+        );
+    }
+
+    const variable_node = first.nodes.get(@enumFromInt(0));
+    const variable = variable_node.getPayload().expr_var;
+    try testing.expectEqual(@as(u32, 0x1122_3344), variable.pattern_idx);
+    for (std.mem.asBytes(&variable_node.payload)[12..]) |byte| {
+        try testing.expectEqual(@as(u8, 0), byte);
+    }
+    const structural_hash_node = first.nodes.get(@enumFromInt(1));
+    const structural_hash = structural_hash_node.getPayload().expr_structural_hash;
+    try testing.expectEqual(@as(u32, 0x2233_4455), structural_hash.value);
+    try testing.expectEqual(@as(u32, 0x3344_5566), structural_hash.hasher);
+    for (std.mem.asBytes(&structural_hash_node.payload)[8..]) |byte| {
+        try testing.expectEqual(@as(u8, 0), byte);
+    }
+    const segment_node = first.nodes.get(@enumFromInt(2));
+    const segment = segment_node.getPayload().field_access_segment;
+    try testing.expectEqual(@as(u32, 0x4455_6677), segment.name);
+    try testing.expectEqual(
+        @as(u8, @intFromEnum(CIR.Expr.FieldAccessMode.optional)),
+        segment.mode,
+    );
+    for (std.mem.asBytes(&segment_node.payload)[12..]) |byte| {
+        try testing.expectEqual(@as(u8, 0), byte);
+    }
+    const annotation_node = first.nodes.get(@enumFromInt(3));
+    const annotation = annotation_node.getPayload().annotation;
+    try testing.expectEqual(@as(u32, 0x5566_7788), annotation.anno);
+    try testing.expect(annotation.flags.has_where);
+    try testing.expect(annotation.flags.has_name_region);
+    for (std.mem.asBytes(&annotation_node.payload)[13..]) |byte| {
+        try testing.expectEqual(@as(u8, 0), byte);
+    }
+
+    const first_bytes = try serializeNodeStoreBytesForTest(gpa, &first);
+    defer gpa.free(first_bytes);
+    const second_bytes = try serializeNodeStoreBytesForTest(gpa, &second);
+    defer gpa.free(second_bytes);
+    try testing.expectEqualSlices(u8, first_bytes, second_bytes);
+}
+
+test "isDiagnosticIndex accepts exactly the finite diagnostic node set" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var store = try NodeStore.init(gpa);
+    defer store.deinit();
+
+    const empty_index: CIR.Diagnostic.Idx = @enumFromInt(0);
+    try testing.expect(!store.isDiagnosticIndex(empty_index));
+
+    const malformed_idx = try store.nodes.append(gpa, Node.init(.malformed));
+    _ = try store.regions.append(gpa, Region.zero());
+    try testing.expect(!store.isDiagnosticIndex(@enumFromInt(@intFromEnum(malformed_idx))));
+
+    // This stale Node.Tag has no CIR.Diagnostic variant and is therefore not in
+    // the finite set that getDiagnostic can reconstruct.
+    const empty_single_quote_idx = try store.nodes.append(gpa, Node.init(.diag_empty_single_quote));
+    _ = try store.regions.append(gpa, Region.zero());
+    try testing.expect(!store.isDiagnosticIndex(@enumFromInt(@intFromEnum(empty_single_quote_idx))));
+
+    const diagnostic_tags = std.enums.values(DiagnosticNodeTag);
+    try testing.expectEqual(@as(usize, MODULEENV_DIAGNOSTIC_NODE_COUNT), diagnostic_tags.len);
+    for (diagnostic_tags) |diagnostic_tag| {
+        const node_tag = std.meta.stringToEnum(Node.Tag, @tagName(diagnostic_tag)) orelse unreachable;
+        const node_idx = try store.nodes.append(gpa, Node.init(node_tag));
+        _ = try store.regions.append(gpa, Region.zero());
+        try testing.expect(store.isDiagnosticIndex(@enumFromInt(@intFromEnum(node_idx))));
+    }
+
+    const one_past_end: CIR.Diagnostic.Idx = @enumFromInt(store.nodes.len());
+    try testing.expect(!store.isDiagnosticIndex(one_past_end));
+
+    const maximum_index: CIR.Diagnostic.Idx = @enumFromInt(std.math.maxInt(u32));
+    try testing.expect(!store.isDiagnosticIndex(maximum_index));
+}
 
 test "NodeStore empty CompactWriter roundtrip" {
     const testing = std.testing;

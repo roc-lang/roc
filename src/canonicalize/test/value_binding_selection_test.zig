@@ -35,6 +35,73 @@ fn countDefsWithExprTag(env: *const ModuleEnv, span: CIR.Def.Span, expr_tag: std
     return count;
 }
 
+test "builtin Num annotations canonicalize lookup and application as distinct CIR forms" {
+    const source =
+        \\lookup_value : Num
+        \\lookup_value = 1
+        \\
+        \\apply_value : Num(U8)
+        \\apply_value = 1
+    ;
+
+    const allocator = std.testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
+    var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
+    defer can.deinit();
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.len);
+
+    var lookup_def_idx: ?CIR.Def.Idx = null;
+    var apply_def_idx: ?CIR.Def.Idx = null;
+    for (env.store.sliceDefs(env.top_level_value_defs)) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        const pattern = env.store.getPattern(def.pattern);
+        if (pattern != .assign) continue;
+        const name = env.getIdent(pattern.assign.ident);
+        if (std.mem.eql(u8, name, "lookup_value")) lookup_def_idx = def_idx;
+        if (std.mem.eql(u8, name, "apply_value")) apply_def_idx = def_idx;
+    }
+
+    const lookup_def = env.store.getDef(lookup_def_idx orelse return error.TestUnexpectedResult);
+    const apply_def = env.store.getDef(apply_def_idx orelse return error.TestUnexpectedResult);
+    const lookup_idx = env.store.getAnnotation(lookup_def.annotation orelse return error.TestUnexpectedResult).anno;
+    const apply_idx = env.store.getAnnotation(apply_def.annotation orelse return error.TestUnexpectedResult).anno;
+
+    try std.testing.expectEqual(CIR.Node.Tag.ty_lookup, env.store.nodes.get(@enumFromInt(@intFromEnum(lookup_idx))).tag);
+    const lookup = env.store.getTypeAnno(lookup_idx);
+    try std.testing.expect(lookup == .lookup);
+    try std.testing.expect(lookup.lookup.base == .builtin);
+    try std.testing.expectEqual(CIR.TypeAnno.Builtin.num, lookup.lookup.base.builtin);
+    try std.testing.expectEqualStrings("Num", env.getIdent(lookup.lookup.name));
+
+    try std.testing.expectEqual(CIR.Node.Tag.ty_apply, env.store.nodes.get(@enumFromInt(@intFromEnum(apply_idx))).tag);
+    const apply = env.store.getTypeAnno(apply_idx);
+    try std.testing.expect(apply == .apply);
+    try std.testing.expect(apply.apply.base == .builtin);
+    try std.testing.expectEqual(CIR.TypeAnno.Builtin.num, apply.apply.base.builtin);
+    try std.testing.expectEqualStrings("Num", env.getIdent(apply.apply.name));
+    const args = env.store.sliceTypeAnnos(apply.apply.args);
+    try std.testing.expectEqual(@as(usize, 1), args.len);
+    const arg = env.store.getTypeAnno(args[0]);
+    try std.testing.expect(arg == .lookup);
+    try std.testing.expect(arg.lookup.base == .builtin);
+    try std.testing.expectEqual(CIR.TypeAnno.Builtin.u8, arg.lookup.base.builtin);
+    try std.testing.expectEqualStrings("U8", env.getIdent(arg.lookup.name));
+}
+
 test "canonicalization owns top-level name and value-binding selection" {
     const source =
         \\m = || {}

@@ -183,6 +183,10 @@ pub fn SafeList(comptime T: type) type {
             /// L-10: reject an `(offset, len)` whose `len` elements reach outside the
             /// `backing_len`-byte buffer before `deserializeInto` dereferences it.
             pub fn validateRelocations(self: *const Serialized, backing_len: u64) error{CorruptArtifact}!void {
+                // Compact serialization writes exactly the live prefix. A
+                // different capacity would make mutable deserialization
+                // allocate one extent and copy another.
+                if (self.capacity != self.len) return error.CorruptArtifact;
                 const span_bytes = std.math.mul(u64, self.len, @sizeOf(T)) catch return error.CorruptArtifact;
                 try validateRelocatedSpan(@alignOf(T), self.offset, span_bytes, backing_len);
             }
@@ -816,7 +820,16 @@ pub fn SafeMultiList(comptime T: type) type {
             /// region `serialize` writes) reaches outside the `backing_len`-byte buffer.
             pub fn validateRelocations(self: *const Serialized, backing_len: u64) error{CorruptArtifact}!void {
                 if (self.len == 0) return;
-                const span_bytes = std.MultiArrayList(T).capacityInBytes(@intCast(self.capacity));
+                if (self.capacity < self.len or self.capacity > std.math.maxInt(usize)) {
+                    return error.CorruptArtifact;
+                }
+                const elem_bytes: u64 = comptime blk: {
+                    var total: u64 = 0;
+                    for (std.meta.fields(T)) |field_info| total += @sizeOf(field_info.type);
+                    break :blk total;
+                };
+                const span_bytes = std.math.mul(u64, self.capacity, elem_bytes) catch
+                    return error.CorruptArtifact;
                 try validateRelocatedSpan(@alignOf(T), self.offset, span_bytes, backing_len);
             }
 

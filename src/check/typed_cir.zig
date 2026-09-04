@@ -25,7 +25,7 @@ const OwnedCheckedModule = struct {
 };
 
 const ModuleData = struct {
-    env: *ModuleEnv,
+    env: *const ModuleEnv,
     top_level_defs_by_ident: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx) = .{},
     ownership: union(enum) {
         borrowed,
@@ -33,7 +33,7 @@ const ModuleData = struct {
         owned_cached: CachedModule,
     },
 
-    fn initBorrowed(env: *ModuleEnv) ModuleData {
+    fn initBorrowed(env: *const ModuleEnv) ModuleData {
         return .{
             .env = env,
             .ownership = .borrowed,
@@ -87,6 +87,7 @@ pub const Modules = struct {
     /// Ways to provide a checked module env to typed CIR.
     pub const SourceModule = union(enum) {
         precompiled: *ModuleEnv,
+        admitted: *const ModuleEnv,
         owned_checked: OwnedCheckedModule,
         owned_cached: CachedModule,
 
@@ -94,6 +95,12 @@ pub const Modules = struct {
             return switch (self) {
                 .precompiled => |module_env| blk: {
                     try prepareRuntimeEnv(allocator, module_env);
+                    break :blk ModuleData.initBorrowed(module_env);
+                },
+                .admitted => |module_env| blk: {
+                    if (!module_env.runtime_prepared) {
+                        std.debug.panic("typed CIR received an unprepared admitted import", .{});
+                    }
                     break :blk ModuleData.initBorrowed(module_env);
                 },
                 .owned_checked => |owned| blk: {
@@ -109,7 +116,43 @@ pub const Modules = struct {
     };
 
     /// The graph for a single root module plus its imports, with the root's index.
-    pub const RootModules = struct { modules: Modules, module_idx: u32 };
+    pub const RootModules = struct {
+        modules: Modules,
+        module_idx: u32,
+
+        /// Prove that this public graph has exactly the borrowed root/import
+        /// shape produced by `initForRootModule`. Pointer equality alone is not
+        /// sufficient: an owned ModuleData with the same env would free an
+        /// admitted environment when the graph is destroyed.
+        pub fn validateBorrowedGraph(
+            self: *const @This(),
+            root_env: *const ModuleEnv,
+            imported_envs: []const *const ModuleEnv,
+        ) bool {
+            var expected_import_count: usize = 0;
+            for (imported_envs) |imported_env| {
+                if (root_env.module_role == .builtin and imported_env.module_role == .builtin) continue;
+                expected_import_count = std.math.add(usize, expected_import_count, 1) catch return false;
+            }
+            const expected_count = std.math.add(usize, expected_import_count, 1) catch return false;
+            if (expected_import_count > std.math.maxInt(u32) or
+                self.module_idx != @as(u32, @intCast(expected_import_count)) or
+                self.modules.modules.len != expected_count)
+            {
+                return false;
+            }
+
+            var graph_index: usize = 0;
+            for (imported_envs) |imported_env| {
+                if (root_env.module_role == .builtin and imported_env.module_role == .builtin) continue;
+                const module_data = &self.modules.modules[graph_index];
+                if (std.meta.activeTag(module_data.ownership) != .borrowed or module_data.env != imported_env) return false;
+                graph_index += 1;
+            }
+            const root_data = &self.modules.modules[self.module_idx];
+            return std.meta.activeTag(root_data.ownership) == .borrowed and root_data.env == root_env;
+        }
+    };
 
     /// Build the `Modules` graph for `root_env` plus `imported_envs`, returning the
     /// root's `module_idx`. A builtin root does not re-include builtin imports. This is
@@ -119,7 +162,7 @@ pub const Modules = struct {
     pub fn initForRootModule(
         allocator: Allocator,
         root_env: *ModuleEnv,
-        imported_envs: []const *ModuleEnv,
+        imported_envs: []const *const ModuleEnv,
     ) Allocator.Error!RootModules {
         var imported_source_count: usize = 0;
         for (imported_envs) |imported_env| {
@@ -133,7 +176,7 @@ pub const Modules = struct {
         var source_index: usize = 0;
         for (imported_envs) |imported_env| {
             if (root_env.module_role == .builtin and imported_env.module_role == .builtin) continue;
-            source_modules[source_index] = .{ .precompiled = imported_env };
+            source_modules[source_index] = .{ .admitted = imported_env };
             source_index += 1;
         }
         const module_idx: u32 = @intCast(imported_source_count);
@@ -225,6 +268,53 @@ pub fn prepareRuntimeEnv(allocator: Allocator, env: *ModuleEnv) Allocator.Error!
     env.runtime_prepared = true;
 }
 
+test "RootModules validation binds exact borrowed root and import order" {
+    const allocator = std.testing.allocator;
+
+    var root = try ModuleEnv.init(allocator, "");
+    defer root.deinit();
+    try root.initCIRFields("Root");
+    var import_a = try ModuleEnv.init(allocator, "");
+    defer import_a.deinit();
+    try import_a.initCIRFields("ImportA");
+    var import_b = try ModuleEnv.init(allocator, "");
+    defer import_b.deinit();
+    try import_b.initCIRFields("ImportB");
+    try prepareRuntimeEnv(allocator, &import_a);
+    try prepareRuntimeEnv(allocator, &import_b);
+
+    const imports = [_]*const ModuleEnv{ &import_a, &import_b };
+    var graph = try Modules.initForRootModule(allocator, &root, &imports);
+    defer graph.modules.deinit();
+    try std.testing.expect(graph.validateBorrowedGraph(&root, &imports));
+
+    const swapped = [_]*const ModuleEnv{ &import_b, &import_a };
+    try std.testing.expect(!graph.validateBorrowedGraph(&root, &swapped));
+    const extra = [_]*const ModuleEnv{ &import_a, &import_b, &import_a };
+    try std.testing.expect(!graph.validateBorrowedGraph(&root, &extra));
+    try std.testing.expect(!graph.validateBorrowedGraph(&import_a, &imports));
+
+    const saved_idx = graph.module_idx;
+    graph.module_idx = @intCast(graph.modules.moduleCount());
+    try std.testing.expect(!graph.validateBorrowedGraph(&root, &imports));
+    graph.module_idx = saved_idx;
+}
+
+test "RootModules validation rejects an owning graph with matching pointer" {
+    const allocator = std.testing.allocator;
+    const owned_env = try allocator.create(ModuleEnv);
+    owned_env.* = try ModuleEnv.init(allocator, "");
+    try owned_env.initCIRFields("OwnedRoot");
+
+    const sources = [_]Modules.SourceModule{.{ .owned_checked = .{ .env = owned_env } }};
+    var graph = Modules.RootModules{
+        .modules = try Modules.init(allocator, &sources),
+        .module_idx = 0,
+    };
+    defer graph.modules.deinit();
+    try std.testing.expect(!graph.validateBorrowedGraph(owned_env, &.{}));
+}
+
 fn ensureModuleNameIdents(env: *ModuleEnv) Allocator.Error!void {
     if (env.display_module_name_idx.isNone()) {
         if (env.module_name.len == 0) {
@@ -256,7 +346,7 @@ pub const Module = struct {
         }
     };
 
-    fn env(self: @This()) *ModuleEnv {
+    fn env(self: @This()) *const ModuleEnv {
         return self.data_store.env;
     }
 

@@ -172,7 +172,31 @@ pub const Constants = struct {
     ///     generalized requirement deduplication durably prefers a complete
     ///     deferred generated-codec requirement. This format is unpublished
     ///     while the polarity phase-two stack is incomplete.
-    pub const CACHE_VERSION = 74;
+    /// 75: W6b serializes exact reusable where-alias source expansions plus
+    ///     one ready/checked-error settlement and canonical dependency rank
+    ///     for every where-alias declaration, alongside method-output row and
+    ///     widening authorization tables.
+    /// 76: W6b where-method widening authority serializes explicit occurrence-
+    ///     lineage steps, complete copy-pair relations with canonical shortest
+    ///     discovery witnesses, platform-substitution locators, and inherited
+    ///     marker bases.
+    /// 77: W6b static-dispatch constraint merges serialize exact source-to-
+    ///     destination marker-offset movement evidence.
+    /// 78: W6b serializes the complete checked-admission proof schema: immutable
+    ///     raw marker-copy occurrences; Expected consumption, call-slot/formal,
+    ///     failure, ambiguity, and retirement ledgers; selected/default decision
+    ///     and marker-independent constraint-evidence provenance; and canonical
+    ///     external-lookup tokens with their unique cache-seed authority.
+    /// 79: Selected external-method decisions preserve the exact immutable
+    ///     receiver-owner module identity and source declaration chosen before
+    ///     target checking can retire the live receiver descriptor.
+    /// 80: Selected external-method decisions also preserve the exact finalized
+    ///     provider method-table row returned by that owner-key lookup.
+    /// 81: Checked W6b failure/retirement tags include the finite malformed
+    ///     where-alias lookup and pre-relation call-operand recovery arms.
+    /// 82: Canonical CIR node payload variants explicitly define all sixteen
+    ///     serialized bytes, including zero-default reserved tails.
+    pub const CACHE_VERSION = 82;
 };
 
 /// Configuration for the Roc cache system.

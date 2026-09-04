@@ -196,7 +196,8 @@ pub const CacheModule = struct {
         // Calculate the base address of the serialized data
         const base_addr = @intFromPtr(serialized_data.ptr);
 
-        // Deserialize the ModuleEnv with mutable types so it can be type-checked further
+        // Materialize owned type storage for runtime preparation and checked-
+        // module consumption. Cached checked environments are never checked again.
         const module_env_ptr: *ModuleEnv = try deserialized_ptr.deserializeWithMutableTypes(base_addr, allocator, source, module_name);
 
         return module_env_ptr;
@@ -309,8 +310,8 @@ test "MODULE_ENV_VERSION_HASH golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x1A, 0x62, 0xA6, 0x2C, 0x32, 0x09, 0xAF, 0xC9, 0x16, 0x56, 0x13, 0x46, 0x98, 0x9F, 0x64, 0xEE,
-        0x4A, 0xAF, 0x37, 0x2B, 0x0B, 0x10, 0xF0, 0xBC, 0x95, 0xCA, 0x23, 0xDD, 0x67, 0xF3, 0x79, 0x6A,
+        0x69, 0xDE, 0xF0, 0x18, 0xEB, 0x58, 0x16, 0xBB, 0xE4, 0x10, 0x46, 0xFB, 0xBC, 0x3A, 0x71, 0xAD,
+        0x71, 0x04, 0x03, 0xE8, 0x8F, 0x5A, 0xC3, 0x33, 0x6C, 0xED, 0x9C, 0x62, 0xB7, 0xC2, 0xA3, 0x91,
     };
     try std.testing.expectEqualSlices(u8, &golden, &MODULE_ENV_VERSION_HASH);
 }

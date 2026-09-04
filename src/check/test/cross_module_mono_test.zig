@@ -53,13 +53,15 @@ const MonoTestEnv = struct {
     checker: Check,
     module_envs: std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
     builtin_module: builtin_static.BuiltinModuleView,
+    builtin_validation: Check.ValidatedModuleEnv,
+    owned_builtin_validation: ?Check.OwnedValidatedModuleEnv,
     owns_builtin_module: bool,
     imported_envs_list: std.ArrayList(*const ModuleEnv),
 
     const Self = @This();
 
     /// Initialize a single module test environment
-    pub fn init(module_name: []const u8, source: []const u8) (Allocator.Error || error{CorruptEmbeddedBuiltins})!Self {
+    pub fn init(module_name: []const u8, source: []const u8) (Allocator.Error || Check.W6bSemanticValidationError || error{CorruptEmbeddedBuiltins})!Self {
         const gpa = testing.allocator;
         const roc_ctx = CoreCtx.testing(gpa, gpa);
 
@@ -74,6 +76,12 @@ const MonoTestEnv = struct {
         const builtin_indices = compiled_builtins.builtinIndices(CIR);
         var builtin_module = try builtin_static.moduleView(gpa, compiled_builtins.builtin_bin[0..], "Builtin", compiled_builtins.builtin_source);
         errdefer builtin_module.deinit();
+        var owned_builtin_validation = try Check.admitBuiltinOwned(
+            gpa,
+            builtin_module.env,
+            builtin_indices,
+        );
+        errdefer owned_builtin_validation.deinit();
 
         module_env.* = try ModuleEnv.init(gpa, source);
         errdefer module_env.deinit();
@@ -112,6 +120,9 @@ const MonoTestEnv = struct {
 
         var imported_envs_list = std.ArrayList(*const ModuleEnv).empty;
         try imported_envs_list.append(gpa, builtin_module.env);
+        var imported_validations_list = std.ArrayList(Check.ValidatedModuleEnv).empty;
+        defer imported_validations_list.deinit(gpa);
+        try imported_validations_list.append(gpa, owned_builtin_validation.capability());
 
         module_env.imports.clearResolvedModules();
         try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
@@ -120,7 +131,7 @@ const MonoTestEnv = struct {
             gpa,
             &module_env.types,
             module_env,
-            imported_envs_list.items,
+            .{ .envs = imported_envs_list.items, .modules = imported_validations_list.items },
             &module_envs,
             &module_env.store.regions,
             module_builtin_ctx,
@@ -138,13 +149,15 @@ const MonoTestEnv = struct {
             .checker = checker,
             .module_envs = module_envs,
             .builtin_module = builtin_module,
+            .builtin_validation = owned_builtin_validation.capability(),
+            .owned_builtin_validation = owned_builtin_validation,
             .owns_builtin_module = true,
             .imported_envs_list = imported_envs_list,
         };
     }
 
     /// Initialize with an imported module
-    pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_env: *const Self) Allocator.Error!Self {
+    pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_env: *const Self) (Allocator.Error || Check.W6bSemanticValidationError)!Self {
         const gpa = testing.allocator;
         const roc_ctx = CoreCtx.testing(gpa, gpa);
 
@@ -218,12 +231,16 @@ const MonoTestEnv = struct {
 
         var imported_envs_list = std.ArrayList(*const ModuleEnv).empty;
         try imported_envs_list.append(gpa, other_env.builtin_module.env);
+        var imported_validations_list = std.ArrayList(Check.ValidatedModuleEnv).empty;
+        defer imported_validations_list.deinit(gpa);
+        try imported_validations_list.append(gpa, other_env.builtin_validation);
 
         const import_count = module_env.imports.imports.items.items.len;
         for (module_env.imports.imports.items.items[0..import_count]) |str_idx| {
             const import_name = module_env.getString(str_idx);
             if (std.mem.eql(u8, import_name, other_module_name)) {
                 try imported_envs_list.append(gpa, other_env.module_env);
+                try imported_validations_list.append(gpa, try other_env.checker.validatedModule());
             }
         }
 
@@ -234,7 +251,7 @@ const MonoTestEnv = struct {
             gpa,
             &module_env.types,
             module_env,
-            imported_envs_list.items,
+            .{ .envs = imported_envs_list.items, .modules = imported_validations_list.items },
             &module_envs,
             &module_env.store.regions,
             module_builtin_ctx,
@@ -252,6 +269,8 @@ const MonoTestEnv = struct {
             .checker = checker,
             .module_envs = module_envs,
             .builtin_module = other_env.builtin_module,
+            .builtin_validation = other_env.builtin_validation,
+            .owned_builtin_validation = null,
             .owns_builtin_module = false,
             .imported_envs_list = imported_envs_list,
         };
@@ -260,7 +279,7 @@ const MonoTestEnv = struct {
     const ImportedModule = struct { name: []const u8, env: *const MonoTestEnv };
 
     /// Initialize with multiple imported modules
-    pub fn initWithImports(module_name: []const u8, source: []const u8, imports: []const ImportedModule) Allocator.Error!Self {
+    pub fn initWithImports(module_name: []const u8, source: []const u8, imports: []const ImportedModule) (Allocator.Error || Check.W6bSemanticValidationError)!Self {
         const gpa = testing.allocator;
         const roc_ctx = CoreCtx.testing(gpa, gpa);
 
@@ -336,6 +355,9 @@ const MonoTestEnv = struct {
 
         var imported_envs_list = std.ArrayList(*const ModuleEnv).empty;
         try imported_envs_list.append(gpa, builtin_env);
+        var imported_validations_list = std.ArrayList(Check.ValidatedModuleEnv).empty;
+        defer imported_validations_list.deinit(gpa);
+        try imported_validations_list.append(gpa, imports[0].env.builtin_validation);
 
         const import_count = module_env.imports.imports.items.items.len;
         for (module_env.imports.imports.items.items[0..import_count]) |str_idx| {
@@ -343,6 +365,7 @@ const MonoTestEnv = struct {
             for (imports) |imp| {
                 if (std.mem.eql(u8, import_name, imp.name)) {
                     try imported_envs_list.append(gpa, imp.env.module_env);
+                    try imported_validations_list.append(gpa, try imp.env.checker.validatedModule());
                 }
             }
         }
@@ -354,7 +377,7 @@ const MonoTestEnv = struct {
             gpa,
             &module_env.types,
             module_env,
-            imported_envs_list.items,
+            .{ .envs = imported_envs_list.items, .modules = imported_validations_list.items },
             &module_envs,
             &module_env.store.regions,
             module_builtin_ctx,
@@ -372,6 +395,8 @@ const MonoTestEnv = struct {
             .checker = checker,
             .module_envs = module_envs,
             .builtin_module = imports[0].env.builtin_module,
+            .builtin_validation = imports[0].env.builtin_validation,
+            .owned_builtin_validation = null,
             .owns_builtin_module = false,
             .imported_envs_list = imported_envs_list,
         };
@@ -387,6 +412,7 @@ const MonoTestEnv = struct {
         self.module_env.deinit();
         self.gpa.destroy(self.module_env);
         if (self.owns_builtin_module) {
+            if (self.owned_builtin_validation) |*owned| owned.deinit();
             self.builtin_module.deinit();
         }
     }
@@ -625,6 +651,12 @@ test "type checker catches polymorphic recursion (infinite type)" {
     const builtin_indices = compiled_builtins.builtinIndices(CIR);
     var builtin_module = try builtin_static.moduleView(gpa, compiled_builtins.builtin_bin[0..], "Builtin", compiled_builtins.builtin_source);
     defer builtin_module.deinit();
+    var owned_builtin_validation = try Check.admitBuiltinOwned(
+        gpa,
+        builtin_module.env,
+        builtin_indices,
+    );
+    defer owned_builtin_validation.deinit();
 
     module_env.* = try ModuleEnv.init(gpa, source);
     defer module_env.deinit();
@@ -664,6 +696,9 @@ test "type checker catches polymorphic recursion (infinite type)" {
     var imported_envs_list = std.ArrayList(*const ModuleEnv).empty;
     defer imported_envs_list.deinit(gpa);
     try imported_envs_list.append(gpa, builtin_module.env);
+    var imported_validations_list = std.ArrayList(Check.ValidatedModuleEnv).empty;
+    defer imported_validations_list.deinit(gpa);
+    try imported_validations_list.append(gpa, owned_builtin_validation.capability());
 
     module_env.imports.clearResolvedModules();
     try module_env.imports.resolveImportsByExactModuleName(module_env, imported_envs_list.items);
@@ -672,7 +707,7 @@ test "type checker catches polymorphic recursion (infinite type)" {
         gpa,
         &module_env.types,
         module_env,
-        imported_envs_list.items,
+        .{ .envs = imported_envs_list.items, .modules = imported_validations_list.items },
         &module_envs,
         &module_env.store.regions,
         module_builtin_ctx,

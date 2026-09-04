@@ -30,11 +30,25 @@ entry_count: u32 = 0,
 /// - deinit() must NOT free memory (would double-free)
 /// - insert operations are invalid (buffer is immutable)
 supports_inserts: bool = true,
+/// Number of open rollback savepoints. This is runtime-only state and is never
+/// serialized; `u16` uses padding already present in the runtime struct.
+savepoint_depth: u16 = 0,
 
 /// A unique index for a deduped string in this interner.
 pub const Idx = enum(u32) {
     unused = 0,
     _,
+};
+
+/// An owned snapshot of the append boundary and exact probe-table cells.
+/// Savepoints must be closed exactly once and in LIFO order on `owner`.
+pub const Savepoint = struct {
+    allocator: std.mem.Allocator,
+    owner: *SmallStringInterner,
+    depth: u16,
+    bytes_len: usize,
+    entry_count: u32,
+    index_cells: []Idx,
 };
 
 fn assertAppendIndex(expected: usize, idx: collections.SafeList(u8).Idx) void {
@@ -121,16 +135,22 @@ const Policy = struct {
     }
     pub fn appendEntry(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Id {
         assertSupportsInserts(self.supports_inserts);
+        const append_len = std.math.add(usize, string.len, 1) catch return error.OutOfMemory;
+        try self.bytes.items.ensureUnusedCapacity(gpa, append_len);
         const new_offset: Idx = @enumFromInt(self.bytes.len());
         {
             const expected_start = self.bytes.items.items.len;
-            const range = try self.bytes.appendSlice(gpa, string);
-            assertAppendRange(expected_start, @intCast(string.len), range);
+            self.bytes.items.appendSliceAssumeCapacity(string);
+            if (comptime builtin.mode == .Debug) {
+                std.debug.assert(self.bytes.items.items.len == expected_start + string.len);
+            }
         }
         {
             const expected_idx = self.bytes.items.items.len;
-            const idx = try self.bytes.append(gpa, 0);
-            assertAppendIndex(expected_idx, idx);
+            self.bytes.items.appendAssumeCapacity(0);
+            if (comptime builtin.mode == .Debug) {
+                std.debug.assert(self.bytes.items.items.len == expected_idx + 1);
+            }
         }
         self.entry_count += 1;
         return new_offset;
@@ -147,6 +167,69 @@ fn assertSupportsInserts(supports_inserts: bool) void {
         std.debug.panic("SmallStringInterner invariant violated: attempted to insert into frozen interner", .{});
     }
     unreachable;
+}
+
+fn assertSavepointTop(self: *SmallStringInterner, savepoint: *const Savepoint) void {
+    assertSupportsInserts(self.supports_inserts);
+    if (savepoint.owner == self and savepoint.depth != 0 and self.savepoint_depth == savepoint.depth) {
+        return;
+    }
+
+    if (comptime builtin.mode == .Debug) {
+        std.debug.panic("SmallStringInterner invariant violated: savepoints must close in LIFO order on their owning interner", .{});
+    }
+    unreachable;
+}
+
+/// Snapshot the current logical state. Opening a savepoint allocates one exact
+/// copy of the probe table; all inserts while it is open must use the same
+/// allocator that owns this interner.
+pub fn createSavepoint(self: *SmallStringInterner, gpa: std.mem.Allocator) std.mem.Allocator.Error!Savepoint {
+    assertSupportsInserts(self.supports_inserts);
+    const depth = std.math.add(u16, self.savepoint_depth, 1) catch return error.OutOfMemory;
+    const index_cells = try gpa.dupe(Idx, self.index.items.items);
+
+    self.savepoint_depth = depth;
+    return .{
+        .allocator = gpa,
+        .owner = self,
+        .depth = depth,
+        .bytes_len = self.bytes.items.items.len,
+        .entry_count = self.entry_count,
+        .index_cells = index_cells,
+    };
+}
+
+/// Close the newest savepoint while keeping all mutations made since it opened.
+pub fn commitSavepoint(self: *SmallStringInterner, savepoint: *Savepoint) void {
+    assertSavepointTop(self, savepoint);
+    savepoint.allocator.free(savepoint.index_cells);
+    self.savepoint_depth -= 1;
+    savepoint.* = undefined;
+}
+
+/// Undo every insert since the newest savepoint opened. The durable byte store
+/// is append-only, and the saved table already owns every pre-savepoint cell, so
+/// rollback only shrinks and copies; it never allocates.
+pub fn rollbackToSavepoint(self: *SmallStringInterner, savepoint: *Savepoint) void {
+    assertSavepointTop(self, savepoint);
+    const valid_suffix = savepoint.bytes_len <= self.bytes.items.items.len and
+        savepoint.entry_count <= self.entry_count and
+        savepoint.index_cells.len <= self.index.items.items.len;
+    if (comptime builtin.mode == .Debug) {
+        std.debug.assert(valid_suffix);
+    } else if (!valid_suffix) {
+        unreachable;
+    }
+
+    self.bytes.items.shrinkRetainingCapacity(savepoint.bytes_len);
+    self.entry_count = savepoint.entry_count;
+    self.index.items.shrinkRetainingCapacity(savepoint.index_cells.len);
+    @memcpy(self.index.items.items, savepoint.index_cells);
+
+    savepoint.allocator.free(savepoint.index_cells);
+    self.savepoint_depth -= 1;
+    savepoint.* = undefined;
 }
 
 /// Enable inserts on a deserialized interner for runtime use.
@@ -248,6 +331,83 @@ pub fn lookup(self: *const SmallStringInterner, string: []const u8) ?Idx {
 pub fn isInBounds(self: *const SmallStringInterner, idx: Idx) bool {
     const offset = @intFromEnum(idx);
     return offset != 0 and offset < self.bytes.items.items.len;
+}
+
+/// Whether `idx` is exactly the start of a complete interned entry. Unlike
+/// `isInBounds`, this rejects offsets into the middle of another string and
+/// the offset of a terminating NUL.
+pub fn validateExactIdx(self: *const SmallStringInterner, idx: Idx) bool {
+    const raw = @intFromEnum(idx);
+    const data = self.bytes.items.items;
+    if (raw == 0 or raw >= data.len or data[raw - 1] != 0) return false;
+    return std.mem.findScalar(u8, data[raw..], 0) != null;
+}
+
+/// Validate the complete byte-entry and open-addressed-index invariants before
+/// any persisted identifier offset is dereferenced. Allocation-free so cache
+/// loading can reject malformed tables without first trusting them.
+pub fn validateSemanticState(self: *const SmallStringInterner) error{CorruptArtifact}!void {
+    const data = self.bytes.items.items;
+    const cells = self.index.items.items;
+    if (data.len == 0 or data[0] != 0 or cells.len == 0 or
+        !std.math.isPowerOfTwo(cells.len) or self.entry_count >= cells.len)
+    {
+        return error.CorruptArtifact;
+    }
+
+    var byte_entry_count: usize = 0;
+    var entry_start: usize = 1;
+    while (entry_start < data.len) {
+        const terminator_offset = std.mem.findScalar(u8, data[entry_start..], 0) orelse
+            return error.CorruptArtifact;
+        byte_entry_count += 1;
+        entry_start += terminator_offset + 1;
+    }
+    if (entry_start != data.len or byte_entry_count != self.entry_count) {
+        return error.CorruptArtifact;
+    }
+
+    // Validate every candidate cell before the probe replay below dereferences
+    // even one of them. The table has one occupied cell per byte entry and is
+    // not full, so every bounded probe either finds its entry or reaches an
+    // empty terminator.
+    var indexed_entry_count: usize = 0;
+    for (cells) |cell| {
+        if (cell == .unused) continue;
+        if (!self.validateExactIdx(cell)) return error.CorruptArtifact;
+        indexed_entry_count += 1;
+    }
+    if (indexed_entry_count != self.entry_count) return error.CorruptArtifact;
+
+    // Replay the actual lookup for every byte entry. Its first equal-text cell
+    // must name that exact byte offset. Since there are N byte entries and
+    // exactly N occupied cells, these N distinct successful lookups prove a
+    // bijection without an unconditional pairwise cell/text scan: a duplicate
+    // cell necessarily omits another entry, and equal text at two offsets makes
+    // one of those offsets encounter the other one first.
+    entry_start = 1;
+    while (entry_start < data.len) {
+        const terminator_offset = std.mem.findScalar(u8, data[entry_start..], 0) orelse
+            return error.CorruptArtifact;
+        const raw_wanted = std.math.cast(u32, entry_start) orelse
+            return error.CorruptArtifact;
+        const wanted: Idx = @enumFromInt(raw_wanted);
+        const text = data[entry_start .. entry_start + terminator_offset];
+        const mask = cells.len - 1;
+        var probe: usize = @intCast(Policy.hash(text) & @as(u64, @intCast(mask)));
+        var probes_remaining = cells.len;
+        while (probes_remaining > 0) : (probes_remaining -= 1) {
+            const candidate = cells[probe];
+            if (candidate == .unused) return error.CorruptArtifact;
+            if (std.mem.eql(u8, text, Policy.textForId(self, candidate))) {
+                if (candidate != wanted) return error.CorruptArtifact;
+                break;
+            }
+            probe = (probe + 1) & mask;
+        } else return error.CorruptArtifact;
+
+        entry_start += terminator_offset + 1;
+    }
 }
 
 /// Get a reference to the text for an interned string.
@@ -669,6 +829,180 @@ fn roundTripSerialized(gpa: std.mem.Allocator, src: *const SmallStringInterner) 
     return .{ .buffer = buffer, .interner = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr)) };
 }
 
+test "SmallStringInterner semantic validation accepts empty and wrapped collision chains" {
+    const gpa = std.testing.allocator;
+
+    var empty = try SmallStringInterner.initCapacity(gpa, 0);
+    defer empty.deinit(gpa);
+    try empty.validateSemanticState();
+    const empty_text = try empty.insert(gpa, "");
+    try std.testing.expectEqualStrings("", empty.getText(empty_text));
+    try empty.validateSemanticState();
+
+    var interner = try SmallStringInterner.initCapacity(gpa, 8);
+    defer interner.deinit(gpa);
+    const mask = interner.index.items.items.len - 1;
+
+    // Find two distinct real texts with the last table slot as their home.
+    // Inserting only those two forces the second probe to wrap to slot zero.
+    var ids: [2]Idx = undefined;
+    var found: usize = 0;
+    var candidate_number: usize = 0;
+    while (candidate_number < 4096 and found < ids.len) : (candidate_number += 1) {
+        var buffer: [32]u8 = undefined;
+        const text = try std.fmt.bufPrint(&buffer, "wrapped-ident-{d}", .{candidate_number});
+        const home: usize = @intCast(Policy.hash(text) & @as(u64, @intCast(mask)));
+        if (home != mask) continue;
+        ids[found] = try interner.insert(gpa, text);
+        found += 1;
+    }
+    try std.testing.expectEqual(ids.len, found);
+    try std.testing.expectEqual(ids[0], interner.index.items.items[mask]);
+    try std.testing.expectEqual(ids[1], interner.index.items.items[0]);
+    try interner.validateSemanticState();
+}
+
+test "SmallStringInterner semantic validation rejects non-bijective probe tables" {
+    const gpa = std.testing.allocator;
+
+    // Omitting the only entry is rejected directly, independently of the
+    // coordinated duplicate-cell case below.
+    {
+        var interner = try SmallStringInterner.initCapacity(gpa, 1);
+        defer interner.deinit(gpa);
+        const id = try interner.insert(gpa, "missing");
+        for (interner.index.items.items) |*cell| {
+            if (cell.* == id) cell.* = .unused;
+        }
+        try std.testing.expectError(error.CorruptArtifact, interner.validateSemanticState());
+    }
+
+    // Repeating one exact cell while omitting another keeps the occupied count
+    // unchanged, but the omitted byte entry cannot resolve to itself.
+    {
+        var interner = try SmallStringInterner.initCapacity(gpa, 2);
+        defer interner.deinit(gpa);
+        const first = try interner.insert(gpa, "alpha");
+        const second = try interner.insert(gpa, "bravo");
+        var second_slot: ?usize = null;
+        for (interner.index.items.items, 0..) |cell, slot| {
+            if (cell == second) second_slot = slot;
+        }
+        interner.index.items.items[second_slot orelse return error.TestUnexpectedResult] = first;
+        try std.testing.expectError(error.CorruptArtifact, interner.validateSemanticState());
+    }
+
+    // Two distinct byte offsets with equal text are not two interner entries,
+    // even when both cells form an otherwise valid collision chain.
+    {
+        var interner = try SmallStringInterner.initCapacity(gpa, 2);
+        defer interner.deinit(gpa);
+        const first = try interner.insert(gpa, "alpha");
+        const second = try interner.insert(gpa, "bravo");
+        const first_start: usize = @intFromEnum(first);
+        const second_start: usize = @intFromEnum(second);
+        @memcpy(
+            interner.bytes.items.items[second_start..][0.."alpha".len],
+            interner.bytes.items.items[first_start..][0.."alpha".len],
+        );
+        @memset(interner.index.items.items, .unused);
+        const mask = interner.index.items.items.len - 1;
+        const home: usize = @intCast(Policy.hash("alpha") & @as(u64, @intCast(mask)));
+        interner.index.items.items[home] = first;
+        interner.index.items.items[(home + 1) & mask] = second;
+        try std.testing.expectError(error.CorruptArtifact, interner.validateSemanticState());
+    }
+
+    // Moving a cell beyond an empty home slot violates first-empty linear
+    // probing even though the cell and occupied count remain individually valid.
+    {
+        var interner = try SmallStringInterner.initCapacity(gpa, 1);
+        defer interner.deinit(gpa);
+        const id = try interner.insert(gpa, "misplaced");
+        const mask = interner.index.items.items.len - 1;
+        const home: usize = @intCast(Policy.hash("misplaced") & @as(u64, @intCast(mask)));
+        try std.testing.expectEqual(id, interner.index.items.items[home]);
+        interner.index.items.items[home] = .unused;
+        interner.index.items.items[(home + 1) & mask] = id;
+        try std.testing.expectError(error.CorruptArtifact, interner.validateSemanticState());
+    }
+}
+
+test "SmallStringInterner semantic validation rejects malformed bytes cells counts and capacity" {
+    const gpa = std.testing.allocator;
+
+    {
+        var interner = try SmallStringInterner.initCapacity(gpa, 1);
+        defer interner.deinit(gpa);
+        _ = try interner.insert(gpa, "alpha");
+        interner.bytes.items.items[0] = 1;
+        try std.testing.expectError(error.CorruptArtifact, interner.validateSemanticState());
+    }
+    {
+        var interner = try SmallStringInterner.initCapacity(gpa, 1);
+        defer interner.deinit(gpa);
+        _ = try interner.insert(gpa, "alpha");
+        interner.bytes.items.items[interner.bytes.items.items.len - 1] = 'x';
+        try std.testing.expectError(error.CorruptArtifact, interner.validateSemanticState());
+    }
+    {
+        var interner = try SmallStringInterner.initCapacity(gpa, 1);
+        defer interner.deinit(gpa);
+        const id = try interner.insert(gpa, "alpha");
+        const cell = for (interner.index.items.items, 0..) |candidate, slot| {
+            if (candidate == id) break &interner.index.items.items[slot];
+        } else return error.TestUnexpectedResult;
+        cell.* = @enumFromInt(@intFromEnum(id) + 1);
+        try std.testing.expectError(error.CorruptArtifact, interner.validateSemanticState());
+        cell.* = @enumFromInt(@as(u32, @intCast(interner.bytes.items.items.len)));
+        try std.testing.expectError(error.CorruptArtifact, interner.validateSemanticState());
+    }
+    {
+        var interner = try SmallStringInterner.initCapacity(gpa, 1);
+        defer interner.deinit(gpa);
+        _ = try interner.insert(gpa, "alpha");
+        interner.entry_count += 1;
+        try std.testing.expectError(error.CorruptArtifact, interner.validateSemanticState());
+    }
+    {
+        var interner = try SmallStringInterner.initCapacity(gpa, 1);
+        defer interner.deinit(gpa);
+        _ = try interner.insert(gpa, "alpha");
+        interner.entry_count = @intCast(interner.index.items.items.len);
+        try std.testing.expectError(error.CorruptArtifact, interner.validateSemanticState());
+    }
+    {
+        var interner = try SmallStringInterner.initCapacity(gpa, 2);
+        defer interner.deinit(gpa);
+        _ = try interner.insert(gpa, "alpha");
+        interner.index.items.items.len -= 1;
+        try std.testing.expectError(error.CorruptArtifact, interner.validateSemanticState());
+    }
+    {
+        var interner: SmallStringInterner = .{};
+        try std.testing.expectError(error.CorruptArtifact, interner.validateSemanticState());
+    }
+}
+
+test "SmallStringInterner semantic validation handles a realistic identifier table" {
+    const gpa = std.testing.allocator;
+    const identifier_count = 24_000;
+    var interner = try SmallStringInterner.initCapacity(gpa, identifier_count);
+    defer interner.deinit(gpa);
+
+    var identifier_number: usize = 0;
+    while (identifier_number < identifier_count) : (identifier_number += 1) {
+        var buffer: [32]u8 = undefined;
+        const text = try std.fmt.bufPrint(&buffer, "identifier-{d}", .{identifier_number});
+        _ = try interner.insert(gpa, text);
+    }
+
+    try std.testing.expectEqual(@as(u32, identifier_count), interner.entry_count);
+    try interner.validateSemanticState();
+    try std.testing.expect(interner.lookup("identifier-0") != null);
+    try std.testing.expect(interner.lookup("identifier-23999") != null);
+}
+
 test "SmallStringInterner lookup survives deserialize with no rebuild" {
     const gpa = std.testing.allocator;
 
@@ -799,4 +1133,123 @@ test "SmallStringInterner multiple interners CompactWriter roundtrip" {
     // Verify interner 3
     try std.testing.expectEqualStrings("interner3_string1", deserialized3.getText(idx3_1));
     try std.testing.expectEqual(@as(u32, 1), deserialized3.entry_count);
+}
+
+test "SmallStringInterner savepoints compose nested commit and rollback" {
+    const gpa = std.testing.allocator;
+    var interner = try SmallStringInterner.initCapacity(gpa, 1);
+    defer interner.deinit(gpa);
+
+    const seed = try interner.insert(gpa, "seed");
+    const baseline_bytes = try gpa.dupe(u8, interner.bytes.items.items);
+    defer gpa.free(baseline_bytes);
+    const baseline_index = try gpa.dupe(Idx, interner.index.items.items);
+    defer gpa.free(baseline_index);
+    const baseline_count = interner.entry_count;
+
+    var outer = try interner.createSavepoint(gpa);
+    var outer_open = true;
+    errdefer if (outer_open) interner.rollbackToSavepoint(&outer);
+    _ = try interner.insert(gpa, "outer-discarded");
+    var inner = try interner.createSavepoint(gpa);
+    var inner_open = true;
+    errdefer if (inner_open) interner.rollbackToSavepoint(&inner);
+    _ = try interner.insert(gpa, "inner-committed");
+    interner.commitSavepoint(&inner);
+    inner_open = false;
+    try std.testing.expect(interner.lookup("inner-committed") != null);
+
+    interner.rollbackToSavepoint(&outer);
+    outer_open = false;
+    try std.testing.expectEqual(@as(?Idx, seed), interner.lookup("seed"));
+    try std.testing.expectEqual(@as(?Idx, null), interner.lookup("outer-discarded"));
+    try std.testing.expectEqual(@as(?Idx, null), interner.lookup("inner-committed"));
+    try std.testing.expectEqual(baseline_count, interner.entry_count);
+    try std.testing.expectEqualSlices(u8, baseline_bytes, interner.bytes.items.items);
+    try std.testing.expectEqualSlices(Idx, baseline_index, interner.index.items.items);
+
+    var committed_outer = try interner.createSavepoint(gpa);
+    var committed_outer_open = true;
+    errdefer if (committed_outer_open) interner.rollbackToSavepoint(&committed_outer);
+    const kept = try interner.insert(gpa, "outer-kept");
+    const kept_bytes = try gpa.dupe(u8, interner.bytes.items.items);
+    defer gpa.free(kept_bytes);
+    const kept_index = try gpa.dupe(Idx, interner.index.items.items);
+    defer gpa.free(kept_index);
+    const kept_count = interner.entry_count;
+
+    var rolled_back_inner = try interner.createSavepoint(gpa);
+    var rolled_back_inner_open = true;
+    errdefer if (rolled_back_inner_open) interner.rollbackToSavepoint(&rolled_back_inner);
+    _ = try interner.insert(gpa, "inner-discarded");
+    interner.rollbackToSavepoint(&rolled_back_inner);
+    rolled_back_inner_open = false;
+    interner.commitSavepoint(&committed_outer);
+    committed_outer_open = false;
+
+    try std.testing.expectEqual(@as(?Idx, seed), interner.lookup("seed"));
+    try std.testing.expectEqual(@as(?Idx, kept), interner.lookup("outer-kept"));
+    try std.testing.expectEqual(@as(?Idx, null), interner.lookup("inner-discarded"));
+    try std.testing.expectEqual(kept_count, interner.entry_count);
+    try std.testing.expectEqualSlices(u8, kept_bytes, interner.bytes.items.items);
+    try std.testing.expectEqualSlices(Idx, kept_index, interner.index.items.items);
+    try std.testing.expectEqual(@as(u16, 0), interner.savepoint_depth);
+    try interner.validateSemanticState();
+}
+
+test "SmallStringInterner savepoint rollback makes induced OOM atomic" {
+    const gpa = std.testing.allocator;
+    const candidate = [_]u8{'x'} ** 64;
+    var saw_mutation_oom = false;
+    var reached_success = false;
+
+    for (0..8) |fail_index| {
+        var interner = try SmallStringInterner.initCapacity(gpa, 1);
+        _ = try interner.insert(gpa, "a");
+
+        const before_bytes = try gpa.dupe(u8, interner.bytes.items.items);
+        defer gpa.free(before_bytes);
+        const before_index = try gpa.dupe(Idx, interner.index.items.items);
+        defer gpa.free(before_index);
+        const before_count = interner.entry_count;
+
+        var failing = std.testing.FailingAllocator.init(gpa, .{
+            .fail_index = fail_index,
+            .resize_fail_index = 0,
+        });
+        const failing_gpa = failing.allocator();
+        defer interner.deinit(failing_gpa);
+
+        var savepoint = interner.createSavepoint(failing_gpa) catch |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expect(failing.has_induced_failure);
+            try std.testing.expectEqual(before_count, interner.entry_count);
+            try std.testing.expectEqualSlices(u8, before_bytes, interner.bytes.items.items);
+            try std.testing.expectEqualSlices(Idx, before_index, interner.index.items.items);
+            try std.testing.expectEqual(@as(u16, 0), interner.savepoint_depth);
+            continue;
+        };
+
+        const insertion = interner.insert(failing_gpa, &candidate);
+        if (insertion) |_| {
+            interner.rollbackToSavepoint(&savepoint);
+            reached_success = true;
+        } else |err| {
+            interner.rollbackToSavepoint(&savepoint);
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expect(failing.has_induced_failure);
+            saw_mutation_oom = true;
+        }
+
+        try std.testing.expectEqual(before_count, interner.entry_count);
+        try std.testing.expectEqualSlices(u8, before_bytes, interner.bytes.items.items);
+        try std.testing.expectEqualSlices(Idx, before_index, interner.index.items.items);
+        try std.testing.expectEqual(@as(?Idx, null), interner.lookup(&candidate));
+        try std.testing.expectEqual(@as(u16, 0), interner.savepoint_depth);
+        try interner.validateSemanticState();
+        if (reached_success) break;
+    }
+
+    try std.testing.expect(saw_mutation_oom);
+    try std.testing.expect(reached_success);
 }

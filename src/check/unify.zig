@@ -116,6 +116,48 @@ pub const GeneralizedDispatchTargetShareCandidate = struct {
     pub const SafeList = MkSafeList(@This());
 };
 
+/// One exact marker-offset movement performed while unification appends a new
+/// static-dispatch constraint occurrence. Source occurrences are immutable;
+/// this row authenticates only the metadata carried into the new destination.
+/// `offsets` maps every source marker offset to its destination marker offset.
+pub const WhereMarkerConstraintMove = struct {
+    source_constraint_index: u32,
+    destination_constraint_index: u32,
+    offsets_start: u32,
+    offsets_len: u32,
+};
+
+/// One exact module-local tagged evidence handle moved into a newly appended
+/// constraint occurrence. Unlike where-marker movement, this is emitted even
+/// when the constraint carries no marker metadata.
+pub const ConstraintEvidenceMove = struct {
+    handle: types_mod.ConstraintEvidenceHandle,
+    source_constraint_index: u32,
+    destination_constraint_index: u32,
+};
+
+const ConstraintMoveSide = enum(u8) {
+    only_in_a,
+    only_in_b,
+};
+
+/// A source occurrence contributing marker metadata to one not-yet-appended
+/// scratch constraint. Successive metadata folds compose this exact map; once
+/// the scratch constraint is appended, it becomes a durable movement row.
+const PendingWhereMarkerConstraintContributor = struct {
+    side: ConstraintMoveSide,
+    scratch_constraint_index: u32,
+    source_constraint_index: u32,
+    offsets_start: u32,
+    offsets_len: u32,
+};
+
+const PendingConstraintEvidenceContributor = struct {
+    side: ConstraintMoveSide,
+    scratch_constraint_index: u32,
+    source_constraint_index: u32,
+};
+
 const NominalDirection = enum {
     a_is_nominal,
     b_is_nominal,
@@ -283,6 +325,12 @@ pub const Options = struct {
     root_relation: RootRelation = .ordinary,
     row_width_relation: RowWidthRelation = .construction,
     field_presence_relation: FieldPresenceRelation = .ordinary,
+    /// The compiler-owned polarity marker rigid used while relating repeated
+    /// written occurrences of one where-method signature. Distinct variables
+    /// with this exact reserved name represent the same per-use row decision
+    /// when ordinary signature unification brings them together; every user
+    /// rigid remains opaque.
+    duplicate_where_signature_marker_ident: ?Ident.Idx = null,
     /// Source-backed record construction whose omission decisions this
     /// relation owns. The checker publishes successful default absorptions
     /// against this exact expression when the empty row operand is an
@@ -319,6 +367,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         env.occurs_scratch,
         opts.row_width_relation,
         opts.field_presence_relation,
+        opts.duplicate_where_signature_marker_ident,
         env.construction_probe,
         opts.record_construction_var,
     );
@@ -383,6 +432,7 @@ const Unifier = struct {
     occurs_scratch: *occurs.Scratch,
     row_width_relation: RowWidthRelation,
     field_presence_relation: FieldPresenceRelation,
+    duplicate_where_signature_marker_ident: ?Ident.Idx,
     /// The unresolved "actual" var before resolution, used for deferred constraint origin tracking.
     /// This allows error messages to point to the original expression rather than the resolved type.
     unresolved_a: ?Var,
@@ -409,6 +459,7 @@ const Unifier = struct {
         occurs_scratch: *occurs.Scratch,
         row_width_relation: RowWidthRelation,
         field_presence_relation: FieldPresenceRelation,
+        duplicate_where_signature_marker_ident: ?Ident.Idx,
         construction_probe: ?ConstructionProbe,
         record_construction_var: ?Var,
     ) Unifier {
@@ -420,6 +471,7 @@ const Unifier = struct {
             .occurs_scratch = occurs_scratch,
             .row_width_relation = row_width_relation,
             .field_presence_relation = field_presence_relation,
+            .duplicate_where_signature_marker_ident = duplicate_where_signature_marker_ident,
             .unresolved_a = null,
             .unresolved_b = null,
             .enclosing_records = null,
@@ -882,7 +934,16 @@ const Unifier = struct {
                 try self.recordDeferredConstraintOn(vars.a.var_, b_flex.constraints);
                 try self.merge(vars, .{ .rigid = a_rigid });
             },
-            .rigid => {
+            .rigid => |b_rigid| {
+                if (self.duplicate_where_signature_marker_ident) |marker_ident| {
+                    if (a_rigid.name.eql(marker_ident) and b_rigid.name.eql(marker_ident)) {
+                        if (a_rigid.constraints.len() != 0 or b_rigid.constraints.len() != 0) {
+                            return error.TypeMismatch;
+                        }
+                        try self.merge(vars, .{ .rigid = a_rigid });
+                        return;
+                    }
+                }
                 // Distinct rigid vars are distinct opaque variables even when
                 // their names match (the identical-var fast path has already
                 // handled a rigid meeting itself).
@@ -3326,11 +3387,26 @@ const Unifier = struct {
             capacity,
         );
 
-        for (self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a)) |only_a| {
+        const a_scratch_start: u32 = @intFromEnum(partitioned.only_in_a.start);
+        var destination_index = top;
+        for (self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a), 0..) |only_a, offset| {
             self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_a);
+            try self.finalizePendingConstraintContributors(
+                .only_in_a,
+                a_scratch_start + @as(u32, @intCast(offset)),
+                destination_index,
+            );
+            destination_index += 1;
         }
-        for (self.scratch.only_in_b_static_dispatch_constraints.sliceRange(partitioned.only_in_b)) |only_b| {
+        const b_scratch_start: u32 = @intFromEnum(partitioned.only_in_b.start);
+        for (self.scratch.only_in_b_static_dispatch_constraints.sliceRange(partitioned.only_in_b), 0..) |only_b, offset| {
             self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(only_b);
+            try self.finalizePendingConstraintContributors(
+                .only_in_b,
+                b_scratch_start + @as(u32, @intCast(offset)),
+                destination_index,
+            );
+            destination_index += 1;
         }
 
         return self.types_store.static_dispatch_constraints.rangeToEnd(top);
@@ -3373,19 +3449,258 @@ const Unifier = struct {
         in_both: TwoStaticDispatchConstraints.SafeList.Range,
     };
 
+    fn retainedConstraintList(
+        self: *const Self,
+        side: ConstraintMoveSide,
+    ) *StaticDispatchConstraint.SafeList {
+        return switch (side) {
+            .only_in_a => &self.scratch.only_in_a_static_dispatch_constraints,
+            .only_in_b => &self.scratch.only_in_b_static_dispatch_constraints,
+        };
+    }
+
+    fn appendPendingConstraintContributor(
+        self: *const Self,
+        side: ConstraintMoveSide,
+        scratch_constraint_index: u32,
+        source_constraint_index: u32,
+        source_marker_len: u32,
+        source_to_destination_offsets: ?[]const u32,
+    ) Error!void {
+        if (source_marker_len == 0) return;
+        const offsets = source_to_destination_offsets orelse blk: {
+            const start = self.scratch.pending_where_marker_constraint_offsets.items.len;
+            try self.scratch.pending_where_marker_constraint_offsets.ensureUnusedCapacity(
+                self.scratch.gpa,
+                source_marker_len,
+            );
+            for (0..source_marker_len) |offset| {
+                self.scratch.pending_where_marker_constraint_offsets.appendAssumeCapacity(@intCast(offset));
+            }
+            break :blk self.scratch.pending_where_marker_constraint_offsets.items[start..];
+        };
+        std.debug.assert(offsets.len == source_marker_len);
+
+        // Reserve both arrays before committing either owner row or its pool.
+        // The identity case above already appended its temporary offsets, but
+        // an OOM aborts the whole unification and these are scratch-only.
+        try self.scratch.pending_where_marker_constraint_contributors.ensureUnusedCapacity(
+            self.scratch.gpa,
+            1,
+        );
+        if (source_to_destination_offsets != null) {
+            try self.scratch.pending_where_marker_constraint_offsets.ensureUnusedCapacity(
+                self.scratch.gpa,
+                offsets.len,
+            );
+        }
+        const offsets_start: u32 = if (source_to_destination_offsets != null) blk: {
+            const start: u32 = @intCast(self.scratch.pending_where_marker_constraint_offsets.items.len);
+            self.scratch.pending_where_marker_constraint_offsets.appendSliceAssumeCapacity(offsets);
+            break :blk start;
+        } else @intCast(self.scratch.pending_where_marker_constraint_offsets.items.len - offsets.len);
+        self.scratch.pending_where_marker_constraint_contributors.appendAssumeCapacity(.{
+            .side = side,
+            .scratch_constraint_index = scratch_constraint_index,
+            .source_constraint_index = source_constraint_index,
+            .offsets_start = offsets_start,
+            .offsets_len = source_marker_len,
+        });
+    }
+
+    fn appendRetainedStaticDispatchConstraint(
+        self: *const Self,
+        side: ConstraintMoveSide,
+        constraint: StaticDispatchConstraint,
+        source_constraint_index: u32,
+    ) Error!void {
+        const list = self.retainedConstraintList(side);
+        const scratch_constraint_index: u32 = @intCast(list.len());
+        _ = try list.append(self.scratch.gpa, constraint);
+        try self.scratch.pending_constraint_evidence_contributors.append(
+            self.scratch.gpa,
+            .{
+                .side = side,
+                .scratch_constraint_index = scratch_constraint_index,
+                .source_constraint_index = source_constraint_index,
+            },
+        );
+        try self.appendPendingConstraintContributor(
+            side,
+            scratch_constraint_index,
+            source_constraint_index,
+            constraint.where_method_markers.len(),
+            null,
+        );
+    }
+
+    fn composePendingConstraintContributors(
+        self: *const Self,
+        side: ConstraintMoveSide,
+        scratch_constraint_index: u32,
+        old_to_new_offsets: []const u32,
+    ) void {
+        for (self.scratch.pending_where_marker_constraint_contributors.items) |contributor| {
+            if (contributor.side != side or
+                contributor.scratch_constraint_index != scratch_constraint_index)
+            {
+                continue;
+            }
+            std.debug.assert(contributor.offsets_len == old_to_new_offsets.len);
+            const offsets = self.scratch.pending_where_marker_constraint_offsets.items[contributor.offsets_start..][0..contributor.offsets_len];
+            for (offsets) |*offset| {
+                std.debug.assert(offset.* < old_to_new_offsets.len);
+                offset.* = old_to_new_offsets[offset.*];
+            }
+        }
+    }
+
+    fn finalizedConstraintMoveMatches(
+        self: *const Self,
+        existing: WhereMarkerConstraintMove,
+        source_constraint_index: u32,
+        destination_constraint_index: u32,
+        offsets: []const u32,
+    ) bool {
+        if (existing.source_constraint_index != source_constraint_index or
+            existing.destination_constraint_index != destination_constraint_index)
+        {
+            return false;
+        }
+        const existing_offsets = self.scratch.where_marker_constraint_move_offsets.items[existing.offsets_start..][0..existing.offsets_len];
+        if (!std.mem.eql(u32, existing_offsets, offsets)) {
+            std.debug.panic("one constraint occurrence moved to the same destination with two offset maps", .{});
+        }
+        return true;
+    }
+
+    fn finalizePendingConstraintContributors(
+        self: *const Self,
+        side: ConstraintMoveSide,
+        scratch_constraint_index: u32,
+        destination_constraint_index: u32,
+    ) Error!void {
+        const destination = self.types_store.static_dispatch_constraints.items.items[destination_constraint_index];
+        const destination_handles = self.types_store.sliceConstraintEvidenceHandles(
+            destination.constraint_evidence,
+        );
+        for (self.scratch.pending_constraint_evidence_contributors.items) |contributor| {
+            if (contributor.side != side or
+                contributor.scratch_constraint_index != scratch_constraint_index)
+            {
+                continue;
+            }
+            const source = self.types_store.static_dispatch_constraints.items.items[contributor.source_constraint_index];
+            const source_handles = self.types_store.sliceConstraintEvidenceHandles(
+                source.constraint_evidence,
+            );
+            for (source_handles) |handle| {
+                const destination_has_handle = for (destination_handles) |destination_handle| {
+                    if (std.meta.eql(destination_handle, handle)) break true;
+                } else false;
+                if (!destination_has_handle) {
+                    std.debug.panic("retained constraint dropped a constraint-evidence handle", .{});
+                }
+                const duplicate = for (self.scratch.constraint_evidence_moves.items) |existing| {
+                    if (std.meta.eql(existing.handle, handle) and
+                        existing.source_constraint_index == contributor.source_constraint_index and
+                        existing.destination_constraint_index == destination_constraint_index)
+                    {
+                        break true;
+                    }
+                } else false;
+                if (duplicate) continue;
+                try self.scratch.constraint_evidence_moves.append(self.scratch.gpa, .{
+                    .handle = handle,
+                    .source_constraint_index = contributor.source_constraint_index,
+                    .destination_constraint_index = destination_constraint_index,
+                });
+            }
+        }
+        for (self.scratch.pending_where_marker_constraint_contributors.items) |contributor| {
+            if (contributor.side != side or
+                contributor.scratch_constraint_index != scratch_constraint_index)
+            {
+                continue;
+            }
+            const offsets = self.scratch.pending_where_marker_constraint_offsets.items[contributor.offsets_start..][0..contributor.offsets_len];
+            const duplicate = for (self.scratch.where_marker_constraint_moves.items) |existing| {
+                if (self.finalizedConstraintMoveMatches(
+                    existing,
+                    contributor.source_constraint_index,
+                    destination_constraint_index,
+                    offsets,
+                )) break true;
+            } else false;
+            if (duplicate) continue;
+
+            try self.scratch.where_marker_constraint_moves.ensureUnusedCapacity(self.scratch.gpa, 1);
+            try self.scratch.where_marker_constraint_move_offsets.ensureUnusedCapacity(
+                self.scratch.gpa,
+                offsets.len,
+            );
+            const offsets_start: u32 = @intCast(self.scratch.where_marker_constraint_move_offsets.items.len);
+            self.scratch.where_marker_constraint_move_offsets.appendSliceAssumeCapacity(offsets);
+            self.scratch.where_marker_constraint_moves.appendAssumeCapacity(.{
+                .source_constraint_index = contributor.source_constraint_index,
+                .destination_constraint_index = destination_constraint_index,
+                .offsets_start = offsets_start,
+                .offsets_len = @intCast(offsets.len),
+            });
+        }
+    }
+
     fn retainDeclarativeStaticDispatchConstraint(
         self: *const Self,
         retained_group_start: usize,
+        source_constraint_index: u32,
         constraint: StaticDispatchConstraint,
     ) Error!void {
-        for (self.scratch.only_in_a_static_dispatch_constraints.items.items[retained_group_start..]) |*existing| {
+        for (self.scratch.only_in_a_static_dispatch_constraints.items.items[retained_group_start..], retained_group_start..) |*existing, existing_index| {
             if (!sameDeclarativeOriginClass(existing.origin, constraint.origin)) continue;
-            existing.* = mergeStaticDispatchConstraintMetadata(constraint, existing.*);
+            const existing_marker_len = existing.where_method_markers.len();
+            const incoming_marker_len = constraint.where_method_markers.len();
+            const existing_remap = try self.scratch.gpa.alloc(u32, existing_marker_len);
+            defer self.scratch.gpa.free(existing_remap);
+            const incoming_remap = try self.scratch.gpa.alloc(u32, incoming_marker_len);
+            defer self.scratch.gpa.free(incoming_remap);
+            existing.* = try mergeStaticDispatchConstraintMetadataWithRemaps(
+                self.types_store,
+                constraint,
+                existing.*,
+                existing_remap,
+                incoming_remap,
+            );
+            existing.constraint_evidence = try self.types_store.mergeConstraintEvidence(
+                existing.constraint_evidence,
+                constraint.constraint_evidence,
+            );
+            try self.scratch.pending_constraint_evidence_contributors.append(
+                self.scratch.gpa,
+                .{
+                    .side = .only_in_a,
+                    .scratch_constraint_index = @intCast(existing_index),
+                    .source_constraint_index = source_constraint_index,
+                },
+            );
+            self.composePendingConstraintContributors(
+                .only_in_a,
+                @intCast(existing_index),
+                existing_remap,
+            );
+            try self.appendPendingConstraintContributor(
+                .only_in_a,
+                @intCast(existing_index),
+                source_constraint_index,
+                incoming_marker_len,
+                incoming_remap,
+            );
             return;
         }
-        _ = try self.scratch.only_in_a_static_dispatch_constraints.append(
-            self.scratch.gpa,
+        try self.appendRetainedStaticDispatchConstraint(
+            .only_in_a,
             constraint,
+            source_constraint_index,
         );
     }
 
@@ -3495,16 +3810,20 @@ const Unifier = struct {
                     self.getTypeIdentText(a_name),
                     self.getTypeIdentText(b_name),
                 )) {
-                    _ = try scratch.only_in_a_static_dispatch_constraints.append(
-                        scratch.gpa,
+                    const source_offset = a_indices[a_group_start];
+                    try self.appendRetainedStaticDispatchConstraint(
+                        .only_in_a,
                         a_constraints[a_indices[a_group_start]],
+                        @intFromEnum(a_constraints_range.start) + source_offset,
                     );
                     a_group_start += 1;
                     continue;
                 } else {
-                    _ = try scratch.only_in_b_static_dispatch_constraints.append(
-                        scratch.gpa,
+                    const source_offset = b_indices[b_group_start];
+                    try self.appendRetainedStaticDispatchConstraint(
+                        .only_in_b,
                         b_constraints[b_indices[b_group_start]],
+                        @intFromEnum(b_constraints_range.start) + source_offset,
                     );
                     b_group_start += 1;
                     continue;
@@ -3596,15 +3915,19 @@ const Unifier = struct {
                 );
                 var a_declarative = a_group_start;
                 while (a_declarative < a_non_method_end) : (a_declarative += 1) {
+                    const source_offset = a_indices[a_declarative];
                     try self.retainDeclarativeStaticDispatchConstraint(
                         retained_group_start,
+                        @intFromEnum(a_constraints_range.start) + source_offset,
                         a_constraints[a_indices[a_declarative]],
                     );
                 }
                 var b_declarative = b_group_start;
                 while (b_declarative < b_non_method_end) : (b_declarative += 1) {
+                    const source_offset = b_indices[b_declarative];
                     try self.retainDeclarativeStaticDispatchConstraint(
                         retained_group_start,
+                        @intFromEnum(b_constraints_range.start) + source_offset,
                         b_constraints[b_indices[b_declarative]],
                     );
                 }
@@ -3632,16 +3955,20 @@ const Unifier = struct {
                 // method scheme at its own type.
                 var a_index = a_group_start;
                 while (a_index < a_group_end) : (a_index += 1) {
-                    _ = try scratch.only_in_a_static_dispatch_constraints.append(
-                        scratch.gpa,
+                    const source_offset = a_indices[a_index];
+                    try self.appendRetainedStaticDispatchConstraint(
+                        .only_in_a,
                         a_constraints[a_indices[a_index]],
+                        @intFromEnum(a_constraints_range.start) + source_offset,
                     );
                 }
                 var b_index = b_group_start;
                 while (b_index < b_group_end) : (b_index += 1) {
-                    _ = try scratch.only_in_b_static_dispatch_constraints.append(
-                        scratch.gpa,
+                    const source_offset = b_indices[b_index];
+                    try self.appendRetainedStaticDispatchConstraint(
+                        .only_in_b,
                         b_constraints[b_indices[b_index]],
+                        @intFromEnum(b_constraints_range.start) + source_offset,
                     );
                 }
             }
@@ -3651,15 +3978,19 @@ const Unifier = struct {
         }
 
         while (a_group_start < a_indices.len) : (a_group_start += 1) {
-            _ = try scratch.only_in_a_static_dispatch_constraints.append(
-                scratch.gpa,
+            const source_offset = a_indices[a_group_start];
+            try self.appendRetainedStaticDispatchConstraint(
+                .only_in_a,
                 a_constraints[a_indices[a_group_start]],
+                @intFromEnum(a_constraints_range.start) + source_offset,
             );
         }
         while (b_group_start < b_indices.len) : (b_group_start += 1) {
-            _ = try scratch.only_in_b_static_dispatch_constraints.append(
-                scratch.gpa,
+            const source_offset = b_indices[b_group_start];
+            try self.appendRetainedStaticDispatchConstraint(
+                .only_in_b,
                 b_constraints[b_indices[b_group_start]],
+                @intFromEnum(b_constraints_range.start) + source_offset,
             );
         }
 
@@ -3727,10 +4058,13 @@ fn sameDeclarativeOriginClass(
     };
 }
 
-fn mergeStaticDispatchConstraintMetadata(
+fn mergeStaticDispatchConstraintMetadataWithRemaps(
+    types_store: *types_mod.Store,
     other: StaticDispatchConstraint,
     retained: StaticDispatchConstraint,
-) StaticDispatchConstraint {
+    retained_remap: []u32,
+    other_remap: []u32,
+) Allocator.Error!StaticDispatchConstraint {
     var merged = retained;
     if (other.origin == .from_literal and retained.origin == .from_literal) {
         if (mergeFromNumeralLiteralInfo(
@@ -3757,6 +4091,14 @@ fn mergeStaticDispatchConstraintMetadata(
     if (!merged.interpolation.isPresent()) {
         merged.interpolation = other.interpolation;
     }
+    const marker_metadata = try types_store.mergeWhereMethodMarkerMetadataWithRemaps(
+        types_mod.WhereMethodMarkerMetadata.fromConstraint(retained),
+        types_mod.WhereMethodMarkerMetadata.fromConstraint(other),
+        retained_remap,
+        other_remap,
+    );
+    merged.where_method_markers = marker_metadata.markers;
+    merged.where_method_marker_bases = marker_metadata.bases;
     return merged;
 }
 
@@ -3871,7 +4213,7 @@ pub fn partitionFields(
     a_fields_range: RecordFieldSafeList.Range,
     b_fields_range: RecordFieldSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedRecordFields {
-    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, null, null);
+    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, null, null, null);
     return try unifier.partitionFields(scratch, a_fields_range, b_fields_range);
 }
 
@@ -3885,7 +4227,7 @@ pub fn partitionTags(
     a_tags_range: TagSafeList.Range,
     b_tags_range: TagSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedTags {
-    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, null, null);
+    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, null, null, null);
     return try unifier.partitionTags(scratch, a_tags_range, b_tags_range);
 }
 
@@ -3967,6 +4309,15 @@ pub const Scratch = struct {
     generalized_dispatch_target_share_candidates: GeneralizedDispatchTargetShareCandidate.SafeList,
     a_static_dispatch_constraint_indices: MkSafeList(u32),
     b_static_dispatch_constraint_indices: MkSafeList(u32),
+    /// Transient contributor maps for constraint occurrences still resident in
+    /// the two retained scratch lists.
+    pending_where_marker_constraint_contributors: std.ArrayListUnmanaged(PendingWhereMarkerConstraintContributor),
+    pending_where_marker_constraint_offsets: std.ArrayListUnmanaged(u32),
+    pending_constraint_evidence_contributors: std.ArrayListUnmanaged(PendingConstraintEvidenceContributor),
+    /// Completed movement evidence consumed by Check before the next reset.
+    where_marker_constraint_moves: std.ArrayListUnmanaged(WhereMarkerConstraintMove),
+    where_marker_constraint_move_offsets: std.ArrayListUnmanaged(u32),
+    constraint_evidence_moves: std.ArrayListUnmanaged(ConstraintEvidenceMove),
 
     // occurs
     occurs_scratch: occurs.Scratch,
@@ -4026,6 +4377,12 @@ pub const Scratch = struct {
             .generalized_dispatch_target_share_candidates = try GeneralizedDispatchTargetShareCandidate.SafeList.initCapacity(gpa, 8),
             .a_static_dispatch_constraint_indices = try MkSafeList(u32).initCapacity(gpa, 32),
             .b_static_dispatch_constraint_indices = try MkSafeList(u32).initCapacity(gpa, 32),
+            .pending_where_marker_constraint_contributors = .empty,
+            .pending_where_marker_constraint_offsets = .empty,
+            .pending_constraint_evidence_contributors = .empty,
+            .where_marker_constraint_moves = .empty,
+            .where_marker_constraint_move_offsets = .empty,
+            .constraint_evidence_moves = .empty,
             .occurs_scratch = try occurs.Scratch.init(gpa),
             .visited_vars = try VarSafeList.initCapacity(gpa, 16),
             .open_var_map = std.AutoHashMap(types_mod.Var, types_mod.Var).init(gpa),
@@ -4056,6 +4413,12 @@ pub const Scratch = struct {
         self.generalized_dispatch_target_share_candidates.deinit(self.gpa);
         self.a_static_dispatch_constraint_indices.deinit(self.gpa);
         self.b_static_dispatch_constraint_indices.deinit(self.gpa);
+        self.pending_where_marker_constraint_contributors.deinit(self.gpa);
+        self.pending_where_marker_constraint_offsets.deinit(self.gpa);
+        self.pending_constraint_evidence_contributors.deinit(self.gpa);
+        self.where_marker_constraint_moves.deinit(self.gpa);
+        self.where_marker_constraint_move_offsets.deinit(self.gpa);
+        self.constraint_evidence_moves.deinit(self.gpa);
         self.occurs_scratch.deinit();
         self.visited_vars.deinit(self.gpa);
         self.constraint_visited_vars.deinit(self.gpa);
@@ -4084,6 +4447,12 @@ pub const Scratch = struct {
         self.generalized_dispatch_target_share_candidates.items.clearRetainingCapacity();
         self.a_static_dispatch_constraint_indices.items.clearRetainingCapacity();
         self.b_static_dispatch_constraint_indices.items.clearRetainingCapacity();
+        self.pending_where_marker_constraint_contributors.clearRetainingCapacity();
+        self.pending_where_marker_constraint_offsets.clearRetainingCapacity();
+        self.pending_constraint_evidence_contributors.clearRetainingCapacity();
+        self.where_marker_constraint_moves.clearRetainingCapacity();
+        self.where_marker_constraint_move_offsets.clearRetainingCapacity();
+        self.constraint_evidence_moves.clearRetainingCapacity();
         self.fresh_vars.items.clearRetainingCapacity();
         self.occurs_scratch.reset();
         self.visited_vars.items.clearRetainingCapacity();

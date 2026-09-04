@@ -3517,13 +3517,17 @@ fn finishAssociatedDeclBody(
     can_expr: CanonicalizedExpr,
 ) std.mem.Allocator.Error!void {
     const state = work.state;
+    const def = CIR.Def{
+        .pattern = work.pattern_idx,
+        .expr = can_expr.idx,
+        .annotation = work.annotation,
+        .kind = .{ .let = {} },
+    };
     const associated_def = AssociatedValueDef{
-        .def_idx = try self.env.addDef(CIR.Def{
-            .pattern = work.pattern_idx,
-            .expr = can_expr.idx,
-            .annotation = work.annotation,
-            .kind = .{ .let = {} },
-        }, work.pattern_region),
+        .def_idx = if (state.owner_is_module_visible)
+            try self.env.addDef(def, work.pattern_region)
+        else
+            try self.env.addStagedLocalDef(def, work.pattern_region),
         .free_vars = can_expr.free_vars,
     };
 
@@ -3759,7 +3763,7 @@ fn recordAssociatedValue(
     const stmt_idx = blk: {
         if (self.assoc_forward_pattern_keys.get(def.pattern)) |key| {
             if (self.assoc_local_statement_placeholders.fetchRemove(key)) |placeholder| {
-                try self.env.store.setStatementNode(placeholder.value, stmt);
+                try self.env.setBodyAnnotationStatement(placeholder.value, stmt);
                 try self.propagateBlockStatementFreeVars(self.localAssociatedContext(block_context), associated_def.free_vars);
                 break :blk placeholder.value;
             }
@@ -4084,10 +4088,14 @@ fn canonicalizeAssociatedItems(
                         break :blk_adopt null;
                     };
 
-                    const def_idx = if (adopted_pattern_idx) |adopted|
-                        try self.createAnnotationDefWithPattern(adopted, qualified_idx, type_anno_idx, annotation_expr_kind, where_clauses, region)
+                    const publication: AnnotationDefPublication = if (owner_is_module_visible)
+                        .checked_def
                     else
-                        try self.createAnnotationDef(qualified_idx, type_anno_idx, annotation_expr_kind, where_clauses, region, null);
+                        .staged_local_statement;
+                    const def_idx = if (adopted_pattern_idx) |adopted|
+                        try self.createAnnotationDefWithPattern(adopted, qualified_idx, type_anno_idx, annotation_expr_kind, where_clauses, region, publication)
+                    else
+                        try self.createAnnotationDef(qualified_idx, type_anno_idx, annotation_expr_kind, where_clauses, region, null, publication);
 
                     if (owner_is_module_visible) {
                         try self.env.setExposedValueNodeIndexById(qualified_idx, @intFromEnum(def_idx));
@@ -4107,6 +4115,13 @@ fn canonicalizeAssociatedItems(
                     if (assoc_key) |key| {
                         try self.assoc_value_patterns.put(self.env.gpa, key, anno_pattern_idx);
                     }
+
+                    // Annotation-only associated items have the same lexical
+                    // aliases as implemented associated items once their
+                    // declaration has been reached. All aliases name the one
+                    // staged pattern; the local statement remains its sole
+                    // checked owner.
+                    try self.currentScope().idents.put(self.env.gpa, name_ident, anno_pattern_idx);
 
                     const anno_type_qualified_idx: Ident.Idx = if (parent_name.eql(type_name))
                         qualified_idx
@@ -4576,7 +4591,7 @@ pub fn canonicalizeFile(
                                 // Names don't match - create an anno-only def for this annotation
                                 // and let the next iteration handle the decl normally
                                 const parser_decl_idx = self.parse_ir.decl_index.declForStatement(@intFromEnum(stmt_id));
-                                const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, .ordinary, where_clauses, region, parser_decl_idx);
+                                const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, .ordinary, where_clauses, region, parser_decl_idx, .checked_def);
                                 try self.env.store.addScratchDef(def_idx);
                                 try self.recordGlobalValueDef(def_idx);
 
@@ -4592,7 +4607,7 @@ pub fn canonicalizeFile(
                             // If the next non-malformed stmt is not a decl,
                             // create a Def with an e_anno_only body
                             const parser_decl_idx = self.parse_ir.decl_index.declForStatement(@intFromEnum(stmt_id));
-                            const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, .ordinary, where_clauses, region, parser_decl_idx);
+                            const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, .ordinary, where_clauses, region, parser_decl_idx, .checked_def);
                             try self.env.store.addScratchDef(def_idx);
                             try self.recordGlobalValueDef(def_idx);
 
@@ -4612,7 +4627,7 @@ pub fn canonicalizeFile(
                 // (This handles the case where the type annotation is the last statement in the file)
                 if (next_i >= ast_stmt_idxs.len) {
                     const parser_decl_idx = self.parse_ir.decl_index.declForStatement(@intFromEnum(stmt_id));
-                    const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, .ordinary, where_clauses, region, parser_decl_idx);
+                    const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, .ordinary, where_clauses, region, parser_decl_idx, .checked_def);
                     try self.env.store.addScratchDef(def_idx);
                     try self.recordGlobalValueDef(def_idx);
 
@@ -4844,7 +4859,7 @@ fn poisonRecursiveNonFunctionDefs(
                 continue;
             }
             const malformed_idx = try self.env.pushMalformed(CIR.Expr.Idx, diagnostic);
-            self.env.store.setDefExpr(def_to_poison.def_idx, malformed_idx);
+            self.env.setDefExpr(def_to_poison.def_idx, malformed_idx);
         }
     }
 }
@@ -5024,6 +5039,11 @@ pub fn validateForExecution(self: *Self) std.mem.Allocator.Error!void {
 }
 
 /// Creates a definition for a standalone annotation with no Roc implementation.
+const AnnotationDefPublication = enum {
+    checked_def,
+    staged_local_statement,
+};
+
 fn createAnnotationDef(
     self: *Self,
     ident: base.Ident.Idx,
@@ -5032,6 +5052,7 @@ fn createAnnotationDef(
     where_clauses: ?WhereClause.Span,
     region: Region,
     parser_decl_idx: ?AST.DeclIndex.DeclIdx,
+    publication: AnnotationDefPublication,
 ) std.mem.Allocator.Error!CIR.Def.Idx {
     // If a placeholder pattern was previously registered for this ident in a
     // parent scope (e.g. by builtin hierarchical name registration), reuse it
@@ -5081,13 +5102,19 @@ fn createAnnotationDef(
     };
     const annotation_idx = try self.env.addAnnotation(annotation, region);
 
-    // Create and return the def
-    return try self.env.addDef(.{
+    // Create and return the def. A local annotation-only value is represented
+    // transiently as a Def while canonicalization establishes its pattern and
+    // body, but its eventual statement is the sole checked attachment owner.
+    const def = CIR.Def{
         .pattern = pattern_idx,
         .expr = annotation_expr,
         .annotation = annotation_idx,
         .kind = .let,
-    }, region);
+    };
+    return switch (publication) {
+        .checked_def => try self.env.addDef(def, region),
+        .staged_local_statement => try self.env.addStagedLocalDef(def, region),
+    };
 }
 
 fn createAnnotationPattern(
@@ -5154,6 +5181,7 @@ fn createAnnotationDefWithPattern(
     annotation_expr_kind: AnnotationExprKind,
     where_clauses: ?WhereClause.Span,
     region: Region,
+    publication: AnnotationDefPublication,
 ) std.mem.Allocator.Error!CIR.Def.Idx {
     try self.scopes.items[self.scopes.items.len - 1].idents.put(self.env.gpa, ident, pattern_idx);
 
@@ -5165,12 +5193,16 @@ fn createAnnotationDefWithPattern(
     };
     const annotation_idx = try self.env.addAnnotation(annotation, region);
 
-    return try self.env.addDef(.{
+    const def = CIR.Def{
         .pattern = pattern_idx,
         .expr = annotation_expr,
         .annotation = annotation_idx,
         .kind = .let,
-    }, region);
+    };
+    return switch (publication) {
+        .checked_def => try self.env.addDef(def, region),
+        .staged_local_statement => try self.env.addStagedLocalDef(def, region),
+    };
 }
 
 fn canonicalizeStmtDecl(
@@ -9344,9 +9376,13 @@ fn createBlockAnnoOnlyStatement(
     where_clauses: ?WhereClause.Span,
     region: Region,
 ) std.mem.Allocator.Error!CanonicalizedStatement {
-    const def_idx = try self.createAnnotationDef(ident, type_anno_idx, .ordinary, where_clauses, region, null);
-    try self.env.store.addScratchDef(def_idx);
+    const def_idx = try self.createAnnotationDef(ident, type_anno_idx, .ordinary, where_clauses, region, null, .staged_local_statement);
 
+    // The Def is only a construction record for the pattern/expression/
+    // annotation tuple. Do not append it to scratch defs: the enclosing file
+    // turns that scratch suffix into `all_defs`, whose SCC driver would check
+    // this body a second time. The local statement below is its sole checked
+    // owner and remains the durable lookup/scheme boundary.
     const def = self.env.store.getDef(def_idx);
     const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
         .pattern = def.pattern,
@@ -21234,6 +21270,62 @@ fn canonicalizeWhereAliasClauses(
     return try self.env.store.whereClauseSpanFrom(where_start, roots);
 }
 
+fn publishExternalWhereAliasLookupGroup(
+    self: *Self,
+    alias_anno_idx: TypeAnno.Idx,
+) std.mem.Allocator.Error!void {
+    const annotation = self.env.store.getTypeAnno(alias_anno_idx);
+    const external = switch (annotation) {
+        .lookup => |lookup| switch (lookup.base) {
+            .external => |value| value,
+            .builtin, .local, .pending => return,
+        },
+        .apply => |apply| switch (apply.base) {
+            .external => |value| value,
+            .builtin, .local, .pending => return,
+        },
+        .rigid_var,
+        .rigid_var_lookup,
+        .underscore,
+        .tag_union,
+        .tag,
+        .tuple,
+        .record,
+        .@"fn",
+        .parens,
+        .malformed,
+        => return,
+    };
+
+    // The ordinary external type token above remains the exhaustive record for
+    // malformed/non-alias targets. The specialized receiver+parameter group is
+    // published only for a sealed provider where-alias declaration, exactly
+    // matching the checker path which proceeds to copy those components.
+    const import_ident = self.env.imports.getIdentIdx(external.module_idx) orelse return;
+    const provider = (self.lookupAvailableModuleEnv(import_ident) orelse return).env;
+    if (external.target_node_idx >= provider.store.nodes.len()) return;
+    if (provider.store.nodes.get(@enumFromInt(external.target_node_idx)).tag !=
+        .statement_where_alias_decl)
+    {
+        return;
+    }
+    const declaration = switch (provider.store.getStatement(
+        @enumFromInt(external.target_node_idx),
+    )) {
+        .s_where_alias_decl => |value| value,
+        else => unreachable,
+    };
+    const parameters = provider.store.sliceTypeAnnos(
+        provider.store.getTypeHeader(declaration.header).args,
+    );
+    try self.env.appendExternalWhereAliasLookupGroup(
+        alias_anno_idx,
+        external.module_idx,
+        external.target_node_idx,
+        parameters,
+    );
+}
+
 fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type_anno_ctx: TypeAnnoCtx.TypeAnnoCtxType) std.mem.Allocator.Error!WhereClause.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -21382,6 +21474,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
             //           ^^^^^
             var alias_ctx = TypeAnnoCtx.init(type_anno_ctx);
             const alias_anno_idx = try self.runTypeAnnoKernel(ma.alias, &alias_ctx);
+            try self.publishExternalWhereAliasLookupGroup(alias_anno_idx);
 
             return try self.env.addWhereClause(WhereClause{ .w_alias = .{
                 .var_ = var_anno_idx,

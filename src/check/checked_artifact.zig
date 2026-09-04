@@ -4358,7 +4358,7 @@ pub const CheckedTypeStore = struct {
                 .dispatch_target, .where_method_use => {
                     _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @enumFromInt(record.slot_data));
                 },
-                .value_use, .nested_function_use, .shared_value_use => {},
+                .value_use, .nested_function_use, .shared_value_use, .inspect_method => {},
             }
             const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
             for (pairs) |pair| {
@@ -8739,6 +8739,7 @@ const ExpectSingleNominalBackingPayloadError = Allocator.Error || error{
     TestExpectedEqual,
     TestUnexpectedResult,
     CorruptEmbeddedBuiltins,
+    CorruptArtifact,
     ExpectedNominalStatement,
     ExpectedNominalRoot,
     ExpectedNominalPayload,
@@ -16543,7 +16544,7 @@ fn sealCheckedProcedureTemplateRefs(
                     @enumFromInt(record.scheme_root),
                     {},
                 ),
-                .nested_function_use, .dispatch_target, .where_method_use => {},
+                .nested_function_use, .dispatch_target, .where_method_use, .inspect_method => {},
             }
         }
 
@@ -17344,7 +17345,7 @@ const EvidencePass = struct {
                     }
                     entry.value_ptr.* = @intCast(i);
                 },
-                .nested_function_use => {},
+                .nested_function_use, .inspect_method => {},
             }
         }
 
@@ -30598,7 +30599,17 @@ pub const CheckedModuleArtifact = struct {
     // Version 77 distinguishes independent callable plans that reuse the
     // evidence slot's producer-resolved nested vector from those that must
     // synthesize nested evidence from their own callable.
-    const serialized_layout_version: u32 = 77;
+    // Version 78 embeds the ModuleEnv where-alias declaration settlement and
+    // dependency-rank table used for allocation-free cache admission.
+    // Version 79 embeds the ModuleEnv where-marker occurrence-lineage tables,
+    // canonical discovery witnesses, platform-substitution locators, and
+    // inherited marker bases used by W6b cache admission.
+    // Version 80 pairs checked artifacts with the complete W6b ModuleEnv proof
+    // schema: Expected producer/retirement authority, exact call-formal origins,
+    // selected/default constraint evidence, and canonical external-cache seed
+    // ownership. The manual bump rejects artifacts interpreted against the old
+    // checked-admission contract even though ModuleEnv remains a separate blob.
+    const serialized_layout_version: u32 = 80;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -36834,8 +36845,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x95, 0xF5, 0xEA, 0x6A, 0x06, 0x07, 0xC7, 0x13, 0xEC, 0x31, 0x62, 0x51, 0x33, 0xD8, 0xE9, 0xED,
-        0x22, 0x6E, 0x2E, 0x18, 0xB1, 0xAA, 0x79, 0x30, 0x86, 0x3F, 0x15, 0xA6, 0x97, 0x36, 0x74, 0x69,
+        0xAD, 0x76, 0xE0, 0xC5, 0x55, 0xAA, 0x5E, 0x18, 0x08, 0x78, 0x74, 0x6E, 0x0B, 0x3C, 0xC8, 0xBE,
+        0x72, 0x4E, 0x93, 0x03, 0xC5, 0xDE, 0xC2, 0xF5, 0xD1, 0xF9, 0x61, 0x5F, 0xDA, 0x8D, 0x10, 0x68,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

@@ -36,7 +36,7 @@ const CoreCtx = @import("ctx").CoreCtx;
 /// Errors that can occur while publishing compile-time finalization results.
 pub const PublishError = CheckedArtifact.CompileTimeFinalizer.Error;
 /// Errors that can occur while type-checking a module.
-pub const TypeCheckModuleError = Allocator.Error || PublishError || error{Internal};
+pub const TypeCheckModuleError = Allocator.Error || PublishError || Check.W6bSemanticValidationError || error{Internal};
 
 /// Build CTFE finalization options from the package compiler context.
 pub fn compileTimeFinalizationOptions(
@@ -69,6 +69,7 @@ pub const Mode = enum { single_threaded, multi_threaded };
 /// Semantic facts retained for a checked module.
 pub const SemanticModuleData = struct {
     env: *ModuleEnv,
+    validated_module: ?Check.ValidatedModuleEnv,
     checked_artifact: ?*const CheckedArtifact.CheckedModuleArtifact,
 };
 
@@ -82,13 +83,16 @@ pub const TypeCheckPublication = union(enum) {
 pub const TypeCheckOutput = struct {
     checker: Check,
     checker_owned: bool = true,
+    validated_module: Check.OwnedValidatedModuleEnv,
+    validated_module_owned: bool = true,
     publication: TypeCheckPublication,
     publication_owned: bool = true,
 
     pub fn deinit(self: *TypeCheckOutput) void {
+        if (self.validated_module_owned) self.validated_module.deinit();
         if (self.publication_owned) {
             switch (self.publication) {
-                .published => |*artifact| artifact.deinit(artifact.canonical_names.allocator),
+                .published => |*artifact| artifact.deinitRetainingModuleEnv(artifact.canonical_names.allocator),
                 .deferred => {},
             }
         }
@@ -114,6 +118,12 @@ pub const TypeCheckOutput = struct {
         std.debug.assert(self.checker_owned);
         self.checker_owned = false;
         return self.checker;
+    }
+
+    pub fn takeValidatedModule(self: *TypeCheckOutput) Check.OwnedValidatedModuleEnv {
+        std.debug.assert(self.validated_module_owned);
+        self.validated_module_owned = false;
+        return self.validated_module;
     }
 };
 
@@ -143,7 +153,7 @@ pub const ArtifactPublicationInputs = struct {
 };
 
 fn importedArtifactsCoverImportedEnvs(
-    imported_envs: []const *ModuleEnv,
+    imported_envs: []const *const ModuleEnv,
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
 ) bool {
     for (imported_envs, 0..) |_, module_idx| {
@@ -162,7 +172,7 @@ fn importedArtifactsCoverImportedEnvs(
 /// Build the semantic module-owner closure available while checking a module.
 pub fn buildCheckOwnerEnvs(
     allocator: Allocator,
-    imported_envs: []const *ModuleEnv,
+    imported_envs: []const *const ModuleEnv,
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
     platform_requirements: ?Check.PlatformRequirementInput,
@@ -229,19 +239,9 @@ fn appendCheckOwnerEnvIfMissing(
     module_env: *const ModuleEnv,
 ) Allocator.Error!void {
     for (owner_envs.items) |existing| {
-        if (moduleEnvIdentitiesMatch(existing, module_env)) return;
+        if (existing == module_env) return;
     }
     try owner_envs.append(allocator, module_env);
-}
-
-/// Two owner envs are duplicates exactly when their deep content identities
-/// match: byte-identical transitive module content is interchangeable as a
-/// type owner. No name text participates.
-fn moduleEnvIdentitiesMatch(a: *const ModuleEnv, b: *const ModuleEnv) bool {
-    if (@intFromPtr(a) == @intFromPtr(b)) return true;
-    const a_hash = a.contentIdentityHash() orelse return false;
-    const b_hash = b.contentIdentityHash() orelse return false;
-    return base.ModuleIdentity.eql(a_hash, b_hash);
 }
 
 fn availableArtifactByKey(
@@ -279,11 +279,12 @@ pub fn canonicalizeAndTypeCheckModule(
     parse_ast: *AST,
     builtin_module_env: *const ModuleEnv,
     builtin_indices: can.CIR.BuiltinIndices,
-    imported_envs: []const *ModuleEnv,
+    imported_envs: []const *const ModuleEnv,
+    imported_validations: []const Check.ValidatedModuleEnv,
     module_envs_out: *std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
     source_dir: ?[]const u8,
     validation_mode: SnapshotValidationMode,
-) Allocator.Error!Check {
+) (Allocator.Error || Check.W6bSemanticValidationError)!Check {
     // Canonicalize
     var czer = try Can.initModule(roc_ctx, env, parse_ast, .{
         .builtin_types = .{
@@ -317,7 +318,7 @@ pub fn canonicalizeAndTypeCheckModule(
         gpa,
         &env.types,
         env,
-        imported_envs,
+        .{ .envs = imported_envs, .modules = imported_validations },
         module_envs_out,
         &env.store.regions,
         module_builtin_ctx,
@@ -567,7 +568,10 @@ pub fn typeCheckModule(
     artifact_alloc: Allocator,
     env: *ModuleEnv,
     builtin_module_env: *const ModuleEnv,
-    imported_envs: []const *ModuleEnv,
+    imported_envs: []const *const ModuleEnv,
+    imported_validations: []const Check.ValidatedModuleEnv,
+    owner_envs: []const *const ModuleEnv,
+    owner_validations: []const Check.ValidatedModuleEnv,
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
     platform_requirements: ?Check.PlatformRequirementInput,
@@ -591,26 +595,17 @@ pub fn typeCheckModule(
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(check_alloc);
     errdefer module_envs_map.deinit();
 
-    const owner_envs = try buildCheckOwnerEnvs(
-        check_alloc,
-        imported_envs,
-        imported_artifacts,
-        available_artifacts,
-        platform_requirements,
-    );
-    defer check_alloc.free(owner_envs);
-
     var checker = try Check.initWithOwnerModules(
         check_alloc,
         &env.types,
         env,
-        imported_envs,
-        owner_envs,
+        .{ .envs = imported_envs, .modules = imported_validations },
+        .{ .envs = owner_envs, .modules = owner_validations },
+        platform_requirements,
         &module_envs_map,
         &env.store.regions,
         module_builtin_ctx,
     );
-    checker.platform_requirements = platform_requirements;
     checker.validation = validation;
     checker.fixupTypeWriter();
     errdefer checker.deinit();
@@ -620,6 +615,9 @@ pub fn typeCheckModule(
     // constrained by platform types (e.g., I64) before defaulting to Dec.
     // TODO: re-enable defer_numeric_defaults once ModuleEnv has the field
     try checker.checkFile();
+
+    var validated_module = try checker.takeValidatedModule();
+    errdefer validated_module.deinit();
 
     module_envs_map.deinit();
 
@@ -637,6 +635,7 @@ pub fn typeCheckModule(
     if (defer_publication and !(try checker.requiresTypesContainError())) {
         return .{
             .checker = checker,
+            .validated_module = validated_module,
             .publication = .deferred,
         };
     }
@@ -644,7 +643,9 @@ pub fn typeCheckModule(
     var checked_artifact = try publishCheckedArtifactFromCheckedModule(
         artifact_alloc,
         env,
+        validated_module.capability(),
         imported_envs,
+        imported_validations,
         imported_artifacts,
         .{
             .platform_requirement_context = platform_requirement_context,
@@ -658,10 +659,11 @@ pub fn typeCheckModule(
             .validation = validation,
         },
     );
-    errdefer checked_artifact.deinit(artifact_alloc);
+    errdefer checked_artifact.deinitRetainingModuleEnv(artifact_alloc);
 
     return .{
         .checker = checker,
+        .validated_module = validated_module,
         .publication = .{ .published = checked_artifact },
     };
 }
@@ -670,15 +672,19 @@ pub fn typeCheckModule(
 pub fn publishCheckedArtifactFromCheckedModule(
     gpa: Allocator,
     env: *ModuleEnv,
-    imported_envs: []const *ModuleEnv,
+    validated_module: Check.ValidatedModuleEnv,
+    imported_envs: []const *const ModuleEnv,
+    imported_validations: []const Check.ValidatedModuleEnv,
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     publication: ArtifactPublicationInputs,
-) PublishError!CheckedArtifact.CheckedModuleArtifact {
+) (PublishError || Check.W6bSemanticValidationError)!CheckedArtifact.CheckedModuleArtifact {
     return publishCheckedArtifactFromCheckedModuleWithStorage(
         gpa,
         env,
+        validated_module,
         .{ .checked_source = env },
         imported_envs,
+        imported_validations,
         imported_artifacts,
         publication,
     );
@@ -688,14 +694,29 @@ pub fn publishCheckedArtifactFromCheckedModule(
 pub fn publishCheckedArtifactFromCheckedModuleWithStorage(
     gpa: Allocator,
     env: *ModuleEnv,
+    validated_module: Check.ValidatedModuleEnv,
     module_env_storage: CheckedArtifact.ModuleEnvStorage,
-    imported_envs: []const *ModuleEnv,
+    imported_envs: []const *const ModuleEnv,
+    imported_validations: []const Check.ValidatedModuleEnv,
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     publication: ArtifactPublicationInputs,
-) PublishError!CheckedArtifact.CheckedModuleArtifact {
+) (PublishError || Check.W6bSemanticValidationError)!CheckedArtifact.CheckedModuleArtifact {
+    if (try validated_module.validate() != env) return error.CorruptArtifact;
+    try validated_module.validateImportedModules(.{
+        .envs = imported_envs,
+        .modules = imported_validations,
+    });
     var typed = try CheckedModules.initForRootModule(gpa, env, imported_envs);
     defer typed.modules.deinit();
-    return publishFromPrebuiltModules(gpa, &typed.modules, typed.module_idx, module_env_storage, imported_artifacts, publication);
+    return publishFromPrebuiltModules(
+        gpa,
+        &typed,
+        validated_module,
+        .{ .envs = imported_envs, .modules = imported_validations },
+        module_env_storage,
+        imported_artifacts,
+        publication,
+    );
 }
 
 /// Publish from an already-built `Modules` graph. The cache-key probe builds the
@@ -704,17 +725,24 @@ pub fn publishCheckedArtifactFromCheckedModuleWithStorage(
 /// real, redundant work).
 pub fn publishFromPrebuiltModules(
     gpa: Allocator,
-    modules: *const CheckedModules,
-    module_idx: u32,
+    root_modules: *const CheckedModules.RootModules,
+    validated_module: Check.ValidatedModuleEnv,
+    imported_modules: Check.ValidatedModuleSet,
     module_env_storage: CheckedArtifact.ModuleEnvStorage,
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     publication: ArtifactPublicationInputs,
-) PublishError!CheckedArtifact.CheckedModuleArtifact {
+) (PublishError || Check.W6bSemanticValidationError)!CheckedArtifact.CheckedModuleArtifact {
+    const root_env = module_env_storage.envConst();
+    if (try validated_module.validate() != root_env) return error.CorruptArtifact;
+    try validated_module.validateImportedModules(imported_modules);
+    if (!root_modules.validateBorrowedGraph(root_env, imported_modules.envs)) {
+        return error.CorruptArtifact;
+    }
     var ctfe_options = publication.ctfe_options;
     return try CheckedArtifact.publishFromTypedModule(
         gpa,
-        modules,
-        module_idx,
+        &root_modules.modules,
+        root_modules.module_idx,
         .{
             .module_env_storage = module_env_storage,
             .imports = imported_artifacts,
@@ -729,5 +757,72 @@ pub fn publishFromPrebuiltModules(
             .problem_store = publication.problem_store,
             .validation = publication.validation,
         },
+    );
+}
+
+test "typeCheckModule rejects a corrupt public owner before identity dedup" {
+    const allocator = std.testing.allocator;
+    const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
+    var builtin_module = try can.BuiltinStatic.moduleView(
+        allocator,
+        compiled_builtins.builtin_bin[0..],
+        "Builtin",
+        compiled_builtins.builtin_source,
+    );
+    defer builtin_module.deinit();
+    var builtin_validation = try Check.admitBuiltinOwned(
+        allocator,
+        builtin_module.env,
+        builtin_indices,
+    );
+    defer builtin_validation.deinit();
+
+    var owner = try ModuleEnv.init(allocator, "");
+    defer owner.deinit();
+    try owner.initCIRFields("Owner");
+    try owner.ensureContentIdentity(&.{});
+    const builtin_display = try owner.insertIdent(base.Ident.for_text("Builtin"));
+    _ = try owner.internModuleIdentity(builtin_module.env.contentIdentityHash().?, builtin_display);
+    owner.typecheck_state = .checked_file;
+
+    owner.self_module_identity = @enumFromInt(owner.module_identities.count());
+    owner.w6b_semantically_validated = true;
+
+    var current = try ModuleEnv.init(allocator, "");
+    defer current.deinit();
+    try current.initCIRFields("Current");
+    const imported_envs = [_]*ModuleEnv{&owner};
+    const imported_validations = [_]Check.ValidatedModuleEnv{builtin_validation.capability()};
+    const owner_modules = [_]*const ModuleEnv{ &owner, &owner };
+    const owner_validations = [_]Check.ValidatedModuleEnv{
+        builtin_validation.capability(),
+        builtin_validation.capability(),
+    };
+    const requirements = Check.PlatformRequirementInput{
+        .env = builtin_module.env,
+        .validated_env = builtin_validation.capability(),
+        .owner_modules = &owner_modules,
+        .path = "",
+    };
+    try std.testing.expectError(
+        error.CorruptArtifact,
+        typeCheckModule(
+            allocator,
+            allocator,
+            &current,
+            builtin_module.env,
+            &imported_envs,
+            &imported_validations,
+            &owner_modules,
+            &owner_validations,
+            &.{},
+            &.{},
+            requirements,
+            null,
+            &.{},
+            .explicit_roots,
+            .{},
+            false,
+        ),
     );
 }

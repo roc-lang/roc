@@ -8,7 +8,7 @@
 const std = @import("std");
 const collections = @import("collections");
 
-/// Typed payload - 12 bytes accessed via semantic field names per node type.
+/// Typed payload - 16 fully defined bytes accessed via semantic field names per node type.
 payload: Payload,
 tag: Tag,
 
@@ -296,6 +296,11 @@ pub const Tag = enum {
     diag_default_not_allowed_on_local_type_decl,
 };
 
+fn isPayloadReservedField(comptime name: []const u8) bool {
+    return std.mem.eql(u8, name, "_padding") or
+        std.mem.eql(u8, name, "_reserved");
+}
+
 /// Typed payload union for accessing node data in a type-safe manner.
 /// This is an extern union of exactly 16 bytes (4 × u32).
 /// Each variant corresponds to a Node.Tag and provides semantic field names.
@@ -442,13 +447,14 @@ pub const Payload = extern union {
     if_branch: IfBranch,
     type_var_slot: TypeVarSlot,
 
-    // Payload struct definitions - all must be exactly 12 bytes
+    // Payload struct definitions - all must explicitly cover exactly 16 bytes.
 
     /// statement_decl, statement_decl_gen: pattern + expr + annotation info
     pub const StatementDecl = extern struct {
         pattern: u32,
         expr: u32,
         anno_span2_idx: u32, // Index into span2_data: (has_anno, anno_idx_or_zero)
+        _reserved: u32 = 0,
     };
 
     /// statement_var: pattern_idx + expr + annotation info
@@ -456,6 +462,7 @@ pub const Payload = extern union {
         pattern_idx: u32,
         expr: u32,
         anno_span2_idx: u32, // Index into span2_data: (has_anno, anno_idx_or_zero)
+        _reserved: u32 = 0,
     };
 
     /// statement_var_uninitialized: pattern_idx + annotation info
@@ -463,6 +470,7 @@ pub const Payload = extern union {
         pattern_idx: u32,
         anno_span2_idx: u32, // Index into span2_data: (has_anno, anno_idx_or_zero)
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// statement_reassign: pattern_idx + expr
@@ -470,18 +478,21 @@ pub const Payload = extern union {
         pattern_idx: u32,
         expr: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// statement_crash: msg expr
     pub const StatementCrash = extern struct {
         msg: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// statement_dbg, statement_expr, statement_expect: single expr/body
     pub const StatementSingleExpr = extern struct {
         expr: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// statement_for: patt + expr + body
@@ -489,6 +500,7 @@ pub const Payload = extern union {
         patt: u32,
         expr: u32,
         body: u32,
+        _reserved: u32 = 0,
     };
 
     /// statement_while: cond + body
@@ -496,6 +508,7 @@ pub const Payload = extern union {
         cond: u32,
         body: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// statement_return: expr + optional lambda
@@ -503,6 +516,7 @@ pub const Payload = extern union {
         expr: u32,
         lambda: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// statement_import: module_name_tok + import_data_idx
@@ -510,6 +524,7 @@ pub const Payload = extern union {
         module_name_tok: u32,
         import_data_idx: u32, // Index into import_data list
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// statement_alias_decl: header + anno
@@ -517,6 +532,7 @@ pub const Payload = extern union {
         header: u32,
         anno: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// statement_nominal_decl: header + anno + is_opaque flag
@@ -524,6 +540,7 @@ pub const Payload = extern union {
         header: u32,
         anno: u32,
         is_opaque: u32, // 0 or 1
+        _reserved: u32 = 0,
     };
 
     /// statement_where_alias_decl: header + receiver + where clause
@@ -531,6 +548,7 @@ pub const Payload = extern union {
         header: u32,
         receiver: u32,
         where_span_idx: u32, // index into span_with_node_data
+        _reserved: u32 = 0,
     };
 
     /// statement_type_anno: annotation + name + optional where clause
@@ -538,6 +556,7 @@ pub const Payload = extern union {
         anno: u32,
         name: u32,
         where_span2_idx_plus_one: u32, // 0 means no where clause, else index+1 into span_with_node_data
+        _reserved: u32 = 0,
     };
 
     /// statement_type_var_alias: alias_name + type_var_name + type_var_anno
@@ -545,6 +564,7 @@ pub const Payload = extern union {
         alias_name: u32,
         type_var_name: u32,
         type_var_anno: u32,
+        _reserved: u32 = 0,
     };
 
     // --- Expressions ---
@@ -553,6 +573,7 @@ pub const Payload = extern union {
     pub const ExprVar = extern struct {
         pattern_idx: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// expr_external_lookup: lookup from another module
@@ -560,6 +581,7 @@ pub const Payload = extern union {
         module_idx: u32,
         target_node_idx: u32,
         ident_idx: u32,
+        _reserved: u32 = 0,
     };
 
     /// expr_associated_lookup_local: local type alias plus associated item.
@@ -567,6 +589,7 @@ pub const Payload = extern union {
         type_node_idx: u32,
         type_ident: u32,
         item_ident: u32,
+        _reserved: u32 = 0,
     };
 
     /// expr_associated_lookup: imported type declaration plus associated item.
@@ -589,6 +612,7 @@ pub const Payload = extern union {
     pub const ExprRequiredLookup = extern struct {
         requires_idx: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// expr_dec_small: small decimal value
@@ -604,18 +628,21 @@ pub const Payload = extern union {
         elems_start: u32,
         elems_len: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const ExprTupleAccess = extern struct {
         tuple: u32, // Index of the tuple expression being accessed
         elem_index: u32, // The 0-based index of the element to access
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const ExprList = extern struct {
         elems_start: u32,
         elems_len: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const ExprCall = extern struct {
@@ -629,50 +656,59 @@ pub const Payload = extern union {
         fields_ext_idx: u32, // Index into span_with_node_data: (fields.start, fields.len, ext_value)
         unsets_span2_idx: u32, // Index into span2_data: (unsets.start, unsets.len)
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const ExprTag = extern struct {
         name: u32,
         args_start: u32,
         args_len: u32,
+        _reserved: u32 = 0,
     };
 
     pub const ExprClosure = extern struct {
         closure_data_idx: u32, // Index into closure_data
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const ExprLambda = extern struct {
         args_start: u32,
         args_len: u32,
         body: u32,
+        _reserved: u32 = 0,
     };
 
     pub const ExprBinOp = extern struct {
         op: u32,
         lhs: u32,
         rhs: u32,
+        _reserved: u32 = 0,
     };
 
     pub const ExprUnary = extern struct {
         expr: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const ExprBlock = extern struct {
         stmts_start: u32,
         stmts_len: u32,
         final_expr: u32,
+        _reserved: u32 = 0,
     };
 
     pub const ExprIfThenElse = extern struct {
         branches_else_idx: u32, // Index into if_data
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const ExprMatch = extern struct {
         match_data_idx: u32, // Index into match_data: (cond, branches_start, branches_len, exhaustive, is_try_suffix, skip_exhaustiveness)
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const ExprFracF32 = extern struct {
@@ -680,6 +716,7 @@ pub const Payload = extern union {
         has_suffix: bool,
         _padding: [3]u8 = .{ 0, 0, 0 },
         literal_dispatch_plan_plus_one: u32 = 0,
+        _reserved: u32 = 0,
     };
 
     pub const ExprFracF64 = extern struct {
@@ -704,35 +741,41 @@ pub const Payload = extern union {
         has_suffix: bool,
         _padding: [3]u8 = .{ 0, 0, 0 },
         literal_dispatch_plan_plus_one: u32 = 0,
+        _reserved: u32 = 0,
     };
 
     pub const ExprNumFromNumeral = extern struct {
         literal_dispatch_plan_plus_one: u32 = 0,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const ExprString = extern struct {
         segments_start: u32,
         segments_len: u32,
         literal_dispatch_plan_plus_one: u32 = 0,
+        _reserved: u32 = 0,
     };
 
     pub const ExprFieldAccess = extern struct {
         receiver: u32,
         segments_start: u32,
         segments_len: u32,
+        _reserved: u32 = 0,
     };
 
     pub const FieldAccessSegment = extern struct {
         name: u32,
         mode: u8,
         _padding: [7]u8 = .{ 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const ExprMethodCall = extern struct {
         receiver: u32,
         method_name: u32,
         method_call_data_idx: u32,
+        _reserved: u32 = 0,
     };
 
     pub const ExprDispatchCall = extern struct {
@@ -753,11 +796,13 @@ pub const Payload = extern union {
         rhs: u32,
         negated: u8,
         _padding: [3]u8 = .{ 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const ExprStructuralHash = extern struct {
         value: u32,
         hasher: u32,
+        _reserved: [2]u32 = .{ 0, 0 },
     };
 
     pub const ExprMethodEq = extern struct {
@@ -772,6 +817,7 @@ pub const Payload = extern union {
         type_dispatch_stmt: u32,
         method_name: u32,
         method_call_data_idx: u32,
+        _reserved: u32 = 0,
     };
 
     pub const ExprTypeDispatchCall = extern struct {
@@ -784,34 +830,40 @@ pub const Payload = extern union {
     pub const ExprHostedLambda = extern struct {
         symbol_name: u32,
         args_span2_idx: u32, // Index into span2_data: (args.start, args.len)
+        _reserved: [2]u32 = .{ 0, 0 },
     };
 
     pub const ExprLowLevel = extern struct {
         op: u32,
         args_body_idx: u32, // Index into span_with_node_data: (args.start, args.len, body)
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const ExprRunLowLevel = extern struct {
         op: u32,
         args_span2_idx: u32, // Index into span2_data: (args.start, args.len)
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const ExprZeroArgumentTag = extern struct {
         zero_arg_tag_idx: u32, // Index into zero_arg_tag_data
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const ExprFor = extern struct {
         patt: u32,
         expr: u32,
         body: u32,
+        _reserved: u32 = 0,
     };
 
     pub const ExprExpect = extern struct {
         body: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// expr_typed_int: typed integer with type name and value in int128_values
@@ -834,12 +886,14 @@ pub const Payload = extern union {
         type_name: u32,
         literal_dispatch_plan_plus_one: u32 = 0,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// expr_string_segment: string segment reference
     pub const ExprStringSegment = extern struct {
         segment_idx: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// expr_nominal: nominal type expression
@@ -847,6 +901,7 @@ pub const Payload = extern union {
         nominal_type_decl: u32,
         backing_expr: u32,
         backing_type: u32,
+        _reserved: u32 = 0,
     };
 
     /// expr_nominal_external: external nominal type
@@ -854,18 +909,21 @@ pub const Payload = extern union {
         module_idx: u32,
         target_node_idx: u32,
         backing_span2_idx: u32, // Index into span2_data: (backing_expr, backing_type)
+        _reserved: u32 = 0,
     };
 
     /// expr_crash: crash expression with message
     pub const ExprCrash = extern struct {
         msg: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// expr_dbg: debug expression
     pub const ExprDbg = extern struct {
         expr: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// expr_expect_err: Err arm of `?` inside a top-level expect
@@ -873,6 +931,7 @@ pub const Payload = extern union {
         expr: u32,
         snippet: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// expr_anno_only: annotation-only expression
@@ -880,6 +939,7 @@ pub const Payload = extern union {
         ident: u32,
         kind: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// expr_derived_method: compiler-derived associated method marker
@@ -887,6 +947,7 @@ pub const Payload = extern union {
         ident: u32,
         kind: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// expr_return: return expression
@@ -894,6 +955,7 @@ pub const Payload = extern union {
         expr: u32,
         lambda: u32,
         context: u32,
+        _reserved: u32 = 0,
     };
 
     // --- Patterns ---
@@ -901,35 +963,41 @@ pub const Payload = extern union {
     pub const PatternIdentifier = extern struct {
         ident: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const PatternAs = extern struct {
         ident: u32,
         pattern: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const PatternAppliedTag = extern struct {
         args_start: u32,
         args_len: u32,
         name: u32,
+        _reserved: u32 = 0,
     };
 
     pub const PatternRecordDestructure = extern struct {
         destructs_start: u32,
         destructs_len: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const PatternList = extern struct {
         pattern_list_data_idx: u32, // Index into pattern_list_data list
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const PatternTuple = extern struct {
         patterns_start: u32,
         patterns_len: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// pattern_num_literal: numeric pattern with value in int128_values
@@ -944,12 +1012,14 @@ pub const Payload = extern union {
         nominal_type_decl: u32,
         backing_pattern: u32,
         backing_type: u32,
+        _reserved: u32 = 0,
     };
 
     pub const PatternNominalExternal = extern struct {
         module_idx: u32,
         target_node_idx: u32,
         backing_span2_idx: u32, // Index into span2_data: (backing_pattern, backing_type)
+        _reserved: u32 = 0,
     };
 
     pub const PatternSmallDecLiteral = extern struct {
@@ -966,38 +1036,45 @@ pub const Payload = extern union {
         has_suffix: bool,
         _padding: [3]u8 = .{ 0, 0, 0 },
         literal_dispatch_plan_plus_one: u32 = 0,
+        _reserved: u32 = 0,
     };
 
     pub const PatternStrLiteral = extern struct {
         literal: u32,
         literal_dispatch_plan_plus_one: u32 = 0,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const PatternNumFromNumeralLiteral = extern struct {
         literal_dispatch_plan_plus_one: u32 = 0,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const PatternStrInterpolation = extern struct {
         data_idx: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const PatternFracF32 = extern struct {
         value: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const PatternFracF64 = extern struct {
         value_lo: u32,
         value_hi: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const PatternMalformed = extern struct {
         diagnostic: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     // --- Type annotations ---
@@ -1006,63 +1083,74 @@ pub const Payload = extern union {
         name: u32,
         args_start: u32,
         type_apply_data_idx: u32, // Index into type_apply_data list
+        _reserved: u32 = 0,
     };
 
     pub const TyTagUnion = extern struct {
         tags_start: u32,
         tags_len: u32,
         ext_plus_one: u32,
+        _reserved: u32 = 0,
     };
 
     pub const TyTag = extern struct {
         name: u32,
         args_start: u32,
         args_len: u32,
+        _reserved: u32 = 0,
     };
 
     pub const TyTuple = extern struct {
         elems_start: u32,
         elems_len: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const TyRecord = extern struct {
         fields_start: u32,
         fields_len: u32,
         ext_plus_one: u32,
+        _reserved: u32 = 0,
     };
 
     pub const TyFn = extern struct {
         args_start: u32,
         args_len: u32,
         fn_info_span2_idx: u32, // Index into span2_data: (effectful, ret_idx)
+        _reserved: u32 = 0,
     };
 
     pub const TyLookup = extern struct {
         name: u32,
         base: u32, // LocalOrExternal.Tag
         base_span2_idx: u32, // Index into span2_data: (value1, value2) - value2=0 for non-external
+        _reserved: u32 = 0,
     };
 
     pub const TyRigidVar = extern struct {
         name: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// ty_rigid_var_lookup: lookup reference to a rigid type variable
     pub const TyRigidVarLookup = extern struct {
         ref: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const TyParens = extern struct {
         anno: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const TyMalformed = extern struct {
         diagnostic: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     // --- Other ---
@@ -1071,28 +1159,33 @@ pub const Payload = extern union {
         name: u32,
         expr: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const RecordUnsetField = extern struct {
         name: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const RecordDestruct = extern struct {
         label: u32,
         ident: u32,
         kind_span2_idx: u32, // Index into span2_data: (kind_tag, pattern_idx)
+        _reserved: u32 = 0,
     };
 
     pub const MatchBranch = extern struct {
         match_branch_idx: u32, // Index into match_branch_data
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const MatchBranchPattern = extern struct {
         pattern: u32,
         degenerate: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const WhereClause = extern struct {
@@ -1105,6 +1198,7 @@ pub const Payload = extern union {
     pub const WhereMalformed = extern struct {
         diagnostic: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// where_alias: a where alias applied to a type variable in a where clause
@@ -1112,17 +1206,20 @@ pub const Payload = extern union {
         var_idx: u32,
         alias_idx: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const Def = extern struct {
         def_data_idx: u32, // Index into def_data
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const LambdaCapture = extern struct {
         name: u32,
         scope_depth: u32,
         pattern_idx: u32,
+        _reserved: u32 = 0,
     };
 
     pub const Annotation = extern struct {
@@ -1136,6 +1233,7 @@ pub const Payload = extern union {
         name_region_span2_idx: u32,
         /// The annotation's boolean properties.
         flags: Flags,
+        _reserved: [3]u8 = .{ 0, 0, 0 },
 
         /// The annotation's boolean properties, packed into one byte.
         ///
@@ -1169,6 +1267,7 @@ pub const Payload = extern union {
     /// Used by: diag_invalid_num_literal, diag_empty_tuple, diag_break_outside_loop, etc.
     pub const DiagEmpty = extern struct {
         _padding: [12]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// Diagnostics with a single identifier.
@@ -1176,6 +1275,7 @@ pub const Payload = extern union {
     pub const DiagSingleIdent = extern struct {
         ident: u32, // @bitCast(Ident.Idx)
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// Diagnostics with a single u32 value (feature ID, count, bool, enum, etc.)
@@ -1183,6 +1283,7 @@ pub const Payload = extern union {
     pub const DiagSingleValue = extern struct {
         value: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// Diagnostics with two identifiers.
@@ -1191,6 +1292,7 @@ pub const Payload = extern union {
         ident1: u32, // @bitCast(Ident.Idx)
         ident2: u32, // @bitCast(Ident.Idx)
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// Diagnostics with three identifiers.
@@ -1199,6 +1301,7 @@ pub const Payload = extern union {
         ident1: u32, // @bitCast(Ident.Idx)
         ident2: u32, // @bitCast(Ident.Idx)
         ident3: u32, // @bitCast(Ident.Idx)
+        _reserved: u32 = 0,
     };
 
     /// Internal builtin type diagnostic with its exact codec family.
@@ -1206,6 +1309,7 @@ pub const Payload = extern union {
         parent_name: u32, // @bitCast(Ident.Idx)
         nested_name: u32, // @bitCast(Ident.Idx)
         kind: u32, // @intFromEnum(Diagnostic.InternalBuiltinTypeKind)
+        _reserved: u32 = 0,
     };
 
     /// Diagnostics with an identifier and inline region offsets.
@@ -1214,6 +1318,7 @@ pub const Payload = extern union {
         ident: u32, // @bitCast(Ident.Idx)
         region_start: u32, // offset
         region_end: u32, // offset
+        _reserved: u32 = 0,
     };
 
     /// Diagnostics with two values plus region stored in span2_data.
@@ -1222,6 +1327,7 @@ pub const Payload = extern union {
         ident1: u32, // @bitCast(Ident.Idx) or value
         ident2: u32, // @bitCast(Ident.Idx) or bool flag
         region_span2_idx: u32, // index into span2_data: (region_start, region_end)
+        _reserved: u32 = 0,
     };
 
     /// Diagnostics with a single identifier plus region stored in span2_data.
@@ -1230,6 +1336,7 @@ pub const Payload = extern union {
         ident: u32, // @bitCast(Ident.Idx)
         region_span2_idx: u32, // index into span2_data: (region_start, region_end)
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// Diagnostics with two enum values.
@@ -1238,12 +1345,14 @@ pub const Payload = extern union {
         enum1: u32, // @intFromEnum
         enum2: u32, // @intFromEnum
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const TypeHeader = extern struct {
         name: u32,
         relative_name: u32,
         packed_args: u32,
+        _reserved: u32 = 0,
     };
 
     pub const TyRecordField = extern struct {
@@ -1252,6 +1361,7 @@ pub const Payload = extern union {
         is_optional: bool = false,
         is_unnamed: bool = false,
         _padding: [2]u8 = .{ 0, 0 },
+        _reserved: u32 = 0,
     };
 
     /// A DEFAULTED record-annotation field (`a : U8 ?? 10`): never optional,
@@ -1261,36 +1371,118 @@ pub const Payload = extern union {
         name: u32,
         ty: u32,
         default_value: u32,
+        _reserved: u32 = 0,
     };
 
     pub const ExposedItem = extern struct {
         name: u32,
         alias: u32,
         is_wildcard: u32,
+        _reserved: u32 = 0,
     };
 
     pub const IfBranch = extern struct {
         cond: u32,
         body: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
     pub const TypeVarSlot = extern struct {
         parent_node_idx: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        _reserved: u32 = 0,
     };
 
-    // Compile-time size verification
+    // Compile-time size and representation verification. `Payload` is an
+    // untagged extern union, so a short active variant would leave its tail
+    // undefined when the whole union is assigned. Every variant therefore
+    // covers every byte explicitly, and every reserved field has a zero
+    // default for ordinary payload literals.
     comptime {
+        @setEvalBranchQuota(100_000);
         std.debug.assert(@sizeOf(Payload) == 16);
-        // Access mode occupies padding that was already present on the segment
-        // payload; flattened field-access paths must not increase the per-node
-        // footprint.
-        std.debug.assert(@sizeOf(FieldAccessSegment) == 12);
-        // anno + where_span2_idx + name_region_span2_idx (3 x u32) + a packed
-        // flags byte, rounded up to the struct's 4-byte alignment. That fills
-        // the Payload union exactly; assert the size so a stray field can't
-        // silently grow it past the union budget.
-        std.debug.assert(@sizeOf(Annotation) == 16);
+        for (@typeInfo(Payload).@"union".fields) |variant| {
+            const Variant = variant.type;
+            std.debug.assert(@typeInfo(Variant) == .@"struct");
+            std.debug.assert(@sizeOf(Variant) == @sizeOf(Payload));
+
+            var next_offset: usize = 0;
+            for (@typeInfo(Variant).@"struct".fields) |field| {
+                std.debug.assert(@offsetOf(Variant, field.name) == next_offset);
+                next_offset += @sizeOf(field.type);
+                if (isPayloadReservedField(field.name)) {
+                    const default = field.defaultValue() orelse
+                        @compileError("Node payload reserved fields require a default");
+                    std.debug.assert(std.meta.eql(default, std.mem.zeroes(field.type)));
+                }
+            }
+            std.debug.assert(next_offset == @sizeOf(Payload));
+        }
     }
 };
+
+fn setPayloadTestSemanticFields(comptime Variant: type, value: *Variant) void {
+    inline for (@typeInfo(Variant).@"struct".fields, 0..) |field, field_index| {
+        if (comptime !isPayloadReservedField(field.name)) {
+            if (comptime field.type == u32) {
+                @field(value.*, field.name) = 0x1020_3000 + @as(u32, @intCast(field_index + 1));
+            } else if (comptime field.type == u8) {
+                @field(value.*, field.name) = 0x5a;
+            } else if (comptime field.type == bool) {
+                @field(value.*, field.name) = true;
+            } else if (comptime field.type == Payload.Annotation.Flags) {
+                @field(value.*, field.name) = .{
+                    .has_where = true,
+                    .mentions_type_var = true,
+                    .introduces_type_var = true,
+                    .contains_underscore = true,
+                    .has_name_region = true,
+                };
+            } else {
+                @compileError("unhandled semantic Node payload test field");
+            }
+        }
+    }
+}
+
+test "Node payload variants deterministically overwrite all sixteen bytes" {
+    @setEvalBranchQuota(100_000);
+    inline for (@typeInfo(Payload).@"union".fields) |field| {
+        const Variant = field.type;
+        var first_variant = std.mem.zeroes(Variant);
+        var second_variant = std.mem.zeroes(Variant);
+        setPayloadTestSemanticFields(Variant, &first_variant);
+        setPayloadTestSemanticFields(Variant, &second_variant);
+
+        var first = @This().init(.malformed);
+        var second = @This().init(.malformed);
+        @memset(std.mem.asBytes(&first.payload), 0xa5);
+        @memset(std.mem.asBytes(&second.payload), 0x5a);
+        first.setPayload(@unionInit(Payload, field.name, first_variant));
+        second.setPayload(@unionInit(Payload, field.name, second_variant));
+
+        try std.testing.expectEqualSlices(
+            u8,
+            std.mem.asBytes(&first.payload),
+            std.mem.asBytes(&second.payload),
+        );
+        try std.testing.expect(std.meta.eql(
+            @field(first.getPayload(), field.name),
+            first_variant,
+        ));
+        try std.testing.expect(std.meta.eql(
+            @field(second.getPayload(), field.name),
+            second_variant,
+        ));
+        inline for (@typeInfo(Variant).@"struct".fields) |variant_field| {
+            if (comptime isPayloadReservedField(variant_field.name)) {
+                const start = @offsetOf(Variant, variant_field.name);
+                const end = start + @sizeOf(variant_field.type);
+                for (std.mem.asBytes(&first.payload)[start..end]) |byte| {
+                    try std.testing.expectEqual(@as(u8, 0), byte);
+                }
+            }
+        }
+    }
+}

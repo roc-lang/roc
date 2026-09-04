@@ -94,7 +94,7 @@ pub fn main(process_init: std.process.Init) !void {
     const builtin_roc_source = try readFileAllocPath(gpa, io, builtin_src_path, max_builtin_bytes);
 
     // Compile Builtin.roc (it's completely self-contained)
-    const builtin_env = try compileModule(
+    const compiled_builtin = try compileModule(
         gpa,
         io,
         "Builtin",
@@ -105,14 +105,16 @@ pub fn main(process_init: std.process.Init) !void {
         null, // try_stmt not available yet (will be found within Builtin)
         null, // str_stmt not available yet (will be found within Builtin)
     );
+    const builtin_env = compiled_builtin.env;
+    var builtin_admission = compiled_builtin.validated_module;
     defer {
+        builtin_admission.deinit();
         builtin_env.deinit();
         gpa.destroy(builtin_env);
         gpa.free(builtin_roc_source);
     }
 
     const builtin_indices = try buildBuiltinIndices(gpa, builtin_env);
-    try installBuiltinNodeIndices(gpa, builtin_env, builtin_indices);
 
     // Create output directories when needed.
     if (std.fs.path.dirname(builtin_bin_path)) |dir| {
@@ -128,13 +130,23 @@ pub fn main(process_init: std.process.Init) !void {
     // Prepare once before baking so the compiler executable can view the static
     // env directly without enabling runtime inserts or finalizing method tables.
     try check.TypedCIR.prepareRuntimeEnv(gpa, builtin_env);
+    try check.Check.validateCleanCacheW6bEligibility(
+        builtin_env,
+        builtin_admission.capability(),
+    );
 
     // Serialize the single Builtin module
     try serializeModuleEnv(gpa, io, builtin_env, builtin_bin_path);
 
     // Publish the type-checked Builtin to a CheckedModuleArtifact and serialize
     // it from the same prepared env that is embedded as Builtin.bin.
-    try serializeBuiltinArtifact(gpa, io, builtin_env, builtin_artifact_path);
+    try serializeBuiltinArtifact(
+        gpa,
+        io,
+        builtin_env,
+        builtin_admission.capability(),
+        builtin_artifact_path,
+    );
 
     // Validate that BuiltinIndices contains all type declarations under Builtin
     // before emitting the typed static data consumed by the compiler executable.
@@ -149,8 +161,10 @@ fn serializeBuiltinArtifact(
     gpa: Allocator,
     io: std.Io,
     builtin_env: *ModuleEnv,
+    validated_module: Check.ValidatedModuleEnv,
     output_path: []const u8,
 ) !void {
+    if (try validated_module.validate() != builtin_env) return error.CorruptArtifact;
     var typed_modules = try check.TypedCIR.Modules.init(gpa, &.{
         .{ .precompiled = builtin_env },
     });
@@ -225,6 +239,11 @@ const ModuleDep = struct {
     env: *const ModuleEnv,
 };
 
+const CompiledModule = struct {
+    env: *ModuleEnv,
+    validated_module: Check.OwnedValidatedModuleEnv,
+};
+
 fn compileModule(
     gpa: Allocator,
     io: std.Io,
@@ -235,7 +254,7 @@ fn compileModule(
     bool_stmt_opt: ?CIR.Statement.Idx,
     try_stmt_opt: ?CIR.Statement.Idx,
     str_stmt_opt: ?CIR.Statement.Idx,
-) !*ModuleEnv {
+) !CompiledModule {
     // This follows the pattern from TestEnv.init() in src/check/test/TestEnv.zig
 
     // 1. Create ModuleEnv
@@ -354,6 +373,7 @@ fn compileModule(
         builtin_ctx.try_stmt = builtin_indices.try_type;
         builtin_ctx.str_stmt = builtin_indices.str_type;
         builtin_ctx.builtin_indices = builtin_indices;
+        try installBuiltinNodeIndices(gpa, module_env, builtin_indices);
     }
 
     // 6. Type check
@@ -375,7 +395,7 @@ fn compileModule(
         gpa,
         &module_env.types,
         module_env,
-        imported_envs.items,
+        .{ .envs = imported_envs.items, .modules = &.{} },
         &module_envs,
         &module_env.store.regions,
         builtin_ctx,
@@ -423,7 +443,10 @@ fn compileModule(
         return error.TypeCheckError;
     }
 
-    return module_env;
+    return .{
+        .env = module_env,
+        .validated_module = try checker.takeValidatedModule(),
+    };
 }
 
 fn serializeModuleEnv(

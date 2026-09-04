@@ -47,6 +47,20 @@ index: SafeList(u32) = .{},
 /// True while this interner owns growable memory; false after deserialize
 /// (memory then points into the serialization buffer and must not be freed/grown).
 supports_inserts: bool = true,
+/// Number of open rollback savepoints. This is runtime-only state and is never
+/// serialized; `u16` uses padding already present in the runtime struct.
+savepoint_depth: u16 = 0,
+
+/// An owned snapshot of the append boundaries and exact probe-table cells.
+/// Savepoints must be closed exactly once and in LIFO order on `owner`.
+pub const Savepoint = struct {
+    allocator: Allocator,
+    owner: *SerialStringInterner,
+    depth: u16,
+    bytes_len: usize,
+    ranges_len: usize,
+    index_cells: []u32,
+};
 
 const initial_index_capacity: usize = 16;
 const Index = InternedBytes.Index(Policy);
@@ -229,6 +243,75 @@ pub fn getText(self: *const SerialStringInterner, id: u32) []const u8 {
     return self.textAt(id);
 }
 
+/// Validate every logical index before a cache consumer calls `getText` or
+/// `lookup`. Relocation validation proves only that the three backing slices
+/// lie in the artifact; it does not prove that range scalars or hash cells are
+/// safe. `expected_text_len` is used by fixed-width identity tables.
+pub fn validateSemanticState(
+    self: *const SerialStringInterner,
+    expected_text_len: ?usize,
+) error{CorruptArtifact}!void {
+    const bytes = self.bytes.items.items;
+    const ranges = self.ranges.items.items;
+    const cells = self.index.items.items;
+
+    var next_start: usize = 0;
+    for (ranges) |range| {
+        const range_start: usize = range.start;
+        const range_len: usize = range.len;
+        if (range_start != next_start or range_len > bytes.len - next_start) {
+            return error.CorruptArtifact;
+        }
+        if (expected_text_len) |expected| {
+            if (range_len != expected) return error.CorruptArtifact;
+        }
+        next_start += range_len;
+    }
+    if (next_start != bytes.len) return error.CorruptArtifact;
+
+    if (ranges.len == 0) {
+        for (cells) |cell| {
+            if (cell != 0) return error.CorruptArtifact;
+        }
+        return;
+    }
+    if (cells.len == 0 or !std.math.isPowerOfTwo(cells.len)) return error.CorruptArtifact;
+
+    var populated: usize = 0;
+    for (cells) |cell| {
+        if (cell == 0) continue;
+        populated += 1;
+        if (@as(usize, cell) > ranges.len) return error.CorruptArtifact;
+    }
+    // Linear probing requires an empty cell to terminate, and one table cell
+    // for every serial id.
+    if (populated != ranges.len or populated >= cells.len) return error.CorruptArtifact;
+
+    // Every candidate id is now proven safe to dereference. Replay the actual
+    // bounded lookup for each serial id and require its first equal-text cell
+    // to name that exact id. Together with the equal occupied/entry counts,
+    // these distinct successful lookups prove a bijection: duplicate cells
+    // imply an omitted id, while duplicate text makes one id resolve to the
+    // other. No separate all-cells occurrence scan is needed.
+    for (ranges, 0..) |range, wanted_id| {
+        const text = bytes[range.start..][0..range.len];
+        const text_hash = InternedBytes.hash(text);
+        var slot: usize = @intCast(text_hash & @as(u64, @intCast(cells.len - 1)));
+        var remaining = cells.len;
+        while (remaining > 0) : (remaining -= 1) {
+            const cell = cells[slot];
+            if (cell == 0) return error.CorruptArtifact;
+            const candidate_id: usize = @as(usize, cell) - 1;
+            const candidate = ranges[candidate_id];
+            if (std.mem.eql(u8, text, bytes[candidate.start..][0..candidate.len])) {
+                if (candidate_id != wanted_id) return error.CorruptArtifact;
+                break;
+            }
+            slot = (slot + 1) & (cells.len - 1);
+        } else return error.CorruptArtifact;
+    }
+}
+
 /// Id encoding for the shared `InternedBytes`: dense serial ids (0, 1, 2, …)
 /// stored via the `ranges` array, with hash-table cells holding `id + 1` (so 0 is
 /// the empty-slot sentinel).
@@ -273,6 +356,69 @@ fn assertSupportsInserts(supports_inserts: bool) void {
         std.debug.panic("SerialStringInterner invariant violated: attempted to insert into frozen interner", .{});
     }
     unreachable;
+}
+
+fn assertSavepointTop(self: *SerialStringInterner, savepoint: *const Savepoint) void {
+    assertSupportsInserts(self.supports_inserts);
+    if (savepoint.owner == self and savepoint.depth != 0 and self.savepoint_depth == savepoint.depth) {
+        return;
+    }
+
+    if (comptime builtin.mode == .Debug) {
+        std.debug.panic("SerialStringInterner invariant violated: savepoints must close in LIFO order on their owning interner", .{});
+    }
+    unreachable;
+}
+
+/// Snapshot the current logical state. Opening a savepoint allocates one exact
+/// copy of the probe table; all inserts while it is open must use the same
+/// allocator that owns this interner.
+pub fn createSavepoint(self: *SerialStringInterner, gpa: Allocator) Allocator.Error!Savepoint {
+    assertSupportsInserts(self.supports_inserts);
+    const depth = std.math.add(u16, self.savepoint_depth, 1) catch return error.OutOfMemory;
+    const index_cells = try gpa.dupe(u32, self.index.items.items);
+
+    self.savepoint_depth = depth;
+    return .{
+        .allocator = gpa,
+        .owner = self,
+        .depth = depth,
+        .bytes_len = self.bytes.items.items.len,
+        .ranges_len = self.ranges.items.items.len,
+        .index_cells = index_cells,
+    };
+}
+
+/// Close the newest savepoint while keeping all mutations made since it opened.
+pub fn commitSavepoint(self: *SerialStringInterner, savepoint: *Savepoint) void {
+    assertSavepointTop(self, savepoint);
+    savepoint.allocator.free(savepoint.index_cells);
+    self.savepoint_depth -= 1;
+    savepoint.* = undefined;
+}
+
+/// Undo every insert since the newest savepoint opened. The durable byte/range
+/// stores are append-only, and the saved table already owns every pre-savepoint
+/// cell, so rollback only shrinks and copies; it never allocates.
+pub fn rollbackToSavepoint(self: *SerialStringInterner, savepoint: *Savepoint) void {
+    assertSavepointTop(self, savepoint);
+    const valid_suffix = savepoint.bytes_len <= self.bytes.items.items.len and
+        savepoint.ranges_len <= self.ranges.items.items.len and
+        savepoint.index_cells.len <= self.index.items.items.len;
+    if (comptime builtin.mode == .Debug) {
+        std.debug.assert(valid_suffix);
+    } else if (!valid_suffix) {
+        unreachable;
+    }
+
+    self.bytes.items.shrinkRetainingCapacity(savepoint.bytes_len);
+    self.ranges.items.shrinkRetainingCapacity(savepoint.ranges_len);
+    self.index.items.shrinkRetainingCapacity(savepoint.index_cells.len);
+    @memcpy(self.index.items.items, savepoint.index_cells);
+
+    savepoint.allocator.free(savepoint.index_cells);
+    self.savepoint_depth -= 1;
+    savepoint.* = undefined;
 }
 
 /// Look up a string's serial id without modifying the interner. Safe on frozen
@@ -372,6 +518,194 @@ test "SerialStringInterner: serial ids, dedup, lookup, getText" {
     try testing.expectEqualStrings("Dict", it.getText(1));
     try testing.expectEqual(@as(?u32, 1), it.lookup("Dict"));
     try testing.expectEqual(@as(?u32, null), it.lookup("Set"));
+}
+
+test "SerialStringInterner semantic validation accepts empty and wrapped collision chains" {
+    const gpa = testing.allocator;
+
+    var default_empty: SerialStringInterner = .{};
+    try default_empty.validateSemanticState(null);
+
+    var initialized_empty = try SerialStringInterner.initCapacity(gpa, 0);
+    defer initialized_empty.deinit(gpa);
+    try initialized_empty.validateSemanticState(null);
+    const empty_text = try initialized_empty.insert(gpa, "");
+    try testing.expectEqualStrings("", initialized_empty.getText(empty_text));
+    try initialized_empty.validateSemanticState(0);
+
+    // Empty stores historically accept any all-zero cell slice, including a
+    // non-power-of-two preallocation, because no lookup can dereference it.
+    var odd_capacity_empty = try SerialStringInterner.initCapacity(gpa, 0);
+    defer odd_capacity_empty.deinit(gpa);
+    odd_capacity_empty.index.items.items.len = 3;
+    try odd_capacity_empty.validateSemanticState(null);
+
+    var interner = try SerialStringInterner.initCapacity(gpa, 8);
+    defer interner.deinit(gpa);
+    const mask = interner.index.items.items.len - 1;
+
+    // Find two distinct real texts with the last table slot as their home.
+    // Inserting only those two forces the second probe to wrap to slot zero.
+    var ids: [2]u32 = undefined;
+    var found: usize = 0;
+    var candidate_number: usize = 0;
+    while (candidate_number < 4096 and found < ids.len) : (candidate_number += 1) {
+        var buffer: [32]u8 = undefined;
+        const text = try std.fmt.bufPrint(&buffer, "wrapped-name-{d}", .{candidate_number});
+        const home: usize = @intCast(InternedBytes.hash(text) & @as(u64, @intCast(mask)));
+        if (home != mask) continue;
+        ids[found] = try interner.insert(gpa, text);
+        found += 1;
+    }
+    try testing.expectEqual(ids.len, found);
+    try testing.expectEqual(ids[0] + 1, interner.index.items.items[mask]);
+    try testing.expectEqual(ids[1] + 1, interner.index.items.items[0]);
+    try interner.validateSemanticState(null);
+}
+
+test "SerialStringInterner semantic validation rejects non-bijective probe tables" {
+    const gpa = testing.allocator;
+
+    // Repeating one exact cell while omitting another preserves the occupied
+    // count but leaves one serial id unable to resolve to itself.
+    {
+        var interner = try SerialStringInterner.initCapacity(gpa, 2);
+        defer interner.deinit(gpa);
+        const first = try interner.insert(gpa, "alpha");
+        const second = try interner.insert(gpa, "bravo");
+        var second_slot: ?usize = null;
+        for (interner.index.items.items, 0..) |cell, slot| {
+            if (cell == second + 1) second_slot = slot;
+        }
+        interner.index.items.items[second_slot orelse return error.TestUnexpectedResult] = first + 1;
+        try testing.expectError(error.CorruptArtifact, interner.validateSemanticState(null));
+    }
+
+    // Two ids with equal text cannot both own the first equal-text probe cell.
+    {
+        var interner = try SerialStringInterner.initCapacity(gpa, 2);
+        defer interner.deinit(gpa);
+        const first = try interner.insert(gpa, "alpha");
+        const second = try interner.insert(gpa, "bravo");
+        const first_range = interner.ranges.items.items[first];
+        const second_range = interner.ranges.items.items[second];
+        @memcpy(
+            interner.bytes.items.items[second_range.start..][0..second_range.len],
+            interner.bytes.items.items[first_range.start..][0..first_range.len],
+        );
+        @memset(interner.index.items.items, 0);
+        const mask = interner.index.items.items.len - 1;
+        const home: usize = @intCast(InternedBytes.hash("alpha") & @as(u64, @intCast(mask)));
+        interner.index.items.items[home] = first + 1;
+        interner.index.items.items[(home + 1) & mask] = second + 1;
+        try testing.expectError(error.CorruptArtifact, interner.validateSemanticState(null));
+    }
+
+    // A valid id placed beyond an empty home cell violates lookup placement.
+    {
+        var interner = try SerialStringInterner.initCapacity(gpa, 1);
+        defer interner.deinit(gpa);
+        const id = try interner.insert(gpa, "misplaced");
+        const mask = interner.index.items.items.len - 1;
+        const home: usize = @intCast(InternedBytes.hash("misplaced") & @as(u64, @intCast(mask)));
+        try testing.expectEqual(id + 1, interner.index.items.items[home]);
+        interner.index.items.items[home] = 0;
+        interner.index.items.items[(home + 1) & mask] = id + 1;
+        try testing.expectError(error.CorruptArtifact, interner.validateSemanticState(null));
+    }
+}
+
+test "SerialStringInterner semantic validation rejects corrupt ranges and probe tables" {
+    const gpa = testing.allocator;
+    var interner = try SerialStringInterner.initCapacity(gpa, 2);
+    defer interner.deinit(gpa);
+    const first = [_]u8{0x11} ** 32;
+    const second = [_]u8{0x22} ** 32;
+    _ = try interner.insert(gpa, &first);
+    _ = try interner.insert(gpa, &second);
+    try interner.validateSemanticState(32);
+
+    const saved_first_range = interner.ranges.items.items[0];
+    interner.ranges.items.items[0].start = 1;
+    try testing.expectError(error.CorruptArtifact, interner.validateSemanticState(32));
+    interner.ranges.items.items[0] = saved_first_range;
+    interner.ranges.items.items[0].len = 31;
+    try testing.expectError(error.CorruptArtifact, interner.validateSemanticState(32));
+    interner.ranges.items.items[0] = saved_first_range;
+
+    const saved_cells = try gpa.dupe(u32, interner.index.items.items);
+    defer gpa.free(saved_cells);
+    const occupied = for (interner.index.items.items, 0..) |cell, index| {
+        if (cell != 0) break index;
+    } else return error.TestUnexpectedResult;
+    interner.index.items.items[occupied] = @intCast(interner.ranges.items.items.len + 1);
+    try testing.expectError(error.CorruptArtifact, interner.validateSemanticState(32));
+    @memcpy(interner.index.items.items, saved_cells);
+
+    @memset(interner.index.items.items, 1);
+    try testing.expectError(error.CorruptArtifact, interner.validateSemanticState(32));
+    @memcpy(interner.index.items.items, saved_cells);
+    try interner.validateSemanticState(32);
+}
+
+test "SerialStringInterner semantic validation rejects range coverage counts and capacity corruption" {
+    const gpa = testing.allocator;
+
+    {
+        var interner = try SerialStringInterner.initCapacity(gpa, 2);
+        defer interner.deinit(gpa);
+        _ = try interner.insert(gpa, "alpha");
+        _ = try interner.insert(gpa, "bravo");
+        interner.ranges.items.items[1].start += 1;
+        try testing.expectError(error.CorruptArtifact, interner.validateSemanticState(null));
+    }
+    {
+        var interner = try SerialStringInterner.initCapacity(gpa, 1);
+        defer interner.deinit(gpa);
+        _ = try interner.insert(gpa, "alpha");
+        interner.ranges.items.items[0].len = std.math.maxInt(u32);
+        try testing.expectError(error.CorruptArtifact, interner.validateSemanticState(null));
+    }
+    {
+        var interner = try SerialStringInterner.initCapacity(gpa, 1);
+        defer interner.deinit(gpa);
+        _ = try interner.insert(gpa, "alpha");
+        _ = try interner.bytes.append(gpa, 'x');
+        try testing.expectError(error.CorruptArtifact, interner.validateSemanticState(null));
+    }
+    {
+        var interner = try SerialStringInterner.initCapacity(gpa, 2);
+        defer interner.deinit(gpa);
+        _ = try interner.insert(gpa, "alpha");
+        interner.index.items.items.len -= 1;
+        try testing.expectError(error.CorruptArtifact, interner.validateSemanticState(null));
+    }
+    {
+        var interner = try SerialStringInterner.initCapacity(gpa, 1);
+        defer interner.deinit(gpa);
+        _ = try interner.insert(gpa, "alpha");
+        @memset(interner.index.items.items, 1);
+        try testing.expectError(error.CorruptArtifact, interner.validateSemanticState(null));
+    }
+}
+
+test "SerialStringInterner semantic validation handles a large canonical name table" {
+    const gpa = testing.allocator;
+    const name_count = 12_000;
+    var interner = try SerialStringInterner.initCapacity(gpa, name_count);
+    defer interner.deinit(gpa);
+
+    var name_number: usize = 0;
+    while (name_number < name_count) : (name_number += 1) {
+        var buffer: [32]u8 = undefined;
+        const text = try std.fmt.bufPrint(&buffer, "canonical-name-{d}", .{name_number});
+        _ = try interner.insert(gpa, text);
+    }
+
+    try testing.expectEqual(@as(u32, name_count), interner.count());
+    try interner.validateSemanticState(null);
+    try testing.expectEqual(@as(?u32, 0), interner.lookup("canonical-name-0"));
+    try testing.expectEqual(@as(?u32, name_count - 1), interner.lookup("canonical-name-11999"));
 }
 
 test "SerialStringInterner: default-empty interner lazily initializes on first insert" {
@@ -541,4 +875,137 @@ test "SerialStringInterner: relocation fixup count is constant in number of name
     try testing.expectEqual(nonEmptyBasePointers(&rt_small.it), nonEmptyBasePointers(&rt_large.it));
     try testing.expectEqual(@as(usize, 3), nonEmptyBasePointers(&rt_large.it));
     try testing.expectEqualStrings("T3999", rt_large.it.getText(rt_large.it.lookup("T3999").?));
+}
+
+test "SerialStringInterner: savepoints compose nested commit and rollback" {
+    const gpa = testing.allocator;
+    var interner = try SerialStringInterner.initCapacity(gpa, 12);
+    defer interner.deinit(gpa);
+
+    var name_buffer: [16]u8 = undefined;
+    for (0..12) |i| {
+        _ = try interner.insert(gpa, try std.fmt.bufPrint(&name_buffer, "seed-{d}", .{i}));
+    }
+    const baseline_bytes = try gpa.dupe(u8, interner.bytes.items.items);
+    defer gpa.free(baseline_bytes);
+    const baseline_ranges = try gpa.dupe(Range, interner.ranges.items.items);
+    defer gpa.free(baseline_ranges);
+    const baseline_index = try gpa.dupe(u32, interner.index.items.items);
+    defer gpa.free(baseline_index);
+    const baseline_count = interner.count();
+
+    var outer = try interner.createSavepoint(gpa);
+    var outer_open = true;
+    errdefer if (outer_open) interner.rollbackToSavepoint(&outer);
+    _ = try interner.insert(gpa, "outer-discarded");
+    var inner = try interner.createSavepoint(gpa);
+    var inner_open = true;
+    errdefer if (inner_open) interner.rollbackToSavepoint(&inner);
+    _ = try interner.insert(gpa, "inner-committed");
+    interner.commitSavepoint(&inner);
+    inner_open = false;
+    try testing.expect(interner.lookup("inner-committed") != null);
+
+    interner.rollbackToSavepoint(&outer);
+    outer_open = false;
+    try testing.expectEqual(@as(?u32, 0), interner.lookup("seed-0"));
+    try testing.expectEqual(@as(?u32, null), interner.lookup("outer-discarded"));
+    try testing.expectEqual(@as(?u32, null), interner.lookup("inner-committed"));
+    try testing.expectEqual(baseline_count, interner.count());
+    try testing.expectEqualSlices(u8, baseline_bytes, interner.bytes.items.items);
+    try testing.expectEqualSlices(Range, baseline_ranges, interner.ranges.items.items);
+    try testing.expectEqualSlices(u32, baseline_index, interner.index.items.items);
+
+    var committed_outer = try interner.createSavepoint(gpa);
+    var committed_outer_open = true;
+    errdefer if (committed_outer_open) interner.rollbackToSavepoint(&committed_outer);
+    const kept = try interner.insert(gpa, "outer-kept");
+    const kept_bytes = try gpa.dupe(u8, interner.bytes.items.items);
+    defer gpa.free(kept_bytes);
+    const kept_ranges = try gpa.dupe(Range, interner.ranges.items.items);
+    defer gpa.free(kept_ranges);
+    const kept_index = try gpa.dupe(u32, interner.index.items.items);
+    defer gpa.free(kept_index);
+    const kept_count = interner.count();
+
+    var rolled_back_inner = try interner.createSavepoint(gpa);
+    var rolled_back_inner_open = true;
+    errdefer if (rolled_back_inner_open) interner.rollbackToSavepoint(&rolled_back_inner);
+    _ = try interner.insert(gpa, "inner-discarded");
+    interner.rollbackToSavepoint(&rolled_back_inner);
+    rolled_back_inner_open = false;
+    interner.commitSavepoint(&committed_outer);
+    committed_outer_open = false;
+
+    try testing.expectEqual(@as(?u32, 0), interner.lookup("seed-0"));
+    try testing.expectEqual(@as(?u32, kept), interner.lookup("outer-kept"));
+    try testing.expectEqual(@as(?u32, null), interner.lookup("inner-discarded"));
+    try testing.expectEqual(kept_count, interner.count());
+    try testing.expectEqualSlices(u8, kept_bytes, interner.bytes.items.items);
+    try testing.expectEqualSlices(Range, kept_ranges, interner.ranges.items.items);
+    try testing.expectEqualSlices(u32, kept_index, interner.index.items.items);
+    try testing.expectEqual(@as(u16, 0), interner.savepoint_depth);
+    try interner.validateSemanticState(null);
+}
+
+test "SerialStringInterner: savepoint rollback makes induced OOM atomic" {
+    const gpa = testing.allocator;
+    const candidate = [_]u8{'x'} ** 64;
+    var saw_mutation_oom = false;
+    var reached_success = false;
+
+    for (0..8) |fail_index| {
+        var interner = try SerialStringInterner.initCapacity(gpa, 2);
+        _ = try interner.insert(gpa, "a");
+        _ = try interner.insert(gpa, "b");
+
+        const before_bytes = try gpa.dupe(u8, interner.bytes.items.items);
+        defer gpa.free(before_bytes);
+        const before_ranges = try gpa.dupe(Range, interner.ranges.items.items);
+        defer gpa.free(before_ranges);
+        const before_index = try gpa.dupe(u32, interner.index.items.items);
+        defer gpa.free(before_index);
+        const before_count = interner.count();
+
+        var failing = testing.FailingAllocator.init(gpa, .{
+            .fail_index = fail_index,
+            .resize_fail_index = 0,
+        });
+        const failing_gpa = failing.allocator();
+        defer interner.deinit(failing_gpa);
+
+        var savepoint = interner.createSavepoint(failing_gpa) catch |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            try testing.expect(failing.has_induced_failure);
+            try testing.expectEqual(before_count, interner.count());
+            try testing.expectEqualSlices(u8, before_bytes, interner.bytes.items.items);
+            try testing.expectEqualSlices(Range, before_ranges, interner.ranges.items.items);
+            try testing.expectEqualSlices(u32, before_index, interner.index.items.items);
+            try testing.expectEqual(@as(u16, 0), interner.savepoint_depth);
+            continue;
+        };
+
+        const insertion = interner.insert(failing_gpa, &candidate);
+        if (insertion) |_| {
+            interner.rollbackToSavepoint(&savepoint);
+            reached_success = true;
+        } else |err| {
+            interner.rollbackToSavepoint(&savepoint);
+            try testing.expectEqual(error.OutOfMemory, err);
+            try testing.expect(failing.has_induced_failure);
+            saw_mutation_oom = true;
+        }
+
+        try testing.expectEqual(before_count, interner.count());
+        try testing.expectEqualSlices(u8, before_bytes, interner.bytes.items.items);
+        try testing.expectEqualSlices(Range, before_ranges, interner.ranges.items.items);
+        try testing.expectEqualSlices(u32, before_index, interner.index.items.items);
+        try testing.expectEqual(@as(?u32, null), interner.lookup(&candidate));
+        try testing.expectEqual(@as(u16, 0), interner.savepoint_depth);
+        try interner.validateSemanticState(null);
+        if (reached_success) break;
+    }
+
+    try testing.expect(saw_mutation_oom);
+    try testing.expect(reached_success);
 }

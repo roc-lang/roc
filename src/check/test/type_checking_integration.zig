@@ -3937,6 +3937,238 @@ test "check type - bool lambda" {
 
 // if-else
 
+fn expectSingleBranchPlanCardinality(module_env: *const ModuleEnv, expected_contributions: usize) !void {
+    var owner_node: ?u32 = null;
+    var seed_count: usize = 0;
+    var contribution_count: usize = 0;
+    var final_count: usize = 0;
+
+    for (module_env.expected_consumption_plans.items.items) |plan| {
+        const role = plan.decodedRole() orelse return error.TestUnexpectedResult;
+        switch (role) {
+            .branch_seed, .branch_contribution, .branch_final => {
+                if (owner_node) |owner| {
+                    try testing.expectEqual(owner, plan.owner_node);
+                } else {
+                    owner_node = plan.owner_node;
+                }
+                try testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.Outcome.anchored, plan.decodedOutcome().?);
+                switch (role) {
+                    .branch_seed => {
+                        try testing.expectEqual(@as(u32, 0), plan.slot);
+                        try testing.expectEqual(plan.owner_node, plan.site_node);
+                        seed_count += 1;
+                    },
+                    .branch_contribution => contribution_count += 1,
+                    .branch_final => {
+                        try testing.expectEqual(@as(u32, 0), plan.slot);
+                        try testing.expectEqual(plan.owner_node, plan.site_node);
+                        final_count += 1;
+                    },
+                    else => unreachable,
+                }
+            },
+            else => {},
+        }
+    }
+
+    try testing.expect(owner_node != null);
+    try testing.expectEqual(@as(usize, 1), seed_count);
+    try testing.expectEqual(expected_contributions, contribution_count);
+    try testing.expectEqual(@as(usize, 1), final_count);
+
+    for (0..expected_contributions) |expected_slot| {
+        var slot_count: usize = 0;
+        for (module_env.expected_consumption_plans.items.items) |plan| {
+            if (plan.decodedRole() == .branch_contribution and @as(usize, plan.slot) == expected_slot) {
+                slot_count += 1;
+            }
+        }
+        try testing.expectEqual(@as(usize, 1), slot_count);
+    }
+}
+
+fn expectSameExpectedAuthority(
+    expected: ModuleEnv.ExpectedMarkerAuthority,
+    actual: ModuleEnv.ExpectedMarkerAuthority,
+) !void {
+    try testing.expectEqual(expected.kind, actual.kind);
+    switch (expected.decodedKind() orelse return error.TestUnexpectedResult) {
+        .copy_occurrence => {
+            try testing.expectEqual(expected.payload.copy_occurrence.copy_step, actual.payload.copy_occurrence.copy_step);
+            try testing.expectEqual(expected.payload.copy_occurrence.occurrence_offset, actual.payload.copy_occurrence.occurrence_offset);
+            try testing.expectEqual(expected.payload.copy_occurrence.side, actual.payload.copy_occurrence.side);
+        },
+        .producer_root_plan => {
+            try testing.expectEqual(expected.payload.producer_root_plan.plan_index, actual.payload.producer_root_plan.plan_index);
+            try testing.expectEqual(expected.payload.producer_root_plan.raw_var, actual.payload.producer_root_plan.raw_var);
+        },
+        .evidence_free_plan => {
+            try testing.expectEqual(expected.payload.evidence_free_plan.plan_index, actual.payload.evidence_free_plan.plan_index);
+            try testing.expectEqual(expected.payload.evidence_free_plan.raw_var, actual.payload.evidence_free_plan.raw_var);
+        },
+        .relation_plan => {
+            try testing.expectEqual(expected.payload.relation_plan.plan_index, actual.payload.relation_plan.plan_index);
+            try testing.expectEqual(expected.payload.relation_plan.raw_var, actual.payload.relation_plan.raw_var);
+        },
+    }
+}
+
+test "check type - if Expected plans reserve seed, every body, and final" {
+    const source =
+        \\choose : Bool, Bool -> Str
+        \\choose = |first, second| if first "first" else if second "second" else "last"
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try expectSingleBranchPlanCardinality(test_env.module_env, 3);
+}
+
+test "check type - match Expected plans reserve seed, every body, and final" {
+    const source =
+        \\choose : [First, Second, Third] -> Str
+        \\choose = |choice| match choice {
+        \\    First => "first"
+        \\    Second => "second"
+        \\    Third => "third"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try expectSingleBranchPlanCardinality(test_env.module_env, 3);
+}
+
+test "check type - refined branch accumulator retains later pristine Expected body" {
+    const source =
+        \\choose : Bool, Bool -> { x : U32, y ?: U32, z : U32 }
+        \\choose = |outer, inner| if outer {
+        \\    { x: 1, y: 2, z: 3 }
+        \\} else (if inner {
+        \\    { x: 4, y: 5, z: 6 }
+        \\} else {
+        \\    { x: 7, z: 8 }
+        \\})
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+
+    const none = ModuleEnv.ExpectedConsumptionPlan.none;
+    var retained: ?ModuleEnv.ExpectedConsumptionPlan = null;
+    for (test_env.module_env.expected_consumption_plans.items.items) |plan| {
+        if (plan.decodedOutcome() != .retained) continue;
+        try testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.Role.branch_contribution, plan.decodedRole().?);
+        try testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.Reason.branch_body_already_expected, plan.decodedReason().?);
+        try testing.expect(retained == null);
+        retained = plan;
+    }
+    const retained_plan = retained orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(u32, 1), retained_plan.slot);
+    try testing.expectEqual(none, retained_plan.produced_copy_step);
+    try testing.expectEqual(none, retained_plan.produced_occurrence_offset);
+    try testing.expectEqual(none, retained_plan.produced_side);
+
+    var outer_seed: ?ModuleEnv.ExpectedConsumptionPlan = null;
+    var first_outer_contribution: ?ModuleEnv.ExpectedConsumptionPlan = null;
+    var retained_body_seed_count: usize = 0;
+    var outer_plan_count: usize = 0;
+    for (test_env.module_env.expected_consumption_plans.items.items) |plan| {
+        if (plan.owner_node == retained_plan.site_node and plan.decodedRole() == .branch_seed) {
+            retained_body_seed_count += 1;
+        }
+        if (plan.owner_node != retained_plan.owner_node) continue;
+        outer_plan_count += 1;
+        switch (plan.decodedRole() orelse return error.TestUnexpectedResult) {
+            .branch_seed => outer_seed = plan,
+            .branch_contribution => if (plan.slot == 0) {
+                first_outer_contribution = plan;
+            },
+            .branch_final => {},
+            else => return error.TestUnexpectedResult,
+        }
+    }
+    try testing.expectEqual(@as(usize, 4), outer_plan_count);
+    try testing.expectEqual(@as(usize, 1), retained_body_seed_count);
+    const seed_plan = outer_seed orelse return error.TestUnexpectedResult;
+    const first_contribution = first_outer_contribution orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.Outcome.anchored, first_contribution.decodedOutcome().?);
+    try testing.expect(first_contribution.produced_copy_step != none);
+    try expectSameExpectedAuthority(seed_plan.parent_authority, retained_plan.parent_authority);
+}
+
+test "check type - outer branch rejection preserves nested Expected branch plans" {
+    const source =
+        \\choose : Bool, Bool -> U64
+        \\choose = |outer, inner| if outer 1 else {
+        \\    text : Str
+        \\    text = if inner "yes" else "no"
+        \\    text
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Type Mismatch");
+
+    var rejected_outer_owner: ?u32 = null;
+    var rejected_count: usize = 0;
+    for (test_env.module_env.expected_consumption_plans.items.items) |plan| {
+        if (plan.decodedReason() == .branch_expected_compatibility_rejected) {
+            try testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.Role.branch_contribution, plan.decodedRole().?);
+            try testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.Outcome.checked_error, plan.decodedOutcome().?);
+            rejected_outer_owner = plan.owner_node;
+            rejected_count += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), rejected_count);
+
+    const outer_owner = rejected_outer_owner orelse return error.TestUnexpectedResult;
+    var nested_owner: ?u32 = null;
+    for (test_env.module_env.expected_consumption_plans.items.items) |plan| {
+        const role = plan.decodedRole() orelse return error.TestUnexpectedResult;
+        if (role != .branch_seed or plan.owner_node == outer_owner) continue;
+        try testing.expect(nested_owner == null);
+        nested_owner = plan.owner_node;
+    }
+    const inner_owner = nested_owner orelse return error.TestUnexpectedResult;
+
+    var nested_plan_count: usize = 0;
+    for (test_env.module_env.expected_consumption_plans.items.items) |plan| {
+        if (plan.owner_node != inner_owner) continue;
+        nested_plan_count += 1;
+        try testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.Outcome.anchored, plan.decodedOutcome().?);
+    }
+    try testing.expectEqual(@as(usize, 4), nested_plan_count);
+}
+
+test "check type - queued erroneous branch body settles its exact Expected contribution" {
+    const source =
+        \\choose : Bool -> U64
+        \\choose = |flag| if flag 1.U64 else { value: "bad" }.0
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Invalid Tuple Access");
+
+    var queued_body_plan: ?ModuleEnv.ExpectedConsumptionPlan = null;
+    for (test_env.module_env.expected_consumption_plans.items.items) |plan| {
+        if (plan.decodedReason() != .branch_body_error_short_circuit) continue;
+        try testing.expect(queued_body_plan == null);
+        try testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.Role.branch_contribution, plan.decodedRole().?);
+        try testing.expectEqual(ModuleEnv.ExpectedConsumptionPlan.Outcome.checked_error, plan.decodedOutcome().?);
+        try testing.expect(plan.failure_owner.decodedExpectedConsumerRetirement() != null);
+        queued_body_plan = plan;
+    }
+    const body_plan = queued_body_plan orelse return error.TestUnexpectedResult;
+    try testing.expect(body_plan.site_node != body_plan.owner_node);
+}
+
 test "check type - if else" {
     const source =
         \\x : Str
@@ -11165,6 +11397,26 @@ test "check type - dispatch - nested Try interpolation reports recursive dispatc
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
+
+    // Recursive target checking retires this selected receiver to `.err` after
+    // the producer has committed its decision. The immutable nominal/alias
+    // owner tuple must keep contextual selected-root admission independent of
+    // that live descriptor rewrite.
+    var poisoned_selected_receivers: usize = 0;
+    for (test_env.checker.cir.selected_method_decisions.items.items) |decision| {
+        if (decision.decodedState() != .complete or
+            decision.receiver_var >= test_env.checker.types.len())
+        {
+            continue;
+        }
+        try testing.expect(decision.receiver_owner_origin_module != ModuleEnv.SelectedMethodDecision.none);
+        try testing.expect(decision.receiver_owner_source_decl != ModuleEnv.SelectedMethodDecision.none);
+        try testing.expect(decision.provider_method_entry_index != ModuleEnv.SelectedMethodDecision.none);
+        if (test_env.checker.types.resolveVar(@enumFromInt(decision.receiver_var)).desc.content == .err) {
+            poisoned_selected_receivers += 1;
+        }
+    }
+    try testing.expect(poisoned_selected_receivers != 0);
     try test_env.assertOneTypeError("Recursive Dispatch");
 }
 

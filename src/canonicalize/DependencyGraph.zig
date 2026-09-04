@@ -8,8 +8,10 @@
 //! - Regular top-level definitions (e.g., `foo = 42`)
 //! - Associated items (e.g., `TypeName.item_name = 5` from `TypeName := T.{ item_name = 5 }`)
 //!
-//! Associated items are definitions nested under nominal type declarations and have
-//! qualified names. They are stored in `all_defs` alongside regular top-level defs.
+//! Module-visible associated items are definitions nested under nominal type
+//! declarations and have qualified names. They are stored in `all_defs`
+//! alongside regular top-level defs. A staged local associated Def instead has
+//! one lexical statement owner and is deliberately outside this graph.
 
 const std = @import("std");
 const base = @import("base");
@@ -322,7 +324,7 @@ const DemandAnalyzer = struct {
                     const entry = try analyzer.scheme_use_by_node.getOrPut(allocator, @enumFromInt(record.node_idx));
                     if (!entry.found_existing) entry.value_ptr.* = @intCast(record_index);
                 },
-                .nested_function_use, .dispatch_target, .where_method_use => {},
+                .nested_function_use, .dispatch_target, .where_method_use, .inspect_method => {},
             }
         }
 
@@ -1389,13 +1391,19 @@ pub fn collectNameReferences(
             },
             .e_type_method_call => |call| {
                 if (cir.lookupMethodBindingForOwnerConst(call.type_dispatch_stmt, call.method_name)) |binding| {
-                    try out.put(allocator, binding.def_idx, {});
+                    const binding_def = cir.store.getDef(binding.def_idx);
+                    if (pattern_to_def.get(binding_def.pattern)) |scheduled_def| {
+                        if (scheduled_def == binding.def_idx) try out.put(allocator, binding.def_idx, {});
+                    }
                 }
                 for (cir.store.sliceExpr(call.args)) |arg| try scratch_stack.append(allocator, arg);
             },
             .e_type_dispatch_call => |call| {
                 if (cir.lookupMethodBindingForOwnerConst(call.type_dispatch_stmt, call.method_name)) |binding| {
-                    try out.put(allocator, binding.def_idx, {});
+                    const binding_def = cir.store.getDef(binding.def_idx);
+                    if (pattern_to_def.get(binding_def.pattern)) |scheduled_def| {
+                        if (scheduled_def == binding.def_idx) try out.put(allocator, binding.def_idx, {});
+                    }
                 }
                 for (cir.store.sliceExpr(call.args)) |arg| try scratch_stack.append(allocator, arg);
             },

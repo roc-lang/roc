@@ -156,6 +156,48 @@ fn countValueLookupDiagnostics(env: *ModuleEnv, diagnostics: []const CIR.Diagnos
     return count;
 }
 
+fn findSingleDefByName(env: *const ModuleEnv, name: []const u8) TypeDeclTestError!CIR.Def.Idx {
+    var found: ?CIR.Def.Idx = null;
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < env.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (env.store.nodes.get(node_idx).tag != .def) continue;
+
+        const def_idx: CIR.Def.Idx = @enumFromInt(raw_node_idx);
+        const def = env.store.getDef(def_idx);
+        const pattern = env.store.getPattern(def.pattern);
+        if (pattern != .assign) continue;
+        if (!std.mem.eql(u8, env.getIdent(pattern.assign.ident), name)) continue;
+        if (found != null) return error.TestUnexpectedResult;
+        found = def_idx;
+    }
+    return found orelse error.TestUnexpectedResult;
+}
+
+fn expectDefLooksUpPattern(
+    env: *const ModuleEnv,
+    def_name: []const u8,
+    target_pattern: CIR.Pattern.Idx,
+) TypeDeclTestError!void {
+    const def_idx = try findSingleDefByName(env, def_name);
+    const expr = env.store.getExpr(env.store.getDef(def_idx).expr);
+    if (expr != .e_lookup_local) return error.TestUnexpectedResult;
+    try testing.expectEqual(target_pattern, expr.e_lookup_local.pattern_idx);
+}
+
+fn countShadowingDiagnosticsForName(
+    env: *const ModuleEnv,
+    diagnostics: []const CIR.Diagnostic,
+    name: []const u8,
+) usize {
+    var count: usize = 0;
+    for (diagnostics) |diagnostic| {
+        if (diagnostic != .shadowing_warning) continue;
+        if (std.mem.eql(u8, env.getIdent(diagnostic.shadowing_warning.ident), name)) count += 1;
+    }
+    return count;
+}
+
 fn expectSourceDoesNotContain(source: []const u8, needle: []const u8) error{TestUnexpectedResult}!void {
     if (std.mem.find(u8, source, needle)) |_| {
         std.debug.print("Source still contains forbidden canonicalization structure: {s}\n", .{needle});
@@ -387,6 +429,102 @@ test "block-local associated value lookup resolves through the visible local own
         fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) TypeDeclTestError!void {
             try testing.expectEqual(@as(usize, 0), countRedeclarationDiagnostics(diagnostics));
             try testing.expectEqual(@as(usize, 0), countUndeclaredTypeDiagnostics(diagnostics));
+        }
+    }.check);
+}
+
+test "declaration-first local annotation-only associated aliases share one staged pattern" {
+    const source =
+        \\main! = |_| {
+        \\    Outer := [Outer].{
+        \\        Inner := [Inner].{
+        \\            missing : a -> a
+        \\            bare = missing
+        \\            type_qualified = Inner.missing
+        \\            fully_qualified = Outer.Inner.missing
+        \\        }
+        \\    }
+        \\    {}
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) TypeDeclTestError!void {
+            try testing.expectEqual(@as(usize, 0), diagnostics.len);
+
+            const annotation_def_idx = try findSingleDefByName(env, "Outer.Inner.missing");
+            const annotation_def = env.store.getDef(annotation_def_idx);
+            try testing.expect(env.store.getExpr(annotation_def.expr) == .e_anno_only);
+
+            try expectDefLooksUpPattern(env, "Outer.Inner.bare", annotation_def.pattern);
+            try expectDefLooksUpPattern(env, "Outer.Inner.type_qualified", annotation_def.pattern);
+            try expectDefLooksUpPattern(env, "Outer.Inner.fully_qualified", annotation_def.pattern);
+
+            for (env.store.sliceDefs(env.all_defs)) |def_idx| {
+                try testing.expect(def_idx != annotation_def_idx);
+            }
+        }
+    }.check);
+}
+
+test "forward bare reference to local annotation-only associated item stays out of scope" {
+    const source =
+        \\main! = |_| {
+        \\    T := [T].{
+        \\        before = missing
+        \\        missing : a -> a
+        \\    }
+        \\    {}
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) TypeDeclTestError!void {
+            try testing.expectEqual(@as(usize, 1), diagnostics.len);
+            try testing.expect(diagnostics[0] == .ident_not_in_scope);
+            try testing.expectEqualStrings("missing", env.getIdent(diagnostics[0].ident_not_in_scope.ident));
+
+            const before_def_idx = try findSingleDefByName(env, "T.before");
+            const before_expr = env.store.getExpr(env.store.getDef(before_def_idx).expr);
+            try testing.expect(before_expr == .e_runtime_error);
+            const runtime_diagnostic = env.store.getDiagnostic(before_expr.e_runtime_error.diagnostic);
+            try testing.expect(runtime_diagnostic == .ident_not_in_scope);
+            try testing.expectEqualStrings("missing", env.getIdent(runtime_diagnostic.ident_not_in_scope.ident));
+        }
+    }.check);
+}
+
+test "annotation-only associated items use ordinary duplicate collision policy" {
+    const source =
+        \\main! = |_| {
+        \\    T := [T].{
+        \\        anno_first : U64
+        \\        separator = 0
+        \\        anno_first = 1
+        \\        implemented_first = 2
+        \\        implemented_first : U64
+        \\        ordinary = 3
+        \\        ordinary = 4
+        \\    }
+        \\    {}
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(env: *ModuleEnv, diagnostics: []const CIR.Diagnostic) TypeDeclTestError!void {
+            try testing.expectEqual(@as(usize, 3), diagnostics.len);
+            try testing.expectEqual(@as(usize, 1), countShadowingDiagnosticsForName(env, diagnostics, "anno_first"));
+            try testing.expectEqual(@as(usize, 1), countShadowingDiagnosticsForName(env, diagnostics, "implemented_first"));
+            try testing.expectEqual(@as(usize, 1), countShadowingDiagnosticsForName(env, diagnostics, "ordinary"));
+
+            const annotation_def = env.store.getDef(try findSingleDefByName(env, "T.anno_first"));
+            try testing.expect(env.store.getExpr(annotation_def.expr) == .e_anno_only);
+
+            const implemented_def = env.store.getDef(try findSingleDefByName(env, "T.implemented_first"));
+            try testing.expect(env.store.getExpr(implemented_def.expr) != .e_anno_only);
+
+            const ordinary_def = env.store.getDef(try findSingleDefByName(env, "T.ordinary"));
+            try testing.expect(env.store.getExpr(ordinary_def.expr) != .e_anno_only);
         }
     }.check);
 }

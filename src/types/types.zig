@@ -44,9 +44,18 @@ test {
     // so the `Origin` union dominates the struct. Provenance adds one raw expr
     // index (4B); expect effects live in checker-owned slots because they belong
     // to call occurrences, not copied type constraints. The optional derived-map
-    // payload selection adds its tag, payload index, and optional discriminant
-    // without affecting type identity.
-    try std.testing.expectEqual(88, @sizeOf(StaticDispatchConstraint));
+    // payload selection adds its tag, payload index, and optional discriminant.
+    // Where-method output-row markers add one explicit contract range so that
+    // copied constraints retain their checker-produced widening authority.
+    // W6b's marker-independent observational provenance adds the fixed-width
+    // `ConstraintEvidence { start, len }` range (8B). It is carried through
+    // constraint merges and copies without participating in type identity.
+    try std.testing.expectEqual(112, @sizeOf(StaticDispatchConstraint));
+    try std.testing.expectEqual(8, @sizeOf(ConstraintEvidenceHandle));
+    try std.testing.expectEqual(3, std.enums.values(ConstraintEvidenceHandle.Kind).len);
+    try std.testing.expectEqual(0, @intFromEnum(ConstraintEvidenceHandle.Kind.selected_receiver_anchor));
+    try std.testing.expectEqual(1, @intFromEnum(ConstraintEvidenceHandle.Kind.copied_literal_event));
+    try std.testing.expectEqual(2, @intFromEnum(ConstraintEvidenceHandle.Kind.where_requirement_source));
     // Directed effect dependencies must survive type generalization,
     // instantiation, and cross-module copying, so they live with the function
     // payload rather than in checker-only side state.
@@ -1059,6 +1068,208 @@ pub const InterpolationPartMetadata = struct {
     pub const SafeList = MkSafeList(@This());
 };
 
+/// One guarded semantic step from a where-method signature root to an
+/// implicitly opened tag row. Extension links and transparent alias backings
+/// are omitted; positional steps carry their source arity. Record/tag labels
+/// carry their exact identifier. A nominal's display identifier is retained
+/// for diagnostics, while its semantic identity is origin + source declaration.
+pub const WhereMethodMarkerPathStep = extern struct {
+    kind: u32,
+    index: u32,
+    arity: u32,
+    name: u32,
+    origin_module: u32,
+    source_decl: u32,
+
+    pub const SafeList = MkSafeList(@This());
+
+    pub const Kind = enum(u32) {
+        fn_arg,
+        fn_ret,
+        nominal_arg,
+        tuple_elem,
+        record_field,
+        tag_payload,
+    };
+
+    pub fn kindOrNull(self: @This()) ?Kind {
+        return std.enums.fromInt(Kind, self.kind);
+    }
+};
+
+/// Canonical ordering for producer-authored where-method output positions.
+/// Producer identity, when present, is a separate contract-level tie-breaker.
+/// Nominal display identifiers do not participate: nominal type equality is
+/// its explicit origin + source declaration, independent of local spelling.
+pub fn compareWhereMethodMarkerPathSlices(
+    a_steps: anytype,
+    b_steps: anytype,
+) std.math.Order {
+    const common_len = @min(a_steps.len, b_steps.len);
+    for (a_steps[0..common_len], b_steps[0..common_len]) |a_step, b_step| {
+        inline for (.{ "kind", "index", "arity" }) |field| {
+            const order = std.math.order(@field(a_step, field), @field(b_step, field));
+            if (order != .eq) return order;
+        }
+        if (a_step.kind == @intFromEnum(WhereMethodMarkerPathStep.Kind.nominal_arg)) {
+            inline for (.{ "origin_module", "source_decl" }) |field| {
+                const order = std.math.order(@field(a_step, field), @field(b_step, field));
+                if (order != .eq) return order;
+            }
+        } else {
+            inline for (.{ "name", "origin_module", "source_decl" }) |field| {
+                const order = std.math.order(@field(a_step, field), @field(b_step, field));
+                if (order != .eq) return order;
+            }
+        }
+    }
+    return std.math.order(a_steps.len, b_steps.len);
+}
+
+/// Diagnostic nominal names are not part of path identity, but two semantic
+/// copies of one path must still carry the same canonical declaration name.
+/// Callers use this after semantic equality to reject an arbitrary display
+/// winner during merge/coalescing.
+pub fn whereMethodMarkerNominalNamesMatch(a_steps: anytype, b_steps: anytype) bool {
+    if (a_steps.len != b_steps.len) return false;
+    for (a_steps, b_steps) |a_step, b_step| {
+        if (a_step.kind == @intFromEnum(WhereMethodMarkerPathStep.Kind.nominal_arg) and
+            a_step.name != b_step.name)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// One marker in the constraint-owned widening contract of a where-method
+/// signature. The guarded path is stable across instantiation; cross-module
+/// copying explicitly re-interns label steps. While a local annotation is
+/// being checked, the three producer fields name its exact source occurrence
+/// and `ready` is false. The enclosing scheme boundary records the settled
+/// fact for that producer. Checked-module publication replaces producer refs
+/// by flattened ready facts, represented by all three producer fields being
+/// `none`. Exact row variables belong to per-body-use and selected-target
+/// records, never to this copy-stable contract.
+pub const WhereMethodMarkerContract = extern struct {
+    producer_owner_node: u32,
+    producer_where_node: u32,
+    producer_method_name: u32,
+    position: u32,
+    widened: u32,
+    ready: u32,
+    path_start: u32,
+    path_len: u32,
+
+    pub const SafeList = MkSafeList(@This());
+
+    pub const Position = enum(u32) {
+        direct,
+        try_ok,
+        try_err,
+        nested,
+    };
+
+    pub fn positionOrNull(self: @This()) ?Position {
+        return std.enums.fromInt(Position, self.position);
+    }
+
+    pub fn isWidened(self: @This()) ?bool {
+        return switch (self.widened) {
+            0 => false,
+            1 => true,
+            else => null,
+        };
+    }
+
+    pub fn isReady(self: @This()) ?bool {
+        return switch (self.ready) {
+            0 => false,
+            1 => true,
+            else => null,
+        };
+    }
+
+    pub fn hasProducer(self: @This()) bool {
+        const none = std.math.maxInt(u32);
+        const owner_present = self.producer_owner_node != none;
+        const where_present = self.producer_where_node != none;
+        const name_present = self.producer_method_name != none;
+        if (owner_present != where_present or owner_present != name_present) {
+            std.debug.panic("where-method marker had a partial producer identity", .{});
+        }
+        return owner_present;
+    }
+};
+
+/// One proof-chain edge for a copied where-method marker. `marker_offset`
+/// addresses the destination constraint's local canonical marker range.
+/// `copy_step` identifies the exact producer-authored source-to-destination
+/// occurrence relation in the containing ModuleEnv; the final two fields name
+/// the marker on that step's source occurrence. Import steps start a chain at
+/// an admitted provider, while instantiation steps extend it inside this
+/// module. A cache candidate cannot substitute another same-shaped provider
+/// occurrence without also violating the authenticated copy chain.
+pub const WhereMethodMarkerBasis = extern struct {
+    marker_offset: u32,
+    copy_step: u32,
+    source_constraint_index: u32,
+    source_contract_offset: u32,
+
+    pub const SafeList = MkSafeList(@This());
+};
+
+/// The two parallel certificate ranges carried by one static-dispatch
+/// constraint. Marker offsets in every basis row are relative to `markers`,
+/// so all unions must produce and install these ranges as one value.
+pub const WhereMethodMarkerMetadata = struct {
+    markers: WhereMethodMarkerContract.SafeList.Range,
+    bases: WhereMethodMarkerBasis.SafeList.Range,
+
+    pub fn fromConstraint(constraint: StaticDispatchConstraint) @This() {
+        return .{
+            .markers = constraint.where_method_markers,
+            .bases = constraint.where_method_marker_bases,
+        };
+    }
+};
+
+/// Canonical set of module-local observational evidence handles attached to one
+/// exact static-dispatch constraint occurrence. The tagged backing pool is
+/// owned by `Store`; each producer domain validates its own payload index.
+pub const ConstraintEvidence = extern struct {
+    start: u32 = 0,
+    len: u32 = 0,
+
+    pub const none = ConstraintEvidence{};
+};
+
+/// Closed tag and producer-owned payload index for one constraint fact. These
+/// handles are metadata only: union and dedup carry their canonical set without
+/// changing solver identity or graph structure.
+pub const ConstraintEvidenceHandle = extern struct {
+    kind: u32,
+    index: u32,
+
+    pub const Kind = enum(u32) {
+        selected_receiver_anchor = 0,
+        copied_literal_event = 1,
+        where_requirement_source = 2,
+    };
+
+    pub fn decodedKind(self: @This()) ?Kind {
+        return std.enums.fromInt(Kind, self.kind);
+    }
+
+    pub fn canonicalLessThan(_: void, a: @This(), b: @This()) bool {
+        return a.kind < b.kind or (a.kind == b.kind and a.index < b.index);
+    }
+
+    pub fn eql(a: @This(), b: @This()) bool {
+        return a.kind == b.kind and a.index == b.index;
+    }
+};
+
 /// Represents a static dispatch constraints on a variable
 ///
 /// sort  : List(a) -> List(a) where [a.ord : a -> Ord]
@@ -1091,6 +1302,18 @@ pub const StaticDispatchConstraint = struct {
     /// after instantiation and cross-module copying. It is metadata, not type
     /// identity: canonical type keys and constraint equivalence do not read it.
     interpolation: InterpolationMetadata = .none,
+    /// Producer-authored marker positions for a where-clause callable. This is
+    /// dispatch metadata, excluded from type identity like provenance. It is
+    /// empty on every non-where constraint.
+    where_method_markers: WhereMethodMarkerContract.SafeList.Range = .empty(),
+    /// Immediate-provider facts contributing to `where_method_markers`.
+    /// Entries are constraint-local and must be remapped in lockstep whenever
+    /// marker paths are merged or coalesced.
+    where_method_marker_bases: WhereMethodMarkerBasis.SafeList.Range = .empty(),
+    /// Explicit module-local evidence handles. This observational metadata is
+    /// excluded from type identity and is reset/re-authored at every
+    /// instantiation or cross-module copy boundary.
+    constraint_evidence: ConstraintEvidence = .none,
 
     /// The introducing site of a static dispatch constraint. `intro_expr` is the
     /// raw `CIR.Expr.Idx` of the expression that created the constraint, stored

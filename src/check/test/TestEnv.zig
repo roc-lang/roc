@@ -20,22 +20,24 @@ const report_mod = @import("../report.zig");
 const testing = std.testing;
 // Allocators was removed in Zig 0.16 migration
 
-const compiled_builtins = @import("compiled_builtins");
-
 /// Errors that can occur while constructing or using a check test environment.
-pub const TestEnvError = Allocator.Error || error{ WriteFailed, TestExpectedEqual, TestUnexpectedResult, CorruptEmbeddedBuiltins };
+pub const TestEnvError = Allocator.Error || Check.W6bSemanticValidationError || error{ WriteFailed, TestExpectedEqual, TestUnexpectedResult, CorruptEmbeddedBuiltins };
 
 gpa: std.mem.Allocator,
 module_env: *ModuleEnv,
 parse_ast: *parse.AST,
 can: *Can,
 checker: Check,
+owns_checker: bool = true,
 type_writer: types.TypeWriter,
 
 module_envs: std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
 
 // Static Builtin module view (created per test, cleaned up in deinit)
 builtin_module: builtin_static.BuiltinModuleView,
+/// Immutable capability borrowed from or owned alongside `builtin_module`.
+builtin_validation: Check.ValidatedModuleEnv,
+owned_builtin_validation: ?Check.OwnedValidatedModuleEnv,
 // Whether this TestEnv owns the builtin_module and should deinit it
 owns_builtin_module: bool,
 /// Heap-allocated source buffer owned by this TestEnv (if any)
@@ -51,7 +53,30 @@ const TestEnv = @This();
 /// add that module as an import to this module.
 /// IMPORTANT: This reuses the Builtin module from the imported module to ensure
 /// type variables from auto-imported types (Bool, Try, Str) are shared across modules.
-pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_test_env: *const TestEnv) Allocator.Error!TestEnv {
+pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_test_env: *const TestEnv) TestEnvError!TestEnv {
+    return initWithImportCheckRun(module_name, source, other_module_name, other_test_env, .file);
+}
+
+/// Build a canonical consumer and checker against one admitted explicit import
+/// without consuming its one-shot check boundary. This is reserved for
+/// allocation/lifecycle tests that must observe the first external-cache miss.
+pub fn initUncheckedWithImportForTesting(
+    module_name: []const u8,
+    source: []const u8,
+    other_module_name: []const u8,
+    other_test_env: *const TestEnv,
+) TestEnvError!TestEnv {
+    return initWithImportCheckRun(module_name, source, other_module_name, other_test_env, .unchecked);
+}
+
+fn initWithImportCheckRun(
+    module_name: []const u8,
+    source: []const u8,
+    other_module_name: []const u8,
+    other_test_env: *const TestEnv,
+    check_run: CheckRun,
+) TestEnvError!TestEnv {
+    const compiled_builtins = @import("compiled_builtins");
     const gpa = std.testing.allocator;
 
     const roc_ctx = CoreCtx.testing(gpa, gpa);
@@ -152,9 +177,12 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     // Always include the builtin module for auto-imported types (Bool, Str, etc.)
     var imported_envs = try std.ArrayList(*const ModuleEnv).initCapacity(gpa, 2);
     defer imported_envs.deinit(gpa);
+    var imported_validations = try std.ArrayList(Check.ValidatedModuleEnv).initCapacity(gpa, 2);
+    defer imported_validations.deinit(gpa);
 
     // Add builtin module unconditionally (needed for auto-imported types)
     try imported_envs.append(gpa, other_test_env.builtin_module.env);
+    try imported_validations.append(gpa, other_test_env.builtin_validation);
 
     // Process explicit imports
     const import_count = module_env.imports.imports.items.items.len;
@@ -163,6 +191,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         if (std.mem.eql(u8, import_name, other_module_name)) {
             // Cross-module import - append the other test module's env
             try imported_envs.append(gpa, other_test_env.module_env);
+            try imported_validations.append(gpa, try other_test_env.checker.validatedModule());
         }
     }
 
@@ -175,7 +204,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         gpa,
         &module_env.types,
         module_env,
-        imported_envs.items,
+        .{ .envs = imported_envs.items, .modules = imported_validations.items },
         &module_envs,
         &module_env.store.regions,
         module_builtin_ctx,
@@ -183,8 +212,14 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     checker.fixupTypeWriter();
     errdefer checker.deinit();
 
-    try checker.checkFile();
-    _ = try checker.problems.flushAllPendingStaticExhaustiveness(gpa);
+    switch (check_run) {
+        .unchecked => {},
+        .file => {
+            try checker.checkFile();
+            _ = try checker.problems.flushAllPendingStaticExhaustiveness(gpa);
+        },
+        .repl_with_defs => unreachable,
+    }
 
     var type_writer = try module_env.initTypeWriter();
     errdefer type_writer.deinit();
@@ -198,6 +233,8 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         .type_writer = type_writer,
         .module_envs = module_envs,
         .builtin_module = other_test_env.builtin_module,
+        .builtin_validation = other_test_env.builtin_validation,
+        .owned_builtin_validation = null,
         .owns_builtin_module = false, // Borrowed from other_test_env
     };
 }
@@ -210,6 +247,121 @@ pub fn init(module_name: []const u8, source: []const u8) TestEnvError!TestEnv {
 /// Initialize a source file and mark selected top-level defs as executable
 /// zero-arg roots for checker validation.
 pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, explicit_root_names: []const []const u8) TestEnvError!TestEnv {
+    return initWithCheckRun(module_name, source, explicit_root_names, .file);
+}
+
+/// Initialize a canonicalized file through the REPL-with-definitions checker
+/// boundary, using the named definition's expression as the REPL result.
+pub fn initReplWithDefs(module_name: []const u8, source: []const u8, expr_def_name: []const u8) TestEnvError!TestEnv {
+    return initWithCheckRun(module_name, source, &.{}, .{ .repl_with_defs = expr_def_name });
+}
+
+/// Initialize a checked fixture against an already-admitted Builtin module.
+/// The caller owns the Builtin view and admission capability and must keep both
+/// alive until this TestEnv is deinitialized.
+pub fn initWithAdmittedBuiltinForTesting(
+    module_name: []const u8,
+    source: []const u8,
+    builtin_module: builtin_static.BuiltinModuleView,
+    builtin_validation: Check.ValidatedModuleEnv,
+    builtin_indices: CIR.BuiltinIndices,
+) TestEnvError!TestEnv {
+    return initWithPreparedBuiltin(
+        module_name,
+        source,
+        &.{},
+        .file,
+        builtin_module,
+        builtin_validation,
+        builtin_indices,
+        null,
+        false,
+    );
+}
+
+/// Build a canonical checker fixture without consuming its one-shot check
+/// boundary, borrowing an already-admitted immutable Builtin module. The
+/// caller must keep the Builtin view and admission capability alive until the
+/// returned TestEnv is deinitialized.
+pub fn initUncheckedWithAdmittedBuiltinForTesting(
+    module_name: []const u8,
+    source: []const u8,
+    builtin_module: builtin_static.BuiltinModuleView,
+    builtin_validation: Check.ValidatedModuleEnv,
+    builtin_indices: CIR.BuiltinIndices,
+) TestEnvError!TestEnv {
+    return initWithPreparedBuiltin(
+        module_name,
+        source,
+        &.{},
+        .unchecked,
+        builtin_module,
+        builtin_validation,
+        builtin_indices,
+        null,
+        false,
+    );
+}
+
+/// Build the canonical checker fixture without consuming its one-shot check
+/// boundary. Intended only for allocation/lifecycle tests in Check.zig.
+pub fn initUncheckedForTesting(module_name: []const u8, source: []const u8) TestEnvError!TestEnv {
+    return initWithCheckRun(module_name, source, &.{}, .unchecked);
+}
+
+const CheckRun = union(enum) {
+    unchecked,
+    file,
+    repl_with_defs: []const u8,
+};
+
+fn initWithCheckRun(
+    module_name: []const u8,
+    source: []const u8,
+    explicit_root_names: []const []const u8,
+    check_run: CheckRun,
+) TestEnvError!TestEnv {
+    const compiled_builtins = @import("compiled_builtins");
+    const gpa = std.testing.allocator;
+    const builtin_indices = compiled_builtins.builtinIndices(CIR);
+    var builtin_module = try builtin_static.moduleView(
+        gpa,
+        compiled_builtins.builtin_bin[0..],
+        "Builtin",
+        compiled_builtins.builtin_source,
+    );
+    errdefer builtin_module.deinit();
+    var owned_builtin_validation = try Check.admitBuiltinOwned(
+        gpa,
+        builtin_module.env,
+        builtin_indices,
+    );
+    errdefer owned_builtin_validation.deinit();
+
+    return initWithPreparedBuiltin(
+        module_name,
+        source,
+        explicit_root_names,
+        check_run,
+        builtin_module,
+        owned_builtin_validation.capability(),
+        builtin_indices,
+        owned_builtin_validation,
+        true,
+    );
+}
+
+fn initWithPreparedBuiltin(
+    module_name: []const u8,
+    source: []const u8,
+    explicit_root_names: []const []const u8,
+    check_run: CheckRun,
+    builtin_module: builtin_static.BuiltinModuleView,
+    builtin_validation: Check.ValidatedModuleEnv,
+    builtin_indices: CIR.BuiltinIndices,
+    owned_builtin_validation: ?Check.OwnedValidatedModuleEnv,
+    owns_builtin_module: bool,
+) TestEnvError!TestEnv {
     const gpa = std.testing.allocator;
 
     const roc_ctx = CoreCtx.testing(gpa, gpa);
@@ -224,11 +376,6 @@ pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, 
     errdefer gpa.destroy(can);
 
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
-
-    // Load Builtin module once - Bool, Try, and Str are all types within this module
-    const builtin_indices = compiled_builtins.builtinIndices(CIR);
-    var builtin_module = try builtin_static.moduleView(gpa, compiled_builtins.builtin_bin[0..], "Builtin", compiled_builtins.builtin_source);
-    errdefer builtin_module.deinit();
 
     // Initialize the ModuleEnv with the CommonEnv
     module_env.* = try ModuleEnv.init(gpa, source);
@@ -278,9 +425,12 @@ pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, 
     // Always include the builtin module for auto-imported types (Bool, Str, etc.)
     var imported_envs = try std.ArrayList(*const ModuleEnv).initCapacity(gpa, 2);
     defer imported_envs.deinit(gpa);
+    var imported_validations = try std.ArrayList(Check.ValidatedModuleEnv).initCapacity(gpa, 2);
+    defer imported_validations.deinit(gpa);
 
     // Add builtin module unconditionally (needed for auto-imported types)
     try imported_envs.append(gpa, builtin_module.env);
+    try imported_validations.append(gpa, builtin_validation);
 
     // Resolve imports - map each import to its index in imported_envs
     module_env.imports.clearResolvedModules();
@@ -291,7 +441,7 @@ pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, 
         gpa,
         &module_env.types,
         module_env,
-        imported_envs.items,
+        .{ .envs = imported_envs.items, .modules = imported_validations.items },
         &module_envs,
         &module_env.store.regions,
         module_builtin_ctx,
@@ -308,7 +458,16 @@ pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, 
     }
     errdefer checker.deinit();
 
-    try checker.checkFile();
+    switch (check_run) {
+        .unchecked => {},
+        .file => try checker.checkFile(),
+        .repl_with_defs => |expr_def_name| {
+            const expr_def_idx = can.explicitRootDefByName(expr_def_name) orelse
+                return error.TestUnexpectedResult;
+            const expr_idx = module_env.store.getDef(expr_def_idx).expr;
+            try checker.checkExprReplWithDefs(expr_idx);
+        },
+    }
     _ = try checker.problems.flushAllPendingStaticExhaustiveness(gpa);
 
     var type_writer = try module_env.initTypeWriter();
@@ -323,12 +482,15 @@ pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, 
         .type_writer = type_writer,
         .module_envs = module_envs,
         .builtin_module = builtin_module,
-        .owns_builtin_module = true, // We own this module
+        .builtin_validation = builtin_validation,
+        .owned_builtin_validation = owned_builtin_validation,
+        .owns_builtin_module = owns_builtin_module,
     };
 }
 
 /// Canonicalize a source module without type checking and count module-not-found diagnostics.
 pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const u8, source: []const u8) TestEnvError!usize {
+    const compiled_builtins = @import("compiled_builtins");
     const gpa = std.testing.allocator;
 
     var module_env = try ModuleEnv.init(gpa, source);
@@ -404,7 +566,7 @@ pub fn deinit(self: *TestEnv) void {
     self.gpa.destroy(self.can);
     self.parse_ast.deinit();
 
-    self.checker.deinit();
+    if (self.owns_checker) self.checker.deinit();
     self.type_writer.deinit();
 
     // ModuleEnv.deinit calls self.common.deinit() to clean up CommonEnv's internals
@@ -421,8 +583,18 @@ pub fn deinit(self: *TestEnv) void {
 
     // Clean up loaded Builtin module (only if we own it)
     if (self.owns_builtin_module) {
+        if (self.owned_builtin_validation) |*owned| owned.deinit();
         self.builtin_module.deinit();
     }
+}
+
+/// Transfer the checked session into a coordinator-style deferred publication.
+/// This is test-only ownership plumbing; the returned checker must be deinitialized
+/// by its new owner before this fixture's ModuleEnv is destroyed.
+pub fn takeCheckerForTesting(self: *TestEnv) Check {
+    std.debug.assert(self.owns_checker);
+    self.owns_checker = false;
+    return self.checker;
 }
 
 /// Transfer ownership of the published checked module into a typed-CIR source module.
@@ -781,6 +953,18 @@ pub fn assertCanErrors(self: *TestEnv, expected: []const []const u8) TestEnvErro
     const diagnostics = try self.module_env.getDiagnostics();
     defer self.gpa.free(diagnostics);
 
+    if (diagnostics.len != expected.len) {
+        std.debug.print("canonical diagnostics ({d}):\n", .{diagnostics.len});
+        for (diagnostics, 0..) |diagnostic, index| {
+            var report = try self.module_env.diagnosticToReport(
+                diagnostic,
+                self.gpa,
+                self.module_env.module_name,
+            );
+            defer report.deinit();
+            std.debug.print("  [{d}] {s}\n", .{ index, report.title });
+        }
+    }
     try testing.expectEqual(expected.len, diagnostics.len);
     for (expected, diagnostics) |expected_title, diagnostic| {
         var report = try self.module_env.diagnosticToReport(diagnostic, self.gpa, self.module_env.module_name);

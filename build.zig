@@ -3364,19 +3364,6 @@ pub fn build(b: *std.Build) void {
     roc_modules.lsp_unit.addImport("compiled_builtins", compiled_builtins_module);
     roc_modules.lsp_integration.addImport("compiled_builtins", compiled_builtins_module);
 
-    const check_test_env_module = b.createModule(.{
-        .root_source_file = b.path("src/check/test_env_pkg.zig"),
-    });
-    check_test_env_module.addImport("tracy", roc_modules.tracy);
-    check_test_env_module.addImport("builtins", roc_modules.builtins);
-    check_test_env_module.addImport("collections", roc_modules.collections);
-    check_test_env_module.addImport("base", roc_modules.base);
-    check_test_env_module.addImport("parse", roc_modules.parse);
-    check_test_env_module.addImport("types", roc_modules.types);
-    check_test_env_module.addImport("can", roc_modules.can);
-    check_test_env_module.addImport("reporting", roc_modules.reporting);
-    check_test_env_module.addImport("compiled_builtins", compiled_builtins_module);
-
     // Build wasm32 builtins object at build time so the eval/REPL pipeline can
     // merge real compiled builtins into WASM modules (instead of using host imports).
     const wasm32_resolved_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });

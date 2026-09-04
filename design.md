@@ -1321,6 +1321,17 @@ no reference to a valueless declaration survives checking. Post-check stages
 therefore never see one, and their rule that a procedure use carries a
 function-shaped request node needs no exception for it.
 
+Within an associated-value block, an annotation-only item publishes the same
+three lexical aliases as an implemented item when its declaration is reached:
+the exact unqualified name in the current associated scope, the type-qualified
+name, and the fully-qualified name. Those aliases all name the one staged
+pattern; they never create a second Def or a second checked owner. Ordinary
+modules do not make a later annotation-only declaration forward-visible, so an
+unqualified read which precedes that declaration remains a canonicalization
+error. Alias collision and redeclaration handling is the same closed producer
+path used by implemented associated items rather than a checker-time lookup or
+name scan.
+
 The `Scope.type_bindings` table has one ordinary mutation API for type names.
 It accepts the full scope slice, the target scope index, the introduced name,
 and the incoming binding:
@@ -1462,6 +1473,53 @@ joins whole classes through the same balanced mechanism while explicitly
 adopting the redirect destination's descriptor and checked representative; it
 must not directly graft one storage root beneath another and recreate an
 unbounded chain.
+
+Solver savepoints are stack-compatible and strictly LIFO. Each handle owns its
+exact slot, descriptor, mutation-journal, and auxiliary-pool baselines plus the
+prior nesting depth. Rolling back an inner handle restores only its suffix to
+the outer handle's current state, after which the outer transaction may
+continue. Committing an inner handle does not discard undo information needed
+by a later outer rollback; journal storage is cleared only when the outermost
+handle commits or rolls back. Checker probes nest the same way and snapshot
+every checker-owned proof/cache/worklist pool which can be touched below them.
+A non-LIFO commit or rollback is an invariant violation. In particular, a
+proof-aware copy reserves its durable append-only step id before traversal;
+nested copies may append later ids, while an inner failure can be caught and
+rolled back without invalidating the outer reservation. Success fills the
+reserved row infallibly, and no reserved row may reach terminal rebuild,
+serialization, or admission.
+
+The nominal-declaration table and its sorted `(origin module, statement)`
+index participate in that same Store savepoint. This is required when an
+external-cache first miss copies a nominal application: the cross-module graph
+copy reserves a destination declaration before copying its recursive backing,
+then fills that same declaration after the backing succeeds. A savepoint keeps
+one typed nominal-declaration undo trail. A new declaration records its stable
+append index and exact sorted-index insertion position; an update records the
+exact prior declaration value. Registration preflights the declaration list,
+sorted index, and undo entry before changing any of them. Rollback replays this
+trail in reverse, restoring updates and removing insertions at their authored
+positions, while commit retains an inner suffix until the outermost transaction
+commits. The current savepoint's declaration-length baseline determines whether
+an in-place fill/update must be journaled, so an inner rollback restores an
+outer transaction's reserved declaration without discarding the outer row.
+The outermost commit clears the trail. Allocation failure leaves declaration
+rows, sorted index order, and trail length unchanged, and clone verification
+compares both declaration lists in addition to the union-find stores. No
+nominal registration or fill may bypass this journal while a savepoint is
+active.
+
+A completed publish-if-marker traversal which carried no marker and acquired
+no reference may replace only its own reserved row with a checker-local
+`discarded` tombstone. The tombstone has zero ranges and an all-zero payload;
+no root, cache entry, origin, constraint movement, parent, or child may name
+it. A nested producer which names the reservation therefore forces the owner
+to publish a real support step even when the outer traversal is marker-free.
+Terminal rebuilding proves every tombstone globally unreferenced before
+pruning it and remapping later stable step ids. Serialization and checked-
+module admission reject both `reserved` and `discarded` states, and rollback
+restores the exact reserved-step and proof-pool suffixes rather than leaking a
+partially filled or tombstoned row.
 
 A solver savepoint runs only non-poisoning unification. Successful speculative
 relations may be committed in place, but a mismatch returns without poisoning
@@ -1662,14 +1720,83 @@ converted into a user diagnostic or a module `Failure` value.
 ## Cache Boundary
 
 The checked module cache is the only checked cache boundary in this design.
-Checked module cache entries are trusted compiler-produced cache entries, not
-adversarial inputs. Cache reads validate only the cache header,
-entry-version hash, key, serialized layout, and ordinary binary decoding. They must
-not rerun checked validation, reselect hoisted roots, reconstruct checked data,
-or walk checked expressions to prove that cached checked data is still complete.
-Correctness belongs to the producer path that writes the cache entry, and
-invalidation belongs to the cache key and explicit cache/selection format
-versions.
+Its bytes are untrusted until admission: cache reads validate the header,
+entry-version hash, key, serialized layout, ordinary binary decoding, and each
+explicit checked-data table's stage-owned semantic invariants before any index
+is dereferenced by a consumer. A failed admission is a cache miss and rebuild,
+never repair. Admission does not reselect hoisted roots, reconstruct missing
+checked data, or rerun source checking; completeness checks compare explicit
+producer tables against their explicit owners. Correctness belongs to both the
+producer path that writes the cache entry and the matching semantic admission
+validator, with invalidation governed by the cache key and explicit
+cache/selection format versions.
+
+### Checked Module Admission Authority
+
+A relocated or mutable-deserialized `ModuleEnv` is untrusted. Checked-module
+consumers may receive one only together with an owner-minted admission
+capability that is pointer-bound to that exact environment and its validated
+content identity. Semantic validation itself is allocation-free. Only after the
+local checked-data tables and their contextual import certificates pass does the
+owner allocate the private immutable admission record and publish its opaque
+handle. Allocation or validation failure publishes no authority.
+
+Raw imported-environment arrays never cross a checked-data consumer boundary on
+their own. They are paired position-for-position with admission capabilities,
+and every boundary verifies that each capability names the exact pointer in the
+parallel array. Cache admission additionally receives the distinct fresh
+`canonical_unchecked` request environment as import-resolution authority. The
+cached candidate's import slots and resolved-module redirects must equal that
+fresh mapping exactly; cache-controlled module names are never used to
+reconstruct it. Shared imported environments are immutable and are not
+revalidated through `@constCast` or marked trusted by another worker.
+
+The capability moves with the environment and checked artifact through worker
+results, coordinator module state, cache installation, replacement, and retired
+artifact ownership. Replacement reserves every destination first and moves the
+old and new `(environment, capability, artifact)` tuples atomically, so no
+borrower observes a dangling handle. Cache storage and checked-artifact
+publication require the exact root capability and exact-paired imported
+capabilities; the caller-writable validation bit is never sufficient authority.
+Diagnostic-free cache storage also rejects every explicit checked-error or
+error-suppression certificate.
+
+Each admission record retains one exact borrowed-capability dependency array:
+the producer-ordered direct-import set addressed by CIR resolved-module indexes
+is an exact prefix, followed by the remaining platform and recursively public
+semantic owners in the coordinator-produced order. Environment pointers are
+unique across the full closure; content-identity equality does not collapse two
+distinct environments. The record stores the direct-prefix length.
+Direct-import copy/validation APIs expose only that prefix; contextual
+checked-data admission resolves inherited authority through the complete
+closure. A fresh cache request carries both the direct prefix and full closure
+and proves exact env/cap equality over the prefix, while republish admission
+recovers both views from the already-admitted root's sealed record; neither
+view is reconstructed from names.
+
+The record is immutable throughout the semantic-consumer lifetime.
+Coordinator shutdown is the sole terminal exception: it first joins every
+worker, cancellation-drains owned task and result payloads, and destroys
+deferred checker consumers; then, while every provider record and environment
+is still alive, it severs every retained semantic-dependency edge in one owner-only
+pass. No capability operation is legal after that pass, so environments,
+artifacts, and records may then be destroyed without relying on package-map
+iteration order. A `BuildEnv`-owned Builtin module outlives the coordinator and
+is released only after this complete borrower teardown.
+
+After admission, `prepareRuntimeEnv` is the sole sanctioned runtime-only
+mutation. It may enable runtime identifier insertion, install module-name
+identifiers, and finalize runtime lookup accelerators, but it cannot modify any
+checked certificate, provenance, path, row, outcome, or authorization table.
+Cache hits are validated and consumed, never repaired or rechecked; source
+changes produce a fresh canonical environment.
+
+This gate authenticates the checked tables introduced at this boundary against
+their exact CIR owners and an otherwise-valid checked `TypeStore`. It is not a
+second typechecker and does not attempt to prove an arbitrarily and
+coordinately rewritten solved type graph from untyped source syntax. Evidence
+rows must agree exactly with their retained solved constraints and fresh source
+identity/topology; the retained checked constraint is the signature authority.
 
 `ModuleEnv` contains `CommonEnv.strings`, a `base.StringLiteral.Store`. That
 store is part of the checked module cache data. A cache hit materializes it as a
@@ -1740,6 +1867,17 @@ relation identity, and explicit root requests. Any additional checked tables
 stored in the checked module cache must be deterministic output of those
 checked inputs and the checked modules they name. Such tables are serialized
 data, not new cache-id inputs.
+
+Canonical CIR node payloads have one producer-owned physical representation.
+Every active member of the untagged sixteen-byte `Node.Payload` union occupies
+all sixteen bytes: semantic fields retain their declared offsets, and every
+remaining gap or tail is an explicit zero-default reserved field. A producer
+therefore overwrites the complete payload when it changes the node tag; it does
+not leave inactive union bytes dependent on prior stack or allocator contents.
+Compile-time layout checks cover every union member and reject an implicit gap,
+an implicit tail, or a member whose size differs from the union. Checked-cache
+serialization and immutable retirement snapshots consume those producer bytes
+verbatim rather than masking or reconstructing them.
 
 `module_identity` includes the module's name. Canonicalization output is not
 a function of source bytes alone—a type module's main type takes its name
@@ -1818,9 +1956,10 @@ checked rule before such values may be output.
 When the checker changes what checked data it emits, how hoisted roots are
 selected, or how checked compile-time values are serialized, the checked module
 cache format or the specific checked-data selection version must be bumped. A
-cache hit with a matching key and version is consumed as already-checked output;
-the compiler must not pay an extra pass to rediscover whether the cached output
-is complete for the checked module.
+cache hit with a matching key and version is consumed as already-checked output
+after its allocation-free semantic admission validators prove the serialized
+tables match their explicit owners. The compiler does not rerun source checking
+or rediscover missing facts from solved shapes.
 
 ## Def Checking Order
 
@@ -1879,6 +2018,1191 @@ ordinary full-shape relation owns the diagnostic. This preserves the explicit
 stored-value scheme-use edge, gives nested constructions their declared field
 kinds before siblings meet, and keeps the shared expected graph pristine for
 the owning relation and its error report.
+
+An expected type that can carry attached dispatch, default, or where-clause
+evidence also carries authenticated parent authority: normally an occurrence
+endpoint from an earlier proof-producing copy, or at the finite call-formal
+boundary an exact producer-root plan and raw formal. A copy occurrence names
+the copy-step index, the occurrence offset within that step, and whether the
+raw source or raw destination variable is selected. The selected raw variable
+is exactly the expected variable; equality only after following redirects is
+insufficient. A copy made while checking an aggregate child or seeding a
+branch records the consuming expression node and this exact tagged parent
+authority in its origin. A copy-occurrence parent step strictly precedes the
+new step; a producer-root plan strictly precedes the child plan. Validation
+recursively replays the selected authority. The consumer may neither name
+itself as the parent nor recover a parent by inspecting the settled type graph.
+Annotation materialization uses
+the source root occurrence of its `.type_annotation` copy; a platform
+requirement instance uses that copy's destination root occurrence; default
+field copies, imported and local scheme uses, and nominal declaration or
+backing copies likewise pass forward their exact produced occurrence. An
+expected type may omit this authority only at an explicitly audited producer
+that proves its value cannot contain attached dispatch, default, or
+where-clause evidence. Starting a marker-bearing proof copy from unauthenticated
+expected type is an invariant violation.
+The transient representation makes that choice mandatory with a closed union:
+an exact copy-occurrence endpoint, an exact producer-root plan endpoint
+`{plan_index, raw_var}`, an exact relation-plan endpoint with that same payload
+shape, or a finite evidence-free producer kind. There is no default or
+unspecified state. The producer-root arm authenticates only the finite producer
+occurrence and exact raw variable named by its plan; it does not claim that the
+raw variable's mutable type graph was already copied or frozen. A relation-plan
+arm names an earlier `branch_contribution` whose outcome is `related`; that
+plan row is the durable certificate that its body relation committed, and the
+arm's raw variable is the unchanged accumulator selected by that plan's parent
+authority. It is not a detached graph snapshot. Each evidence-free producer
+asserts its claim over the graph it supplies, and expected aggregate checking
+retains the ordinary marker-free copy behavior for that arm.
+
+Expected consumption is also an exhaustive producer plan, not merely a node
+number stored on a copy origin. For every syntactically eligible consumer and
+slot, the checker records exactly one closed outcome. An anchored outcome binds
+the consumer's exact raw variable, tagged parent authority, and produced
+copy/root occurrence. A related outcome is legal only for a branch contribution
+or final row; it has mandatory parent authority, no reason or failure owner,
+and no produced copy coordinate. Every other non-copy outcome names its finite
+producer-proven reason when its outcome class requires one.
+Aggregate projections, branch accumulators and contributions, record-update
+base/field projections, nominal backings, call formals, and default-field
+checks occupy distinct finite roles. Admission enumerates the eligible CIR
+nodes and slots and proves a bijection between those sites and their plan rows;
+separately, every anchored row and every expected-copy origin are bijective.
+Thus a same-shaped node cannot be substituted for the actual consumer, and
+neither settled type equality nor duplicated unchecked metadata supplies
+authority. A record update first eagerly copies
+its exact base expression under a `.record_update_base { record_expr,
+base_expr }` producer origin, then projects a field occurrence from that
+authenticated destination root; a monomorphic call analogously uses a
+call-formal producer root rather than pretending a SchemeUse occurred.
+An aggregate has one owner projection, plus one plan row for every CIR child
+contribution slot; child rows may deliberately select the same occurrence when
+the expected graph aliases those slots. A branch has three explicit phases:
+the seed copy, one committed plan relation for every body fold, and a final
+relation to the branch owner's raw CIR variable. The seed selects its fresh
+destination. Each successful contribution retains the immediately prior
+accumulator authority as its parent, completes with `related`, and exposes a
+relation-plan authority naming that contribution and the unchanged accumulator
+for the next phase. It produces no support copy. The final row likewise uses
+`related`, retains the last accumulator authority, and produces no endpoint;
+it is terminal and cannot be named as a later relation-plan authority.
+External-type and nominal-opening APIs return the exact copy step and the
+substitution occurrence/witness selected for the backing rather than dropping
+that identity. Every apply or record-builder call has a call-shape plan naming
+the raw call, callee, and argument nodes, its cardinality root, and one exact
+raw formal producer-root plan per function-argument slot; a call precheck
+formal with no independently enumerable CIR relation is not admissible as an
+expected producer. Finally,
+syntax that is eligible for one of these roles but is retired after a checked
+error still emits the role's closed error outcome tied to the exact durable
+rejection. Error recovery cannot make an eligible plan row disappear.
+
+Call-formal authority is published separately for every exact argument slot.
+After the callable shape exposes its raw formal, the per-argument plan has the
+distinct successful `.producer_root` outcome. It owns no parent or produced
+copy endpoint; the plan itself is the authority endpoint
+`{argument_plan_index, raw_formal_var}` and names the mandatory call-root plan
+plus its exact argument slot. The separate call-root cardinality row has the
+benign `.not_projected/.call_shape_ready` outcome and owns no type endpoint or
+whole-function copy relation. Admission authenticates both plans against the
+producer-authored call node, callee, arity, argument CIR node, slot, and exact
+raw formal. This is a finite producer root, not an anchored self-cycle and not
+a claim that the formal's current graph is immutable.
+
+The exact raw formal is authenticated by a separate immutable
+`ExpectedCallFormal` producer ledger, authored in the one call-shape branch
+which publishes the root and argument plans. There is exactly one row for each
+successful call argument plan and none for an unsuccessful call-shape relation;
+a zero-argument call is already completely represented by its call-root
+cardinality plan and therefore owns no formal row. Every row binds the exact
+call owner, root plan, argument plan, exact canonical call-slot token,
+called-via kind (`apply` or `record_builder`), raw callee, selected raw
+callable, argument slot, and raw formal at producer time. A closed shape kind distinguishes an
+`existing_callable` formal from a `fresh_arity_shape` formal. A second closed
+origin tag has exactly three arms: `direct_monomorphic_or_alias`,
+`explicitly_instantiated`, and `fresh_arity_shape`. Direct existing-callable
+rows require raw callee and raw callable identity. Explicitly instantiated
+existing-callable rows retain both distinct raw occurrences without requiring
+a `SchemeUse` (marker-free instantiation is still a real producer).
+Fresh-arity rows retain the exact fresh function-shape variable whose formal
+was selected; that field is canonical `none` in both existing-callable arms.
+Only the three declared shape/origin combinations are legal. A callee which
+was instantiated but still required a fresh arity shape uses the fresh arm;
+the raw callee and selected raw callable still preserve that distinction.
+
+Canonicalization independently authors the complete `ExpectedCallSlotToken`
+stream at `ModuleEnv.addExpr`: one root token plus one token for every source
+argument of each `apply` or `record_builder` call. Every token stores the exact
+call owner, callee/argument node, called-via kind, root/argument role, argument
+slot, and total cardinality. Capacity for the entire group and for the call's
+`NodeStore` span, node, and region rows is reserved before any one of those
+pools changes length. The call span/node/region and its root plus
+source-ordered slot tokens are then appended through infallible
+assume-capacity operations. Allocation failure during any preflight therefore
+leaves all four logical streams byte-for-byte unchanged; capacity growth before
+a later failed preflight is not durable state. The cached checked stream must match the
+fresh canonical request byte-for-byte, so a checked ledger cannot invent,
+delete, reorder, or retarget a token. Checker call-root plans name the unique
+root token, and formal rows name the matching slot token. Calls introduced by
+checker metadata rewrites do not create a second token group.
+This token contract is canonical topology, not proof that checking reached the
+call. A child call can remain live after its enclosing canonical parent is
+rejected; its optional checker relation is then still absent even though its
+call node and complete token group are valid. Token admission accepts that
+canonical state. Canonical token validity alone does not certify a completed
+checked-call relation. Consumers of the existing checked-call snapshot continue
+to require the explicit nonzero relation stamp written by a reached-call
+producer; a token never reconstructs or substitutes for that later publication.
+This phase distinction does not redefine call error-retirement authority.
+
+The three formal origins use closed, independently replayable witnesses. A
+direct existing callable publishes an immutable, otherwise-unused shallow
+function exposure root whose exact function tag, argument range, return, and
+effect-dependency range equal the producer-observed callable descriptor; the
+formal row selects its exact argument slot from that root. An explicitly
+instantiated existing callable uses the actual semantically consumed
+instantiation copy step under a call-specific token origin. Instantiation is
+often performed while checking the callee lookup, before the enclosing call
+branch observes the callable. Local and external lookup producers therefore
+return a closed transient `CalleeInstantiationAuthority` in their checked
+expression outcome: the exact call-root token and callee expression, copy step
+and root occurrence, raw pre-copy source and post-copy destination, and a
+closed source authority. A generalized callee expression instantiated by the
+call branch names that exact expression; a normal local binding names its exact pattern; a
+top-level or block-local predeclared annotation scheme names its exact
+definition/pattern publication; an imported binding names the immutable cached
+cross-module support step which authored that local source. Import-cache reuse
+preserves that support identity instead of pretending each later lookup made a
+second provider copy. A predeclared annotation's orphan-copy step keeps its
+distinct `predeclared_annotation` origin after the regenerated body occurrence
+is transactionally rebased into it. Its source is the exact regenerated body
+occurrence captured by the producer event stream and its destination is the
+immutable predeclared scheme occurrence; it must never be restamped as a
+generic body `type_annotation` step, because the ordinary body materialization
+may publish another same-annotation copy. Marker-free predeclarations publish
+this support eagerly as well. Every local lookup status arm which actually instantiates
+a scheme returns this authority; monomorphic and checked-error arms return
+none. Only an explicitly enumerated,
+semantically transparent callee wrapper may forward that authority; a wrapper
+which selects, merges, or reconstructs a value must consume or terminate it.
+The call producer uses a returned authority as the callable it actually
+consumed and must neither reclassify it as direct nor create another copy. The
+durable formal row retains the call expression's raw callee separately from
+the exact instantiation source and destination, and names the exact
+destination function-argument occurrence/path from that step, including
+marker-free copies, rather than creating a second proof-only copy or relying
+on a `SchemeUse`. Local admission replays a local source through the exact
+lookup pattern scheme and an external source through the exact imported-root
+support publication before accepting the call-specific step. The producer-time
+callee relation is authenticated by exact raw ids and the finite lookup rule;
+admission must not require that the callee and instantiated destination still
+share a final solved root, because later checking or diagnostic poisoning may
+legitimately change final topology. The canonical call-root token, not a formal
+row, is the total owner of its call-specific instantiation step. Thus a
+zero-argument call, rejected call shape, or later-retired call can retain the
+real consumed instantiation with zero formal rows; token-to-step ownership is
+still exact and at most one step may name a token. A fresh arity shape publishes its allocation atomically with
+the token-linked call-shape relation and retains the exact fresh function root,
+argument range, return, and relation-input callable; the formal row selects its
+slot from that publication. Existing exposure roots are ledger-only authority:
+no solver relation may consume or redirect them, and terminal rooting retains
+them solely for admission.
+
+Local admission requires a bijection between canonical call groups and
+call-root plans and between call argument plans, formal rows, and slot tokens;
+it checks exact root/owner/slot/raw-formal equality, bounds, the closed
+called-via/shape/origin legality table, every arm's active/inactive raw
+coordinates, and the selected immutable exposure/copy/allocation witness. It
+never reopens the semantically consumed callable's final solved descriptor to
+infer which formal existed at copy time. Contextual checked-module admission
+byte-compares the complete canonical token stream with the fresh canonical
+request, then replays every formal witness against those admitted tokens.
+Terminal publication roots and
+remaps both plan indexes, canonical-sorts the rows by their full semantic key,
+rejects duplicate or orphan rows, and publishes them
+atomically with the plans. The formal ledger
+participates in checker Probe rollback, terminal failing-allocator snapshots,
+mutable/static serialization, relocation, clean-cache validation, and exact
+empty-state checks. Corruption coverage includes row deletion/duplication,
+call/slot/formal/root retargeting, direct/instantiated/fresh arm swaps,
+called-via swaps, illegal active bytes, later formal mutation, and fresh-context
+token-stream mismatch.
+
+A later aggregate or branch projection carries a closed parent-authority union:
+the existing `{copy_step, occurrence_offset, side}` or an exact
+`{plan_index, raw_var}` tagged as producer-root, relation-plan, or
+evidence-free authority. Its persisted copy origin and its
+Expected-consumption plan encode the same tagged arm when the consumer is
+anchored. For a producer root the child copy's raw source root must equal the
+plan's raw formal exactly; that child copy records the complete topology at the
+time it is actually consumed. For a copy occurrence the selected raw endpoint
+must equal the child source, and the parent step strictly precedes the child.
+For a relation-plan authority, the named plan must be an earlier
+`branch_contribution` with outcome `related`, and the raw variable must equal
+the accumulator selected by that plan's parent authority. In every arm the
+authority plan or step strictly precedes its consumer. The `.anchored` outcome
+is reserved for a real copy from authenticated parent authority and can never
+name itself; `.related` instead records a branch relation without any produced
+copy. Terminal canonicalization roots and remaps every selected copy endpoint
+or plan authority, and admission rejects arm swaps, later-plan or same-shaped
+sibling retargets, plan deletion, mismatched raw variables, and any missing,
+duplicate, or cross-call root/argument plan. No observational identity step is
+published: a monomorphic formal may acquire new topology after call-shape
+publication, so an early identity traversal would be neither a copy nor an
+immutable copy-time snapshot.
+
+Call-formal producer-root authority travels only through the contextual
+Expected channel. Scalar arguments settle through the exact owned relation and
+plan without manufacturing a copy. If an aggregate projection or committed
+branch seed actually consumes that authority, that producer publishes the first
+real child copy with the tagged parent-authority arm and the resulting complete
+copy-time relation. A committed branch contribution instead publishes its
+`related` plan and advances authority through that plan without copying. There
+is no generic expression-frame backup bridge and no durable origin for an
+unused copy. Admission separately checks the scalar, aggregate, and branch
+flows so deleting or inventing a copy cannot substitute one flow for another.
+
+The finite eligibility and cardinality are part of that contract. A nonempty
+list has one aggregate-owner row plus one list-element row per element; every
+tuple and every record literal has one aggregate-owner row plus one row per
+element or supplied field, including the owner row when that child count is
+zero. Empty-list, empty-record, and zero-payload-tag forms do not project and
+are outside this inventory, while a payload-bearing tag has one owner plus one
+row per payload. A record update has one base row even when it supplies no
+fields, then one field row per supplied field. Every `if` or `match` has one
+branch-seed row, one contribution row for each body (including the final
+`else`), and one branch-final row, even when there is no contextual expected
+result. Each nominal expression or nominal pattern has exactly its declaration
+and backing rows. Each apply or record-builder call has one call-root row plus
+one row per exact CIR argument. Each surviving defaulted record-type field has
+one default-field row. Admission derives these counts and raw consumer nodes
+from the exact tagged CIR payload and its bounds-checked append-only side
+tables; the cached payload bytes are not interpreted without those table
+lookups. Later poisoning may put an already completed anchored plan in a
+retirement's erased-consumer range, but it does not rewrite that plan to a
+fabricated failure outcome.
+
+An open expected row may acquire a record field or tag payload only when the
+aggregate skeleton is related to it. Such a newly introduced slot does not
+pretend that the pre-relation parent copy contained a witness, and absence of a
+parent witness is not evidence-free authority. When allocating the fresh
+skeleton child, the checker reserves a finite
+`.aggregate_fresh_shape_child { expected_plans_start, expected_plans_len }`
+support token and records the exact raw allocation before the shape relation
+runs. The nonempty gapless plan range is the exhaustive set of contribution
+slots which share that fresh child (for example, all elements of one list),
+and every row in it names the same raw child, parent endpoint, and produced
+endpoint while retaining its own exact role and slot. A successful
+relation completes that reserved token with a support copy/root occurrence and
+the plan carries the resulting endpoint; a failed relation rolls the token
+back or retires the plan with its exact producer-authored diagnostic or
+rejection event. The relation result may not be ignored; if the language rule
+makes rejection impossible, that invariant is proved at the producer and the
+unreachable failure arm is absent from the durable reason enum. The
+reservation, shape relation, completed proof, and plan row are one transaction.
+Later attachment
+of evidence therefore follows the explicit support occurrence rather than a
+post-relation shape scan, and a missing pre-relation edge can never silently
+select an evidence-free branch.
+The plan row uses an explicit checker-only `reserved` outcome during this
+transaction. It has no legal role/reason/owner combination, and terminal
+publication and cache admission reject every surviving reserved row.
+
+The plan outcome and reason vocabulary is closed and role-specific. Anchored
+rows carry no reason. Related rows also carry no reason or failure owner, are
+legal only for `branch_contribution` and `branch_final`, require parent
+authority, and carry no produced-copy coordinates. The sole evidence-free
+reason is a child projection from an already authenticated producer-proven-free
+parent. Benign non-projection reasons such as an aggregate or branch with no
+expected type remain distinct from shape, arity, opacity, relation, effect, and
+checked-error rejections.
+Aggregate, record-update, branch, nominal, call, and default-field roles each
+have an exhaustive table of the reasons they may produce; a reason from a
+different role is corrupt even when the same solved variables or source region
+are involved. Every rejection or checked-error reason names an exact durable
+error owner from a closed owner union. A missing owner, an owner on a benign
+reason, or an owner kind not admitted for that exact reason is corrupt. Enum
+coverage tests enumerate the complete role/outcome/reason/owner table so adding
+any tag requires an explicit validator case.
+Record-update base and field outcomes use record-update reasons, never the
+aggregate-projection tags used by list, tuple, record-literal, and tag slots; an
+update with no supplied fields still consumes its mandatory base row rather
+than claiming a fictitious no-fields non-projection. A bad base gives the base
+row and every skipped field row distinct finite outcomes. Likewise a malformed
+Expected source arising directly from an annotation or root is distinct from a
+true upstream plan failure for aggregate and branch consumers. This distinction
+is encoded in the reason-to-owner-relation table, not inferred from the final
+error-shaped graph.
+
+In-place runtime-error poisoning cannot itself serve as that authentication:
+it replaces the CIR tag and can erase the child topology which made the node
+an eligible expected consumer. A retirement therefore names its owner with a
+closed `{ expression | pattern, raw_index }` union; expression poisoning and
+pattern failure cannot borrow one another's identity. At the corresponding
+failure boundary the checker publishes an immutable expected-consumer
+retirement row. The checker does not first reduce erroneous consumers to a set
+of node ids: at each failure decision it appends a retirement draft containing
+the exact plan, role, slot, raw owner/child variables, and diagnostic or
+rejection authority. Multiple failures for one owner remain an exhaustive cause set,
+which the rewrite canonicalizes into one gapless range rather than overwriting
+an earlier cause or depending on hash-map iteration order. The row snapshots
+the complete finite pre-failure CIR node and owns that cause range, then binds
+it to the exact resulting expression runtime-error node or failed pattern and
+the exact final diagnostic selected for the failure. Every runtime-error
+rewrite or pattern failure which can retire an eligible owner has exactly one
+such row. Where final CIR cannot distinguish eligible from ineligible
+retirements, the ledger is exhaustive over all retirements and uses a closed
+original-kind/eligibility result rather than omitting the ineligible case; an
+ineligible result is legal only after exhaustive interpretation of the
+original node proves that it owns no expected-consumer slot. A retirement's
+consumer range is the exhaustive set of plans whose own original consumer
+topology that failure erased, including a plan which had already completed
+successfully before an unrelated later failure poisoned its owner. Same-node
+failure reasons must name that retirement and appear exactly once in its
+range.
+
+A separate closed set of upstream-error reasons may instead name a prior
+retirement which caused an otherwise intact downstream consumer to skip a
+projection. Such a causal reference does not claim membership in the upstream
+node's consumer range: admission replays it through the plan's explicit parent
+Expected endpoint and a mandatory `failure_cause_plan_index`. The named plan
+must be strictly earlier, must produce or select that exact endpoint, and must
+have a validated causal path to the cited retirement; two plans which share an
+endpoint are not interchangeable. The relation is acyclic and permits fanout
+to several downstream plans. A direct annotation or root error with no
+upstream consumer plan uses its own closed direct-error reason and owner rather
+than inventing a causal plan. Treating a same-node retirement
+as upstream, or an unrelated upstream retirement as same-node, is corrupt.
+Terminal canonicalization orders plans topologically by causal-plan edges and
+by every parent-authority arm which names a plan, including relation-plan
+edges. It uses the complete stable semantic consumer key as the tie-break among
+currently ready rows. It does not sort lexicographically first and then hope
+that every dependency points backward. The resulting durable index order is
+itself the allocation-free acyclicity certificate checked by admission.
+Call-root plans have no causal predecessor or plan-valued parent authority, and
+the stable semantic key begins with their raw owner node. Consequently their
+subsequence in that durable order is strictly owner-increasing. Admission
+validates that derived order, then traverses it together with the independently
+owner-ordered call-token groups and the full-key-sorted `ExpectedCallFormal`
+rows. Each root owns the exact contiguous formal slots `0..arity`; every formal
+reciprocally names its exact interleaved argument plan. This is an
+allocation-free traversal of the existing producer authority, not an inferred
+index or a relaxed form of the call-plan bijection.
+Admission therefore validates a bijection among final failed owner identities,
+retirement rows, and only the plans whose own topology was erased, while causal
+references have their separate exhaustive relation. A diagnostic index or
+source region alone is never evidence of the erased consumer shape.
+
+When one retirement is caused by several independently authored failures, the
+retirement owns a canonical gapless range of
+`ExpectedRetirementFailure { failure_index }` rows. This range is the complete
+failure cause set; it is never reduced to one nominated failure. Its rows are
+sorted by the stable failure semantic key, contain no duplicate failure index,
+and every referenced failure is an earlier predecessor in the combined
+failure/retirement causal DAG. The retirement's final diagnostic remains a
+separate field and does not stand in for this range. Terminal rebuilding,
+admission, cache serialization, Probe rollback, and allocation-failure rollback
+all treat the range and its pool as one owned partition.
+
+Expression checking carries suppression authority by value. Its typed outcome
+contains the ordinary effect bit together with either `established` or
+`suppressed(CauseOwner)`. Every expression wrapper, stored-value wrapper, and
+iterative expression frame preserves that exact cause. A child which becomes
+erroneous reserves or cites its exact retirement before returning suppression;
+a unifier's bare `suppressed_by_error` result is insufficient without that
+producer cause. Aggregate-child relation publication consumes this outcome
+directly and therefore never infers a cause from a final `.err` descriptor or
+from the absence of a diagnostic.
+
+There is also a finite direct-source-retirement relation for a preexisting
+malformed child/default or a direct annotation/root error which has no earlier
+consumer plan. Its typed cause names the exact retirement, diagnostic, or
+provider failure while its independently tagged subject authority names the
+source Expected endpoint or direct producer phase. This relation cannot be
+substituted for same-owner membership or for a true upstream causal edge.
+Because canonicalization may
+already have produced an indistinguishable runtime-error node before checking
+begins, the checker first records an exact baseline row for every such node,
+with its unchanged malformed payload and an empty consumer range. The closed
+retirement kind distinguishes this `preexisting_runtime_error` case from
+checker rewrites with or without expected consumers. Consequently every final
+expression runtime-error node belongs to exactly one baseline or rewrite row;
+deleting a checker retirement cannot make it appear preexisting.
+
+The raw `malformed` node tag is shared by expressions, patterns, statements,
+and type syntax, so a retirement's claimed owner kind is not authority for that
+namespace. Canonicalization therefore publishes one immutable
+`MalformedExpressionPublication` at the typed `pushMalformed(Expr.Idx, ...)`
+or `pushRuntimeErrorExpr(Expr.Idx, ...)` call itself. The rows are complete,
+strictly node-ordered, and name the exact malformed expression node and its
+diagnostic. Checked-cache admission compares the whole publication stream with
+the freshly canonicalized module before a preexisting-runtime-error retirement
+may cite one of its rows. Checker rewrites need no such row: their retirement
+snapshot retains the original non-malformed `expr_*` tag, which independently
+establishes the expression namespace. Neither a scan of final malformed nodes
+nor a self-asserted retirement owner kind can substitute for this publication.
+
+The same shared-tag rule applies to a direct malformed-annotation failure.
+Canonicalization publishes a separate complete, strictly node-ordered
+`MalformedTypeAnnotationPublication` stream only at the typed
+`pushMalformed(TypeAnno.Idx, ...)` producer. Each row names the exact annotation
+node and diagnostic. Checked-cache admission compares this entire stream with
+fresh canonicalization, and an `annotation_malformed_type` failure must cite a
+matching row. An arbitrary same-numbered malformed statement, pattern, or
+expression is therefore not annotation authority; checking never reconstructs
+the namespace from the shared final node tag.
+
+An Annotation root and body expression alone do not establish which typed
+binding occurrence canonicalization attached. At the exact canonicalization
+edge which attaches an annotation to a real checked body, canonicalization
+therefore publishes one `BodyAnnotationAttachment` with exactly the closed
+attachment kind (`top_level_def`, `local_decl`, or `local_var`), the typed
+Def-or-statement attachment node, the containing `Annotation` root, and the
+body `Expr`. There is exactly one row for every annotated Def, local
+declaration, and initialized local variable whose body checking can generate
+an annotation failure. An uninitialized local variable has no body and owns no
+row. A temporary staged `Def` used while canonicalizing a local associated
+value or an annotation-only block declaration is also nonpublishing: it is not
+a member of `all_defs`, and its eventual local declaration statement is the
+sole attachment. Rows are unique and in
+strict `(attachment node, attachment kind)` order. A block-local associated
+value which fills an earlier unannotated placeholder inserts its row by that
+key at the typed replacement edge; unrelated raw statement replacement edges
+are type-declaration placeholders and cannot publish it. A
+canonicalization-time Def expression replacement retargets the row at that
+exact mutation edge. The ledger participates in ordinary initialization,
+deinitialization, relocation, mutable and static serialization, and copied
+deserialization; no later stage reconstructs it by scanning definitions.
+
+The same row is also the local staged-body lookup authority. A local lookup is
+classified as annotation-only or as a generated-derived marker only when its
+exact pattern belongs to one authenticated `local_decl` attachment and that
+row's exact canonical body has the corresponding closed `e_anno_only` or
+`e_derived_method` tag. Both judgments share one coordinate replay. This
+consumes the producer-authored attachment/statement coordinates; it does not
+put the staged construction Def back in `all_defs`, scan names, or infer from
+solved type shape. The statement therefore remains the single checking,
+dependency, and scheme-publication boundary while declaration-site and
+use-site diagnostics remain distinct and exact.
+
+Likewise, the module-level name-reference graph adds a statically resolved
+type-method binding only when the binding's exact Def is a member of
+`all_defs`. Its binder-to-Def inventory is the membership authority. A staged
+local associated Def is checked in lexical statement order and is never an SCC
+node or edge; a qualified call may still retain its exact staged Def coordinate
+for local statement checking and dispatch. The graph must not follow that
+coordinate as though it were a module Def.
+
+Canonicalization exposes allocation-free exact structural membership for this
+ledger. A row first replays its attachment kind and node against the current
+Def or statement payload and proves the exact Annotation root and body Expr.
+A canonical TypeAnno syntax occurrence is appended after each of its structural
+children, and each child occurrence has at most one structural parent.
+Consequently every structural child index is strictly less than its parent
+index. A `rigid_var_lookup` or named local/external lookup occurrence obeys
+those syntax-tree rules like every other child; only the reference coordinate
+inside its payload is an identity edge which traversal does not follow.
+Canonical publication and admission follow those producer rules with a
+stack-free, allocation-free monotonic parent ascent: they bound and tag every
+node and span before reading it, and malformed, non-descending, or cyclic
+coordinates cannot manufacture an ownership path. This membership query proves
+only the requested path; the producer invariant makes it complete for
+canonical trees, while the query does not claim to audit every unrelated
+duplicate edge in a corrupt forest.
+A TypeAnno site is a member only when it is reached by structural child edges
+from the Annotation's main type tree or from a where-method/where-alias tree
+whose canonical `owned_by_annotation` receiver belongs to the exact
+producer-authored reachability closure. That closure is seeded by rigid
+introductions in the main tree and extended to locally
+declared rigids referenced by an already reachable owner's method arguments,
+method return, or alias application. The checker consumes this canonical owner
+fact and does not reconstruct the closure from solved types. The written
+where-clause node span is strict source order, and every owner's clause list is
+a strict subsequence of that span; the deterministic first-malformed selection
+replays this authored order rather than accepting a permuted owner list;
+the reference coordinate in a `rigid_var_lookup` payload is an identity edge
+and is never followed as a child. A WhereClause site is a member only when its
+node occurs in the exact written
+`Annotation.where` span. This second predicate deliberately includes malformed
+clauses and clauses whose receiver is not introduced, because those nodes are
+the direct producers of their own finite failure kinds. Neither predicate
+accepts a same-numbered node from another typed CIR namespace or an unrelated
+annotation.
+
+For every method or alias clause that canonicalization actually lists in one
+`WhereClauseOwner` row, that row's rigid is also the exact normalized receiver
+owner: a direct rigid receiver names itself, while a `rigid_var_lookup`
+receiver names its payload reference. Admission validates this inverse for
+every listed clause before consulting `owned_by_annotation`. Alias application
+arguments can extend the producer's reachability closure, but they never
+select the clause's owner. This is an inverse for listed rows only: it does not
+claim that every written clause is listed, that malformed or non-rigid
+receivers have an owner row, or that the rows form a globally unique partition.
+The lookup payload reference remains an identity edge, not a structural child.
+
+The typed malformed leaf alone additionally does not establish which source
+annotation or checked body owns it. At the same canonicalization attachment
+edge, canonicalization publishes one
+`BodyAnnotationMalformedTypePublication` for every distinct malformed
+type-annotation leaf owned by that annotation. Its closed attachment kind is
+exactly `top_level_def`, `local_decl`, or `local_var`; the row names the typed
+Def-or-statement attachment node, the containing `Annotation` root, the exact
+body `Expr`, and the cited `MalformedTypeAnnotationPublication`. Enumeration is
+complete over the annotation's main type tree and over every owned where-clause
+type tree: a method receiver, arguments, and return, or an alias receiver and
+alias application. A malformed where-clause node is a different failure kind
+and contributes no malformed-type row. Structural type children are followed
+exactly, while a `rigid_var_lookup` identity reference is not a child edge.
+Rows for one attachment are unique and ordered by malformed-type publication
+index, and attachments are published in canonical CIR node order. A
+block-local associated value which fills a previously emitted unannotated
+forward-declaration statement publishes at that exact typed replacement edge,
+inserting its rows by the existing attachment-node key. All other raw statement
+replacement edges are type-declaration placeholders and cannot publish this
+body-annotation relation. The temporary `Def` used while canonicalizing a local
+associated value is explicitly nonpublishing: it is not a member of `all_defs`,
+and its eventual local declaration statement is the sole body-annotation
+attachment. A
+canonicalization-time Def expression replacement retargets the already
+published rows at that exact mutation edge; no later stage scans definitions to
+repair stale owners. This leaf-specific ledger remains the stronger authority
+for `annotation_malformed_type`; every other direct annotation phase cites the
+single generic body-attachment row and its appropriate exact TypeAnno or
+WhereClause structural site.
+
+An `annotation_malformed_type` failure's direct local-record index selects this
+joined publication rather than the leaf publication alone. Admission compares
+the complete joined stream with fresh canonicalization, replays the closed
+attachment variant against the exact Def or statement payload, and then checks
+the named Annotation root, body expression, typed leaf publication, diagnostic,
+and raw owner/subject variables. In particular, forwarding an Expected
+annotation through a closure may change where its type is materialized but does
+not change the authenticated outer body expression which owns a possible
+retirement. If that body was already a canonicalization-authored runtime error,
+annotation generation is suppressed by its exact baseline retirement: it does
+not reserve a checker rewrite, does not attach a failure to the baseline's empty
+cause range, and does not relabel the preexisting error as an annotation-caused
+rewrite.
+
+A malformed name in a where-alias clause is itself one of those malformed
+type-annotation leaves. It is the clause's alias target, not one of the alias
+application arguments, so the rigid-owner producer publishes the existing
+`annotation_malformed_type` result at the exact failed alias-resolution branch
+before poisoning the owning rigid. The unchanged `GenTypeAnnoCtx` selects the
+same body, suppression, or nonpublishing mode as ordinary annotation-tree
+traversal. This publication proves only the malformed alias leaf and its exact
+body attachment; it does not broadcast the failure to every function formal or
+pattern merely because the annotation root is erroneous. Any later operand
+retirement must separately authenticate the exact receiver/formal/binder path
+which consumed this failure.
+
+The first operand-propagation arm for that failure is deliberately finite. A
+body annotation remembers the exact published `ExpectedFailure` index returned
+by each malformed where-alias target. For one constrained rigid with several
+malformed aliases, the source-ordered first malformed-alias clause for that
+rigid is the deterministic typed cause; the other failures remain independent
+members of the annotation retirement's complete cause range. When that rigid
+is exactly the introducing occurrence of one direct function formal, and the
+corresponding lambda argument is a direct assignment pattern, the checker may
+carry that exact source to local lookups of that pattern, including uses
+captured by a nested closure. It may not carry it to another formal or another
+lambda's parameter. A repeated formal occurrence represented by
+`rigid_var_lookup`, or a nested tuple/record/tag binder, requires a separately
+declared canonical-identity or source-type-child to pattern-child authority and
+is outside this first arm. An erroneous solved descriptor or dense error bit
+never selects either case.
+
+That transport becomes durable at the lookup which consumes it. A
+`direct_binder_lookup_checked_error` `ExpectedFailure` owns the exact lookup
+expression and direct pattern, stores the annotation formal and slot, and uses
+the direct `SubjectAuthority` local-record word to name the exact earlier
+malformed-annotation `ExpectedFailure`. Its cause names that failure's owning
+annotation retirement. Admission requires the selected failure to precede the
+lookup failure, occur in the annotation retirement's complete cause range, and
+replay the malformed where-alias leaf, `WhereClauseOwner` rigid, annotation
+function formal, and the exact lambda argument/direct pattern. A capture-free
+annotation owner is the lambda itself, so admission reads its original lambda
+payload from the retirement snapshot. A captured owner is a closure, so its
+retirement snapshot names the separately live lambda child. The lookup
+simultaneously reserves an ineligible checker retirement; the central rewrite
+completes its immutable original
+`e_lookup_local` payload before erasing the pattern reference. Annotation and
+lookup are distinct closed producers of this shared ineligible-retirement
+mechanism, and neither may borrow the other's source rule.
+
+The malformed-alias failure, its pending annotation retirement and draft, and
+the transient direct-formal source are one logical publication. The producer
+reserves source capacity before any durable append, so allocation failure
+publishes either the complete tuple or none of it; revisiting the same source
+reuses the exact indices. Direct-binder lookup publication likewise commits its
+lookup retirement, failure, and draft as one suffix transaction, and an
+enclosing checker `Probe` owns that whole suffix. Completing the lookup
+retirement first publishes its complete singleton failure-reference range;
+only after every fallible append succeeds may it stamp the original lookup
+snapshot and diagnostic, consume the draft, and erase the expression. An
+allocation failure therefore leaves the original lookup live and the same
+incomplete tuple available for an exact retry, never a half-completed durable
+retirement.
+
+Contextual replay of this diagnostic-bearing recovery arm has an explicit
+private lifecycle mode. The cold `produced` pass replays the complete local
+failure/retirement inverse and the producer-authored pre-rewrite snapshots; it
+does not compare those snapshots with the same CIR after its lookup and lambda
+owners have been rewritten. An independent `fresh_canonical` pass additionally
+compares both original snapshots and the complete annotation-formal/lambda-
+pattern path with the distinct canonical request. The `recovery_forbidden`
+mode used by cache republishing and Builtin admission cannot carry this arm:
+a scalar-only preflight rejects malformed-type and body-malformed publications
+before any deep candidate read, and the complete clean-cache gate remains after
+local validation. The mode changes only this source-authentication step;
+import, provider, and all other contextual checks remain mandatory in every
+mode.
+
+An annotated binding lookup used as a call callee has a separate finite
+retirement path. Checking a predeclared recursive callee may precede checking
+the referenced body, so the call must not retroactively change that lookup's
+typed outcome or borrow a future body failure. Once all binding bodies have
+checked, either the erroneous-value-use rewrite or the expression-owner rewrite
+may be the first mutation edge which still has the live `e_lookup_local`
+payload and its canonicalization-authored binding pattern. Both sweeps consume
+the same complete, producer-authored `ValueLookupEntry` group: exact duplicate
+rows are idempotent, while conflicting pattern or call-root-token authority is
+rejected before either sweep mutates an expression. At that exact mutation
+edge, an `annotated_binding_lookup_checked_error` failure selects the canonical
+`BodyAnnotationMalformedTypePublication` for the exact top-level Def or local
+declaration binding, the source-ordered first malformed where-alias target in
+that annotation, and the already published annotation failure and retirement
+which own that leaf. The lookup failure names that annotation retirement as
+its cause and is itself owned by a distinct checker-rewrite-ineligible lookup
+retirement which snapshots the complete pre-rewrite payload. The later
+call-instantiation replay may use this snapshot only for the same callee node
+and binding-pattern origin. A `local_binding_pattern` instantiation names that
+pattern variable as its copy root source. A `local_predeclared_annotation`
+instantiation instead names the predeclared support step's exact destination,
+whose source is the attached annotation; the distinct scheme root is not
+retargeted to the binding pattern. It does not use the binding's solved `.err`,
+a dense error bit, or a lookup outcome reconstructed after checking, and it
+does not alter predeclaration or recursive checking order. Producer-time checks
+permit the source annotation retirement to be either its exact pending draft
+or its completed durable range; terminal admission always requires that
+completed range, exact source failure, attachment, and fresh canonical lookup
+payload.
+
+An ordinary call retains each argument's typed checking outcome. For every
+argument which carries the `direct_binder_lookup_checked_error` retirement, the
+call publishes one
+`call_operand_checked_error` failure for that exact call, argument expression,
+formal, actual, slot, argument plan, and producer-root authority, with the
+lookup retirement as its cause. An independently checked-error sibling outside
+this finite arm neither suppresses nor supplies such a failure; the call
+publishes this finite retirement only when the complete qualifying subset is
+nonempty. At that producer boundary a canonicalization-authored malformed
+argument is accepted only when its retained typed `checked_error` outcome
+names the exact `preexisting_runtime_error` retirement for that same argument;
+the retirement independently replays the malformed-expression publication,
+original payload, and diagnostic. That sibling cause does not enter the finite
+call-failure subset. The direct-lookup publisher is the only producer of the
+source retirement and immediately installs that same retirement as the lookup
+frame's typed outcome, so terminal replay also enforces the converse from every
+completed direct-lookup retirement at an exact call argument site to exactly
+one call failure for that slot, site, formal plan, and retirement cause. This is
+replay of durable typed producer rows, not reconstruction from a solved error.
+The call then publishes a distinct
+`call_retired_after_operand_checked_error` same-node retirement for the
+complete already-successful call root and formal-plan group. The original call
+snapshot must have a zero checker relation stamp: a successfully stamped call,
+an ambiguity retirement, and this pre-relation operand retirement are three
+disjoint states. An argument may already be the canonicalization-authored
+malformed expression described above; a callee or argument may later reach
+either final poisoning sweep before the call itself. Only this exact retirement
+path may therefore decode the saved call topology when each current child is
+either a live expression or the `.malformed` node written at that exact
+token-authenticated child coordinate: the immutable original payload is joined
+to the complete canonical call-token group, the successful root/argument plans
+and formal rows, every qualifying argument's explicit lookup retirement,
+and—at producer time—the exact retained typed cause of each preexisting
+malformed sibling. No type, pattern, statement, or other shared node tag is
+legal in that current-state set. The
+independent fresh-canonical pass still compares that payload and token group
+with the request. A live-call decoder and every other call retirement retain
+their existing child-tag requirements. The retirement does not rewrite the
+successful root/argument plans or `ExpectedCallFormal` rows; it preserves them
+as the exact call shape which existed before operand propagation skipped the
+relation. Admission replays the call snapshot, slot token, formal row, plan
+group, call failure, and lookup cause. It never reconstructs the missing
+relation from the final runtime-error node or the solved callable shape.
+
+Completing that call retirement is one transaction over both owned ranges.
+Before either durable range grows, the checker builds and canonically orders
+the complete `call_operand_checked_error` failure-index sequence, then reserves
+capacity for both the root-plus-arguments retired-consumer range and that
+failure-reference range. Only after both reservations succeed may it append
+either range. At this mutation boundary a source lookup retirement may still
+be the exact incomplete row with its live lookup snapshot and unique
+direct-lookup producer draft, or it may already be the completed diagnostic
+row with its singleton failure range. Completion authenticates either explicit
+phase without requiring the source annotation retirement to have completed;
+terminal admission later requires every lookup and annotation retirement to be
+complete. The remaining commit is infallible: it records the unchanged original
+call payload, whose relation stamp is zero, together with the diagnostic and
+both ranges; consumes the
+aggregate and call-failure drafts; and permits the central expression rewrite.
+An allocation failure before both reservations succeed leaves the call live,
+the same retirement incomplete, both draft classes intact, and both semantic
+range lengths unchanged. This transaction covers the call retirement ledger;
+the central rewrite's earlier invalidation of unrelated subtree metadata has
+its own transaction and is not rolled back by this rule.
+
+**Runtime-error subtree metadata invalidation.** That invalidation
+first discovers the complete insertion-ordered set reachable from the root's
+typed CIR child edges in private storage. The edge relation may contain shared
+children or cycles (in particular the lambda backreference on `e_return` and
+`s_return`), so the root itself may re-enter the discovered set; ordered
+deduplication, rather than a tree assumption, terminates the walk. Discovery
+does not mutate the durable invalidation map, literal dispatch plans, selected
+hoist metadata, or omitted-default rows. After discovery completes, the checker
+reserves the durable map for every new member before committing anything.
+Insertion of those members in discovery order, retirement of their literal
+plans in that same order, and compaction of omitted defaults are then
+infallible. The explicit `omitted.expr == root` case remains necessary because
+an acyclic root is not one of its own descendants. Allocation failure leaves
+all four metadata families semantically unchanged; a retry rediscovers the
+same closure. Success makes durable map membership certify the complete
+reachable closure, and repeating the invalidation is idempotent. A later
+failure in the independently transactional call-retirement ledger may retain
+this complete invalidation, but can never retain only a prefix of it.
+
+The Annotation root and body expression are not themselves attachment
+authority: they omit the typed binding occurrence which canonicalization
+authored. Every binding checker therefore puts the exact closed attachment
+token `{kind, node}` into `Expected` together with the Annotation index.
+Closure forwarding preserves that token unchanged, and annotation generation
+selects the joined publication by the complete
+`{kind, node, annotation, body, malformed-publication}` tuple. Selecting the
+first equal root/body row, or recovering an attachment by scanning definitions,
+is corrupt. The nonpublishing temporary associated-value `Def` cannot supply a
+second candidate for this lookup.
+
+Direct annotation-generation and nominal-pattern failures have one closed,
+producer-authored `ExpectedFailure` publication rather than relying on a
+transient `ProblemStore` entry or on a solved `.err` descriptor. Annotation
+failure kinds are exactly: malformed type, malformed where clause, invalid tag
+child, where receiver not introduced, where-alias not-an-alias, recursive
+where alias, checked-error where-alias publication, unresolved where alias,
+where-alias arity, where alias in type position, builtin-not-a-type, recursive
+type declaration, poisoned type declaration, poisoned type formal, type-apply
+arity, rejected alias row, unresolved external type, a composite annotation
+child failure, and a rejected duplicate where-method signature. Nominal-pattern
+failure kinds are exactly: unresolved external nominal, poisoned nominal
+declaration, inaccessible opaque nominal,
+unavailable backing, checked-error backing, and rejected backing relation.
+The remaining expression failure kinds are a direct-binder local lookup which
+consumed the exact malformed where-alias source above, an annotated-binding
+callee lookup retired at the later erroneous-value-use mutation edge, an
+ordinary call operand which consumed the direct-binder lookup retirement, and
+an aggregate child relation rejected at its exact projection producer.
+Resolved targets with impossible compiler tags and
+`nominal_type_resolution_failed` are compiler invariants, never serializable
+failure kinds.
+
+Each failure row names its exact expression-or-pattern owner and producer site,
+the kind-specific raw owner, subject, peer, constraint occurrence, and semantic
+slot. Subject authentication and failure causality are two independent
+fixed-width tagged values. `SubjectAuthority` is exactly one of: a direct
+producer node and finite phase with its optional exact local durable record; an
+Expected copy occurrence; an Expected producer-root plan plus exact raw
+variable; an Expected relation plan plus exact raw accumulator; an
+evidence-free Expected plan plus exact raw variable; or an exact checked-error
+where-alias publication in a sealed semantic dependency. Relation-plan and
+evidence-free arms name the same exact plan and raw occurrence in both failure
+subject authority and the closed Expected parent-authority union; neither is a
+bare producer enum or a nullable substitute for authority. `CauseOwner` is
+exactly one of: none, a
+local `ExpectedFailure`, a local retirement, a CIR diagnostic, or that exact
+provider checked-error publication. The same `CauseOwner` encoding replaces
+the loose failure-owner fields on `ExpectedConsumptionPlan`. Same-node,
+direct-source, and upstream reasons admit only their explicitly inventoried
+cause arms. Every inactive payload word is canonical, and a shared exhaustive
+kind-by-subject-by-cause table makes adding an enum arm a compile-time coverage
+obligation.
+
+The subject authority is not optional support metadata. Admission replays the
+exact CIR, declaration/import, raw variables, constraint, selected copy
+occurrence or producer plan, finite direct phase, and provider capability named
+by its arm. A local Expected endpoint's selected raw variable must equal the
+failure's raw subject exactly. A provider reference resolves through the sealed
+semantic-dependency slot and checks the provider publication index, declaration,
+and checked-error outcome in that provider's namespace; a provider index is
+never interpreted in the current module's pool. Local where-alias resolution
+therefore returns an exact local publication index, while external resolution
+returns the exact dependency slot and provider publication index. Passing a
+publication by value or retaining only an `is_local`/`saw_checked_error` bit is
+not authority. Local publication indices are checker-draft coordinates until
+the where-alias publication pool is canonically sorted. That sort is an
+off-side transaction which builds a total old-to-new index map and rewrites
+every local failure reference during the infallible commit; provider indices
+remain untouched in their already-sealed provider namespace. The row itself is
+the durable publication for relation failures
+whose transient `Problem` was previously discarded. Admission rejects owner,
+site, constraint, endpoint, kind, subject arm, cause arm, slot, or provider
+substitution even when the substituted graph is structurally identical.
+The producer kind and finite phase statically select the permitted authority
+arm; the checker never chooses an arm by asking whether some coincidental copy
+exists. Body-annotation drafts may use the mandated annotation-copy occurrence
+only when it contains that exact raw subject, pre-copy annotation and nominal
+pre-open failures use their declared direct phase, post-open nominal decisions
+use the exact backing occurrence, and aggregate decisions use the explicitly
+passed Expected authority, including the failure-only evidence-free-plan arm.
+
+The direct `annotation_malformed_where` producer scans the exact written
+`Annotation.where` span in source order before generating the annotation's
+ordinary main type tree. Each canonical `where_malformed` member produces one
+finite result whose site is that exact `WhereClause`, whose slot is its ordinal
+in the complete written span (including well-formed siblings), whose raw
+subject is the generated main annotation occurrence (`Annotation.anno`), and
+whose cause is the diagnostic carried by that `where_malformed` node. A
+publishing body cites the generic `BodyAnnotationAttachment` row for its exact
+binding; all malformed members of one annotation append distinct failure rows
+but reserve one shared owner retirement, and the completed retirement owns the
+complete cause set. A preexisting-runtime-error body first proves the same
+attachment, written-span membership, ordinal, node payload, and diagnostic,
+then propagates only its exact baseline-retirement suppression and publishes no
+new failure or cause-range member. Every `no_publication` mode consumes the
+same typed malformed-where result with its CIR diagnostic but touches no
+Expected pool: this includes predeclaration, an uninitialized variable, and a
+reusable where-alias declaration;
+platform requirements have no where span, and ordinary type declarations do
+not canonicalize an admitted where span. A malformed reusable where alias
+settles only its declaration as `checked_error`.
+
+After this source-order scan, annotation generation still traverses the whole
+main type tree so independent finite failures are not hidden; it then poisons
+the main annotation occurrence before generating the remaining owned where
+constraints. The malformed-where producer, its shared retirement reservation,
+and its draft links use the same Probe and allocation-failure suffix rollback
+as the other annotation producers. Admission replays the selected generic
+attachment and exact written ordinal locally. Checked-cache admission also
+compares the attachment, Annotation payload, complete written where-span and
+owner topology, selected `where_malformed` payload, and diagnostic tag and
+region against fresh canonicalization. No checker path scans solved `.err`
+descriptors, the owner-only where table, final malformed nodes, or diagnostics
+after generation to recover or reconstruct this failure.
+
+The direct `builtin-not-a-type` producer cites the generic
+`BodyAnnotationAttachment` row for its exact checked binding and proves that
+its producer `TypeAnno` is a structural member of that attachment. Its failure
+has no diagnostic cause: the `CauseOwner` is the canonical inactive value, and
+the eventual expression retirement separately names the diagnostic selected
+for the runtime-error rewrite. The producer site is exactly either a builtin
+`Num` lookup or a builtin `Num` application; those CIR tags are distinct and
+are not inferred from argument count. Checked-cache admission replays the same
+tag, builtin target, identifier text, and, for an application, exact argument
+span against fresh canonicalization. Nonpublishing annotation modes return the
+same typed failure with the inactive cause without minting a durable row, while
+a preexisting-runtime-error body validates the same attachment and structural
+site before propagating its exact baseline-retirement suppression.
+
+Annotation failure publication uses an explicit owned draft scope. An
+expression or pattern frame reserves its owner before annotation generation;
+leaf failure branches append stable draft ids while a support copy may not yet
+exist. After the real eager annotation copy, the frame completes every
+applicable draft with the exact subject authority, or completes an earlier
+direct failure with its finite node/phase arm. Predeclaration, standalone type
+annotations, and nested on-demand declaration generation use explicit
+no-publication or suspended scopes and cannot accidentally mint an
+expression-owned row. Draft reservation, proof publication, and completion are
+one Probe/OOM transaction. Terminal publication rejects any incomplete draft;
+it never chooses an authority later from a solved `.err` graph.
+
+Annotation generation exposes a closed typed outcome rather than leaving
+callers to rediscover an error from the generated type. The success arm carries
+the generated occurrence; every failure arm carries its exact finite failure
+kind and typed `CauseOwner`, and a suppressed arm must cite the earlier cause
+which made this producer inapplicable. Only the expression-frame body scope
+may consume that outcome into an `ExpectedFailure` draft. Predeclaration,
+uninitialized-variable annotation generation, standalone annotations,
+platform requirements, where-alias and type-declaration generation pass an
+explicit `no_publication` mode (or suspend the enclosing scope while producing
+a dependency) and must consume the same outcome without publishing a checked
+expression owner. The mode is exhaustive at every `generateAnnotationType`
+and `generateAnnoTypeInPlace` entry; there is no implicit ambient default.
+The sole publishing mode is
+`.body_expression { owner_expr, attachment: { kind, node } }`; the exact
+attachment is the same producer token carried by `Expected` and is preserved
+unchanged through closure forwarding. A preexisting-runtime-error suppression
+likewise carries that attachment so it can prove the malformed annotation was
+owned by this binding before citing the body's empty baseline retirement. The finite
+nonpublishing reasons are `.predeclared_scheme`, `.uninitialized_var`,
+`.platform_requirement`, and `.where_alias_declaration`; type-declaration generation remains a distinct
+`GenTypeAnnoCtx.type_decl` arm. Recursive annotation generation preserves the
+same mode byte-for-byte, while the where-method signature subcontext changes
+only its opening behavior. A new caller therefore cannot compile until it
+chooses one of these producer-owned modes.
+
+All Expected-producing type relations use one closed transient result:
+`established`, `rejected(exact failure data)`, or
+`suppressed(CauseOwner)`. Duplicate where-signature relation, nominal-backing
+relation, aggregate-child relation, and list/tuple/record/tag projection all
+return and exhaustively consume this result. `rejected` is the only arm which
+authors a new failure; `suppressed` requires a nonempty, already authenticated
+cause and never fabricates a rejection. No caller may convert this result to a
+boolean, inspect only `Unifier.Result.isEstablished`, or discard it. List
+projection follows the same commit path as every other aggregate child.
+
+Evidence-free Expected authority is not a bare producer tag. It carries the
+exact proving `ExpectedConsumptionPlan` index together with the exact raw
+subject occurrence. The named plan must be the role-specific
+`evidence_free` outcome that proved this graph free, and its raw consumer must
+equal the carried subject. A failure derived from this path cites
+`SubjectAuthority.expectedEvidenceFreePlan`; deleting the plan, swapping a
+same-shaped plan, or substituting a bare enum is corrupt.
+
+When a later Expected consumer fails after receiving relation-plan authority,
+its failure subject uses `SubjectAuthority.expected_relation_plan` with the
+same exact plan index and raw accumulator. The raw value must equal the
+failure's raw subject, and contextual admission must prove that the named plan
+is an earlier related branch contribution whose parent selected that raw
+accumulator. This preserves the failed consumer's exact subject authority
+without reviving the removed branch support copy.
+
+The persisted Expected parent-authority union therefore has a finite
+`evidence_free_plan { plan_index, raw_var }` arm and a distinct
+`relation_plan { plan_index, raw_var }` arm in addition to copy-occurrence and
+producer-root arms. A fresh aggregate-child plan records the exact earlier
+evidence-free parent plan which justified its allocation; after the shape
+relation succeeds, the transient child Expected names the new child plan and
+its raw slot. If the later stored-value relation rejects, that child plan
+changes to the role-specific checked-error outcome while retaining its earlier
+parent authority and naming the exact failure. The failure's
+`expectedEvidenceFreePlan` subject accepts only this checked-error reason (or
+the still-evidence-free pre-consumption state while a draft is active), exact
+raw consumer, and exact earlier parent proof. It never points the plan at
+itself. Lists retain one plan identity per element even though every element
+plan may share the same fresh accumulator variable; each element relation
+consumes its own row.
+
+Expected-consumer plans use one finite role and transition table. Aggregate
+projection owns one `aggregate_owner` row plus one row for every exact source
+child slot. A nonempty list, every tuple (including an empty tuple), every
+literal closed record (including an empty record), and every payload-bearing
+tag owns that root row; empty-list, empty-record, and zero-payload-tag forms do
+not enter aggregate projection. An aggregate projection is a closed union:
+either it carries a prior copy-occurrence authority and the produced copy, or
+it carries an exact earlier evidence-free plan and raw root. It cannot encode
+these as independent nullable fields. Every copy origin names the exact owner
+or child plan which consumes it. Shape rejection or suppression settles the
+entire reserved range with the exact typed failure or cause. A later child
+relation failure first changes only that child's row, retaining its exact
+earlier parent authority and typed cause. If that failure retires the aggregate
+owner, the retirement then owns the complete original owner-and-child plan
+range: the failing child keeps its direct rejection/suppression reason, while
+the successful owner and siblings are snapshotted under the closed
+`aggregate_retired_after_child_relation` reason. Retirement membership is
+therefore exhaustive without rewriting the failing child's source authority or
+pretending that successful siblings failed their own relations. There is no
+boolean or discarded relation result.
+
+An aggregate whose own owner-and-child range completed successfully can later
+become the rejected body of an enclosing branch. That distinct producer path
+uses `aggregate_retired_by_parent_branch_failure`: every aggregate row remains
+its truthful successful outcome, while the enclosing branch contribution names
+the aggregate retirement as its direct cause. The parent-retirement reason is
+never accepted for an aggregate-local child failure, and the child-failure
+reason still requires at least one exact rejected or suppressed child. This
+distinction is authored from the checker-local owner-to-plan-range registry;
+terminal publication never infers it from settled types or final CIR tags.
+
+The `ExpectedType` value which reaches an aggregate also carries the producer's
+closed status: `established` or `checked_error(CauseOwner)`. Annotation
+materialization, platform requirements, nominal/backing producers, call-formal
+plans, and every aggregate child forward that status explicitly. Aggregate
+projection consumes this status directly; it never walks the solved type graph
+to rediscover an `.err` descendant. The owner row and all child rows are
+reserved in one preflighted gapless range and are settled together for a
+producer error, shape rejection, or suppression. A successful shape relation
+settles the owner before any child is exposed; a child relation first settles
+only its own exact row, and an owner retirement subsequently consumes the whole
+gapless plan range as described above.
+
+An evidence-free expected function consumed by a lambda authors one
+`lambda_return` plan for the exact lambda body and the raw function-return
+occurrence selected from the earlier function plan. The body receives this
+authority in both its contextual and branch-result channels. A branch owner
+authors one `branch_seed`, one source-ordered `branch_contribution` per exact
+body (including an `if` expression's final else body), and one `branch_final`
+row. The seed cites its exact incoming authority, is the sole branch
+`branch_expected_copy`, and selects that copy's fresh destination. Each
+successful body fold completes its contribution as `related`: the row retains
+the immediately preceding accumulator authority as its parent, carries no
+reason or failure owner, and produces no copy coordinates. The plan row itself
+is the durable certificate that the body relation committed against the live
+accumulator. The authority carried to the next phase is
+`relation_plan { plan_index = this contribution, raw_var = accumulator }`.
+That arm may name only an earlier `branch_contribution` with outcome `related`,
+and its raw accumulator must equal the raw variable selected by the named
+plan's parent authority. Thus marker lineage follows an exact plan-to-plan edge
+without replacing an annotation rigid with a fresh-rigid snapshot or
+manufacturing another graph copy.
+
+The successful final row is also `related`. It retains the last carried
+accumulator authority and relates that unchanged accumulator to the branch
+owner and pristine Expected root in one transaction, but it produces neither a
+copy endpoint nor a new carried relation authority. Already-equal, rejected,
+erroneous, and suppressed bodies use their distinct closed outcomes and never
+disappear into a direct unify. An already-equal body retains the seed's
+pristine Expected authority (the relation the body actually denotes) while
+leaving the accumulator chain unchanged; it must not claim the possibly
+refined accumulator as its parent. Contributions and final rows can be
+`related`, retained, or one of their finite failure outcomes; they cannot be
+anchored or remain evidence-free.
+The seed's raw consumer is the fresh branch accumulator, every contribution's
+raw consumer is its exact CIR body variable, and the final row's raw consumer
+is the branch expression variable. The full `N + 2` range is reserved before
+the seed copy, with the seed first, every body in CIR order, and the final row
+last; there are no sentinel plan indexes or outcome-dependent omissions. That
+gapless order is a producer-time transaction invariant. Terminal causal
+canonicalization may interleave a nested body's own Expected plans between the
+enclosing branch rows. Admission therefore replays the branch by exact owner,
+role, and CIR slot: exactly one seed, one final, and one contribution for every
+source-ordered body, rejecting missing, duplicate, extra, or coordinated
+retargeted rows without assuming post-canonical adjacency. A successful final
+row consumes its last carried parent authority directly; no terminal support
+copy exists to delete, invent, or substitute. If a body is retired after a direct
+compatibility or accumulator-fold rejection, its exact contribution retains
+that direct cause. If the branch owner must then retire, one
+`branch_retired_after_failure` retirement snapshots the complete seed,
+contribution, and final range while preserving the direct failing row, just as
+aggregate child retirement preserves its exact failing child. An erroneous
+Expected source settles the entire range from the typed producer status; no
+branch path probes the final solved graph for an error.
+An ambiguity verdict may instead make an otherwise successful Expected
+consumer group erroneous after all of that group's rows have settled. This is
+a closed two-case producer, recorded before the CIR rewrite by one
+`ExpectedAmbiguityRetirement` row:
+
+- `body_forced_instantiation_branch` names an `.instantiation` verdict, a
+  branch group, and the exact bound copy step, raw occurrence, and canonical
+  pair which created its receiver. Its selected absolute constraint is in the
+  resolved raw receiver's range, has `.where_clause.body_required` origin,
+  `is_instantiated_where_clause` and `body_forced` are true, and no in-module
+  dispatch use takes precedence.
+- `creation_dispatch_call` names a `.creation` verdict and the exact call group
+  whose dispatch expression is rewritten. It has no instantiation copy
+  driver, so all three copy-coordinate words are canonical `none`; its selected
+  constraint has one of the finite direct creation origins and all
+  instantiation/body/where-dispatch flags are false.
+
+Every row additionally stores a closed consumer-group kind, the exact root
+plan, and the complete plan count. A branch root is its seed and owns exactly
+`N + 2` rows. A call root owns itself plus exactly one `call_argument` row per
+CIR argument slot. Terminal plan sorting may make those rows non-contiguous,
+so the stored root and count are identity/cardinality, not an index slice;
+admission enumerates the group by its exact owner, roles, slots, and root
+references. The row also binds the raw verdict receiver, exact retired
+expression, selected absolute constraint, and selected CIR diagnostic. For the
+instantiation arm the copy occurrence's raw destination is the receiver and
+its pair offset is exact; multiple raw occurrences collapsing to one pair do
+not weaken this check.
+
+The accompanying `ExpectedConsumerRetirement` names the ambiguity row through
+its typed rejection-owner union, repeats the raw receiver as its rejection
+subject, and owns exactly the declared group membership. Branch members use
+`branch_retired_after_ambiguity_verdict`; call members use `call_retired`.
+Group-kind, root, count, reason, and membership form an inverse bijection, so a
+call cannot borrow a branch verdict or omit/reorder/retarget an argument.
+Admission replays the recorded receiver range, source-specific constraint
+origin and flags, expression/diagnostic identity, and complete consumer group.
+Terminal publication sorts the ambiguity rows by their full semantic key,
+rejects duplicates, remaps root-plan and typed retirement-owner indexes, and
+never uses original pool ordinals. Admission never rediscovers this late cause
+from the malformed CIR node, settled type shape, or a queue scan.
+Diagnostic poisoning precedes the fallible proof-row publication only on a
+rejected branch relation. The producer queues the exact raw body and poisons
+only that body's pre-rejection solved class; it never joins the class to the
+pristine Expected endpoint. Any later publication failure is therefore fatal
+to the whole checker invocation: it cannot be caught as a successful checked
+artifact with poisoned types and a partial proof suffix. Focused Probe/OOM
+tests enforce that ordering contract.
+Until every expression producer returns `ExpectedSourceStatus` directly, the
+existing centralized erroneous-expression queue is itself a finite
+producer-authored raw-owner channel. A branch contribution may consume only the
+entry for its exact body, must observe the queued body already poisoned as a
+consistency check, and immediately authors the durable body-retirement cause.
+An unqueued solved `.err` is never accepted as evidence. This transition is
+removed from the branch once the expression producer supplies the same typed
+cause directly; the two authority paths may not coexist for one body.
+
+The only roles which may consume `parent_evidence_free` directly are an
+aggregate owner or child, `lambda_return`, and `branch_seed`; this legality
+table is exhaustive. The generic expression-frame backup channel rejects an
+evidence-free Expected. Legitimate evidence-free authority is consumed only
+by the explicit aggregate, lambda-return, or branch producers above, so there
+is no unanchored orphan copy and no final-graph reconstruction.
+
+Failure ownership has one canonical typed route. A direct-source or upstream
+Expected-error plan names its exact `CauseOwner`; when the cause is a local
+failure, an upstream plan also names its earlier causal plan identity. It may
+not choose an equivalent retirement or diagnostic arm. A same-node plan whose
+topology was erased names its exact retirement cause, and that retirement names
+the exact failure when one of these finite producers caused the retirement.
+Preexisting malformed input remains owned by its baseline retirement and CIR
+diagnostic. No row may claim two routes.
+
+The failure inventory is exhaustive at its producer branches. Duplicate
+where-signature comparison, nominal-backing relation, and aggregate-child
+relation each return the closed transient result
+`established | rejected | suppressed(cause)`. `rejected` publishes the exact
+corresponding failure; `suppressed` cites an already-authenticated typed cause
+and never fabricates a rejection; established follows the positive proof. A
+suppressed result without a cause is an invariant violation. No caller may
+collapse this result to a boolean or discard it. Plans and retirements reference
+typed causes, every retained failure is owned exactly once, and no unreferenced
+failure may survive the checked boundary.
+
+Terminal publication validates and deterministically topologically orders the
+combined local failure-and-retirement causal graph, because a failure may name
+a retirement and a retirement may name a failure. A stable semantic key breaks
+ties among ready nodes. Cross-kind cycles, self-edges, missing causes, and
+orphans are corruption. The two node kinds retain separate serialized pools,
+so no persisted global ordinal is needed: terminal publication chooses the
+minimum ready node under one tagged total key and appends it to its kind's
+pool, while allocation-free admission replays that same choice from the two
+consumed pool prefixes. Admission scans every remaining row when choosing the
+minimum ready node; inspecting only the two prefix heads would accept a
+noncanonical ready-row swap. The corruption matrix covers a cross-kind cycle,
+a swapped pair of simultaneously ready keys, a valid external diagnostic or
+provider terminal cause, and a disconnected local causal component. The
+transaction roots and relocates every subject copy
+step/occurrence or producer plan, local constraint and publication coordinate,
+and every failure/retirement/plan cause before the infallible swap. Provider
+references terminate in their admitted provider and are not remapped locally.
+The
+failure pool and its checker drafts participate in nested Probe rollback and
+the exhaustive failing-allocator snapshot. Static and mutable serialization
+preserve the exact canonical rows; cache admission rejects missing, extra,
+orphaned, provisional, or noncanonical failures, and clean-cache admission
+rejects every failure-backed checked-error outcome.
+
+Expected plans and retirements participate in the same off-side checked-boundary
+transaction as their marker-copy proofs. Every syntactically enumerated plan
+and every exact final failure retirement is a root; an anchored plan roots both
+its produced copy occurrence and its tagged parent authority, a related plan
+roots its tagged parent authority, a plan-valued authority roots its exact
+earlier plan, and a causal plan roots its typed cause and any earlier causal
+plan identity,
+and every retirement child roots its named plan. The transaction topologically
+orders plans as described above, orders failures and retirements as one causal
+DAG, compacts retirement child ranges gaplessly, and remaps every step,
+occurrence, parent plan, typed local cause, retirement owner, and fresh-shape
+plan-range coordinate before one infallible swap. A fresh-shape origin's nonempty plan
+range must remain contiguous after that ordering. Reserved outcomes,
+unresolved provisional origins, missing produced-step plans, orphan rows, and
+noncanonical partitions abort publication. The three pools and every transient
+reservation length are part of nested checker savepoints and the exhaustive
+failing-allocator snapshot, so OOM preserves the original pointers, lengths,
+capacities, and bytes. Clean-cache admission rejects retirements and every
+checked-error or reserved plan; ordinary admission validates the full CIR
+eligibility, ownership, and causal bijections without allocating.
 
 The checker records scheme-ness as explicit binding metadata at each
 generalization boundary. After rank adjustment, it walks the binding's type
@@ -3017,9 +4341,12 @@ member's anchors. The flush first looks for an exact raw where-use witness, then
 accepts equal anchored callable `TypeDigest`s, and otherwise deliberately retires
 the candidate without appending a ModuleEnv row. It consumes or retires every
 candidate for that owner, asserts that none survived the boundary, and asserts
-global quiescence before checked output. Rechecking a mutable deserialized module
-validates and deduplicates existing raw rows, so serialization and rechecking
-are idempotent.
+global quiescence before checked output. A `ModuleEnv` has an explicit,
+serialized one-shot typechecking state: canonical input transitions through
+`checking` to either `checked_file` or `checked_repl`; an operation error leaves
+it unusable in `checking`. A checked deserialized environment is semantically
+validated and consumed as immutable input. It is never fed back into `Check`;
+a changed source is canonicalized into a fresh `canonical_unchecked` env.
 
 Checked-artifact construction resolves these rows into a scoped directed graph.
 Exact callable identity has strength 3, a `where_method_use` reuse edge has
@@ -4592,7 +5919,1489 @@ or import instantiation of the enclosing scheme closes the same markers
 implementation is bounded by the listed tags: it may return a subset, never
 more, and its arguments must match as written. A where-alias declaration's
 signatures are copied into a referencing annotation with their markers
-intact (`.preserve`). Lowering note: a body use that WIDENS its copy is
+intact (`.preserve`). When direct or expanded where clauses repeat one method,
+checking first generates every written signature, then relates the duplicates
+by ordinary structural unification. At structurally aligned row tails, the
+dedicated duplicate-written-where relation unions distinct rigids only when
+both have the exact compiler-reserved polarity-marker identity and carry no
+constraints. The resulting equivalence closure includes sharing written by
+either source occurrence: an alias argument used at two result positions and
+two separately written direct result rows settle to one marker class in either
+source order. This is not a solved-graph rewrite: the relation is
+unconditional, its special case is off for every other unification, and user
+rigids, tags, payloads, arguments, arity, and effect kind retain ordinary exact
+unification and rejection.
+
+At the checked boundary, where-method widening metadata is rebuilt as one
+referenced-only ownership graph. The roots of that graph are the constraint
+ranges on every current live flex/rigid descriptor plus the exact retained
+constraint indexes in the where-method-source, where-alias-expansion, and
+binding-scheme-codec ledgers. Static constraints are retained in ascending old
+index order. Their constraint-owned marker groups, each source ledger's
+source-specific marker group, and every marker-use group own gapless,
+non-sharing slices of their respective contract/path pools; no unowned history
+is serialized. Dead descriptor history has its constraint ranges cleared at
+the same boundary.
+
+Widening facts have two exact aggregation levels. A local copy may be emitted
+before another fact owned by the same checking boundary settles; this is a
+forward reference to an exact producer occurrence, never authority for its
+early boolean. After every owner quiesces, terminal publication requires every
+local producer settled and recomputes the least monotone fact solution from
+final local evidence, authenticated imported-ready bases, and exact copy/move
+edges. For one source occurrence and guarded semantic path, the source fact is
+the boolean OR of every exact local scheme-use marker in that group. For one
+retained constraint and guarded semantic path, the constraint-owned fact is
+the boolean OR of those local source facts plus its authenticated copy-chain
+bases. A basis binds one
+destination-local marker offset to a canonical `WhereMarkerCopy` step and the
+exact constraint/marker occurrence on that step's source side. Every copy step
+owns a complete `WhereMarkerCopyPair` relation from its source occurrence to
+its destination occurrence, strictly sorted and deduplicated by the full
+`(resolved_source, resolved_destination)` tuple, an immutable copy-time
+`WhereMarkerCopyOccurrence` range, and a gapless canonical range of
+producer-authored `WhereMarkerCopyWitness` rows. An occurrence preserves the
+exact raw source and destination variables observed by the producer before
+resolved-pair deduplication and names the one exact canonical tuple to which
+both resolve. The producer relation is functional over raw copy-time ids:
+within one step, equal raw source ids must have equal raw destination ids.
+Distinct raw occurrences may project to the same canonical tuple. Conversely,
+distinct raw source ids may resolve together after publication while their
+destinations remain distinct, or distinct raw destinations may later resolve
+together; final tuples may therefore share either coordinate. This temporal
+collapse is valid and never licenses one raw source id to name two raw
+destinations. The step stores the exact owning-
+range offset of the producer's root occurrence; this is not inferred from the
+possibly many occurrences that project to the root pair. A witness names its exact parent
+and child occurrence offsets, a finite semantic edge locator, and the exact
+copy action or authenticated cut taken at that edge; pair-level reachability
+is the projection of those immutable occurrence edges. Semantic locators never
+name incidental backing-array positions: they distinguish an alias backing or
+argument, tuple/nominal/function position, record field name and value/presence
+axis, tag name and payload position, or exact static-constraint component
+(callable, interpolation part, or item). The step's finite origin kind fixes
+which copy policy and actions are legal; a cut that needs outside authority
+names the exact auxiliary binding-copy pair, platform-substitution,
+requirement, or producer-event row. A binding reuse witness carries both the
+exact prior copy step and that step's owner-relative pair offset. Copy-time
+rank/policy, constraint correspondence, and cut causes are not reconstructed
+from the final solved graph.
+
+A local same-occurrence share cut writes the identical raw Store occurrence id
+into both witness fields and into that cut's occurrence row. If the requested
+edge arrived through an existing redirect, the instantiator records the
+resolved shared occurrence on both sides; it must not encode the pre-redirect
+request as a distinct destination occurrence and later justify the cut from
+canonical equality. This is copy-time identity authority, independent of any
+subsequent unification. The cut terminates before traversing the shared
+descriptor, including its attached static-dispatch constraints. It therefore
+emits no constraint-copy pair for those constraints: their existing Store
+occurrences remain owned by the original descriptor and were not copied by
+this step. This applies equally to rank-based cuts, explicit leaf-sharing, and
+shared virtual requirement/interpolation ingresses. The raw occurrence and
+typed cut witness remain mandatory.
+
+A constraint-copy pair exists only when the producer appends the named
+destination constraint: either the structural traversal's `stepFlexLike` or
+the explicit detached-requirement registration immediately following that
+traversal. That append's exact `static_dispatch_function` or
+`scheme_requirement_function` edge is its sole primary witness. Reaching a
+source again through a memoized variable mapping reuses that already-authored
+destination and does not add another pair. Thus a shared receiver which still
+owns an attached creation relation and an independently copied detached
+requirement do not produce `S -> S` plus `S -> D`: the shared endpoint emits
+only its raw cut, while the detached function append emits the sole `S -> D`
+constraint occurrence.
+
+An exact rigid-substitution cut likewise names a caller-owned, pre-existing
+destination rather than a variable minted by the instantiation. The
+substitution branch records that exact selection in a transient
+source-to-destination reuse ledger at the moment it takes the cut. That
+producer-authored ledger—not a replay of the substitution policy or an
+inspection of the completed graph—is the sole freshness authority consumed by
+checker bookkeeping. The pair remains scheme-use evidence, but the destination
+is excluded from fresh rank/region ownership, copied dispatcher registration,
+copied-open-literal registration, and default-driver authorship; its original
+producer remains responsible for those lifecycles. The ledger is local to the
+checker traversal and is not durable settlement or checked-boundary evidence.
+
+When the exact copied root itself has no outgoing semantic edge that names its
+copy action, the step owns exactly one typed root-action witness whose parent
+and child both name the exact root occurrence, which projects to the sole root
+pair. This covers structural leaves and the
+finite root-level share, freshening, substitution, and preseed cuts. Admission
+does not treat that row as a graph self-edge or predecessor: it validates the
+action against the step's exact copy policy and, for a cut, the exact raw or
+binding-root/platform-substitution authority. A structurally traversed root
+with at least one outgoing witness has no root-action witness.
+
+"Complete" means exact replay
+under finite authenticated cut rules, not unconditional structural closure:
+same-root shared non-generalized subtrees terminate without moving authority;
+a different-root substitution must name its exact origin witness; a
+cycle/share revisit is legal only after that source was discovered earlier in
+the same step; and platform preseeding is cut only by an exact exercised
+substitution row and app-support step. Binding-codec copying maintains an
+explicit producer-side origin table in lockstep with its shared variable map.
+The table is seeded from the returned binding-root step and records each newly
+inserted mapping with the exact component step and owner-relative pair which
+authored it before a later component may observe that mapping. A
+`binding_codec_reuse_cut` copies those two coordinates into the witness. It may
+name the binding-root step, an earlier requirement component under the same
+binding root, or the receiver component of the current requirement when the
+function component follows it. The named component must be the pair's original
+author: an intervening component whose authenticated cut merely reused the
+same pair is not interchangeable provenance. Admission establishes that fact
+from the claimed component's explicit copy action, never from canonical pair
+equality or solved shape. It may not name the current step, a later
+requirement, a component under another binding root, or a pair selected by
+searching solved graph shape. Transaction failure removes every newly recorded
+origin together with its variable-map entry. Alias-source substitution
+continues through backing and arguments, and no generic mapped cut exists. Root steps are a finite
+exhaustive union: an exact direct external node/import slot (including a where-
+alias parameter ordinal), one component of an imported binding-codec
+requirement, an exact selected method target, or an exact platform requirement
+solution/substitution boundary. A selected-method root names one row in an
+exhaustive selected-dispatch decision ledger. The checker reserves each
+decision before that selected use's local instantiation and completes it atomically
+with the exact retained constraint, raw receiver occurrence, matching
+dispatch-target scheme use, provider method coordinates, and the receiver's
+producer-authored authority: either the exact direct CIR dispatch site or the
+prior local-copy occurrence and constraint pair which produced it. Completed
+decisions are ordered bijectively with the authenticated dispatch-target event
+stream. Every imported-method cache seed, regardless of whether its source
+graph carries markers, atomically publishes one eager provider-to-pristine
+support step under that seed's finite first-consumer origin and stores that
+step as a mandatory part of the cache entry. When the imported graph is a
+binding scheme, its checker-local synthetic binding-scheme classification is
+part of the same probe transaction: the producer records that exact insertion
+in the probe mutation journal, so rollback cannot leave a classification for a
+discarded and later reusable raw variable. Every selected decision names
+that exact cached root plus its own explicit pristine-to-use child step. The
+root's persisted origin—not cache-hit state, an owner bit, or selected-event
+order—authenticates which consumer performed the first copy; a structurally
+compatible constraint, receiver, or later use cannot claim that authority.
+At terminal rebuild, including a repeated rebuild of already-canonical state,
+a selected root resolves its provider only through its own exact complete
+decision, that decision's identical root-step index, its sealed semantic-
+dependency slot, and the exact provider `MethodBinding` coordinates. Transient
+imported-method cache indexes are not terminal authority and are not consulted;
+an incomplete decision, a second/mismatched root owner, a dependency retarget,
+or a missing provider binding is an invariant failure.
+The external-template cache has one complete, serialized lookup-token stream.
+Each token carries the raw import, the resolved `(module,target)` key once
+imports are resolved, the exact origin node, and one of nine closed lookup
+site kinds: type-annotation lookup, type-annotation application, numeric
+suffix, where-alias receiver, where-alias parameter, nominal pattern, nominal
+expression, direct external lookup, or associated lookup (the where-alias
+parameter carries its explicit parameter ordinal). The token order is the
+canonical lexicographic order of resolved key, site kind, origin node,
+parameter ordinal (the closed slot), and raw import; it is not source traversal
+order. For each resolved key, the unique minimum token owns one durable
+`ExternalCacheSeed { key, seed_token, seed_node, support_step }` row. A lazy
+cache miss reserves its append-only seed row before the support copy so the
+copy origin can name a stable row even if nested proof publication appends
+later rows. The reservation already carries the resolved key and its canonical
+minimum token, but no support step; only its owner may complete it in place
+with the returned support step. Probe/error rollback removes the reservation
+and every transaction suffix, and checked publication rejects any reservation
+which escapes. Any authenticated lookup token for the same exact key may
+trigger the lazy miss, but the reserved row and support origin always name the
+canonical minimum token; the triggering use cannot impersonate the seed and
+ownership can never come from insertion order or a later same-shaped
+occurrence. The cache entry and its seed row are committed
+atomically after binding-codec ingress succeeds. A LIFO cache-insertion journal
+lets an inner committed miss remain undoable by an outer Probe while an inner
+rollback removes only its own cache suffix. Canonicalization emits the raw
+import and an unresolved-module sentinel before import resolution, and the
+explicit import-resolution phase rewrites every token to its resolved key
+before seeds are admitted. The coordinator's post-import, pre-cache-probe
+boundary and the checker's ordinary preflight invoke the same idempotent seal:
+it resolves every successful raw import, retains the unresolved sentinel only
+for an exact failed-import record, canonical-sorts the complete producer
+stream, rejects duplicate sites, and requires the seed pool still be empty.
+Consequently a cache key or fresh cache-admission replay can never observe a
+successful import token in its pre-resolution state. The exact inverse is
+required at every boundary:
+before checking can rewrite an associated lookup, preflight exhaustively
+enumerates every raw producer for all nine kinds, validates the sealed
+where-alias groups, and retains an exact byte snapshot of the canonical token
+stream; produced-state validation requires that stream to remain unchanged.
+Fresh cache admission independently repeats that producer enumeration before
+comparing the complete canonical stream. Local checking also validates the
+token and minimum-seed relation, contextual
+validation resolves the token's closed site and provider target, and terminal
+publication, relocation, and serialization preserve the same token, seed, and
+support-step identities. No stage reconstructs this authority from source
+shape, cache state, or sibling lookups. The finite producer stream includes
+external numeric suffixes, external where-alias receiver and parameter
+positions, external type annotations, external nominal patterns and
+expressions, direct external lookups, and external associated lookups.
+The copied support step names this authority only through the fixed-width
+`external_cache_seed { seed_row }` origin, which resolves into the serialized
+seed pool and then to its exact support step. The seed key's target is the raw
+provider CIR node requested by the lookup, so it binds the support step's exact
+root occurrence raw source. That occurrence's canonical pair, not raw numeric
+equality with the key, binds the step's copy-time canonical source root (and
+destination root). This distinction is required when the provider raw node
+redirects to a generalized scheme root. Contextual admission resolves the raw
+target in the sealed provider namespace and requires that resolution to equal
+the authored canonical pair; local admission never substitutes a settled-shape
+scan for that occurrence-to-pair relation.
+An external annotation used as a where-alias reference always retains its
+ordinary annotation token. When its sealed provider target is a where-alias
+declaration, canonicalization preflights and atomically appends the specialized
+receiver token plus one parameter token for every parameter in that exact
+provider header. A target which is not a where-alias publishes no specialized
+group and follows the ordinary annotation error path. The same closed outcome
+applies when the raw import has no sealed provider or the provider target is
+unresolved: no specialized receiver or parameter row is published, while the
+ordinary annotation token remains the exact error-path occurrence. Admission
+enumerates every canonical `w_alias` consumer, resolves its raw import through
+the sealed direct-provider table, and requires either no specialized rows for
+one of those finite error outcomes or exactly one receiver plus ordinals
+`0..header_arity` naming the provider header's exact parameter nodes. It also
+requires every specialized row to belong to exactly one such consumer group.
+A valid specialized group can therefore never retain only its receiver or a
+prefix of its provider parameters, and a coordinated whole-group deletion is
+not accepted.
+Marker-independent constraint provenance is one closed, tagged evidence
+carrier shared by every consumer that must follow a constraint occurrence
+through unification and checker-side deduplication. Its finite handle kinds
+include at least a selected-receiver creation anchor and a copied-open-literal
+event; a handle's tag is never inferred from the consumer which later observes
+it. Direct construction and exact copying author the corresponding finite
+domain record and attach its tagged handle to the exact created constraint.
+Whenever unification or checker-side requirement deduplication appends a new
+constraint occurrence, its contributor state unions the tagged handles and
+publishes one exact source-to-destination evidence transition for every moved
+handle; identity, merge, and dedup paths are all covered by this single
+observational pipeline. The durable anchors, events, settlements, and
+admission checks remain domain-specific, and this carrier is distinct from
+`WhereMarkerConstraintMove`, whose nonempty marker-offset mapping has different
+semantics. A consumer must explicitly accept the handle tag it consumes.
+Selected target publication, for example, consumes a terminal
+`selected_receiver_anchor` handle attached to its exact settled constraint
+rather than searching backward by callable identity or final shape. Admission
+replays the complete typed handle chain, rejects missing, duplicate, forged,
+tag-swapped, or orphan transitions, and binds each terminal constraint to the
+corresponding domain row. This propagation is observational metadata only: it
+neither mutates the type graph nor changes, probes, or restamps a dispatch
+judgment. The checked-boundary transaction retains and remaps only chains
+reachable from authenticated consumers.
+
+#### Copied-Open-Literal Copy Inventory Prerequisite
+
+The copied-open-literal copy inventory is an implementation prerequisite for
+`DispatchSettlementEvent`, not an alternate terminal-settlement schema. It is
+output at the copy boundary while the producer still has the exact raw copy
+occurrence and constraint relation. It records only copy-time identity and
+literal kind; it does not decide how any copied constraint eventually settles.
+
+`WhereMarkerCopyStep` adds `copied_groups_start` and `copied_groups_len`. Those
+fields name the step's one gapless slice of `copied_open_literal_groups`, empty
+when the step copied no fresh open-literal receiver. Step slices gaplessly
+partition that pool in copy-step order. Each row has the exact schema
+`CopiedOpenLiteralGroup { copy_step_index, receiver_occurrence_offset,
+source_constraints_start, source_constraints_len,
+destination_constraints_start, destination_constraints_len, component,
+events_start, events_len }`. The two constraint ranges have equal nonzero
+length and the event range is nonempty. The step slice is strictly ordered by
+`(component tag and complete active payload, receiver_occurrence_offset,
+source_constraints_start, source_constraints_len,
+destination_constraints_start, destination_constraints_len)`. There is no
+second group key based on resolved receiver content.
+
+`component` is a closed union with exactly these arms:
+
+* `root_graph`;
+* `scheme_requirement { requirement_ordinal }`;
+* `binding_codec_receiver { binding_root_step, requirement_ordinal }`; and
+* `binding_codec_function { binding_root_step, requirement_ordinal }`.
+
+The arm must agree with the typed origin of `copy_step_index`.
+`scheme_requirement` names the exact detached requirement ordinal. Either
+binding-codec arm names the exact common binding-root step and requirement
+ordinal. Every field inactive for the selected arm has the one permitted
+encoding, all zero bits; `root_graph` therefore has zero in every payload word,
+and `scheme_requirement` has zero in the binding-root word. There is no generic,
+null, inferred, or unknown component arm.
+
+`receiver_occurrence_offset` is relative to the named step's occurrence slice
+and names the immutable raw source/destination receiver request. At every
+constraint offset, the named step's constraint-pair slice contains the exact
+source/destination pair from the group's two ranges. There is exactly one group
+for every retained step occurrence whose raw destination is a freshly copied
+open-literal receiver, and no group for any other occurrence. This implication
+is checked in both directions; a final solved receiver and a later default
+contributor cannot create, suppress, or retarget a group.
+
+The receiver and function component for every admitted group therefore belong
+to that same named step. An imported binding-codec copy preserves this rule for
+each graph component independently: a fresh open-literal receiver reached while
+copying the receiver graph produces a group tagged `binding_codec_receiver`,
+and one reached while copying the function graph produces a group tagged
+`binding_codec_function`. Each tag carries the exact common binding-root step
+and requirement ordinal already authored by its owning component step.
+Constraints internal to either component remain ordinary step-local copied
+sources; the group tag, rather than a composite source reconstruction, records
+which binding component owns them. A source already mapped by the binding-root
+copy takes its authenticated `binding_codec_reuse_cut` and produces no fresh
+component group.
+
+Only the separately appended outer generated-codec requirement must be
+non-literal. Its composite settlement source deliberately spans the receiver
+and function steps, so it cannot be encoded by a single-step group and cannot
+author copied-literal inventory. Producer and admission validate this outer
+ingress separately; they do not impose that restriction on constraints nested
+inside either copied component graph.
+
+Each event row has the exact schema `CopiedOpenLiteralEvent { group_index,
+constraint_offset, literal_kind }`. A group's event slice is strictly ordered
+by `constraint_offset` and contains exactly one event for each offset whose
+source constraint is a literal conversion, and none for any other offset. Its
+`literal_kind` is the exact closed `numeral`, `quote`, or `interpolation` result
+from `literal_defaulting.constraintLiteralKind` for that source constraint.
+Thus a group containing `k` literal-conversion constraints has exactly `k`
+events, including `k` distinct `copied_literal_event { event_index }` handles.
+Each handle is attached only to the matching destination constraint. Group
+slices gaplessly partition `copied_open_literal_events` in group order. A
+receiver-wide handle is forbidden because sibling literal constraints can
+reach different terminal settlements.
+
+All group indexes, event indexes, destination constraint indexes, and attached
+handle ids are destination-module-local. For a checker-local copy, the source
+and destination constraint ranges use the same namespace. An occurrence whose
+raw source and destination receivers are equal is not fresh and its terminating
+share cut emits no constraint pair, group, or event. Every local constraint
+pair instead names an actually appended destination occurrence. For a
+cross-module copy, source and destination constraint ranges use disjoint
+namespaces, so equal integer values do not denote identity. The cross-module
+producer clears every foreign
+constraint-evidence handle before it appends fresh destination-local event
+handles. It never imports or reuses a source event or group index.
+
+For both local and cross-module copies, the producer appends this inventory
+after the step's complete raw occurrence and constraint-pair relation exists,
+but before the copy boundary commits or returns and before any later
+unification or requirement deduplication can move the constraints. The step
+range, groups, events, and destination handle attachments are one copy
+transaction unit. A public cross-module copy includes them in its private
+non-nesting transaction; a binding-codec copy includes both component steps
+and their groups and events in the same transaction. A checker `Probe`, copy
+failure, or allocation failure restores all participating lengths, step range
+fields, handle bytes, variable-map entries, and interner state exactly. No
+partially filled step range or independently committed binding-codec component
+may remain.
+
+The checked-boundary transaction rebuilds these pools off-side with the copy
+steps, occurrences, constraint pairs, and constraints. It computes total
+old-to-new maps and atomically rewrites `copy_step_index`, `group_index`, every
+`copied_literal_event` handle, and every default-contributor group index before
+swapping the replacement pools. Unreachable support steps and their groups,
+events, and handles are removed as one unit. The two pools and the step-owned
+range fields participate in initialization, deinitialization, relocation,
+static and mutable deserialization, serialization-schema reflection,
+checked-boundary replacement, `Probe` snapshots, and byte-exact allocation-
+failure rollback from the first change which outputs them.
+
+Checked-module admission validates this prerequisite without allocation. It
+replays every retained step's typed origin, raw occurrences, and complete
+constraint pairs; validates the component arm and its all-zero inactive
+fields; proves both group and event converses and their strict ordering and
+gapless partitions; recomputes each event kind from its named source
+constraint; and requires an exact event-to-destination-handle inverse. Missing,
+extra, duplicated, overlapping, orphaned, namespace-confused, role-swapped, or
+cross-attached rows and handles are corrupt checked data. Admission never
+reconstructs this inventory from final solved content, default decisions, or
+terminal constraint scans.
+
+`DefaultDecisionContributor.instantiation_copy { group_index }` uses only the
+exact receiver-level group index. Every such contributor names one admitted
+group, and a group is named by at most one contributor; zero or several events
+can later use that one contributor. The former copy-step/pair approximation and
+a per-constraint event index are not valid contributor coordinates.
+
+This prerequisite does not define or output `CopiedOpenLiteralDisposition`,
+and it adds no pending, reserved, unknown, or final-shape disposition arm. That
+parallel ledger becomes valid only after the terminal settlement producer
+below can give every copied event exactly one `DispatchSettlementEvent` and an
+exact terminal outcome. Until that authority exists, checked data contains the
+copy inventory and its destination-local evidence handles but makes no claim
+that an event has been consumed. Rank, resolved content, absence from a default
+decision, and a terminal scan cannot fill the deferred ledger.
+
+Every terminal evidence-bearing static-dispatch constraint owns exactly one
+producer-authored `DispatchSettlementEvent`. The event owns the complete
+canonical set of tagged evidence handles which reached that constraint and the
+complete producer-to-terminal movement DAG for those handles, followed by
+exactly one terminal disposition. Several contributors may merge into one
+settlement, but one handle may never split between settlements or appear in
+two terminal sinks. Identity settlement does not invent a self-move, and every
+real move is unique and strictly forward. The event owns a nonempty canonical
+range of initial source occurrences; every row in that range is one arm of
+this closed union:
+
+* `dispatch_expr` names the exact `e_dispatch_call`, `e_type_dispatch_call`, or
+  equality leg of `e_method_eq`, including its raw receiver, callable, and
+  method;
+* `literal_conversion` names the exact numeral-or-quote durable
+  `LiteralDispatchPlan` creation-field snapshot: node, target, callable, and
+  literal kind;
+* `interpolation` names the exact interpolation node, dispatcher, and
+  constraint callable;
+* `pattern_literal_equality` names the dedicated pattern-equality plan and its
+  exact pattern receiver and `is_eq` callable;
+* `negated_equality_not` names the dedicated `!=` plan and its exact
+  intermediate equality-result receiver and `not` callable;
+* `for_loop_dispatch` names the exact loop and `iter` or `next` plan slot,
+  whose producer records either a live constraint or rejection before a
+  constraint exists;
+* `where_requirement` names the exact owner, where node, method, and source
+  ordinal; the retained method-key representative owns the complete set of
+  duplicate written and alias-expanded sources; and
+* `copied_constraint` names the destination-local copy occurrence, exact
+  source-to-destination constraint pair, and a closed component locator.
+
+The copied-constraint component locator is exactly `root_graph`,
+`scheme_requirement`, `binding_codec_receiver`, or
+`binding_codec_function`. A binding-codec constraint names both its receiver
+and function component references, and both references name the same exact
+binding-root step and requirement ordinal. At every cross-module boundary the
+copy producer clears all foreign constraint-evidence handle ids, then, in the
+same destination transaction, authors fresh destination-local evidence for
+every copied selectable constraint and every copied literal constraint. The
+new evidence names the exact destination receiver occurrence and constraint-
+copy pair. Ordinary and platform copies use `root_graph`; detached scheme
+requirements use `scheme_requirement`; binding-codec ingress uses its paired
+component references. Later phases may only propagate or consume those fresh
+handles. Originless Builtin declaration/template copies reject every static
+constraint, not only open-literal constraints.
+
+The settlement disposition is also a closed union. Its accepted and rejected
+forms remain distinct even when they name the same callable class:
+`assigned_default`; `accepted_builtin_literal`; accepted or rejected
+`rigid_identity`; accepted or rejected `rigid_use`; accepted or rejected
+`local_method`; accepted or rejected `external_selected`; accepted derived
+`is_eq`, `to_hash`, or `map`; accepted generated parser or encoder; accepted or
+rejected `default_method`; `rejected_error`; and `generalized`. Each arm names
+the exact finite producer authority appropriate to it: a default decision and
+constraint offset (with contributors owned by that decision), Builtin pin,
+declaration constraint, SchemeUse, local target, selected decision, derived
+plan, generated derivation/call, rejection
+certificate, or the complete canonical owner/path certificate range of an
+actual scheme publication. A selected external settlement bijects with one
+decision and its exact dispatch-target SchemeUse/use step. A copied-literal
+disposition references the settlement that owns its tagged handle. There is no
+pending, unknown, skipped-literal, or final-shape arm in checked output;
+checker-local constraints which have not settled publish no terminal event and
+cannot cross the checked boundary.
+
+A completed selected decision additionally binds its raw receiver to at least
+one exact `selected_receiver_anchor` in the terminal constraint's owned handle
+set. That anchor's producer occurrence and complete movement chain, rather
+than equality of final resolved receiver roots, authenticate the receiver: two
+same-typed sibling dispatch sites may not retarget the decision between their
+distinct raw receiver coordinates. When a merged terminal constraint carries
+several selected-receiver handles, the selection producer stores the raw
+receiver from the first selected-receiver handle in the constraint's canonical
+handle order; it never substitutes the resolved dispatcher root. A moved
+anchor remains valid when its exact chain reaches the selected terminal
+constraint. Before method lookup or target instantiation can rewrite or poison
+that receiver, the nominal/alias selection branch also captures the receiver's
+exact owner module identity and source declaration in the decision. The lookup
+which selects the target from the canonical/checker `ModuleEnv.method_defs`
+table keyed by `(MethodOwner, Ident.Idx)` returns both its `MethodBinding` and
+exact finalized provider row index; the decision retains that index. The owner
+tuple and provider row form one producer-authored lookup result. Contextual
+admission requires that indexed row to carry the translated owner key, selected
+method name, and provider `MethodBinding`; holding either coordinate fixed, an
+equal binding under a different owner row cannot substitute for it. A jointly
+consistent tuple and row is the recorded lookup selection; ownership is not
+rediscovered from the live receiver descriptor, method annotation, or solved
+receiver shape. The raw receiver anchor and movement proof independently
+authenticate the dispatch occurrence. Both authorities are mandatory, and an
+otherwise valid owner cannot authorize a same-shaped sibling receiver.
+
+Checked-boundary publication groups the independently enumerable producer
+sources by their exact terminal constraint and requires one event per group.
+Every retained producer source belongs to exactly one event source range and
+every event range is the complete group; this is many-to-one source ownership,
+not one event per source. Publication also requires each handle to have exactly
+one producer and one terminal-event owner (intermediate path occurrences are
+not owners), complete movement closure, and exact consumption of every
+selected decision and copied-literal event. Missing or coordinated deletion, extra or
+duplicate rows, reordered noncanonical sources, foreign handles, tag swaps,
+sibling retargets, incomplete movement, and a handle split across terminal
+constraints are corruption. The terminal rebuild, serialization, relocation,
+checker probes, and every OOM rollback cover the event, source-plan, handle,
+movement, disposition, and auxiliary certificate pools as one ownership
+boundary.
+
+A default-method cache root records only the finite first target attempt which
+seeded the mandatory imported-method support step: its stable decision draft,
+relative constraint offset, selected Builtin owner declaration, and exact
+provider `MethodBinding`. The root has no SchemeUse coordinate; its otherwise
+unused field is canonical zero. A signature or outer-arity rejection may seed
+the cache without pretending that a use was committed, and later defaults
+never rewrite or borrow that immutable first-attempt origin. Every successful
+default-method use, including a successful first attempt, publishes its own
+exact pristine-to-use child step and committed SchemeUse, keyed by its stable
+decision draft and relative constraint offset. Rejected attempts publish no
+use child. That successful child is also the sole selected target for the raw
+dispatch edge: while the edge still has its actual pre-selection receiver and
+callable state, the checker records their canonical state digest and the exact
+already-recorded parent edge, then commits the child, SchemeUse, unification,
+and raw-edge target-cache entry as one transaction. A later ordinary worklist
+visit reuses that exact child and may not publish a second SchemeUse or a
+`SelectedMethodDecision` for the same raw edge. An already-committed cache hit
+is likewise reuse of its exact binding, name, parent, and method var, not a new
+default attempt or new provenance. Until the later `DefaultMethodTarget` settlement ledger is
+published, each producer-authored `default_method_use` child is itself an
+unconditional terminal root: its existence is the explicit successful-copy
+event, and its closure retains its committed SchemeUse, cached root, decision,
+constraint, and contributor authority. The checked boundary otherwise remains
+referenced-only: a rejected
+provisional root with no committed child or other retained marker basis is
+pruned together with its otherwise-unconsumed decision. That pruning does not
+turn the rejected attempt into a use or permit a sibling consumer to claim its
+cache root. At quiescent freeze the draft id is remapped to the durable
+default-decision row, so admission can bind each committed use independently
+to the exact decision, constraint, provider root, and consumer rather than
+treating cache reuse as authority. Each decision owns a
+complete constraint range whose shared numeric-defaulting judgment must equal
+its recorded Dec/Str target. That target selects the corresponding explicit
+Builtin declaration index. Every method identifier in the decision range is
+an exact identifier in the consumer module. The selected constraint's method ident and that
+declaration form the exact Builtin `MethodKey`; its `MethodBinding` value must
+equal the origin's provider type-node and def. The declaration index and method
+type-node are distinct coordinate domains and are never compared for equality.
+The decision also owns a nonempty, gapless, canonically ordered range of every exact
+driver contributor for its resolved receiver and complete constraint range;
+it may not nominate an arbitrary first worklist entry. A contributor's closed
+union is either the exact copied-open-literal group which produced the
+receiver, or the exact ordinary literal-creation source node, its expression-
+or-pattern occurrence kind, and literal kind. Contributors are sorted and
+deduplicated only by that stable semantic union key, with canonical inactive-
+arm bytes. Admission replays every contributor against its CIR or copy-step
+authority and requires exact completeness, order, and ownership for the
+decision's producer group; missing, extra, duplicated, orphaned, or cross-
+range contributors are corruption. The decision itself binds the exact
+receiver, complete constraint range, selected Dec/Str target, and each method
+origin's constraint offset. Selection first reserves a stable checker-local
+decision draft keyed by that explicit logical receiver and constraint-range
+identity. Literal creation and copy producers append their exact contributor
+tokens to the draft as registrations occur, and every worklist entry carries
+the draft id rather than later regrouping settled types. A registration-
+producing batch may not freeze the draft while it is being iterated. Only the
+declared literal-defaulting quiescence/fixpoint, after no copy or probe path can
+append another contributor, may sort/deduplicate the staged tokens and
+atomically publish the nonempty durable range; any registration after that
+freeze is an invariant violation. Probe rollback restores the drafts and their
+token pools exactly, and OOM before publication leaves no partial durable
+decision or contributor range. Every proof-aware copy step owns a gapless,
+canonical range of immutable copied-open-literal groups emitted directly by
+the copy traversal. There is exactly one group for each copied open-literal
+receiver occurrence. The group names the exact source and destination copy
+occurrence and constraint ranges plus its finite component authority, and owns
+one event for every literal-conversion constraint in those ranges. A group
+with `k` literal constraints therefore owns exactly `k` events and `k` fresh
+`copied_literal_event` handles, never one handle for the whole receiver.
+Admission replays the authenticated copy relation and requires these two
+bijections; final solved content and contributor rows are never used to
+reconstruct the copy-time inventory. Default contributors name group ids, so
+deleting, inserting, retargeting, or changing the occurrence/ranges of either
+side is corruption. The checked-boundary transaction partitions and remaps
+group and event ranges alongside steps, occurrences, pairs, and constraints;
+probes and OOM roll back both pools with the rest of the proof transaction.
+Event inventory and event consumption are separate exhaustive ledgers. Every
+retained copied-open-
+literal event owns exactly one terminal settlement disposition from a closed
+union: `assigned_default` names its exact default decision and contributor;
+`rejected_error` names the exact rejected-static-dispatch publication which
+rejected that event's carried constraint; an erroneous binding which owns a
+retained evidence-bearing constraint must publish that constraint rejection
+before the binding error consumes the event;
+`generalized` names the exact generalization boundary, binding/scheme
+occurrence, and producer-authored occurrence path which absorbed it; and
+`context_dispatch_pinned` names the exact finite pin producer, terminal
+constraint evidence, and SchemeUse/selected-decision row when dispatch is the
+pin. The corresponding producer authors each disposition when that outcome is
+committed. Neither final resolved content, rank, absence from a default
+decision, nor a terminal scan may supply a disposition. A boundary which skips
+an event only because it belongs to a later boundary leaves its checker-local
+draft pending; the later committing producer supplies the one terminal
+disposition before any checked output is formed. The
+tagged constraint-evidence handle attached at copy time follows every exact
+constraint movement until the producer consumes the matching tag, so a moved
+literal cannot disappear from the settlement inventory. Retained events and
+dispositions are gapless, canonical, and bijective. An assigned-default copied
+event names the contributor for its receiver-level group, but that relation is
+not a bijection: one group can carry several literal constraints, and a cross-
+kind group participating in a decision can have no constraint directly
+discharged by the selected head default. Sibling constraints use their actual
+context-dispatch settlement. Unreferenced support steps and their groups and
+events are pruned together. Missing, extra, duplicated, tag-swapped, owner-
+swapped, or orphan dispositions are corruption, and probes, failed
+publication, terminal rebuild OOM, and cache relocation restore all group,
+event, handle, movement, disposition, and consumer lengths atomically. There
+is no `unknown`, skipped-numeric, or generic final-shape settlement arm.
+
+The settlement evidence is itself explicit producer output. A rejected/error
+disposition owns a nonempty canonical range of exact
+`{evidence_handle, terminal_constraint, rejected_static_dispatch_index}`
+references; a copied-literal rejection must include its exact
+`copied_literal_event` handle.
+The rejected-dispatch row's callable alone is not a constraint identity, so
+admission also replays the tagged evidence-movement chain to the named terminal
+constraint. Every branch which consumes an already-erroneous callable, and
+every literal-value validation which rejects a Builtin conversion, publishes
+that rejection instead of silently skipping the obligation. A successful
+primitive Builtin numeral, quote, or interpolation conversion publishes an
+exact Builtin-literal pin record at the primitive decision branch, naming the
+event handle, terminal constraint, raw dispatcher occurrence, literal kind,
+and exact admitted Builtin declaration. Local custom nominal selections cite
+their `LocalMethodDecision`, external selections cite their
+`SelectedMethodDecision`, and rigid where-method selections cite their exact
+SchemeUse. These rows are reusable only when their exact constraint and tagged
+movement chain match the event.
+
+A generalized disposition owns a nonempty canonical range with one exact owner
+certificate for every tagged evidence handle and binding/scheme root in the
+committing boundary through which that handle is reachable. A copied-literal
+disposition therefore selects the certificates whose handle is its exact
+`copied_literal_event`; it never substitutes a sibling handle from the same
+settlement. Each certificate names the handle, the durable binding node and
+scheme root, the terminal constraint occurrence, and a gapless producer-authored
+semantic path from that root. Path steps use the closed
+function/tuple/nominal/record/tag/alias, static-dispatch, interpolation-part,
+interpolation-item, and captured scheme-requirement edge vocabulary; a side-
+table requirement may not disappear without a durable path-equivalent owner
+row. The boundary reachability producer stages these paths while the literal
+is deliberately left open, and only actual scheme publication after
+generalization completes them. A recursive/shared boundary publishes every
+exact owner in canonical order rather than choosing one convenient member.
+Predeclared-annotation paths remain provisional until their producer-event
+replay rebases them to the regenerated body scheme. Admission starts at the
+named binding/scheme roots and replays every path; a final rank, solved shape,
+or post-hoc graph search is never an ownership certificate.
+
+#### Normalized Dispatch-Settlement Schema
+
+The durable representation has one physical owner for each variable-length
+fact. Every closed union below has a fixed-width tag/payload encoding,
+canonical zero bytes in inactive payload words, and exhaustive producer,
+relocation, serialization, and admission switches; an unrecognized tag is
+corruption, never an `else`/unknown arm. New tags are dense from zero in the
+exact declaration/listing order below; a tag which explicitly reuses an
+existing enum preserves that enum's numeric value.
+`DispatchSettlementEvent` contains `{ terminal_constraint_index,
+sources_start, sources_len,
+constraint_evidence_start, constraint_evidence_len, moves_start, moves_len,
+disposition }`. The terminal index names the exact
+`StaticDispatchConstraint`; the source and move pairs are ranges in
+`dispatch_settlement_sources` and the existing `constraint_evidence_moves`.
+The evidence range is a foreign-key snapshot of the range physically owned by
+the terminal constraint; it must be byte-for-byte equal to that range and does
+not introduce a second handle pool. The source and evidence ranges are
+nonempty; the movement range may be empty only when every handle is already on
+its producer constraint. Likewise, the event directly owns its
+movement slice; a one-word indirection pool would add no information because
+each retained move belongs to exactly one settlement.
+
+Events are strictly ordered by terminal constraint index. Their source and
+movement ranges gaplessly partition their respective pools in event
+order. Sources within one event are strictly ordered by their closed arm and
+then the arm's complete semantic coordinate tuple. Moves are strictly ordered
+by their `(handle.kind, handle.index, source_constraint_index,
+destination_constraint_index)` tuple. Exact duplicate sources or moves are
+invalid, and every move's source constraint index is less than its destination
+constraint index. For each terminal handle, the event range contains every and
+only referenced move which lies on a path from that handle's producer
+constraint to the event's terminal constraint: the move's source is forward-
+reachable from the producer and its destination is reverse-reachable from the
+terminal under that same handle. This producer-forward/terminal-reverse
+intersection rejects a forged or disconnected incoming branch which merely
+reaches the terminal. The producer constraint is the sole source and the
+terminal constraint is the sole sink of the retained per-handle DAG. An
+identity path has no move row. Every retained `ConstraintEvidenceMove`
+belongs to exactly one event closure; a move not owned by a terminal event is
+pruned with its handle.
+
+Every initial source arm is an immutable source plan, not a view reconstructed
+from final CIR. Rewriting a dispatch expression to a structural operation or a
+runtime error may retire its live node payload, but never its source plan. The
+arm payloads are exactly:
+
+* `dispatch_expr`: selected-receiver anchor, source expression node, the closed
+  original node kind (`dispatch_call`, `type_dispatch_call`, or
+  `method_eq_is_eq`), raw receiver, constraint callable, and method;
+* `literal_conversion`: selected-receiver anchor and the exact durable
+  immutable creation-field snapshot of `LiteralDispatchPlan`: node, target,
+  callable, and numeral-or-quote kind. The mutable resolution field is an
+  outcome, not source identity. The mutable NodeStore plan may match this
+  snapshot while live, but its swap-removable backing index is never durable
+  authority;
+* `interpolation`: selected-receiver anchor, interpolation node, raw
+  dispatcher, and constraint callable;
+* `pattern_literal_equality`: selected-receiver anchor, pattern node, literal
+  kind, raw pattern receiver, and `is_eq` callable. This arm is the dedicated
+  pattern-equality plan and survives retirement of the pattern's mutable
+  literal-conversion row;
+* `negated_equality_not`: selected-receiver anchor, equality expression node,
+  exact equality-leg constraint, raw intermediate equality-result receiver,
+  and `not` callable. This arm is the dedicated `!=` plan;
+* `for_loop_dispatch`: selected-receiver anchor, exact
+  `ForLoopDispatchPlan`, and closed `iter` or `next` slot;
+* `where_requirement`: exact `WhereMethodSource`; and
+* `copied_constraint`: selected-receiver anchor plus exact receiver and
+  function `CopiedConstraintComponentRef`s.
+
+Here "selected-receiver anchor" is the payload word `anchor_index`; every
+other named scalar is stored, not rediscovered. The fixed payloads are
+`dispatch_expr { anchor_index, node_index, original_node_kind, receiver_var,
+constraint_fn_var, method_ident }`, `literal_conversion { anchor_index,
+node_index, target_var, constraint_fn_var, literal_kind }`, `interpolation {
+anchor_index, node_index, dispatcher_var, constraint_fn_var }`,
+`pattern_literal_equality { anchor_index, pattern_index, literal_kind,
+receiver_var, is_eq_fn_var }`, `negated_equality_not { anchor_index,
+node_index, equality_constraint_index, receiver_var, not_fn_var }`,
+`for_loop_dispatch { anchor_index, plan_index, slot }`, `where_requirement {
+source_index }`, and `copied_constraint { anchor_index,
+receiver_component_ref, function_component_ref }`. A field repeated by the
+anchor, creation constraint, or referenced plan is an authenticated snapshot:
+admission requires exact equality, so it cannot become a competing authority.
+
+The first six direct arms and `copied_constraint` have the primary handle
+`selected_receiver_anchor { anchor_index }`. `where_requirement` has the
+primary handle `where_requirement_source { source_index }`, which is a third
+closed `ConstraintEvidenceHandle` kind. The producer attaches that handle even
+when the where signature has no polarity-marker contract. Every source's
+primary handle must occur in its event's terminal handle set and its complete
+movement closure must begin at the source plan's creation constraint. Every
+retained primary handle owns exactly one source row. A
+`copied_literal_event` handle is additional copy/defaulting evidence, not a
+second initial source row; its independently exhaustive inventory and
+consumption rules are below. These three handle kinds are exhaustive for this
+schema. Their numeric order preserves the two existing tags and appends the
+new one: `selected_receiver_anchor = 0`, `copied_literal_event = 1`, and
+`where_requirement_source = 2`.
+
+An event's terminal evidence set is exactly the union of the primary handles
+of every row in its source range and every `copied_literal_event` handle whose
+parallel disposition names that event. No other handle may occur, and neither
+side of this equality may omit a member. This is the inverse which makes a
+coordinated deletion of a source, copied event, and handle observable.
+
+At terminal canonicalization `selected_receiver_anchors` are strictly ordered
+by `(constraint_index, kind, node, slot, copy_step,
+receiver_occurrence_offset, constraint_pair_offset, receiver_var)`, with the
+kind-inactive coordinates canonicalized. A total old-to-new map rewrites every
+anchor handle and source/decision reference. The constraint-evidence backing
+pool is rebuilt in constraint-index order; each constraint owns its exact
+strictly handle-ordered range, including the repeated appearance of one handle
+along its authenticated movement path. Those ranges gaplessly partition the
+backing pool, while the no-split rule applies specifically to terminal sinks.
+
+`WhereMethodSource { owner_node, where_node, method_ident, source_ordinal,
+retained_constraint_index, source_contracts_start, source_contracts_len }` is
+the complete source-occurrence ledger, not only a marker-contract ledger. Its
+marker-contract range may be empty. The source ordinal is assigned by the producer's
+complete flattened direct-and-alias-expanded source sequence for that owner.
+Rows are strictly ordered by `(owner_node, source_ordinal, where_node,
+method)`; the retained representative's settlement source range contains all
+rows in its duplicate/alias-expansion equivalence class. A zero-marker row is
+still mandatory and still authors its evidence handle. The producer uses a
+stable draft source id until terminal canonicalization. Sorting the rows builds
+a total old-to-new id map and atomically rewrites every
+`where_requirement_source` handle in constraint evidence ranges, movement
+rows, settlement source plans, pins, and certificates; no raw index survives
+an earlier sort. This terminal sort is the only reordering pass; a duplicate
+complete source key is corruption rather than an invitation to deduplicate two
+authored occurrences.
+
+The source ordinal is a whole-root coordinate, never a per-rigid scratch
+offset. `owner_node` is always the exact durable
+`BodyAnnotationAttachment.annotation_root`. Fresh canonicalization has no
+producer of `CIR.Statement.s_type_anno`: top-level annotation-only values are
+Defs, while block annotation-only values first use a nonpublishing staged Def
+and then publish exactly one `local_decl` attachment for the checked statement.
+Consequently there is no standalone where-source owner arm and no statement-
+membership ledger. A stale or forged `s_type_anno` cannot mint source authority.
+
+The producer stages created requirements while visiting the type tree, then,
+when the annotation root returns, walks the original where span in written
+order. One owned direct clause contributes one source. One owned reusable-
+alias clause contributes each distinct exported requirement in the referenced
+receiver constraint-range order. This yields the dense ordinal sequence across
+all constrained rigids of the root, even when type-tree visit order differs
+from source order. Platform requirements, type declarations, reusable-alias
+declarations, predeclared-scheme generation, and uninitialized-variable
+generation are closed nonpublishing modes; they cannot silently enter this
+body ledger.
+
+Every requirement which reached constraint creation publishes its source,
+including a marker-free requirement and a requirement whose shared rigid is
+poisoned later. Final solved `.err` is never evidence that creation did not
+occur, so source publication must not be suppressed or erased by inspecting a
+rigid's final descriptor. Malformed or unowned direct clauses and reusable
+alias references rejected before constraint creation (unresolved,
+not-an-alias, checked-error, arity mismatch, or a validated empty export) are
+the exhaustive nonpublishing cases. Contextual admission independently
+enumerates the same complete body-attachment roots,
+replays direct clauses and validated alias exports, and byte-compares every
+`(owner, ordinal, where, method)` occurrence; terminal rows alone are not an
+authority for coordinated deletion.
+
+That contextual inventory is one allocation-free canonical stream. It scans
+fresh raw owner nodes in node-index order, admits only an annotation with one
+exact body attachment, and then walks each owner's original where span in
+written order. One cursor consumes the already
+terminal-sorted source table, so end-of-owner and end-of-stream checks reject
+missing, extra, and coordinated whole-group deletion. Direct owned clauses
+consume one occurrence.
+An owned reusable-alias clause has a closed replay outcome: malformed or
+canonically unowned reference, builtin/not-an-alias, failed unresolved import,
+checked-error publication, arity mismatch, and a validated ready empty export
+consume zero; a ready matching-arity declaration consumes exactly its rigid
+receiver's distinct retained constraint range in that range's order. Invalid
+bounds, missing publications or import authority, malformed ready roots, and
+candidate/fresh reference mismatches are corruption rather than additional
+zero-source cases. The ordinal advances only when an occurrence is consumed
+and therefore remains dense across interleaved rigid owners and alias exports.
+
+`ForLoopDispatchPlan` retains its existing node/pattern/iterable, iterator/step
+variables, `iter_fn_var`, `next_fn_var`, and step topology, and adds two closed
+`iter_outcome` and `next_outcome` slots. A `live_constraint` outcome is
+`{ constraint_index, anchor_index }`; a
+`rejected_before_constraint` outcome is `{ rejected_static_dispatch_index }`
+for the synthetic callable. Only a live slot contributes a
+`for_loop_dispatch` source and terminal event. Plans are strictly ordered by
+loop node index, each loop has exactly one plan, and terminal sorting remaps
+every source-plan reference. For each slot the named live constraint or
+rejection row's callable must equal that slot's existing `iter_fn_var` or
+`next_fn_var`, and a live anchor must name the plan's iterable or iterator
+receiver respectively. There is no unresolved slot in checked output.
+
+A live synthetic loop constraint has no `intro_expr`: the same producer is
+used by expression and statement `for` nodes, and a statement node must never
+be smuggled through the expression-only provenance field. When selection of an
+imported `iter` or `next` implementation publishes a `dispatch_target`
+`SchemeUse`, its site is instead the exact nonzero `ForLoopDispatchPlan.node_idx`.
+The producer obtains that site only through the unique live plan outcome whose
+slot names the selected constraint, and contextual admission replays the full
+`plan -> slot -> constraint -> SchemeUse` chain. Both live slots obey this
+rule. An expression-backed constraint continues to require exact
+`intro_expr == SchemeUse.node_idx`; a rejected loop slot cannot authorize a
+SchemeUse, and neither a same-shaped sibling loop nor another slot or plan can
+be substituted.
+
+A `CopiedConstraintComponentRef` is the closed union `root_graph`,
+`scheme_requirement`, `binding_codec_receiver`, or
+`binding_codec_function`. Every arm names an exact copy step and occurrence;
+the outer function reference also names the owner-relative constraint-copy
+pair. A scheme-requirement arm additionally names its requirement ordinal. The
+two binding-codec arms additionally name the binding-root step and requirement
+ordinal. Its fixed fields are `{ kind, copy_step_index, occurrence_offset,
+constraint_pair_offset, requirement_ordinal, binding_root_step }`; the outer
+receiver reference has canonical zero in the role-inactive constraint-pair
+word, and `root_graph` has canonical zero in both origin-specific words. A
+copied-constraint source stores both its receiver and function references:
+ordinary/platform refs name the same `root_graph` step, detached requirements
+name the same `scheme_requirement` step and ordinal, and a binding-codec pair
+is exactly one `binding_codec_receiver` plus one `binding_codec_function` whose
+child-step origins name the same binding-root step and ordinal. The selected-
+receiver anchor must name the receiver reference's raw destination and the
+function reference's exact destination constraint pair. The copied source row
+is the anchor's composite authority: `anchor.copy_step` and
+`anchor.receiver_occurrence_offset` are the receiver reference's step and
+occurrence, while `anchor.constraint_pair_offset` is interpreted only as the
+function reference's owner-relative pair offset. Root-graph and detached-
+scheme refs therefore use one shared step; binding-codec refs truthfully span
+their distinct receiver and function steps. Admission first requires an
+anchor-to-exactly-one-copied-source inverse, then replays each component against
+its own step. It never treats the anchor's single step word as owning both
+binding-codec components. No copy-step-kind scan may synthesize one of these
+refs.
+
+Copied-source cardinality is one row for each genuinely new destination
+constraint occurrence, published in the same atomic transaction as its
+selected-receiver anchor and primary evidence handle. A checker-local shared
+cut publishes no constraint pair; every local pair therefore names a newly
+appended destination and publishes its copied source. A cross-module graph
+copy has disjoint source and destination constraint namespaces: numerically
+equal indexes still denote distinct occurrences and publish the destination
+source. The ordinary graph producer derives both refs only from the one exact
+`static_dispatch_function` witness and its named constraint-pair. The detached
+scheme producer requires one receiver ingress and one function ingress with
+the same root occurrence and requirement ordinal; only the function ingress
+names the constraint-pair. Shape validation may omit that function and pair
+only when the receiver ingress's immutable raw occurrence is exact local
+identity (`source == destination`); that skipped receiver publishes no source.
+The binding-codec producer requires the exact
+receiver/function child steps already returned by its two-component copy,
+their common binding-root step and requirement ordinal, and the function
+step's authored ingress pair. Missing, duplicate, crossed, or role-swapped
+component witnesses are producer invariant failures rather than a reason to
+scan another step, constraint, or resolved type.
+
+The proof converse is exhaustive before any copied source is replayed. Every
+constraint-copy pair has exactly one primary function witness: either its
+ordinary `static_dispatch_function` edge or its detached/binding
+`scheme_requirement_function` ingress. Other pair-bearing edges, including
+interpolation edges, are references and do not satisfy this producer
+cardinality. Within a detached scheme step, each `(root occurrence,
+requirement ordinal)` has exactly one receiver ingress and at most one
+function ingress; both use `requirement_component_ingress`, the receiver and
+ordinary function use no auxiliary origin, and their parent is the exact step
+root. A receiver-only group is legal solely for its canonical local-identity
+raw occurrence. Thus an extra same-pair function witness or a same-shaped
+receiver sibling cannot survive merely because one otherwise valid copied
+source still names the expected witness.
+
+Detached requirement ingresses are virtual edges from the copied scheme root,
+not structural children of that root's type shape. A root
+`root_copy_action/traverse` may therefore coexist with those exact
+`requirement_component_ingress` edges. The traverse action's zero-outgoing
+condition counts only ordinary structural edges; classifying a detached
+receiver or function ingress as structural would reject the producer-authored
+scheme relation even though its root graph itself is empty.
+
+Changing either binding child step, crossing equal ordinals from different
+binding roots, swapping receiver and function roles, retargeting the receiver
+to a same-shaped raw sibling, or moving the pair offset to another function
+step is corruption. This composite-authority rule changes cache admission
+semantics even though it does not grow the serialized layout, so the owning
+cache version advances when this schema slice freezes.
+
+Producer ownership and later settlement references are distinct. Every
+source-created selected-receiver anchor has exactly one source producer row;
+deleting that row, duplicating it, or retargeting it to a same-shaped sibling
+is corruption. A selected-method decision may later carry that same handle in
+its authenticated terminal evidence snapshot, but that reference is not a
+second anchor producer and does not satisfy the source-to-anchor inverse. The
+decision converse remains independently exact, so an unauthenticated decision
+reference is likewise corruption. Source admission replays the producer's raw
+receiver coordinate against the source row, anchor, and creation constraint;
+it does not require that raw receiver to equal a later terminal receiver after
+an authenticated movement or CIR rewrite. Terminal equality and reachability
+belong exclusively to the settlement event's complete movement converse. A
+same-shaped sibling raw receiver can therefore never replace the authored
+source coordinate merely because both variables eventually resolve together.
+
+The disposition payload table is fixed as follows:
+
+* `assigned_default { decision_index, constraint_offset }`;
+* `accepted_builtin_literal { pins_start, pins_len }`;
+* `accepted_rigid_identity { declaration_constraint_index }` and
+  `rejected_rigid_identity { declaration_constraint_index,
+  rejection_certificate_index }`;
+* `accepted_rigid_use { scheme_use_index }` and
+  `rejected_rigid_use { scheme_use_index,
+  rejection_certificate_index }`;
+* `accepted_local_method { local_method_decision_index }` and
+  `rejected_local_method { local_method_decision_index,
+  rejection_certificate_index }`;
+* `accepted_external_selected { selected_method_decision_index }` and
+  `rejected_external_selected { selected_method_decision_index,
+  rejection_certificate_index }`;
+* `accepted_derived_is_eq`, `accepted_derived_to_hash`, and
+  `accepted_derived_map`, each with its exact
+  `derived_dispatch_plan_index` and a tag which must match that plan;
+* `accepted_generated_parser` and `accepted_generated_encoder`, each with its
+  exact `generated_codec_derivation_index` and a tag which must match that
+  derivation;
+* `accepted_default_method { default_method_instantiation_index }`;
+* `rejected_default_method { default_method_target_index,
+  rejection_certificate_index }`;
+* `rejected_error { rejection_certificate_index }`; and
+* `generalized { owner_certificates_start, owner_certificates_len }`.
+
+A rejected class-specific arm is legal only after that class's exact target
+authority was committed. A rigid signature rejected before a per-use copy
+exists, a lookup with no local/external target, and a failed derived or
+generated attempt therefore use `rejected_error`; publication may not invent a
+SchemeUse, decision, or derivation merely to select a more specific tag. Once
+a rigid use, local/external target, or default target exists, rejection uses
+the matching specific arm and the same occurrence certificate. This finite
+precedence is exhaustive and does not inspect final callable shape.
+
+The inverse consumption table is equally closed. Each dispatch-purpose
+`where_method_use` SchemeUse is named by exactly one rigid-use settlement;
+each `LocalMethodDecision`, `SelectedMethodDecision`, `DerivedDispatchPlan`,
+and `GeneratedCodecDerivation` is named by exactly one matching settlement;
+and each `DefaultMethodInstantiation` is named by one accepted-default-method
+settlement. A `DefaultDecision` is intentionally shared, but each exact
+`(decision_index, constraint_offset)` is named by exactly one settlement for
+that constraint. A declaration constraint used for rigid identity is named by
+the one identity settlement of that occurrence. SchemeUses for value,
+nested-function, inspect, and other non-dispatch slots are outside this inverse
+and cannot satisfy it.
+
+`assigned_default` points to the one constraint offset inside the named
+decision; the decision remains the sole owner of its complete contributor
+range. A copied event's separate assigned disposition names its receiver
+group's contributor row. This avoids choosing one arbitrary contributor for a
+settlement whose receiver may have several. Every literal-conversion constraint
+discharged by the default assignment uses `assigned_default`; sibling
+constraints validated against the chosen Dec/Str target use their actual
+default-method disposition. An already-pinned primitive literal uses
+`accepted_builtin_literal`, never a second default disposition.
+
+At freeze, `DefaultDecision` rows are strictly ordered by
+`(receiver_var, constraints_start, constraints_len, target)` after constraint
+remapping, and duplicate keys are invalid. Their nonempty contributor ranges
+gaplessly partition `default_decision_contributors` in decision order; rows
+inside a range are strictly ordered by the complete active
+`instantiation_copy { group_index }` or `literal_creation { source_node,
+occurrence_kind, literal_kind }` tuple.
+
+The auxiliary producer ledgers are normalized as follows:
+
+* One `BuiltinLiteralPin { handle, terminal_constraint_index, dispatcher_var,
+  literal_kind, origin_module, source_decl }` is emitted for each
+  literal-domain handle admitted by a non-default primitive Builtin branch. An
+  accepted-Builtin settlement owns the
+  nonempty pin range, sorted strictly by handle; those ranges gaplessly
+  partition the pin pool in settlement order, and no pin belongs to two
+  settlements. The literal-domain handle is the primary selected-receiver
+  handle of a direct literal/interpolation source, or the
+  `copied_literal_event` handle of a copied literal; a copied constraint's
+  additional selected-receiver handle is source authority and does not create
+  a duplicate pin.
+* `LocalMethodDecision { terminal_constraint_index, receiver_var,
+  method_ident, binding, scheme_use_index }` records the exact local
+  `MethodBinding { type_node_idx, def_idx }` and `dispatch_target` SchemeUse.
+  Rows are strictly ordered by constraint index and each is consumed by exactly
+  one accepted/rejected local-method settlement.
+* `DerivedDispatchPlan { terminal_constraint_index, receiver_var, kind,
+  payload }` records the closed derivation kind. `is_eq` and `to_hash` have no
+  active payload;
+  `map` carries the selected tag name and payload index. The plan is authored
+  before any CIR rewrite, rows are strictly ordered by constraint index, and
+  each row is consumed by exactly one matching accepted-derived settlement.
+* `GeneratedCodecDerivation` additionally records its exact source constraint
+  index. A derivation row and its already-owned call range are consumed by
+  exactly one matching generated-parser/encoder settlement; callable equality
+  cannot replace the source-constraint coordinate. Derivations are strictly
+  ordered by source constraint index.
+* `DefaultMethodTarget { decision_index, constraint_offset,
+  builtin_decl_index, provider_binding }` is published by the selected target
+  before copying; `provider_binding` is the exact `ModuleEnv.MethodBinding`.
+  A successful copy publishes one `DefaultMethodInstantiation` with fields
+  `{ target_index, scheme_use_index, root_copy_step, use_copy_step }`, naming
+  the exact dispatch-target SchemeUse, cached root step, and pristine-to-use
+  child step. The accepted arm
+  names the instantiation; the rejected arm names the target plus rejection
+  certificate. Every target has exactly one of those two consumers, and every
+  instantiation has exactly one accepted consumer. Targets are strictly
+  ordered by `(decision_index, constraint_offset)` and instantiations by target
+  index. This preserves rejected target identity without pretending a failed
+  copy produced a SchemeUse.
+* `DispatchRejectionCertificate { terminal_constraint_index,
+  rejected_static_dispatch_index, handles_start, handles_len }` owns a
+  nonempty canonical handle-reference range. Each
+  `DispatchRejectionHandleRef { handle }` stores only its tagged handle.
+  Certificate handles are exactly the rejected event's complete terminal
+  handle set, in canonical handle order. Thus the certificate plus
+  each handle denotes the required exact
+  `{handle, terminal_constraint, rejected_static_dispatch}` triple. Every
+  erroneous binding which carries a retained evidence-bearing constraint must
+  first publish, or reuse for an already-rejected callable class, the
+  `RejectedStaticDispatch` row before publishing its binding error. A binding
+  error and `CauseOwner` are not dispatch-rejection authority. Each rejected
+  settlement owns one certificate and each certificate is owned once; the
+  callable-only rejection row is never used without this occurrence
+  certificate. Certificates are strictly ordered by terminal constraint and
+  their handle ranges gaplessly partition the reference pool.
+* `GeneralizationBoundary { owners_start, owners_len }` owns a nonempty
+  canonical range of `GeneralizationBoundaryOwner { binding_scheme_index,
+  scheme_root }` rows.
+  The index names the existing `BindingScheme` authority and therefore its
+  binding node; `scheme_root` preserves the exact published root when it is not
+  the node-aligned variable. Owners are sorted by
+  `(binding_scheme_index, scheme_root)`; boundaries are sorted
+  lexicographically by their complete owner tuples, which are their durable
+  identities. A recursive group is one boundary with every published member,
+  not several singleton boundaries. Boundary ranges gaplessly partition the
+  owner pool in boundary order, and two boundary rows may not have the same
+  complete owner tuple.
+* `GeneralizedDispatchOwnerCertificate { handle,
+  terminal_constraint_index, boundary_index, boundary_owner_offset,
+  path_start, path_len }` owns its path range. A generalized
+  settlement owns the nonempty certificate range, sorted by
+  `(handle, boundary, boundary-owner, path)`. It contains exactly one
+  certificate for every handle/owner pair through which that handle is
+  reachable. A copied-event generalized disposition references the contiguous
+  subrange for its handle inside its settlement's owned range; it does not own
+  that pool a second time. Generalized-settlement ranges gaplessly partition
+  the certificate pool in settlement order, and certificate ranges gaplessly
+  partition the path-step pool in certificate order.
+
+`GeneralizedDispatchPathStep` reuses the exact semantic edge vocabulary of
+`WhereMarkerCopyWitness` but carries no copy action or source/destination
+occurrence. Its closed arms are exactly every
+`WhereMarkerCopyWitness.EdgeKind` except `root_copy_action`: static-dispatch
+function, interpolation part, interpolation item, alias backing/argument,
+tuple element, nominal argument, function argument/return/effect dependency,
+every record type/presence/extension arm, tag payload/extension, and captured
+scheme-requirement receiver/function. Named and indexed structural arms carry
+the same name, ordinal, origin-module, and source-declaration coordinates as
+the copy witness. Static-dispatch, interpolation-part, and interpolation-item
+arms name the absolute local constraint index in addition to their edge-local
+coordinate. A captured-requirement arm names the exact
+`BindingSchemeCodecRequirement` and component; an ordinary checker-only
+side-table requirement must first be rebased to an equivalent structural path
+and cannot appear in checked output. For a root with several paths, the
+producer emits the lexicographically first shortest path under this closed
+edge order. Every path ends at its certificate's terminal constraint, so an
+empty path is invalid.
+
+The settlement is the sole owner of generic handle/movement closure.
+`SelectedMethodDecision` retains its provider binding, exact finalized
+provider method-table row index, constraint, raw receiver, the
+producer-captured receiver owner module identity and source declaration,
+SchemeUse, and root/use copy steps, but references the settlement rather than
+owning a duplicate handle range or a selected-only movement subgraph. Its old
+`constraint_evidence_start/len` and `constraint_moves_start/len` fields are
+replaced by `settlement_index`; `SelectedMethodDecisionMove` is not part of the
+normalized checked schema.
+Admission requires a selected decision's settlement to use the matching
+accepted/rejected external arm and to contain at least one exact
+selected-receiver anchor whose raw receiver equals the decision's raw receiver.
+It separately resolves the immutable owner tuple and requires that exact owner
+declaration and method name to select the decision's indexed provider row and
+binding; another owner row with the same binding is not authority, and a
+retired or poisoned live receiver descriptor is never consulted for ownership.
+
+`CopiedOpenLiteralGroup { copy_step_index, receiver_occurrence_offset,
+source_constraints_start, source_constraints_len,
+destination_constraints_start, destination_constraints_len, component,
+events_start, events_len }` is the receiver-level copy authority. Its source
+and destination `StaticDispatchConstraints` ranges have equal nonzero length,
+and its owned event range is nonempty. The component tag is exactly `root_graph`,
+`scheme_requirement`, `binding_codec_receiver`, or
+`binding_codec_function`. `scheme_requirement` additionally carries the exact
+requirement ordinal; either binding-codec arm carries its binding-root step and
+requirement ordinal. The component tag and payload must agree with the named
+copy step's typed origin, and inactive payload words are zero. The named
+occurrence must project to the group's raw source and destination receiver
+variables, and the step's constraint relation must contain the exact
+source/destination constraint pair at every range offset.
+
+There is exactly one group for every retained copy-step occurrence whose raw
+destination was registered as a fresh open-literal receiver, and no group for
+any other occurrence. A copy step owns a gapless group range, sorted by
+`(component tag and payload, receiver occurrence, source range, destination
+range)`; copy-step ranges gaplessly partition the group pool in copy-step
+order. This receiver-level range authority, rather than a final receiver shape,
+is what a default contributor consumes.
+
+`CopiedOpenLiteralEvent { group_index, constraint_offset, literal_kind }` is
+indexed by the `copied_literal_event { event_index }` handle. A group owns
+exactly one event for every offset at which its source constraint is a literal
+conversion, in strictly ascending offset order, and no event for any other
+offset. Consequently a group with `k` literal-conversion constraints owns
+exactly `k` events. Each event's kind equals that source constraint's closed
+`numeral`, `quote`, or `interpolation` result from the shared
+`literal_defaulting.constraintLiteralKind` authority, and its tagged handle is
+attached only to the corresponding destination constraint. Group ranges gaplessly
+partition the event pool in group order. One receiver/range handle is forbidden
+because it would split when its literal constraints settle independently.
+Copy traversal may use draft group and event ids while it is appending; the
+terminal canonical rebuild produces total old-to-new maps and rewrites every
+`copied_literal_event` handle, default-contributor group id, disposition, and
+settlement/certificate reference atomically.
+
+`DefaultDecisionContributor.instantiation_copy` contains only the exact copied
+group index; `literal_creation` retains source node, expression-or-pattern
+occurrence, and literal kind. The union's tag and complete active tuple are its
+canonical key. Every instantiation-copy contributor names one group, and a
+group is named by at most one contributor. The old copy-step/pair approximation
+and a per-constraint copied-event id are not receiver-level contributor
+coordinates.
+
+`CopiedOpenLiteralDisposition { settlement_index, tag, payload }` is a
+parallel, same-index ledger: row `i` is the sole disposition of copied event
+`i`, and every row first names the one settlement which owns that event's
+handle. Its closed payload is:
+
+* `assigned_default { decision_index, contributor_index }`, whose contributor
+  lies in that decision's owned contributor range and is exactly
+  `instantiation_copy { event[i].group_index }`; the named settlement's main
+  arm is `assigned_default` with the same decision index and an offset for
+  which `decision.constraints_start + constraint_offset` is the terminal
+  constraint;
+* `rejected_error { rejection_certificate_index }`, whose certificate is the
+  same certificate named by the settlement's rejected arm and contains the
+  event handle exactly once;
+* `generalized { owner_certificates_start, owner_certificates_len }`, a
+  foreign-key snapshot of the exact contiguous owner-certificate subrange for
+  the event handle inside the settlement's owned range; or
+* `context_dispatch_pinned`, whose named settlement has one non-default
+  accepted disposition and whose finite authority (Builtin pin, declaration
+  constraint/SchemeUse, local/selected decision, derived plan, generated
+  derivation, or default-method instantiation) matches the event's terminal
+  constraint and movement closure.
+
+An `assigned_default` copied-event disposition always names its own group's
+contributor, but zero or several events may name one contributor. The copied
+disposition tag is determined by the named terminal settlement: a main
+`assigned_default` arm requires this copied arm; any rejected main arm requires
+`rejected_error`; `generalized` requires the matching certificate subrange;
+and any accepted non-default main arm requires `context_dispatch_pinned`.
+Thus every event is consumed exactly once without falsely equating the
+receiver-level contributor cardinality with the per-constraint event
+cardinality. A sibling constraint validated against the selected default type
+uses its actual default-method settlement.
+
+No terminal row in any table above has a pending/reserved/unknown/skipped or
+final-shape arm. Checker-local drafts may be reserved only before publication;
+they are remapped to durable indexes during the single checked-boundary
+transaction and cannot serialize.
+
+The corresponding `ModuleEnv` pool inventory is exactly
+`dispatch_settlement_events`, `dispatch_settlement_sources`,
+`builtin_literal_pins`, `local_method_decisions`, `derived_dispatch_plans`,
+`default_method_targets`, `default_method_instantiations`,
+`dispatch_rejection_certificates`, `dispatch_rejection_handle_refs`,
+`generalization_boundaries`, `generalization_boundary_owners`,
+`generalized_dispatch_owner_certificates`,
+`generalized_dispatch_path_steps`, `copied_open_literal_groups`,
+`copied_open_literal_events`, and `copied_open_literal_dispositions`. Existing
+`where_method_sources`, `for_loop_dispatch_plans`,
+`generated_codec_derivations`, `generated_codec_calls`, `default_decisions`,
+`default_decision_contributors`, `scheme_uses`, `scheme_use_pairs`,
+`selected_method_decisions`, `selected_receiver_anchors`, `binding_schemes`,
+`binding_scheme_codec_requirements`, `rejected_static_dispatches`, the
+`where_marker_copy_steps`, `where_marker_copy_pairs`,
+`where_marker_copy_occurrences`, `where_marker_constraint_copy_pairs`,
+`where_marker_copy_witnesses`, `constraint_evidence_handles`, and
+`constraint_evidence_moves` pools are extended or referenced as specified
+above.
+`WhereMarkerCopyStep` gains its owned copied-group range, and each group owns
+its event range. Every listed pool and owned range participates in
+initialization, deinitialization, relocation,
+static and mutable deserialization, serialization schema reflection,
+checked-boundary replacement/remapping, Probe snapshots, and byte-exact OOM
+rollback in the same change which first publishes it.
+
+Publication proceeds in producer order, then canonicalizes once:
+
+1. Direct constraint creation atomically appends its immutable source plan,
+   selected-receiver anchor, primary handle, and initial constraint. Where
+   generation does the same with its complete source row and
+   `where_requirement_source` handle. A for-loop publishes both closed slot
+   outcomes before its plan becomes visible.
+2. A copy traversal reserves its step, emits the complete pair/occurrence/
+   witness relation and copied-literal inventory, clears foreign handles, then
+   atomically authors destination-local copied-constraint sources, anchors,
+   receiver-level copied groups, per-literal-constraint event handles, and the
+   step- and group-owned ranges. Failure restores every participating length.
+3. Unification and requirement dedup append destination constraints, union the
+   exact handle sets, and append one forward `ConstraintEvidenceMove` for every
+   non-identity carried handle. They never author sources or dispositions.
+4. A terminal dispatch branch first publishes its exact target/pin/plan/use
+   authority, then stages the matching disposition. A rejected branch first
+   publishes or reuses its `RejectedStaticDispatch`, then publishes the
+   occurrence certificate. Defaulting freezes decisions and copied-group
+   contributors only at its declared quiescent fixpoint.
+5. A generalization boundary stages its complete owner set and canonical paths
+   while reachability is available, but completes certificates only when the
+   schemes are actually published. A later boundary may own an uncommitted
+   checker draft; no pending disposition enters checked output.
+6. The quiescent checked-boundary transaction groups sources by terminal
+   constraint in one fixed dependency order. It first applies the existing
+   constraint and copy-proof remaps; next it canonically rebuilds anchors,
+   complete where sources, loop plans, copied groups/events, and target/owner
+   ledgers and obtains their total old-to-new maps; then it rewrites every
+   handle occurrence, move endpoint, and staged target/owner/certificate
+   reference. Only after those identities are final does it construct the
+   unique events, rebuild each complete producer-to-terminal movement closure,
+   install settlement indexes in decisions, emit the parallel copied-event
+   dispositions, and prune unreachable support as one ownership component. It
+   validates every inverse relation above and
+   swaps all replacement pools atomically. Admission re-enumerates the same
+   producers and inverses. Probe rollback and OOM rollback restore all
+   participating list lengths and bytes.
+
+A copied open literal is registered with its exact receiver-level group and
+one event per carried literal constraint at the copy boundary:
+ordinary cross-module and platform copies propagate their returned support
+step, predeclared replay publishes an eager scheme-use support step, and an
+imported binding-codec requirement attributes each literal to its exact,
+unambiguous receiver or function component step. An absent step may not become
+a null or unknown default driver. Registration iterates those authored group
+ranges and uses each group's `receiver_occurrence_offset` directly; it never
+selects an occurrence by reverse-searching the raw destination relation,
+because distinct source occurrences may validly alias one destination while
+only one occurrence authored the fresh literal receiver. Direct Builtin nominal declaration/template
+copies instead enter an explicit producer-side `forbid_open_literal` mode;
+their type-declaration graphs are marker- and static-constraint-free, and
+encountering a literal conversion in an immutable root allocated by that
+declaration copy is an invariant failure. This rejection-only check neither
+follows redirects nor registers a solved shape. Marker-
+bearing Builtin value and method
+schemes use the same exact finite consumer origins as every other provider.
+There is no generic Builtin-declaration or unknown origin. Instantiation steps name the durable use
+anchor that caused the fresh copy and carry the instantiator's complete
+source-to-fresh relation, including instantiations that do not otherwise
+publish a scheme-use record. Each destination basis names its own exact source
+constraint/marker occurrence within that step; one graph copy can carry bases
+from several source constraints, and each source marker may itself own several
+bases after unification. Lineage therefore recurses through every named source
+occurrence's complete grouped fact and is never collapsed to one arbitrary
+parent copy.
+
+`copy_import` publishes a root relation directly from its traversal and creates
+one new basis for every copied provider marker after rebasing the marker into
+the destination path namespace. It never copies the provider's own basis
+chain. Every basis-bearing instantiation publishes a child relation and
+rewrites the copied bases to name that step and the immediate source
+occurrence. Same-module constraint merges union and deduplicate bases and
+remap their destination-local marker offsets in lockstep with marker-path
+coalescing; when the retained constraint occurrence is not already identical
+to a copy step's destination occurrence, an explicit merge proof is required.
+
+Each public cross-module graph-copy operation owns one private, non-nesting
+copy transaction. It opens a `TypesStore` savepoint before the first graph
+request; snapshots the destination's copy-step, pair, occurrence,
+constraint-pair, witness, platform-substitution, selected-anchor, and
+settlement-source pools together with its identifier and module-identity
+interners; and journals every new key inserted into the caller's variable
+mapping. Failure restores the complete type store, all listed proof and
+interner state, and removes journaled mapping keys in reverse order. The
+mapping journal belongs to exactly that public copy transaction, not to a scan
+of the hash table: before one absent key is inserted, the transaction
+preflights and records its exact key, then inserts into its one caller-owned
+mapping. A key already present is reused and authors no journal row. Public
+cross-copy transactions never nest. Nominal-declaration recursion remains
+inside one graph-copy context, and a binding-codec copy drives both component
+contexts inside its single transaction; opening another public boundary while
+one is active is an invariant failure rejected before any savepoint or journal
+state changes. The exhaustive entry inventory is
+`copyVarWithMarkerLineageMode` (shared by every public generic-copy wrapper),
+`copyImportedConstraintWithMarkerLineage` (the two-component binding copy), and
+`ensureNominalDeclForStatement` (the direct declaration-table copy); no helper
+beneath those entries opens another transaction. A generic copy
+commits only after its complete source/anchor/handle publication. One
+binding-codec transaction spans both receiver and function component copies,
+the sorted ingress insertion and every shifted owner-relative pair reference,
+and the final copied source, anchor, and handle; independently committed
+component halves are forbidden. These copy savepoints close before return, so
+no solver-mutating unification occurs inside them. When nested under a wider
+checker `Probe`, an inner commit remains rollbackable by the outer store
+savepoint in normal LIFO order; it does not weaken the caller's wider
+transactional obligations. The wider `Probe` therefore owns matching nested
+savepoints for the destination identifier and module-identity interners plus
+the exact parallel module-identity-display boundary and an exact logical
+snapshot of its cross-copy variable map. It commits or rolls those owners with
+the type/proof/cache state. Probe nesting is independently LIFO: an inner
+commit remains part of an outer rollback, while an inner rollback followed by
+an outer commit preserves exactly the outer state. A first external cache miss may
+commit its private copy transaction inside a probe, but rolling back the outer
+probe must restore the interner byte/range/index cells and display list exactly;
+using a previously warmed cache entry is not evidence for this obligation.
+
+Terminal publication recursively follows each basis's exact source occurrence
+to the admitted root, retains only reachable steps and source constraints, and
+rebuilds every pair, occurrence, and witness range as exact gapless partitions.
+Draft witnesses carry producer occurrence identities; the terminal transaction
+sorts and remaps them to canonical occurrence offsets and rejects any missing,
+extra, ambiguous, or unbound occurrence or witness. No producer, terminal
+rebuild, basis walk, OR propagation, or admission lookup assumes that a source
+coordinate uniquely identifies a pair: it uses the persisted pair offset or
+both tuple coordinates. It also computes each pair's canonical shortest
+discovery depth from the root after pruning. The
+root pair is the sole depth-zero row and uses sentinel predecessor fields.
+Every other row names the lexicographically first shortest incoming edge as
+`(predecessor_pair_offset, predecessor_edge_ordinal)`. Admission enumerates
+the canonical witness range, validates every named semantic source and
+destination edge and typed action against the exact step origin and admitted
+authority, and proves that the range is the complete outgoing edge/cut set.
+It then locates each witnessed child by its exact tuple or occurrence-bound
+pair offset and requires
+`child_depth <= parent_depth + 1`, and proves the stored predecessor is the
+minimum incoming edge from depth minus one. This allocation-free certificate
+rejects disconnected components and cycles with fabricated depths,
+non-shortest depths, and alternate noncanonical predecessor bytes. Position
+and written-row metadata must agree within a
+group; raw path offsets are never identity. The
+copy-proof regression matrix includes an annotation whose distinct source
+variables unify only after its backup copy, distinct raw pairs which all
+collapse to one final tuple, valid tuples with one resolved source and several
+destinations, and rejection of one identical raw source copied to different
+raw destinations.
+The
+result-row authorization table is the exact sorted projection of the same
+local use groups: every nonempty direct or `Try` widening shape has exactly one
+row and an empty shape has none. These are equalities, not one-way
+implications: cache admission rejects a manufactured true bit, a deleted
+required row, an unbound/missing/extra basis, and every extra authorization row
+just as it rejects missing authority. Inherited `true` is never self-asserted
+by the destination constraint.
+
+Method-output publication is the exact projection of the finalized method
+registry onto distinct callable `MethodBinding` values. Several owner/name
+keys may name the same exact `(type_node_idx, def_idx)` binding and share one
+publication, but one type node may not name two definitions. Every distinct
+binding whose settled checked root resolves through aliases to a function owns
+exactly one publication, including an explicit ready-empty publication with a
+zero-length row range; a non-callable binding owns none. Rows are ordered by
+their complete guarded structural path, and every publication owns gapless
+row and path slices recording the exact positive tag-row root, terminal tail,
+position, and path. After the checked-boundary rebuild and before binding-
+scheme nodes are finalized, the terminal producer constructs all three
+replacement pools off-side, validates the complete binding bijection and every
+integer/range conversion, and performs one infallible triple swap. It never
+runs under a solver Probe. Allocation failure leaves the old three pointers,
+lengths, capacities, and bytes unchanged, and repeated terminal production is
+idempotent. This durable table is downstream transport; same-SCC nested-
+position rejection occurs earlier from the exact selected binding root and
+does not read a terminal publication that does not yet exist.
+
+Publication constructs complete replacement static-constraint, marker,
+guarded-path, and authorization lists off-side, using the allocator that owns
+each destination. It prevalidates every old range/index and completes every
+checked integer conversion before commit. Only then does one infallible
+transaction swap the replacement pools into the `TypeStore` and `ModuleEnv`,
+rewrite live descriptor and exact-ledger references, clear dead descriptor
+ranges, and destroy the old pools. It never runs under a solver probe or
+savepoint. Allocation failure leaves every original pointer, length, capacity,
+descriptor range, ledger index, and authorization byte unchanged.
+
+Checked-module admission validates this canonical ownership graph without
+allocation: every owner is in range, every durable constraint has at least one
+owner, every owned slice and path pool is an exact partition in canonical
+order, and both grouped OR levels plus the authorization projection are
+complete and exact. Each copy-chain root resolves through the exact admitted
+semantic-owner closure and its finite fresh-CIR locator. Admission validates
+every complete copy pair against exact copy semantics, rebase/substitution
+rules, every instantiation anchor, and every basis destination occurrence,
+then follows the chain to the exact provider constraint/marker/fact. Merely
+substituting a structurally equal provider binding or constraint is invalid.
+Trailing or interstitial pool history, orphan
+constraints, shared ranges, noncanonical-but-in-bounds layouts, and any basis
+not bound exactly once to its destination marker are corrupt artifacts;
+admission never compacts or repairs them.
+
+Reusable where-alias declarations publish an explicit settlement record in
+addition to their per-source expansion rows. Every canonical declaration has
+exactly one `WhereAliasDeclarationPublication`: `ready` carries its exact
+gap-free expansion slice and a canonical local dependency rank, while
+`checked_error` carries rank zero and an empty slice. A ready declaration with
+no methods is therefore distinct from an absent/unsettled declaration. Its
+rank is zero when it has no local ready where-alias dependencies, otherwise
+one plus the maximum rank of every local dependency; ready-empty dependencies
+still participate, while imported dependencies do not affect the current
+module's rank. A checked-error dependency makes the referencing declaration
+checked-error. This producer-authored outcome/rank is the allocation-free
+acyclicity and completeness authority at cache admission; validation never
+guesses dependency order from declaration indices or reconstructs it from the
+expanded constraint rows. Diagnostic-free cache storage rejects every
+checked-error declaration outcome.
+
+Lowering note: a body use that WIDENS its copy is
 specialized by Monotype at the wider row when the implementation's own
 result row is open. `instantiateWhereMethodForUse` records an exact raw
 `SchemeUseRecord.where_method_use`; if generalized constraint dominance later
@@ -4963,8 +7772,9 @@ Dispatch-cycle termination is structural, with two rules. Target selection is
 rejected as recursive dispatch when it repeats an exact solver state along
 its own derivation lineage—the same alpha-normalized receiver plus callable
 digest with the same exact method binding—or when it re-enters an ancestor
-edge's exact binding with a settled receiver that strictly structurally
-contains that ancestor's settled receiver. Every child constraint minted by
+edge's exact binding and the ancestor receiver and callable both embed into
+their current counterparts, at least one embedding is strict, and that
+ancestor lineage has already grown once. Every child constraint minted by
 selecting a target records its parent edge, so the parent graph is
 lineage-complete and acyclic by construction: a child is provably fresh at
 record time. The dispatch worklists carry no numeric give-up bounds; they
@@ -4989,7 +7799,7 @@ relation is explicitly re-enqueued and the ordinary plus instantiated dispatch
 worklists run to quiescence. Only their exact consumed/rejected record permits
 retirement; the receiver's concrete shape alone never does.
 
-Selected method-target instantiation explicitly records which parent dispatch
+Method-target instantiation explicitly records which parent dispatch
 edge produced each copied child constraint—literal-conversion children copied
 from the selected target's scheme included. Only pre-existing caller
 constraints that happen to become concrete during the same unification do not
@@ -4999,12 +7809,26 @@ relation and compares it with the child's ancestor chain. Reaching the same
 digest, method name, owner environment, and exact method binding is the same
 solver state and is rejected as recursive dispatch; a chain whose concrete
 type structure changes has a different digest and continues unless the
-growth rule catches it re-entering the same exact binding with a strictly
-grown settled receiver. Rejection settles only that cyclic relation and
+growth rule catches it re-entering the same exact binding when the ancestor
+receiver and callable both embed into their current counterparts, at least one
+embedding is strict, and that same-binding ancestor's own lineage already
+grew. One growth step remains legal; the next growth through an already-grown
+ancestor is pumping. Rejection settles only that cyclic relation and
 processing continues with unrelated queued relations. A repeated observation
 of the same raw edge reuses its recorded target; type traversal and digest
-construction occur only when selecting a target for a new derived edge, and
-an edge selected with no parent records no digest at all.
+construction occur only when selecting a target for a new raw edge, and
+every new edge records its digest at its own pre-selection point, including a
+chain root with no parent. For a default-selected edge this is the actual
+current receiver and callable state immediately before its sole default child
+is copied, instantiated, and unified—often still flex for a first default edge,
+but possibly already grounded by an earlier latched sibling. The exact parent
+is captured before that child can enqueue further work. Neither state is
+reconstructed after unification. The digest is the immutable pre-copy state
+witness used for exact repetition. Growth comparison is deliberately
+different: it follows the stored raw receiver and callable vars and reads
+their current solved structure when a descendant is prepared, because growth
+concerns the monotone lineage state reached by then rather than a second
+persisted snapshot.
 
 Only bindings explicitly classified as schemes can instantiate a side-table
 scheme; the root itself need not have generalized rank when quantified
@@ -5039,10 +7863,10 @@ node-sorted binding-scheme side table, referencing the constraint already stored
 in the module's TypeStore and carrying the scheme root that groups all source
 aliases. Import copying copies the binding root, codec receiver, and callable
 through one shared source-to-destination substitution map and recreates the
-explicit TypeScheme requirement. Rechecking a deserialized checked environment
-uses that scheme root to rehydrate the same alias-indexed TypeScheme before
-source checking starts. No import stage infers a codec relation from the solved
-receiver shape or from method-name heuristics.
+explicit TypeScheme requirement in the importing module's fresh checker state.
+A deserialized checked environment remains the immutable source of that copy;
+it is not rehydrated into a second source-checking run. No import stage infers a
+codec relation from the solved receiver shape or from method-name heuristics.
 
 Boundary literal defaulting protects variables in the callable relation but
 does not protect the receiver solely because it is the callable's first
@@ -6083,9 +8907,6 @@ site to any family below must classify it here.
 
 - `widenTryConditionForExpectedReturn`—policy: Hosted Try Question
   Widening (above).
-- `markErroneousBranchWithExpected`—mechanism: diagnostic recovery. The
-  expression already has a reported error; its var is redirected to a fresh
-  var unified with the expected return so checking can continue past it.
 - `closeTagRowsForDerivationHelp`'s marker arm
   (`RedirectRule.derivation_marker_ext_closure`)—policy: Polarity /
   `closeTagRowsForDerivation` (below). A polarity marker rigid in tag-ext
@@ -6118,6 +8939,9 @@ Other solved-graph mutations:
   program's typechecking or checked-module output changes.
 - `resetAnnotationNodes` (`resetVarToUnbound`)—mechanism: recycles
   annotation node vars after the scheme was copied off as a disjoint orphan.
+  The checker reserves the whole reset batch before its no-fail commit and
+  retires only the exact constraint interval emitted by that predeclaration;
+  it never detaches a solved checked-env occurrence for another checking run.
 - `finalizeTypeDeclarationValidity` and occurs-check poisoning
   (`setVarContent(.err)`)—policy: Type Declaration Template Validity (above)
   and diagnostic recovery after an already reported problem.
@@ -6182,6 +9006,38 @@ Other solved-graph mutations:
   `src/compile/coordinator.zig`, and the W6a Monotype/LIR fixtures for independent
   synthesis, rejected `requires_record` synthesis, and exact where-use
   nested-evidence reuse.
+- `finalizeWhereMethodWideningContract`—policy: Polarity and Result-Row
+  Widening Adapter (above). At the enclosing scheme boundary, this operation
+  consumes the exact marker rows, source-to-fresh copy relation, and guarded
+  structural path recorded by each `where_method_use`. It compares each
+  settled copied row with the tags written beside that marker, then restamps
+  the matching attached where-clause constraint with a constraint-owned
+  contract. Identical guarded marker paths merge by unioning their widened
+  fact; differing position classes or incompatible guarded paths are an
+  invariant violation, never an arbitrary winner. The contract travels with
+  subsequent scheme instantiation and cross-module copying, so target checking
+  does not inspect a solved equivalence class or reconstruct a path. This
+  changes no type descriptor or union-find edge, but is inventoried because
+  later dispatch rejection and result-row adapter authorization consume the
+  restamped metadata. Accepted side: independently widened direct and builtin
+  `Try` result rows remain adaptable, and a nested row whose implementation is
+  open remains valid. Rejected side: a widened nested `List`, record-field,
+  tuple-element, tag-payload, or non-`Try` nominal row with a closed
+  implementation is reported before implementation unification. The direct,
+  independent `.synthesize`, imported-scheme, and structurally distinct nested
+  cases in `src/check/test/type_checking_integration.zig` and the W6b CLI/LIR
+  fixtures pin both sides.
+  Checked publication is the terminal metadata phase of this same named rule:
+  it retains only statically referenced constraints, rebuilds constraint and
+  source marker/path partitions off-side, canonicalizes the producer-authored
+  copy-edge/cut certificates and their BFS predecessors, and derives the two
+  exact OR levels and authorization projection described above. The commit mutates no solved
+  type relation, but it infallibly rewrites live flex/rigid constraint ranges
+  and explicit ledger indexes after every allocation and conversion succeeds;
+  dead descriptor-history ranges are cleared. OOM is a byte-for-byte no-op on
+  all original lists and owners. Cache admission requires this canonical
+  partition and exact grouped evidence rather than accepting one-way widening
+  implications.
 - `validateDerivedParseTagExt`—policy: Derived Parser Tag-Row Closure
   (above). Once structural parser eligibility has selected a known tag union,
   its unconstrained flexible extension closes to the empty tag union through
@@ -6224,11 +9080,13 @@ Other solved-graph mutations:
 - `rejectRecursiveStaticDispatch`—policy: Pending Dispatch Requirements In
   Type Schemes (above). Two triggers: the explicit derivation chain and
   alpha-normalized receiver + callable digest prove that target selection has
-  returned to the same solver state and exact binding, or a settled receiver
-  strictly structurally contains the settled receiver of an ancestor edge
-  with the same exact binding. A shrinking or otherwise changing finite chain
-  is accepted. The 80-layer accepted chain, the self-nested rejected chain,
-  and the strictly growing rejected chain pin all sides of the rule.
+  returned to the same solver state and exact binding, or an ancestor edge's
+  receiver and callable both structurally embed into their current
+  counterparts, at least one embedding is strict, and that ancestor lineage
+  has already grown once. A first growth step, a shrinking chain, or another
+  changing finite chain is accepted. The 80-layer accepted chain, the
+  self-nested rejected chain, the callable-pumping rejected chain, and the
+  strictly growing rejected chain pin all sides of the rule.
 - `instantiate.zig` / `copy_import.zig` `dangerousSetVarDesc`—mechanism:
   instantiation and import copying build fresh disjoint graphs.
 
@@ -6241,7 +9099,13 @@ stamped plan—is documented and enforced at the restamp sites
 plan's first stamp, not a restamp; `replaceExprWithRuntimeError` retires the
 plans in the subtree it replaces, which is diagnostic recovery at every call
 site except `recheckNominalConstructorBackings`, where it is the rejection
-mechanism of a declared rule (see below).
+mechanism of a declared rule (see below). `invalidateExprSubtreeMetadata`
+implements the offside discovery/reserve/infallible-commit transaction declared
+by Runtime-error subtree metadata invalidation: it follows the existing typed CIR child
+inventory without inspecting solved types, records the complete ordered
+reachability closure privately, reserves all durable invalidation membership,
+then commits map entries, literal-plan retirement, and omitted-default
+compaction without another fallible operation.
 
 - `recheckNominalConstructorBackings`—policy: Nominal Constructor Backing
   Relation, "Settled-State Re-Decision" (above). This is the one probe of
@@ -8000,9 +10864,10 @@ union-find root is not stable across later merges, so a raw-keyed set answers
 "rejected" for whichever occurrence happened to be recorded and misses every
 other member of the same class. `Check.markStaticDispatchFnRejected` sets the
 class bit and appends one durable `ModuleEnv.rejected_static_dispatches` record
-per newly rejected class; `Check.init` rehydrates those records onto their
-classes so re-checking an env already carrying them behaves like a fresh check.
-Every static-dispatch plan lookup—in the checker and in `EvidencePass`—
+per newly rejected class. Imported/cache consumers validate and read those
+records from the checked env; a new source check begins from a fresh canonical
+env and produces its own records. Every static-dispatch plan lookup—in the
+checker and in `EvidencePass`—
 asks the class before resolving its receiver, and must not infer rejection by
 inspecting a callable result type.
 
