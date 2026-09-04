@@ -8009,14 +8009,22 @@ variable. A specialization is the scheme instantiated under one substitution:
 Monotype seeds the callee's context with the substitution's live cells before
 instantiating the root, so every interior type and every requirement of the
 body is determined by the slots. The evidence vector is derived from the
-substitution at each edge (the receiver in slot `k` selects the target; the
-edge's own checked entries supply only structural contracts and rejected or
-unreachable verdicts) and passed to the callee specialization; a plan resolved
+substitution at each edge (the receiver in slot `k` selects the target) and
+passed to the callee specialization. The edge's checked entries supply
+structural contracts and rejected or unreachable verdicts that the
+substitution cannot reconstruct. They also retain an exact selected-target
+callable only when the evidence parameter's declared source is
+`constraint_callable` or `use_site_only`: that relation binds quantified
+variables absent from the scheme root. When the selected target becomes a
+specialization, Monotype consumes that relation, re-derives target identity
+from the completed substitution, and retains only the nested producer
+contracts still needed downstream. Edge-local checked callable identities
+therefore do not become redundant specialization identities. A plan resolved
 `constraint(k)` reads entry `k` of the innermost vector (walking lexical
 parents for nested local functions by `depth`). A direct plan's evidence node
-records the target's substitution the same way, so a direct target
-specializes under the exact substitution checking applied rather than under a
-re-derived one.
+records the target's substitution the same way, so a direct target specializes
+under the exact substitution checking applied rather than under a re-derived
+one.
 
 **The default rule.** A constrained var no edge can pin follows exactly the
 rule Monotype uses to materialize unresolved variables: numeral literals and
