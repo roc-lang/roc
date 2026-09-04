@@ -168,7 +168,8 @@ pub const Constants = struct {
     ///     quantified variables and each evidence parameter its slot.
     /// 75: Evidence parameters record their constraint callable type.
     /// 76: Procedure templates record their root evidence.
-    pub const CACHE_VERSION = 76;
+    /// 77: Recursive-reference provenance is separate from shared scheme uses.
+    pub const CACHE_VERSION = 77;
 };
 
 /// Configuration for the Roc cache system.

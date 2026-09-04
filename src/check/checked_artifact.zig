@@ -15256,11 +15256,10 @@ pub const ResolvedValueRefRecord = struct {
     ref: ResolvedValueRef,
     checked_ty: CheckedTypeId,
     scope_depth: u32,
-    /// Checking related this lookup monomorphically to a definition that was
-    /// still in flight (a `shared_value_use`): the reference shares the
-    /// definition's own type variables instead of instantiating its scheme.
-    /// Monotype treats only such a reference as recursion into an in-progress
-    /// specialization; every other reference is a fresh instantiation.
+    /// Checking proved that this lookup targets a member of an on-stack
+    /// recursive binding group. Monotype may join it to that procedure's
+    /// in-progress specialization only when its recorded scheme substitution
+    /// is the active specialization's substitution.
     recursive_reference: bool = false,
 };
 
@@ -15308,11 +15307,11 @@ pub const ResolvedValueRefTable = struct {
         errdefer allocator.free(by_checked_expr);
         @memset(by_checked_expr, null);
 
-        var shared_use_nodes = std.AutoHashMap(u32, void).init(allocator);
-        defer shared_use_nodes.deinit();
+        var recursive_reference_nodes = std.AutoHashMap(u32, void).init(allocator);
+        defer recursive_reference_nodes.deinit();
         for (module.moduleEnvConst().scheme_uses.items.items) |record| {
-            if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.shared_value_use)) continue;
-            try shared_use_nodes.put(record.node_idx, {});
+            if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.recursive_reference)) continue;
+            try recursive_reference_nodes.put(record.node_idx, {});
         }
 
         var node_idx: u32 = 0;
@@ -15365,7 +15364,7 @@ pub const ResolvedValueRefTable = struct {
                 .ref = resolved_ref,
                 .checked_ty = checked_ty,
                 .scope_depth = 0,
-                .recursive_reference = shared_use_nodes.contains(node_idx),
+                .recursive_reference = recursive_reference_nodes.contains(node_idx),
             });
             by_checked_expr[@intFromEnum(checked_expr)] = id;
         }
@@ -16464,7 +16463,7 @@ fn sealCheckedProcedureTemplateRefs(
                     @enumFromInt(record.scheme_root),
                     {},
                 ),
-                .nested_function_use, .dispatch_target => {},
+                .nested_function_use, .dispatch_target, .recursive_reference => {},
             }
         }
 
@@ -17310,7 +17309,7 @@ const EvidencePass = struct {
                     }
                     entry.value_ptr.* = @intCast(i);
                 },
-                .nested_function_use => {},
+                .nested_function_use, .recursive_reference => {},
             }
         }
 

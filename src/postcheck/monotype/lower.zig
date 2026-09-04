@@ -46,9 +46,10 @@ const DispatchInstantiationPhase = enum {
 };
 
 /// How a specialization request refers to its procedure. Checking records a
-/// `recursive_reference` when a lookup shares the type variables of a
-/// definition still in flight; only such a request may join an in-progress
-/// ancestor specialization before its fresh cells are related. Every other
+/// `recursive_reference` when a lookup targets a member of an on-stack
+/// recursive binding group; only such a request with the active
+/// specialization's substitution may join an in-progress ancestor before its
+/// fresh interface cells are related. Every other
 /// request instantiates a scheme (a scheme use, a dispatch target, a generated
 /// codec's component call, or a compiler-generated component edge) and
 /// identifies with an existing specialization only through an exact interface.
@@ -894,6 +895,20 @@ const EvidenceContract = struct {
     view: ModuleView,
     entries: []const static_dispatch.CheckedEvidence,
 };
+
+fn substitutionsShareClasses(graph: *InstGraph, left: SpecSubstitution, right: SpecSubstitution) bool {
+    if (left.len != right.len) return false;
+    for (left, right) |left_slot, right_slot| {
+        switch (left_slot) {
+            .checked_error => if (right_slot != .checked_error) return false,
+            .node => |left_node| switch (right_slot) {
+                .checked_error => return false,
+                .node => |right_node| if (!graph.sameClass(left_node, right_node)) return false,
+            },
+        }
+    }
+    return true;
+}
 
 /// The substitution and the evidence derived from it for one request edge.
 const EdgeEvidence = struct {
@@ -5567,6 +5582,7 @@ const Builder = struct {
             .graph = graph,
             .family = DraftTemplateFamilyAddress.init(template_ref, method_scope.key, source_fn_key),
             .evidence = body_ctx.evidence.vector,
+            .subst = body_ctx.evidence.subst,
             .request_fn_node = root_node,
             .initial_request_arg_classes = try graph.snapshotFunctionArgumentClasses(root_node),
             .fn_id = reservation.fn_id,
@@ -5687,7 +5703,9 @@ const Builder = struct {
                     source_ctx.draft.current_owner,
                     active_root.fn_id,
                 );
-                const partial_recursive_allowed = active_recursive_edge and request_edge == .recursive_reference;
+                const partial_recursive_allowed = active_recursive_edge and
+                    request_edge == .recursive_reference and
+                    substitutionsShareClasses(source_ctx.graph, active_root.subst, edge.subst);
                 if (exact_interface or partial_recursive_allowed) {
                     if (active_recursive_edge) {
                         try source_ctx.graph.unifyRecursiveFunctionInterface(
@@ -5788,7 +5806,9 @@ const Builder = struct {
                                 source_ctx.draft.current_owner,
                                 spec.fn_id,
                             );
-                            const partial_recursive_allowed = active_recursive_edge and request_edge == .recursive_reference;
+                            const partial_recursive_allowed = active_recursive_edge and
+                                request_edge == .recursive_reference and
+                                substitutionsShareClasses(source_ctx.graph, spec.subst, edge.subst);
                             if (!draftOpenCandidateQualifies(
                                 spec.state,
                                 exact_interface,
@@ -7782,7 +7802,11 @@ const Builder = struct {
                                 spec.state,
                                 exact_interface,
                                 active_recursive_edge,
-                                recursive_reference,
+                                recursive_reference and substitutionsShareClasses(
+                                    source_ctx.graph,
+                                    spec.evidence.subst,
+                                    requested_evidence.subst,
+                                ),
                             )) continue;
                             if (!selection.add(raw_spec, exact_interface)) {
                                 Common.invariant("draft nested request matched more than one partial active recursive specialization");
@@ -7806,6 +7830,7 @@ const Builder = struct {
                 }
                 if (!std.meta.eql(DraftNestedFamilyAddress.init(spec.nested, spec.method_scope, spec.source_fn_key), family)) continue;
                 if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
+                if (!substitutionsShareClasses(source_ctx.graph, spec.evidence.subst, requested_evidence.subst)) continue;
                 if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                 if (!source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id)) continue;
                 const raw_spec: u32 = @intCast(raw_spec_usize);
@@ -12102,6 +12127,7 @@ const ActiveTemplateRoot = struct {
     graph: *InstGraph,
     family: DraftTemplateFamilyAddress,
     evidence: []const SpecEvidence,
+    subst: SpecSubstitution,
     request_fn_node: NodeId,
     initial_request_arg_classes: []const ArgumentClassSnapshot,
     fn_id: Ast.FnId,
@@ -52736,6 +52762,15 @@ test "open draft recursive provenance joins fresh interface cells only while low
     try std.testing.expect(!graph.sameFunctionInterface(active_fn, independent_fn));
     try std.testing.expect(!draftOpenCandidateQualifies(.lowered, false, true, true));
     try std.testing.expect(!graph.sameClass(active_arg, independent_arg));
+
+    const active_subst = [_]SubstSlot{.{ .node = active_arg }};
+    const same_subst = [_]SubstSlot{.{ .node = active_arg }};
+    const different_subst = [_]SubstSlot{.{ .node = independent_arg }};
+    const checked_error_subst = [_]SubstSlot{.checked_error};
+    try std.testing.expect(substitutionsShareClasses(graph, &active_subst, &same_subst));
+    try std.testing.expect(!substitutionsShareClasses(graph, &active_subst, &different_subst));
+    try std.testing.expect(!substitutionsShareClasses(graph, &active_subst, &checked_error_subst));
+    try std.testing.expect(substitutionsShareClasses(graph, &checked_error_subst, &checked_error_subst));
 
     // An exact request reuses a completed specialization regardless of the
     // requesting guard context; reuses under a different context are recorded

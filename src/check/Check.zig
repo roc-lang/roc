@@ -6580,6 +6580,10 @@ fn recordSharedSchemeUse(
     try self.cir.recordSchemeUse(node_idx, slot, slot_data, scheme_root, &.{});
 }
 
+fn recordRecursiveReference(self: *Self, node_idx: u32, scheme_root: Var) std.mem.Allocator.Error!void {
+    try self.recordSharedSchemeUse(node_idx, .recursive_reference, 0, scheme_root);
+}
+
 // regions //
 
 /// Fill slots in the regions array up to and including the target var
@@ -18195,6 +18199,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 expr_idx,
                                 env,
                             );
+                            if (self.defInOnStackGroup(processing_def.def_idx)) {
+                                try self.recordRecursiveReference(
+                                    @intFromEnum(expr_idx),
+                                    ModuleEnv.varFrom(processing_def.def_idx),
+                                );
+                            }
                             break :blk;
                         }
                         {
@@ -18228,6 +18238,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                     0,
                                     ModuleEnv.varFrom(processing_def.def_idx),
                                 );
+                                try self.recordRecursiveReference(
+                                    @intFromEnum(expr_idx),
+                                    ModuleEnv.varFrom(processing_def.def_idx),
+                                );
                             }
                             break :blk;
                         }
@@ -18243,6 +18257,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             // requirements cover the implementation cycle.
                             const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var);
                             _ = try self.unify(expr_var, instantiated, env);
+                            try self.recordRecursiveReference(
+                                @intFromEnum(expr_idx),
+                                ModuleEnv.varFrom(processing_def.def_idx),
+                            );
                             break :blk;
                         }
                         if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(referenced_def.expr))) {
@@ -18274,6 +18292,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             0,
                             ModuleEnv.varFrom(processing_def.def_idx),
                         );
+                        try self.recordRecursiveReference(
+                            @intFromEnum(expr_idx),
+                            ModuleEnv.varFrom(processing_def.def_idx),
+                        );
                         break :blk;
                     },
                     .processed => {
@@ -18286,6 +18308,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 // until that boundary publishes the body scheme.
                                 const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var);
                                 _ = try self.unify(expr_var, instantiated, env);
+                                try self.recordRecursiveReference(
+                                    @intFromEnum(expr_idx),
+                                    ModuleEnv.varFrom(processing_def.def_idx),
+                                );
                                 break :blk;
                             }
                         }
@@ -18313,6 +18339,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // the declared scheme (sound polymorphic recursion).
                     const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var);
                     _ = try self.unify(expr_var, instantiated, env);
+                    try self.recordRecursiveReference(
+                        @intFromEnum(expr_idx),
+                        pat_var,
+                    );
                     break :blk;
                 }
 
@@ -18324,6 +18354,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     @intFromEnum(expr_idx),
                     .shared_value_use,
                     0,
+                    pat_var,
+                );
+                try self.recordRecursiveReference(
+                    @intFromEnum(expr_idx),
                     pat_var,
                 );
                 break :blk;
@@ -18368,6 +18402,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         0,
                         ModuleEnv.varFrom(processing_def.def_idx),
                     );
+                    if (self.defInOnStackGroup(processing_def.def_idx)) {
+                        try self.recordRecursiveReference(
+                            @intFromEnum(expr_idx),
+                            ModuleEnv.varFrom(processing_def.def_idx),
+                        );
+                    }
                 }
             }
         },
@@ -24785,7 +24825,7 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
             // A shared use copies no vars (it shares the in-flight
             // definition's), so it has no fresh pairs to seed; the walk
             // reaches the shared body through the ordinary reference edge.
-            .shared_value_use => {},
+            .shared_value_use, .recursive_reference => {},
         }
     }
     for (self.dispatch_target_instantiations.items, 0..) |instantiation, index| {
