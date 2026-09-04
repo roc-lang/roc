@@ -20390,14 +20390,25 @@ fn recordTypeHeaderParameter(
     return false;
 }
 
-/// The declarations whose parameters may not be underscore-prefixed, and how to
-/// name them in that diagnostic. Nominal and opaque declarations allow them
-/// because their parameters can be phantom.
-fn declaredTypeKindRejectingUnderscores(type_kind: AST.TypeDeclKind) ?CIR.DeclaredTypeKind {
+/// The declarations whose parameters may not have underscore-prefixed names.
+/// Nominal and opaque declarations allow them because their parameters can be
+/// phantom.
+fn declaredTypeKindRejectingNamedUnderscores(type_kind: AST.TypeDeclKind) ?CIR.DeclaredTypeKind {
     return switch (type_kind) {
         .alias => .alias,
         .where_alias => .where_alias,
         .nominal, .@"opaque" => null,
+    };
+}
+
+/// The user-facing declaration kind for diagnostics that apply to every type
+/// declaration kind.
+fn declaredTypeKind(type_kind: AST.TypeDeclKind) CIR.DeclaredTypeKind {
+    return switch (type_kind) {
+        .alias => .alias,
+        .where_alias => .where_alias,
+        .nominal => .nominal,
+        .@"opaque" => .@"opaque",
     };
 }
 
@@ -20478,7 +20489,7 @@ fn canonicalizeTypeHeader(
                 // Only reject underscore-prefixed names for type aliases, not nominal/opaque types
                 const param_name = self.parse_ir.env.getIdent(param_ident);
                 if (param_name.len > 0 and param_name[0] == '_') {
-                    if (declaredTypeKindRejectingUnderscores(type_kind)) |declared| {
+                    if (declaredTypeKindRejectingNamedUnderscores(type_kind)) |declared| {
                         try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
                             .declared = declared,
                             .region = param_region,
@@ -20505,7 +20516,7 @@ fn canonicalizeTypeHeader(
                 if (try self.recordTypeHeaderParameter(&seen_type_parameters, name_ident, param_ident, param_region)) continue;
 
                 // Only reject underscore-prefixed parameters for type aliases, not nominal/opaque types
-                if (declaredTypeKindRejectingUnderscores(type_kind)) |declared| {
+                if (declaredTypeKindRejectingNamedUnderscores(type_kind)) |declared| {
                     try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
                         .declared = declared,
                         .region = param_region,
@@ -20519,21 +20530,17 @@ fn canonicalizeTypeHeader(
                 try self.env.store.addScratchTypeAnno(param_anno);
             },
             .underscore => |underscore_param| {
-                // Handle underscore type parameters
                 const param_region = self.parse_ir.tokenizedRegionToRegion(underscore_param.region);
 
-                // Push underscore diagnostic for underscore type parameters
-                // Only reject for type aliases, not nominal/opaque types
-                if (declaredTypeKindRejectingUnderscores(type_kind)) |declared| {
-                    try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
-                        .declared = declared,
-                        .region = param_region,
-                    } });
-                }
-
-                // Create underscore type annotation
-                const underscore_anno = try self.env.addTypeAnno(.{ .underscore = {} }, param_region);
-                try self.env.store.addScratchTypeAnno(underscore_anno);
+                // A bare underscore is an inferred annotation, not a binder.
+                // Declaration headers require named rigid variables so every
+                // formal has a stable identity throughout checking and
+                // checked-artifact publication.
+                const malformed_anno = try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .underscore_in_type_declaration = .{
+                    .declared = declaredTypeKind(type_kind),
+                    .region = param_region,
+                } });
+                try self.env.store.addScratchTypeAnno(malformed_anno);
             },
             .malformed => |malformed_param| {
                 // Handle malformed underscore type parameters
@@ -20541,7 +20548,7 @@ fn canonicalizeTypeHeader(
 
                 // Push underscore diagnostic for malformed underscore type parameters
                 // Only reject for type aliases, not nominal/opaque types
-                if (declaredTypeKindRejectingUnderscores(type_kind)) |declared| {
+                if (declaredTypeKindRejectingNamedUnderscores(type_kind)) |declared| {
                     try self.env.pushDiagnostic(Diagnostic{ .underscore_in_type_declaration = .{
                         .declared = declared,
                         .region = param_region,
