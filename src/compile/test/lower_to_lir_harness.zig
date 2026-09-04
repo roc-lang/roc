@@ -140,6 +140,9 @@ pub const LirLoweringOptions = struct {
     /// Stop after Monotype lowering. Focused postcheck regressions use this
     /// boundary when later LIR passes are outside the behavior under test.
     monotype_only: bool = false,
+    /// Receives deterministic Monotype work counters. This is independent of
+    /// elapsed-time measurement and is available at the `monotype_only` boundary.
+    monotype_diagnostics_out: ?*postcheck.Monotype.Lower.Diagnostics = null,
 };
 
 /// Lower an app whose body is `app_body` (everything after the platform header
@@ -628,6 +631,7 @@ fn lowerAppPathToLir(
     }
 
     if (opts.monotype_only) {
+        var diagnostics: postcheck.Monotype.Lower.Diagnostics = .{};
         var mono = try postcheck.Monotype.Lower.run(
             gpa,
             .{
@@ -635,9 +639,10 @@ fn lowerAppPathToLir(
                 .imports = imports,
             },
             .{ .requests = lir_roots },
-            .{},
+            .{ .diagnostics = if (opts.monotype_diagnostics_out != null) &diagnostics else null },
         );
         mono.deinit();
+        if (opts.monotype_diagnostics_out) |out| out.* = diagnostics;
         return;
     }
 

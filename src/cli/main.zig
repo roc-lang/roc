@@ -15663,7 +15663,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [22]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [23]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
@@ -15687,6 +15687,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [22]
         .{ .name = "Finished-Monotype nodes visited", .count = graph.finished_mono_nodes_visited },
         .{ .name = "Nominal backing lookups", .count = graph.nominal_backing_lookups },
         .{ .name = "Nominal backing instances scanned", .count = graph.nominal_backing_instances_scanned },
+        .{ .name = "Nominal backing tombstone deletions", .count = graph.nominal_backing_tombstone_deletions },
         .{ .name = "Union-find resolutions", .count = graph.union_find_resolutions },
     };
 }
