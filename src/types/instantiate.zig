@@ -189,6 +189,8 @@ pub const ProofWitnessAction = enum(u32) {
     binding_codec_reuse_cut,
     platform_preseed_cut,
     requirement_component_ingress,
+    flex_fresh_flex_copy,
+    requirement_component_fresh_flex_copy,
 };
 
 pub const ProofWitnessAuxiliaryOriginKind = enum(u32) {
@@ -607,9 +609,10 @@ pub const Instantiator = struct {
     ) std.mem.Allocator.Error!void {
         const sink = self.proof_witnesses orelse return;
         const edge = mb_edge orelse blk: {
-            // An ordinary fresh root is established by the root pair itself.
-            // A root cut additionally needs the typed action and raw ids that
-            // later unification can erase.
+            // An ordinary traversed root is established by the root pair and
+            // its structural witnesses. A root cut or fresh-flex creation
+            // additionally needs the typed action and raw ids that later
+            // unification can erase.
             if (action == .traverse) return;
             break :blk ProofEdge{
                 .parent_raw_source_var = source,
@@ -617,7 +620,11 @@ pub const Instantiator = struct {
                 .edge_kind = .root_copy_action,
             };
         };
-        const final_action = edge.action_override orelse action;
+        const final_action = if (edge.action_override == .requirement_component_ingress and
+            (action == .flex_fresh_flex_copy or action == .rigid_fresh_flex_cut))
+            ProofWitnessAction.requirement_component_fresh_flex_copy
+        else
+            edge.action_override orelse action;
         if (edge.action_override != null and action_auxiliary_origin_kind != .none) {
             std.debug.panic("virtual requirement ingress hid a child cut authority", .{});
         }
@@ -1009,7 +1016,11 @@ pub const Instantiator = struct {
                 // IMPORTANT: This has to be registered _before_ any child copy runs
                 const fresh_var = try self.store.fresh();
                 try self.recordMapping(resolved_var, initial_var, fresh_var);
-                try self.recordProofWitness(edge, initial_var, fresh_var, .traverse, .none, 0);
+                // Unlike a memoized revisit above, this branch genuinely
+                // allocates the destination for a source flex. Retain that
+                // copy-time fact even when the flex has constraints and the
+                // same root subsequently publishes structural witnesses.
+                try self.recordProofWitness(edge, initial_var, fresh_var, .flex_fresh_flex_copy, .none, 0);
 
                 if (flex.constraints.len() == 0) {
                     const fresh_content = Content{ .flex = Flex{ .name = flex.name, .constraints = StaticDispatchConstraint.SafeList.Range.empty() } };
@@ -2357,7 +2368,28 @@ test "instantiator proof: fresh constrained copy and memoized revisit retain one
     try std.testing.expect(constraint_pair.destination_constraint_index != source_constraint_index);
 
     var primary_function_count: usize = 0;
+    var first_flex_copy_count: usize = 0;
+    var memoized_revisit_count: usize = 0;
     for (env.proof_witnesses.items) |witness| {
+        if (witness.edge_kind == .tuple_element and witness.edge_index == 0) {
+            try std.testing.expectEqual(ProofWitnessAction.flex_fresh_flex_copy, witness.action);
+            try std.testing.expectEqual(ProofWitnessAuxiliaryOriginKind.none, witness.auxiliary_origin_kind);
+            try std.testing.expectEqual(@as(u32, 0), witness.auxiliary_origin_index);
+            try std.testing.expectEqual(@intFromEnum(source_child), witness.raw_source_var);
+            try std.testing.expectEqual(@intFromEnum(destination_elems[0]), witness.raw_destination_var);
+            try std.testing.expect(witness.raw_source_var != witness.raw_destination_var);
+            try std.testing.expectEqual(witness.child_raw_source_var, witness.raw_source_var);
+            try std.testing.expectEqual(witness.child_raw_destination_var, witness.raw_destination_var);
+            first_flex_copy_count += 1;
+        }
+        if (witness.edge_kind == .tuple_element and witness.edge_index == 1) {
+            try std.testing.expectEqual(ProofWitnessAction.traverse, witness.action);
+            try std.testing.expectEqual(std.math.maxInt(u32), witness.raw_source_var);
+            try std.testing.expectEqual(std.math.maxInt(u32), witness.raw_destination_var);
+            try std.testing.expectEqual(@intFromEnum(source_child), witness.child_raw_source_var);
+            try std.testing.expectEqual(@intFromEnum(destination_elems[1]), witness.child_raw_destination_var);
+            memoized_revisit_count += 1;
+        }
         if (witness.edge_kind != .static_dispatch_function or
             witness.constraint_source_index != source_constraint_index)
         {
@@ -2372,7 +2404,218 @@ test "instantiator proof: fresh constrained copy and memoized revisit retain one
             witness.child_raw_destination_var,
         );
     }
+    try std.testing.expectEqual(@as(usize, 1), first_flex_copy_count);
+    try std.testing.expectEqual(@as(usize, 1), memoized_revisit_count);
     try std.testing.expectEqual(@as(usize, 1), primary_function_count);
+}
+
+test "instantiator proof: virtual fresh flex ingresses retain creation and memoized roles" {
+    const gpa = std.testing.allocator;
+    var env = try ProofTestEnv.init(gpa);
+    defer env.deinit();
+
+    const attached_name = try env.idents.insert(gpa, Ident.for_text("attached"));
+    const detached_name = try env.idents.insert(gpa, Ident.for_text("detached"));
+    const rigid_name = try env.idents.insert(gpa, Ident.for_text("callable"));
+    const attached_callable = try env.store.freshFromContentWithRank(
+        .{ .structure = .empty_record },
+        .generalized,
+    );
+    const attached_constraints = try env.store.appendStaticDispatchConstraints(&.{.{
+        .fn_name = attached_name,
+        .fn_var = attached_callable,
+        .origin = .method_call,
+    }});
+    const source_receiver = try env.store.freshFromContentWithRank(
+        .{ .flex = Flex.init().withConstraints(attached_constraints) },
+        .generalized,
+    );
+    const source_function = try env.store.freshFromContentWithRank(
+        .{ .rigid = Rigid.init(rigid_name) },
+        .generalized,
+    );
+    const source_part = try env.store.freshFromContentWithRank(
+        .{ .flex = Flex.init() },
+        .generalized,
+    );
+    const source_item = try env.store.freshFromContentWithRank(
+        .{ .flex = Flex.init() },
+        .generalized,
+    );
+    const source_parts = try env.store.appendInterpolationParts(&.{.{
+        .var_ = source_part,
+        .region = base.Region.zero(),
+    }});
+    const detached_constraints = try env.store.appendStaticDispatchConstraints(&.{.{
+        .fn_name = detached_name,
+        .fn_var = source_function,
+        .origin = .method_call,
+        .interpolation = .{
+            .expr_region = StaticDispatchConstraint.OptRegion.some(base.Region.zero()),
+            .item_var = source_item,
+            .interpolated_parts = source_parts,
+        },
+    }});
+    const detached_constraint_index: u32 = @intFromEnum(detached_constraints.start);
+    const detached_constraint = env.store.getStaticDispatchConstraintAt(detached_constraint_index);
+    const source_root = try env.store.freshFromContentWithRank(
+        .{ .structure = .empty_record },
+        .generalized,
+    );
+
+    var inst = env.instantiator(.fresh_flex);
+    const destination_root = try inst.instantiateVar(source_root);
+    const proof_root = ProofRootPair{
+        .source_var = source_root,
+        .destination_var = destination_root,
+    };
+    const destination_receiver = try inst.instantiateSchemeRequirementReceiver(
+        proof_root,
+        7,
+        source_receiver,
+        false,
+    );
+    const destination_constraint = try inst.instantiateSchemeRequirementConstraintAt(
+        proof_root,
+        7,
+        detached_constraint_index,
+        detached_constraint,
+        true,
+    );
+    const memoized_receiver = try inst.instantiateSchemeRequirementReceiver(
+        proof_root,
+        8,
+        source_receiver,
+        false,
+    );
+    try std.testing.expectEqual(destination_receiver, memoized_receiver);
+
+    const expected_edges = [_]struct {
+        kind: ProofWitnessEdgeKind,
+        index: u32,
+        source: Var,
+        destination: Var,
+    }{
+        .{ .kind = .scheme_requirement_receiver, .index = 7, .source = source_receiver, .destination = destination_receiver },
+        .{ .kind = .scheme_requirement_function, .index = 7, .source = source_function, .destination = destination_constraint.fn_var },
+        .{ .kind = .interpolation_part, .index = 0, .source = source_part, .destination = env.store.getInterpolationPartAt(destination_constraint.interpolation.interpolated_parts, 0).var_ },
+        .{ .kind = .interpolation_item, .index = 0, .source = source_item, .destination = destination_constraint.interpolation.item_var },
+    };
+    for (expected_edges) |expected| {
+        var matches: usize = 0;
+        for (env.proof_witnesses.items) |witness| {
+            if (witness.edge_kind != expected.kind or
+                witness.edge_index != expected.index or
+                witness.action != .requirement_component_fresh_flex_copy)
+            {
+                continue;
+            }
+            matches += 1;
+            try std.testing.expectEqual(@intFromEnum(source_root), witness.parent_raw_source_var);
+            try std.testing.expectEqual(@intFromEnum(destination_root), witness.parent_raw_destination_var);
+            try std.testing.expectEqual(@intFromEnum(expected.source), witness.child_raw_source_var);
+            try std.testing.expectEqual(@intFromEnum(expected.destination), witness.child_raw_destination_var);
+            try std.testing.expectEqual(witness.child_raw_source_var, witness.raw_source_var);
+            try std.testing.expectEqual(witness.child_raw_destination_var, witness.raw_destination_var);
+            try std.testing.expect(witness.raw_source_var != witness.raw_destination_var);
+            try std.testing.expectEqual(ProofWitnessAuxiliaryOriginKind.none, witness.auxiliary_origin_kind);
+            try std.testing.expectEqual(@as(u32, 0), witness.auxiliary_origin_index);
+        }
+        try std.testing.expectEqual(@as(usize, 1), matches);
+    }
+
+    var memoized_matches: usize = 0;
+    for (env.proof_witnesses.items) |witness| {
+        if (witness.edge_kind != .scheme_requirement_receiver or witness.edge_index != 8) continue;
+        memoized_matches += 1;
+        try std.testing.expectEqual(ProofWitnessAction.requirement_component_ingress, witness.action);
+        try std.testing.expectEqual(std.math.maxInt(u32), witness.raw_source_var);
+        try std.testing.expectEqual(std.math.maxInt(u32), witness.raw_destination_var);
+    }
+    try std.testing.expectEqual(@as(usize, 1), memoized_matches);
+}
+
+test "instantiator proof: forced shared flex root records creation beside constraint witnesses" {
+    const gpa = std.testing.allocator;
+    var env = try ProofTestEnv.init(gpa);
+    defer env.deinit();
+
+    const action_values = std.enums.values(ProofWitnessAction);
+    try std.testing.expectEqual(
+        @as(u32, @intCast(action_values.len - 1)),
+        @intFromEnum(ProofWitnessAction.requirement_component_fresh_flex_copy),
+    );
+
+    const method_name = try env.idents.insert(gpa, Ident.for_text("forced_root_method"));
+    const source_callable = try env.store.freshFromContentWithRank(
+        .{ .structure = .empty_record },
+        .generalized,
+    );
+    const source_constraints = try env.store.appendStaticDispatchConstraints(&.{.{
+        .fn_name = method_name,
+        .fn_var = source_callable,
+        .origin = .method_call,
+    }});
+    const source = try env.store.freshFromContentWithRank(
+        .{ .flex = Flex{ .name = null, .constraints = source_constraints } },
+        .generalized,
+    );
+
+    var inst = env.instantiator(.fresh_flex);
+    inst.share_leaves = true;
+    const shared = try inst.instantiateVar(source);
+    try std.testing.expectEqual(source, shared);
+    try expectSingleRootProofSince(
+        &env,
+        0,
+        0,
+        0,
+        source,
+        shared,
+        .local_raw_identity_share_cut,
+        .none,
+        0,
+        true,
+    );
+
+    const pair_base = env.proof_pairs.items.len;
+    const constraint_pair_base = env.proof_constraint_pairs.items.len;
+    const witness_base = env.proof_witnesses.items.len;
+    const copied = try inst.instantiateTypeScheme(source);
+    try std.testing.expect(copied != source);
+    try std.testing.expectEqual(constraint_pair_base + 1, env.proof_constraint_pairs.items.len);
+
+    var root_creation_count: usize = 0;
+    var constraint_edge_count: usize = 0;
+    for (env.proof_witnesses.items[witness_base..]) |witness| {
+        switch (witness.edge_kind) {
+            .root_copy_action => {
+                try std.testing.expectEqual(ProofWitnessAction.flex_fresh_flex_copy, witness.action);
+                try std.testing.expectEqual(@intFromEnum(source), witness.parent_raw_source_var);
+                try std.testing.expectEqual(@intFromEnum(copied), witness.parent_raw_destination_var);
+                try std.testing.expectEqual(witness.parent_raw_source_var, witness.child_raw_source_var);
+                try std.testing.expectEqual(witness.parent_raw_destination_var, witness.child_raw_destination_var);
+                try std.testing.expectEqual(witness.child_raw_source_var, witness.raw_source_var);
+                try std.testing.expectEqual(witness.child_raw_destination_var, witness.raw_destination_var);
+                try std.testing.expect(witness.raw_source_var != witness.raw_destination_var);
+                try std.testing.expectEqual(ProofWitnessAuxiliaryOriginKind.none, witness.auxiliary_origin_kind);
+                try std.testing.expectEqual(@as(u32, 0), witness.auxiliary_origin_index);
+                root_creation_count += 1;
+            },
+            .static_dispatch_function => {
+                try std.testing.expectEqual(ProofWitnessAction.traverse, witness.action);
+                try std.testing.expectEqual(
+                    @intFromEnum(source_constraints.start),
+                    witness.constraint_source_index,
+                );
+                constraint_edge_count += 1;
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(env.proof_pairs.items.len > pair_base);
+    try std.testing.expectEqual(@as(usize, 1), root_creation_count);
+    try std.testing.expectEqual(@as(usize, 1), constraint_edge_count);
 }
 
 test "instantiator caller-owned substitution ledger is authored only by exact cuts" {

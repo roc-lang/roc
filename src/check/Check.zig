@@ -6361,11 +6361,12 @@ fn validateCopiedConstraintSourceComponents(
             var function_parent: ?u32 = null;
             for (witnesses[function_step.witnesses_start..][0..function_step.witnesses_len]) |witness| {
                 const edge_kind = witness.decodedEdgeKind() orelse return false;
+                const action = witness.decodedAction() orelse return false;
                 if (edge_kind == .scheme_requirement_receiver and
                     witness.child_occurrence_offset == receiver_ref.occurrence_offset and
                     witness.edge_index == receiver_ref.requirement_ordinal and
                     witness.constraint_pair_offset == std.math.maxInt(u32) and
-                    witness.decodedAction() == .requirement_component_ingress and
+                    whereMarkerWitnessActionIsRequirementComponentIngress(action) and
                     witness.decodedAuxiliaryOriginKind() == .none)
                 {
                     if (receiver_parent != null) return false;
@@ -6375,7 +6376,7 @@ fn validateCopiedConstraintSourceComponents(
                     witness.child_occurrence_offset == function_ref.occurrence_offset and
                     witness.edge_index == function_ref.requirement_ordinal and
                     witness.constraint_pair_offset == function_ref.constraint_pair_offset and
-                    witness.decodedAction() == .requirement_component_ingress and
+                    whereMarkerWitnessActionIsRequirementComponentIngress(action) and
                     witness.decodedAuxiliaryOriginKind() == .none)
                 {
                     if (function_parent != null) return false;
@@ -8949,6 +8950,31 @@ fn whereMarkerCopyPolicyAllowsAction(
     action: ModuleEnv.WhereMarkerCopyWitness.Action,
 ) bool {
     if (action == .traverse or action == .requirement_component_ingress) return true;
+    if (action == .flex_fresh_flex_copy or
+        action == .requirement_component_fresh_flex_copy)
+    {
+        return switch (policy) {
+            .ranked_fresh_flex_close,
+            .ranked_fresh_flex_close_scheme,
+            .ranked_fresh_flex_preserve,
+            .ranked_fresh_flex_resolve_positive,
+            .ranked_fresh_flex_resolve_negative,
+            .ranked_fresh_flex_defer_positive,
+            .ranked_fresh_flex_defer_negative,
+            .ranked_substitute_rigids_close,
+            .ranked_substitute_rigids_preserve,
+            .ranked_substitute_rigids_resolve_positive,
+            .ranked_substitute_rigids_resolve_negative,
+            .ranked_substitute_rigids_defer_positive,
+            .ranked_substitute_rigids_defer_negative,
+            .all_fresh_rigid_preserve,
+            .all_fresh_flex_preserve,
+            => true,
+            .cross_module_import,
+            .all_share_leaves_resolve_positive,
+            => false,
+        };
+    }
     return switch (policy) {
         .cross_module_import => action == .binding_codec_reuse_cut or action == .platform_preseed_cut,
         .ranked_fresh_flex_close,
@@ -8988,6 +9014,34 @@ fn whereMarkerCopyPolicyAllowsAction(
     };
 }
 
+fn whereMarkerWitnessActionIsRequirementComponentIngress(
+    action: ModuleEnv.WhereMarkerCopyWitness.Action,
+) bool {
+    return action == .requirement_component_ingress or
+        action == .requirement_component_fresh_flex_copy;
+}
+
+fn whereMarkerWitnessActionClaimsFreshFlexAllocation(
+    action: ModuleEnv.WhereMarkerCopyWitness.Action,
+) bool {
+    return action == .flex_fresh_flex_copy or
+        action == .requirement_component_fresh_flex_copy or
+        action == .rigid_fresh_flex_cut;
+}
+
+fn whereMarkerWitnessEdgeIsRequirementComponentIngress(
+    edge_kind: ModuleEnv.WhereMarkerCopyWitness.EdgeKind,
+) bool {
+    return switch (edge_kind) {
+        .scheme_requirement_receiver,
+        .scheme_requirement_function,
+        .interpolation_part,
+        .interpolation_item,
+        => true,
+        else => false,
+    };
+}
+
 fn whereMarkerWitnessActionAuxiliaryIsValid(
     action: ModuleEnv.WhereMarkerCopyWitness.Action,
     auxiliary: ModuleEnv.WhereMarkerCopyWitness.AuxiliaryOriginKind,
@@ -8997,6 +9051,8 @@ fn whereMarkerWitnessActionAuxiliaryIsValid(
         .local_raw_identity_share_cut,
         .rigid_fresh_flex_cut,
         .rigid_fresh_rigid_cut,
+        .flex_fresh_flex_copy,
+        .requirement_component_fresh_flex_copy,
         .polarity_open_cut,
         .polarity_close_cut,
         .polarity_preserve_cut,
@@ -14685,8 +14741,14 @@ fn validateWhereMarkerCopyProofLocal(
             {
                 return false;
             }
+            if (whereMarkerWitnessActionIsRequirementComponentIngress(action) and
+                !whereMarkerWitnessEdgeIsRequirementComponentIngress(edge_kind))
+            {
+                return false;
+            }
             if (witness.parent_occurrence_offset == step.root_occurrence_offset and
-                child_pair_offset != root and action != .requirement_component_ingress)
+                child_pair_offset != root and
+                !whereMarkerWitnessActionIsRequirementComponentIngress(action))
             {
                 root_structural_outgoing_count += 1;
             }
@@ -14709,11 +14771,23 @@ fn validateWhereMarkerCopyProofLocal(
                     return false;
                 }
             }
+            if (whereMarkerWitnessActionClaimsFreshFlexAllocation(action)) {
+                for (witnesses[0..witness_offset]) |prior_witness| {
+                    const prior_action = prior_witness.decodedAction() orelse return false;
+                    if (whereMarkerWitnessActionClaimsFreshFlexAllocation(prior_action) and
+                        prior_witness.child_occurrence_offset == witness.child_occurrence_offset)
+                    {
+                        return false;
+                    }
+                }
+            }
             switch (action) {
                 .traverse, .binding_codec_reuse_cut, .platform_preseed_cut, .requirement_component_ingress => if (raw_present) return false,
                 .local_raw_identity_share_cut,
                 .rigid_fresh_flex_cut,
                 .rigid_fresh_rigid_cut,
+                .flex_fresh_flex_copy,
+                .requirement_component_fresh_flex_copy,
                 .exact_annotation_substitution_cut,
                 .polarity_open_cut,
                 .polarity_close_cut,
@@ -14722,6 +14796,12 @@ fn validateWhereMarkerCopyProofLocal(
             }
             if (action == .local_raw_identity_share_cut and
                 witness.raw_source_var != witness.raw_destination_var)
+            {
+                return false;
+            }
+            if ((action == .flex_fresh_flex_copy or
+                action == .requirement_component_fresh_flex_copy) and
+                witness.raw_source_var == witness.raw_destination_var)
             {
                 return false;
             }
@@ -14789,10 +14869,49 @@ fn validateWhereMarkerCopyProofLocal(
             }
             if (primary_function_count != 1) return false;
         }
+        for (witnesses) |interpolation_witness| {
+            const interpolation_edge = interpolation_witness.decodedEdgeKind() orelse return false;
+            if (interpolation_edge != .interpolation_part and
+                interpolation_edge != .interpolation_item)
+            {
+                continue;
+            }
+            const interpolation_action = interpolation_witness.decodedAction() orelse return false;
+            var primary: ?ModuleEnv.WhereMarkerCopyWitness = null;
+            for (witnesses) |candidate| {
+                if (candidate.constraint_pair_offset != interpolation_witness.constraint_pair_offset) continue;
+                switch (candidate.decodedEdgeKind() orelse return false) {
+                    .static_dispatch_function, .scheme_requirement_function => {
+                        if (primary != null) return false;
+                        primary = candidate;
+                    },
+                    else => {},
+                }
+            }
+            const primary_witness = primary orelse return false;
+            const primary_edge = primary_witness.decodedEdgeKind() orelse return false;
+            const primary_auxiliary = primary_witness.decodedAuxiliaryOriginKind() orelse return false;
+            const detached_local_ingress = kind.sourceNamespace() == .local and
+                primary_edge == .scheme_requirement_function and
+                primary_auxiliary == .none;
+            if (whereMarkerWitnessActionIsRequirementComponentIngress(interpolation_action) !=
+                detached_local_ingress)
+            {
+                return false;
+            }
+            if (detached_local_ingress and
+                (interpolation_witness.parent_occurrence_offset !=
+                    primary_witness.parent_occurrence_offset or
+                    interpolation_witness.parent_occurrence_offset != step.root_occurrence_offset))
+            {
+                return false;
+            }
+        }
         for (witnesses) |receiver_witness| {
             if (receiver_witness.decodedEdgeKind() != .scheme_requirement_receiver) continue;
+            const receiver_action = receiver_witness.decodedAction() orelse return false;
             if (receiver_witness.parent_occurrence_offset != step.root_occurrence_offset or
-                receiver_witness.decodedAction() != .requirement_component_ingress or
+                !whereMarkerWitnessActionIsRequirementComponentIngress(receiver_action) or
                 receiver_witness.decodedAuxiliaryOriginKind() != .none or
                 receiver_witness.auxiliary_origin_index != 0)
             {
@@ -14809,7 +14928,8 @@ fn validateWhereMarkerCopyProofLocal(
                 switch (candidate.decodedEdgeKind() orelse return false) {
                     .scheme_requirement_receiver => matching_receivers += 1,
                     .scheme_requirement_function => {
-                        if (candidate.decodedAction() != .requirement_component_ingress or
+                        const candidate_action = candidate.decodedAction() orelse return false;
+                        if (!whereMarkerWitnessActionIsRequirementComponentIngress(candidate_action) or
                             candidate.decodedAuxiliaryOriginKind() != .none or
                             candidate.auxiliary_origin_index != 0)
                         {
@@ -14840,8 +14960,9 @@ fn validateWhereMarkerCopyProofLocal(
             {
                 continue;
             }
+            const function_action = function_witness.decodedAction() orelse return false;
             if (function_witness.parent_occurrence_offset != step.root_occurrence_offset or
-                function_witness.decodedAction() != .requirement_component_ingress or
+                !whereMarkerWitnessActionIsRequirementComponentIngress(function_action) or
                 function_witness.auxiliary_origin_index != 0)
             {
                 return false;
@@ -28478,6 +28599,8 @@ fn moduleWitnessAction(
         .binding_codec_reuse_cut => .binding_codec_reuse_cut,
         .platform_preseed_cut => .platform_preseed_cut,
         .requirement_component_ingress => .requirement_component_ingress,
+        .flex_fresh_flex_copy => .flex_fresh_flex_copy,
+        .requirement_component_fresh_flex_copy => .requirement_component_fresh_flex_copy,
     };
 }
 
@@ -29046,7 +29169,9 @@ fn publishLocalWhereMarkerCopyStep(
                 );
             },
             .scheme_requirement_function => blk: {
-                if (function_witness.decodedAction() != .requirement_component_ingress or
+                const function_action = function_witness.decodedAction() orelse
+                    std.debug.panic("detached scheme function used an invalid proof action", .{});
+                if (!whereMarkerWitnessActionIsRequirementComponentIngress(function_action) or
                     function_witness.decodedAuxiliaryOriginKind() != .none or
                     function_witness.parent_occurrence_offset != root_occurrence_offset)
                 {
@@ -29067,7 +29192,9 @@ fn publishLocalWhereMarkerCopyStep(
                 }
                 const receiver_witness = matching_receiver orelse
                     std.debug.panic("detached scheme function omitted its receiver ingress", .{});
-                if (receiver_witness.decodedAction() != .requirement_component_ingress or
+                const receiver_action = receiver_witness.decodedAction() orelse
+                    std.debug.panic("detached scheme receiver used an invalid proof action", .{});
+                if (!whereMarkerWitnessActionIsRequirementComponentIngress(receiver_action) or
                     receiver_witness.decodedAuxiliaryOriginKind() != .none or
                     receiver_witness.constraint_pair_offset != std.math.maxInt(u32) or
                     receiver_witness.child_occurrence_offset >= durable_occurrences.items.len)
@@ -68078,6 +68205,477 @@ test "one local copied open receiver publishes one event and handle per literal 
     try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
 }
 
+test "local fresh-flex copy witness survives exact validation rebuild and serde" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source = "main = {}";
+    var test_env = try TestEnv.initUncheckedForTesting("FreshFlexCopyWitness", source);
+    defer test_env.deinit();
+    const checker = &test_env.checker;
+
+    var env = try Env.init(checker.gpa, .outermost);
+    defer env.deinit(checker.gpa);
+    const copied = try appendTestCopiedOpenLiteralCopy(checker, &env, false);
+    const step = checker.cir.where_marker_copy_steps.items.items[copied.copy_step];
+    try std.testing.expectEqual(
+        ModuleEnv.WhereMarkerCopyStep.CopyPolicy.ranked_fresh_flex_close,
+        step.decodedCopyPolicy().?,
+    );
+    canonicalizeCheckedBoundaryCopyPairBfs(
+        checker.cir.where_marker_copy_pairs.items.items[step.pairs_start..][0..step.pairs_len],
+        checker.cir.where_marker_copy_occurrences.items.items[step.occurrences_start..][0..step.occurrences_len],
+        checker.cir.where_marker_copy_witnesses.items.items[step.witnesses_start..][0..step.witnesses_len],
+        step.root_occurrence_offset,
+    );
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+
+    const occurrences = checker.cir.where_marker_copy_occurrences.items.items[step.occurrences_start..][0..step.occurrences_len];
+    const root_occurrence = occurrences[step.root_occurrence_offset];
+    const witnesses = checker.cir.where_marker_copy_witnesses.items.items[step.witnesses_start..][0..step.witnesses_len];
+    var creation_offset: ?u32 = null;
+    var constraint_edge_count: usize = 0;
+    for (witnesses, 0..) |witness, witness_offset| {
+        if (witness.decodedEdgeKind() == .static_dispatch_function) {
+            constraint_edge_count += 1;
+        }
+        if (witness.decodedAction() != .flex_fresh_flex_copy) continue;
+        if (creation_offset != null) return error.TestUnexpectedResult;
+        creation_offset = @intCast(witness_offset);
+        try std.testing.expectEqual(
+            ModuleEnv.WhereMarkerCopyWitness.EdgeKind.root_copy_action,
+            witness.decodedEdgeKind().?,
+        );
+        try std.testing.expectEqual(@as(u32, 0), witness.edge_index);
+        try std.testing.expectEqual(@as(u32, 0), witness.edge_name);
+        try std.testing.expectEqual(@as(u32, 0), witness.edge_origin_module);
+        try std.testing.expectEqual(@as(u32, 0), witness.edge_source_decl);
+        try std.testing.expectEqual(std.math.maxInt(u32), witness.constraint_pair_offset);
+        try std.testing.expectEqual(step.root_occurrence_offset, witness.parent_occurrence_offset);
+        try std.testing.expectEqual(step.root_occurrence_offset, witness.child_occurrence_offset);
+        try std.testing.expectEqual(root_occurrence.raw_source_var, witness.raw_source_var);
+        try std.testing.expectEqual(root_occurrence.raw_destination_var, witness.raw_destination_var);
+        try std.testing.expect(witness.raw_source_var != witness.raw_destination_var);
+        try std.testing.expectEqual(
+            ModuleEnv.WhereMarkerCopyWitness.AuxiliaryOriginKind.none,
+            witness.decodedAuxiliaryOriginKind().?,
+        );
+        try std.testing.expectEqual(@as(u32, 0), witness.auxiliary_origin_step);
+        try std.testing.expectEqual(@as(u32, 0), witness.auxiliary_origin_index);
+    }
+    try std.testing.expectEqual(@as(usize, 4), constraint_edge_count);
+    const root_pair = checker.cir.where_marker_copy_pairs.items.items[
+        step.pairs_start + root_occurrence.canonical_pair_offset
+    ];
+    try std.testing.expectEqual(
+        @as(Var, @enumFromInt(root_pair.source_var)),
+        checker.types.resolveVar(@enumFromInt(root_occurrence.raw_source_var)).var_,
+    );
+    try std.testing.expectEqual(
+        @as(Var, @enumFromInt(root_pair.destination_var)),
+        checker.types.resolveVar(@enumFromInt(root_occurrence.raw_destination_var)).var_,
+    );
+    const source_constraints = checker.types.sliceStaticDispatchConstraints(
+        checker.types.resolveVar(copied.source_root).desc.content.flex.constraints,
+    );
+    const destination_constraints = checker.types.sliceStaticDispatchConstraints(
+        checker.types.resolveVar(copied.destination_root).desc.content.flex.constraints,
+    );
+    const alternate_raw_source: u32 = @intFromEnum(source_constraints[0].fn_var);
+    const alternate_raw_destination: u32 = @intFromEnum(destination_constraints[0].fn_var);
+    try std.testing.expect(alternate_raw_source != root_occurrence.raw_source_var);
+    try std.testing.expect(alternate_raw_source != root_occurrence.raw_destination_var);
+    try std.testing.expect(alternate_raw_destination != root_occurrence.raw_source_var);
+    try std.testing.expect(alternate_raw_destination != root_occurrence.raw_destination_var);
+    const creation_index = step.witnesses_start +
+        (creation_offset orelse return error.TestUnexpectedResult);
+    const original = checker.cir.where_marker_copy_witnesses.items.items[creation_index];
+
+    const action_values = std.enums.values(ModuleEnv.WhereMarkerCopyWitness.Action);
+    try std.testing.expectEqual(
+        @as(u32, @intCast(action_values.len - 1)),
+        @intFromEnum(ModuleEnv.WhereMarkerCopyWitness.Action.requirement_component_fresh_flex_copy),
+    );
+    for ([_]ModuleEnv.WhereMarkerCopyStep.CopyPolicy{
+        .ranked_fresh_flex_close,
+        .ranked_fresh_flex_close_scheme,
+        .ranked_fresh_flex_preserve,
+        .ranked_fresh_flex_resolve_positive,
+        .ranked_fresh_flex_resolve_negative,
+        .ranked_fresh_flex_defer_positive,
+        .ranked_fresh_flex_defer_negative,
+        .ranked_substitute_rigids_close,
+        .ranked_substitute_rigids_preserve,
+        .ranked_substitute_rigids_resolve_positive,
+        .ranked_substitute_rigids_resolve_negative,
+        .ranked_substitute_rigids_defer_positive,
+        .ranked_substitute_rigids_defer_negative,
+        .all_fresh_rigid_preserve,
+        .all_fresh_flex_preserve,
+    }) |policy| {
+        inline for (.{
+            ModuleEnv.WhereMarkerCopyWitness.Action.flex_fresh_flex_copy,
+            ModuleEnv.WhereMarkerCopyWitness.Action.requirement_component_fresh_flex_copy,
+        }) |action| {
+            try std.testing.expect(whereMarkerCopyPolicyAllowsAction(policy, action));
+        }
+    }
+    for ([_]ModuleEnv.WhereMarkerCopyStep.CopyPolicy{
+        .cross_module_import,
+        .all_share_leaves_resolve_positive,
+    }) |policy| {
+        inline for (.{
+            ModuleEnv.WhereMarkerCopyWitness.Action.flex_fresh_flex_copy,
+            ModuleEnv.WhereMarkerCopyWitness.Action.requirement_component_fresh_flex_copy,
+        }) |action| {
+            try std.testing.expect(!whereMarkerCopyPolicyAllowsAction(policy, action));
+        }
+    }
+
+    var creation = &checker.cir.where_marker_copy_witnesses.items.items[creation_index];
+    creation.action = std.math.maxInt(u32);
+    const accepted_unknown_action = validateWhereMarkerCopyProofLocal(checker.types, checker.cir);
+    creation.* = original;
+    try std.testing.expect(!accepted_unknown_action);
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+
+    creation.action = @intFromEnum(ModuleEnv.WhereMarkerCopyWitness.Action.rigid_fresh_rigid_cut);
+    const accepted_swapped_action = validateWhereMarkerCopyProofLocal(checker.types, checker.cir);
+    creation.* = original;
+    try std.testing.expect(!accepted_swapped_action);
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+
+    creation.raw_source_var = std.math.maxInt(u32);
+    const accepted_absent_source = validateWhereMarkerCopyProofLocal(checker.types, checker.cir);
+    creation.* = original;
+    try std.testing.expect(!accepted_absent_source);
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+
+    creation.raw_destination_var = creation.raw_source_var;
+    const accepted_equal_raw_ids = validateWhereMarkerCopyProofLocal(checker.types, checker.cir);
+    creation.* = original;
+    try std.testing.expect(!accepted_equal_raw_ids);
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+
+    creation.raw_source_var = @intCast(checker.types.len());
+    const accepted_source_out_of_range = validateWhereMarkerCopyProofLocal(checker.types, checker.cir);
+    creation.* = original;
+    try std.testing.expect(!accepted_source_out_of_range);
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+
+    creation.raw_destination_var = @intCast(checker.types.len());
+    const accepted_destination_out_of_range = validateWhereMarkerCopyProofLocal(checker.types, checker.cir);
+    creation.* = original;
+    try std.testing.expect(!accepted_destination_out_of_range);
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+
+    creation.raw_source_var = alternate_raw_source;
+    const accepted_wrong_child_source = validateWhereMarkerCopyProofLocal(checker.types, checker.cir);
+    creation.* = original;
+    try std.testing.expect(!accepted_wrong_child_source);
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+
+    creation.raw_destination_var = alternate_raw_destination;
+    const accepted_wrong_child_destination = validateWhereMarkerCopyProofLocal(checker.types, checker.cir);
+    creation.* = original;
+    try std.testing.expect(!accepted_wrong_child_destination);
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+
+    creation.auxiliary_origin_kind = @intFromEnum(
+        ModuleEnv.WhereMarkerCopyWitness.AuxiliaryOriginKind.scheme_use,
+    );
+    const accepted_auxiliary = validateWhereMarkerCopyProofLocal(checker.types, checker.cir);
+    creation.* = original;
+    try std.testing.expect(!accepted_auxiliary);
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+
+    creation.auxiliary_origin_step = 1;
+    const accepted_auxiliary_step = validateWhereMarkerCopyProofLocal(checker.types, checker.cir);
+    creation.* = original;
+    try std.testing.expect(!accepted_auxiliary_step);
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+
+    creation.auxiliary_origin_index = 1;
+    const accepted_auxiliary_index = validateWhereMarkerCopyProofLocal(checker.types, checker.cir);
+    creation.* = original;
+    try std.testing.expect(!accepted_auxiliary_index);
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+
+    try checker.rebuildCheckedBoundaryWhereMethodState();
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+    const canonical_once = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        checker.cir,
+    );
+    defer std.testing.allocator.free(canonical_once);
+    try checker.rebuildCheckedBoundaryWhereMethodState();
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+    const canonical_twice = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        checker.cir,
+    );
+    defer std.testing.allocator.free(canonical_twice);
+    try std.testing.expectEqualSlices(u8, canonical_once, canonical_twice);
+
+    const buffer = try serializeModuleEnvForDeserializationTest(
+        std.testing.allocator,
+        checker.cir,
+    );
+    defer std.testing.allocator.free(buffer);
+    try std.testing.expectEqualSlices(u8, canonical_twice, buffer);
+    const base_addr = @intFromPtr(buffer.ptr);
+    const serialized: *const ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    try serialized.validate(buffer.len);
+
+    const readonly = try serialized.deserializeInto(
+        base_addr,
+        std.testing.allocator,
+        source,
+        "FreshFlexCopyWitness",
+    );
+    defer {
+        readonly.imports.deinitMapOnly(std.testing.allocator);
+        readonly.import_mapping.deinit();
+        std.testing.allocator.destroy(readonly);
+    }
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(&readonly.types, readonly));
+    var readonly_action_count: usize = 0;
+    for (readonly.where_marker_copy_witnesses.items.items) |witness| {
+        readonly_action_count += @intFromBool(witness.decodedAction() == .flex_fresh_flex_copy);
+    }
+    try std.testing.expectEqual(@as(usize, 1), readonly_action_count);
+    const readonly_bytes = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        readonly,
+    );
+    defer std.testing.allocator.free(readonly_bytes);
+    try std.testing.expectEqualSlices(u8, canonical_twice, readonly_bytes);
+
+    const mutable = try serialized.deserializeWithMutableTypes(
+        base_addr,
+        std.testing.allocator,
+        source,
+        "FreshFlexCopyWitness",
+    );
+    defer {
+        mutable.deinitCachedModule();
+        std.testing.allocator.destroy(mutable);
+    }
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(&mutable.types, mutable));
+    var mutable_action_count: usize = 0;
+    for (mutable.where_marker_copy_witnesses.items.items) |witness| {
+        mutable_action_count += @intFromBool(witness.decodedAction() == .flex_fresh_flex_copy);
+    }
+    try std.testing.expectEqual(@as(usize, 1), mutable_action_count);
+    const mutable_bytes = try serializeModuleEnvForCanonicalComparison(
+        std.testing.allocator,
+        mutable,
+    );
+    defer std.testing.allocator.free(mutable_bytes);
+    try std.testing.expectEqualSlices(u8, canonical_twice, mutable_bytes);
+}
+
+test "one exact raw mapping has one fresh-flex allocation witness" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initUncheckedForTesting(
+        "UniqueFreshFlexAllocationWitness",
+        "main = {}",
+    );
+    defer test_env.deinit();
+    const checker = &test_env.checker;
+
+    var env = try Env.init(checker.gpa, .outermost);
+    defer env.deinit(checker.gpa);
+    const shared_child = try checker.freshFromContentAtRank(
+        .{ .flex = Flex.init() },
+        &env,
+        Region.zero(),
+        .generalized,
+    );
+    const tuple_elems = try checker.types.appendVars(&.{ shared_child, shared_child });
+    const source_root = try checker.freshFromContentAtRank(
+        .{ .structure = .{ .tuple = .{ .elems = tuple_elems } } },
+        &env,
+        Region.zero(),
+        .generalized,
+    );
+    const copied = try checker.instantiateVarWithMarkerCopy(
+        source_root,
+        &env,
+        .{ .explicit = Region.zero() },
+        .{ .type_annotation = .{ .node = 0 } },
+        .eager_support,
+    );
+    const step_index = copied.copy_step orelse return error.TestUnexpectedResult;
+    const step = checker.cir.where_marker_copy_steps.items.items[step_index];
+    const occurrences = checker.cir.where_marker_copy_occurrences.items.items[step.occurrences_start..][0..step.occurrences_len];
+    const witnesses = checker.cir.where_marker_copy_witnesses.items.items[step.witnesses_start..][0..step.witnesses_len];
+    canonicalizeCheckedBoundaryCopyPairBfs(
+        checker.cir.where_marker_copy_pairs.items.items[step.pairs_start..][0..step.pairs_len],
+        occurrences,
+        witnesses,
+        step.root_occurrence_offset,
+    );
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+
+    var first_edge_absolute: ?u32 = null;
+    var repeated_edge_absolute: ?u32 = null;
+    for (witnesses, 0..) |witness, witness_offset| {
+        if (witness.decodedEdgeKind() != .tuple_element) continue;
+        if (witness.edge_index == 0) {
+            try std.testing.expectEqual(
+                ModuleEnv.WhereMarkerCopyWitness.Action.flex_fresh_flex_copy,
+                witness.decodedAction().?,
+            );
+            first_edge_absolute = step.witnesses_start + @as(u32, @intCast(witness_offset));
+        } else if (witness.edge_index == 1) {
+            try std.testing.expectEqual(
+                ModuleEnv.WhereMarkerCopyWitness.Action.traverse,
+                witness.decodedAction().?,
+            );
+            try std.testing.expectEqual(std.math.maxInt(u32), witness.raw_source_var);
+            try std.testing.expectEqual(std.math.maxInt(u32), witness.raw_destination_var);
+            repeated_edge_absolute = step.witnesses_start + @as(u32, @intCast(witness_offset));
+        }
+    }
+    const first_index = first_edge_absolute orelse return error.TestUnexpectedResult;
+    const repeated_index = repeated_edge_absolute orelse return error.TestUnexpectedResult;
+    const first_edge = checker.cir.where_marker_copy_witnesses.items.items[first_index];
+    const repeated_before = checker.cir.where_marker_copy_witnesses.items.items[repeated_index];
+    try std.testing.expectEqual(
+        first_edge.child_occurrence_offset,
+        repeated_before.child_occurrence_offset,
+    );
+
+    // The repeated tuple edge is an authentic memoized traversal. Giving it
+    // otherwise exact allocation fields would create a second authority for
+    // the same raw mapping and must fail before any graph-shape replay.
+    const child = occurrences[repeated_before.child_occurrence_offset];
+    var repeated = &checker.cir.where_marker_copy_witnesses.items.items[repeated_index];
+    repeated.action = @intFromEnum(ModuleEnv.WhereMarkerCopyWitness.Action.flex_fresh_flex_copy);
+    repeated.raw_source_var = child.raw_source_var;
+    repeated.raw_destination_var = child.raw_destination_var;
+    const accepted_duplicate_allocation = validateWhereMarkerCopyProofLocal(checker.types, checker.cir);
+    repeated.* = repeated_before;
+    try std.testing.expect(!accepted_duplicate_allocation);
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+}
+
+test "attached interpolation fresh copies are structural non-ingress witnesses" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initUncheckedForTesting(
+        "StructuralInterpolationFreshCopy",
+        "main = {}",
+    );
+    defer test_env.deinit();
+    const checker = &test_env.checker;
+
+    var env = try Env.init(checker.gpa, .outermost);
+    defer env.deinit(checker.gpa);
+    const callable = try checker.freshFromContentAtRank(
+        .{ .structure = .empty_record },
+        &env,
+        Region.zero(),
+        .generalized,
+    );
+    const interpolation_part = try checker.freshFromContentAtRank(
+        .{ .flex = Flex.init() },
+        &env,
+        Region.zero(),
+        .generalized,
+    );
+    const interpolation_item = try checker.freshFromContentAtRank(
+        .{ .flex = Flex.init() },
+        &env,
+        Region.zero(),
+        .generalized,
+    );
+    const interpolation_parts = try checker.types.appendInterpolationParts(&.{.{
+        .var_ = interpolation_part,
+        .region = Region.zero(),
+    }});
+    const source_constraints = try checker.types.appendStaticDispatchConstraints(&.{.{
+        .fn_name = checker.cir.idents.from_interpolation,
+        .fn_var = callable,
+        .origin = .{ .where_clause = .{} },
+        .interpolation = .{
+            .expr_region = StaticDispatchConstraint.OptRegion.some(Region.zero()),
+            .item_var = interpolation_item,
+            .interpolated_parts = interpolation_parts,
+        },
+    }});
+    const source_root = try checker.freshFromContentAtRank(
+        .{ .flex = Flex.init().withConstraints(source_constraints) },
+        &env,
+        Region.zero(),
+        .generalized,
+    );
+    const copied = try checker.instantiateVarWithMarkerCopy(
+        source_root,
+        &env,
+        .{ .explicit = Region.zero() },
+        .{ .type_annotation = .{ .node = 0 } },
+        .eager_support,
+    );
+    const step_index = copied.copy_step orelse return error.TestUnexpectedResult;
+    const step = checker.cir.where_marker_copy_steps.items.items[step_index];
+    const occurrences = checker.cir.where_marker_copy_occurrences.items.items[step.occurrences_start..][0..step.occurrences_len];
+    const witnesses = checker.cir.where_marker_copy_witnesses.items.items[step.witnesses_start..][0..step.witnesses_len];
+    canonicalizeCheckedBoundaryCopyPairBfs(
+        checker.cir.where_marker_copy_pairs.items.items[step.pairs_start..][0..step.pairs_len],
+        occurrences,
+        witnesses,
+        step.root_occurrence_offset,
+    );
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+
+    var root_creation_count: usize = 0;
+    var primary_count: usize = 0;
+    var interpolation_count: usize = 0;
+    for (witnesses, 0..) |witness, witness_offset| {
+        const edge_kind = witness.decodedEdgeKind() orelse return error.TestUnexpectedResult;
+        if (edge_kind == .root_copy_action) {
+            try std.testing.expectEqual(
+                ModuleEnv.WhereMarkerCopyWitness.Action.flex_fresh_flex_copy,
+                witness.decodedAction().?,
+            );
+            root_creation_count += 1;
+        }
+        if (edge_kind == .static_dispatch_function) {
+            try std.testing.expectEqual(@as(u32, 0), witness.constraint_pair_offset);
+            try std.testing.expect(
+                !whereMarkerWitnessActionIsRequirementComponentIngress(witness.decodedAction().?),
+            );
+            primary_count += 1;
+        }
+        if (edge_kind != .interpolation_part and edge_kind != .interpolation_item) continue;
+        try std.testing.expectEqual(@as(u32, 0), witness.constraint_pair_offset);
+        try std.testing.expectEqual(
+            ModuleEnv.WhereMarkerCopyWitness.Action.flex_fresh_flex_copy,
+            witness.decodedAction().?,
+        );
+        interpolation_count += 1;
+
+        // This child genuinely allocated, but its pair primary is the attached
+        // structural function. Relabeling the exact raw witness as a virtual
+        // combined ingress must be rejected even beside a non-traverse root.
+        const absolute = step.witnesses_start + @as(u32, @intCast(witness_offset));
+        const before = checker.cir.where_marker_copy_witnesses.items.items[absolute];
+        var candidate = &checker.cir.where_marker_copy_witnesses.items.items[absolute];
+        candidate.action = @intFromEnum(
+            ModuleEnv.WhereMarkerCopyWitness.Action.requirement_component_fresh_flex_copy,
+        );
+        const accepted_virtual_relabel = validateWhereMarkerCopyProofLocal(
+            checker.types,
+            checker.cir,
+        );
+        candidate.* = before;
+        try std.testing.expect(!accepted_virtual_relabel);
+        try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+    }
+    try std.testing.expectEqual(@as(usize, 1), root_creation_count);
+    try std.testing.expectEqual(@as(usize, 1), primary_count);
+    try std.testing.expectEqual(@as(usize, 2), interpolation_count);
+}
+
 test "Probe rollback owns copied open literal groups events handles and moves" {
     const TestEnv = @import("test/TestEnv.zig");
     var test_env = try TestEnv.initUncheckedForTesting("CopiedOpenLiteralProbeRollback", "main = {}");
@@ -68422,6 +69020,436 @@ test "copied open literal checked boundary remaps reordered groups events handle
     defer std.testing.allocator.free(serialized_after);
     try std.testing.expectEqualSlices(u8, serialized_before, serialized_after);
     try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+}
+
+test "virtual requirement fresh-flex copies survive exact local publication and serde" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source = "main = {}";
+    var test_env = try TestEnv.initExpr("VirtualRequirementFreshFlexCopy", source);
+    defer test_env.deinit();
+    const checker = &test_env.checker;
+
+    var env = try Env.init(checker.gpa, .outermost);
+    defer env.deinit(checker.gpa);
+    const scheme_root = try checker.freshFromContentAtRank(
+        .{ .flex = Flex.init() },
+        &env,
+        Region.zero(),
+        .generalized,
+    );
+    const attached_callable = try checker.freshFromContentAtRank(
+        .{ .structure = .empty_record },
+        &env,
+        Region.zero(),
+        .generalized,
+    );
+    const attached_range = try checker.types.appendStaticDispatchConstraints(&.{.{
+        .fn_name = checker.cir.idents.is_eq,
+        .fn_var = attached_callable,
+        .origin = .{ .where_clause = .{} },
+    }});
+    const attached_source_index: u32 = @intFromEnum(attached_range.start);
+    const receiver = try checker.freshFromContentAtRank(
+        .{ .flex = Flex.init().withConstraints(attached_range) },
+        &env,
+        Region.zero(),
+        .outermost,
+    );
+    const interface_elems = try checker.types.appendVars(&.{receiver});
+    const boundary_interface = try checker.freshFromContentAtRank(
+        .{ .structure = .{ .tuple = .{ .elems = interface_elems } } },
+        &env,
+        Region.zero(),
+        .outermost,
+    );
+
+    const rigid_name = try checker.cir.insertIdent(base.Ident.for_text("detached_callable"));
+    const detached_callable = try checker.freshFromContentAtRank(
+        .{ .rigid = Rigid.init(rigid_name) },
+        &env,
+        Region.zero(),
+        .outermost,
+    );
+    const second_rigid_name = try checker.cir.insertIdent(base.Ident.for_text("second_detached_callable"));
+    const second_detached_callable = try checker.freshFromContentAtRank(
+        .{ .rigid = Rigid.init(second_rigid_name) },
+        &env,
+        Region.zero(),
+        .outermost,
+    );
+    const interpolation_part = try checker.freshFromContentAtRank(
+        .{ .flex = Flex.init() },
+        &env,
+        Region.zero(),
+        .generalized,
+    );
+    const interpolation_item = try checker.freshFromContentAtRank(
+        .{ .flex = Flex.init() },
+        &env,
+        Region.zero(),
+        .generalized,
+    );
+    const interpolation_parts = try checker.types.appendInterpolationParts(&.{.{
+        .var_ = interpolation_part,
+        .region = Region.zero(),
+    }});
+    const detached_constraint = StaticDispatchConstraint{
+        .fn_name = checker.cir.idents.is_eq,
+        .fn_var = detached_callable,
+        .origin = .{ .where_clause = .{} },
+        .interpolation = .{
+            .expr_region = StaticDispatchConstraint.OptRegion.some(Region.zero()),
+            .item_var = interpolation_item,
+            .interpolated_parts = interpolation_parts,
+        },
+    };
+    const second_method_name = try checker.cir.insertIdent(base.Ident.for_text("second_requirement"));
+    const second_detached_constraint = StaticDispatchConstraint{
+        .fn_name = second_method_name,
+        .fn_var = second_detached_callable,
+        .origin = .{ .where_clause = .{} },
+    };
+
+    // Exercise the real detached-registration and boundary-capture operations
+    // over controlled typed requirement inputs. Each detached source occurrence
+    // is distinct from the attached occurrence on the receiver, while
+    // structural_origin retains that exact creation relation. The explicit
+    // generated-codec input is consumed by capture and later forces the
+    // receiver component copy; this fixture does not claim upstream codec
+    // classification or parsed-file admission coverage.
+    const candidates_before = checker.scheme_requirement_candidates.items.len;
+    const constraints_before_detached = checker.types.static_dispatch_constraints.items.items.len;
+    const previous_active_scheme_root = checker.active_scheme_root;
+    checker.active_scheme_root = scheme_root;
+    defer checker.active_scheme_root = previous_active_scheme_root;
+    try checker.registerInstantiatedSchemeRequirement(.{
+        .scheme_receiver_var = receiver,
+        .receiver_var = receiver,
+        .scheme_fn_var = detached_callable,
+        .constraint = detached_constraint,
+        .source_constraint_index = std.math.maxInt(u32),
+        .deferred_generated_codec = true,
+        .structural_origin = .{
+            .receiver_var = receiver,
+            .constraint_fn_var = attached_callable,
+        },
+    }, null, null, null, &env);
+    const detached_source_index: u32 = @intCast(constraints_before_detached);
+    const constraints_before_second = checker.types.static_dispatch_constraints.items.items.len;
+    try checker.registerInstantiatedSchemeRequirement(.{
+        .scheme_receiver_var = receiver,
+        .receiver_var = receiver,
+        .scheme_fn_var = second_detached_callable,
+        .constraint = second_detached_constraint,
+        .source_constraint_index = std.math.maxInt(u32),
+        .deferred_generated_codec = true,
+        .structural_origin = .{
+            .receiver_var = receiver,
+            .constraint_fn_var = attached_callable,
+        },
+    }, null, null, null, &env);
+    const second_detached_source_index: u32 = @intCast(constraints_before_second);
+    try std.testing.expect(detached_source_index != attached_source_index);
+    try std.testing.expect(second_detached_source_index != attached_source_index);
+    try std.testing.expect(second_detached_source_index != detached_source_index);
+    try std.testing.expectEqual(
+        constraints_before_detached + 2,
+        checker.types.static_dispatch_constraints.items.items.len,
+    );
+    try std.testing.expectEqual(candidates_before + 2, checker.scheme_requirement_candidates.items.len);
+    const detached_candidate = checker.scheme_requirement_candidates.items[candidates_before];
+    const second_detached_candidate = checker.scheme_requirement_candidates.items[candidates_before + 1];
+    try std.testing.expectEqual(SchemeRequirementCandidate.Source.scheme_copy, detached_candidate.source);
+    try std.testing.expectEqual(detached_source_index, detached_candidate.constraint_index);
+    try std.testing.expectEqual(receiver, detached_candidate.structural_origin.receiver_var);
+    try std.testing.expectEqual(attached_callable, detached_candidate.structural_origin.constraint_fn_var);
+    try std.testing.expectEqual(SchemeRequirementCandidate.Source.scheme_copy, second_detached_candidate.source);
+    try std.testing.expectEqual(second_detached_source_index, second_detached_candidate.constraint_index);
+    try std.testing.expectEqual(receiver, second_detached_candidate.structural_origin.receiver_var);
+    try std.testing.expectEqual(attached_callable, second_detached_candidate.structural_origin.constraint_fn_var);
+
+    try checker.captureSchemeDispatchRequirements(&.{.{
+        .owner = scheme_root,
+        .interface = boundary_interface,
+    }}, &env);
+    try std.testing.expectEqual(candidates_before, checker.scheme_requirement_candidates.items.len);
+    const scheme_index = checker.typeSchemeIndexForRoot(scheme_root) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        checker.type_schemes.items[scheme_index].dispatch_requirements.items.len,
+    );
+    const captured = checker.type_schemes.items[scheme_index].dispatch_requirements.items[0];
+    const second_captured = checker.type_schemes.items[scheme_index].dispatch_requirements.items[1];
+    try std.testing.expect(captured.deferred_generated_codec);
+    try std.testing.expectEqual(detached_source_index, captured.constraint_index);
+    try std.testing.expectEqual(receiver, captured.structural_origin.receiver_var);
+    try std.testing.expectEqual(attached_callable, captured.structural_origin.constraint_fn_var);
+    try std.testing.expect(second_captured.deferred_generated_codec);
+    try std.testing.expectEqual(second_detached_source_index, second_captured.constraint_index);
+    try std.testing.expectEqual(receiver, second_captured.structural_origin.receiver_var);
+    try std.testing.expectEqual(attached_callable, second_captured.structural_origin.constraint_fn_var);
+
+    // Real binding generalization publishes this classification after
+    // requirement capture. A TypeScheme side table alone is not binding-scheme
+    // authority: value-restricted side tables deliberately retain the ordinary
+    // copy policy. Mirror the exact producer before exercising the scheme use.
+    try checker.publishBindingScheme(scheme_root);
+    try std.testing.expect(checker.isBindingSchemeVar(scheme_root));
+
+    // Registration and capture above are the typed local-integration boundary.
+    // The copy below exercises the real instantiator, detached registrar,
+    // translation, and durable proof validator; it is not a parsed checked-file
+    // admission or a source-level generated-codec producer test.
+    checker.active_scheme_root = null;
+    const copied = try checker.instantiateVarWithMarkerCopy(
+        scheme_root,
+        &env,
+        .{ .explicit = Region.zero() },
+        .{ .type_annotation = .{ .node = 0 } },
+        .eager_support,
+    );
+    const step_index = copied.copy_step orelse return error.TestUnexpectedResult;
+    const step = checker.cir.where_marker_copy_steps.items.items[step_index];
+    try std.testing.expectEqual(
+        ModuleEnv.WhereMarkerCopyStep.CopyPolicy.ranked_fresh_flex_close_scheme,
+        step.decodedCopyPolicy().?,
+    );
+    try std.testing.expectEqual(@as(u32, 3), step.constraint_pairs_len);
+    const constraint_pairs = checker.cir.where_marker_constraint_copy_pairs.items.items[step.constraint_pairs_start..][0..step.constraint_pairs_len];
+    try std.testing.expectEqual(attached_source_index, constraint_pairs[0].source_constraint_index);
+    try std.testing.expectEqual(detached_source_index, constraint_pairs[1].source_constraint_index);
+    try std.testing.expectEqual(second_detached_source_index, constraint_pairs[2].source_constraint_index);
+    try std.testing.expect(
+        constraint_pairs[0].destination_constraint_index != attached_source_index and
+            constraint_pairs[1].destination_constraint_index != detached_source_index and
+            constraint_pairs[2].destination_constraint_index != second_detached_source_index,
+    );
+
+    const occurrences = checker.cir.where_marker_copy_occurrences.items.items[step.occurrences_start..][0..step.occurrences_len];
+    const witnesses = checker.cir.where_marker_copy_witnesses.items.items[step.witnesses_start..][0..step.witnesses_len];
+    canonicalizeCheckedBoundaryCopyPairBfs(
+        checker.cir.where_marker_copy_pairs.items.items[step.pairs_start..][0..step.pairs_len],
+        occurrences,
+        witnesses,
+        step.root_occurrence_offset,
+    );
+    const ExpectedIngress = struct {
+        edge_kind: ModuleEnv.WhereMarkerCopyWitness.EdgeKind,
+        edge_index: u32,
+        raw_source: u32,
+    };
+    const expected_ingresses = [_]ExpectedIngress{
+        .{ .edge_kind = .scheme_requirement_receiver, .edge_index = 0, .raw_source = @intFromEnum(receiver) },
+        .{ .edge_kind = .scheme_requirement_function, .edge_index = 0, .raw_source = @intFromEnum(detached_callable) },
+        .{ .edge_kind = .interpolation_part, .edge_index = 0, .raw_source = @intFromEnum(interpolation_part) },
+        .{ .edge_kind = .interpolation_item, .edge_index = 0, .raw_source = @intFromEnum(interpolation_item) },
+        .{ .edge_kind = .scheme_requirement_function, .edge_index = 1, .raw_source = @intFromEnum(second_detached_callable) },
+    };
+    var combined_receiver_absolute: ?u32 = null;
+    var combined_interpolation_absolute: ?u32 = null;
+    var memoized_receiver_absolute: ?u32 = null;
+    for (expected_ingresses) |expected| {
+        var matches: usize = 0;
+        for (witnesses, 0..) |witness, witness_offset| {
+            if (witness.decodedEdgeKind() != expected.edge_kind or
+                witness.edge_index != expected.edge_index or
+                witness.decodedAction() != .requirement_component_fresh_flex_copy)
+            {
+                continue;
+            }
+            matches += 1;
+            try std.testing.expectEqual(step.root_occurrence_offset, witness.parent_occurrence_offset);
+            try std.testing.expectEqual(expected.raw_source, witness.raw_source_var);
+            const occurrence = occurrences[witness.child_occurrence_offset];
+            try std.testing.expectEqual(occurrence.raw_source_var, witness.raw_source_var);
+            try std.testing.expectEqual(occurrence.raw_destination_var, witness.raw_destination_var);
+            try std.testing.expect(witness.raw_source_var != witness.raw_destination_var);
+            try std.testing.expectEqual(
+                ModuleEnv.WhereMarkerCopyWitness.AuxiliaryOriginKind.none,
+                witness.decodedAuxiliaryOriginKind().?,
+            );
+            try std.testing.expectEqual(@as(u32, 0), witness.auxiliary_origin_step);
+            try std.testing.expectEqual(@as(u32, 0), witness.auxiliary_origin_index);
+            if (expected.edge_kind == .scheme_requirement_receiver) {
+                combined_receiver_absolute = step.witnesses_start + @as(u32, @intCast(witness_offset));
+                const destination = checker.types.resolveVar(@enumFromInt(witness.raw_destination_var));
+                try std.testing.expect(destination.desc.content == .flex);
+                try std.testing.expectEqual(@as(usize, 1), destination.desc.content.flex.constraints.len());
+            }
+            if (expected.edge_kind == .scheme_requirement_function) {
+                try std.testing.expect(
+                    checker.types.resolveVar(@enumFromInt(witness.raw_source_var)).desc.content == .rigid,
+                );
+                try std.testing.expect(
+                    checker.types.resolveVar(@enumFromInt(witness.raw_destination_var)).desc.content == .flex,
+                );
+            }
+            if (expected.edge_kind == .interpolation_part) {
+                combined_interpolation_absolute = step.witnesses_start +
+                    @as(u32, @intCast(witness_offset));
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 1), matches);
+    }
+    for (witnesses, 0..) |witness, witness_offset| {
+        if (witness.decodedEdgeKind() != .scheme_requirement_receiver or witness.edge_index != 1) continue;
+        if (memoized_receiver_absolute != null) return error.TestUnexpectedResult;
+        try std.testing.expectEqual(
+            ModuleEnv.WhereMarkerCopyWitness.Action.requirement_component_ingress,
+            witness.decodedAction().?,
+        );
+        try std.testing.expectEqual(std.math.maxInt(u32), witness.raw_source_var);
+        try std.testing.expectEqual(std.math.maxInt(u32), witness.raw_destination_var);
+        memoized_receiver_absolute = step.witnesses_start + @as(u32, @intCast(witness_offset));
+    }
+
+    var root_action_count: usize = 0;
+    for (witnesses) |witness| {
+        if (witness.decodedEdgeKind() != .root_copy_action) continue;
+        try std.testing.expectEqual(
+            ModuleEnv.WhereMarkerCopyWitness.Action.flex_fresh_flex_copy,
+            witness.decodedAction().?,
+        );
+        root_action_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), root_action_count);
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+    for (checker.cir.dispatch_settlement_sources.items.items, 0..) |settlement_source, source_index| {
+        if (settlement_source.decodedKind() != .copied_constraint) continue;
+        try std.testing.expect(validateDispatchSettlementSourceContext(
+            checker.cir,
+            @intCast(source_index),
+        ));
+    }
+
+    const receiver_absolute = combined_receiver_absolute orelse return error.TestUnexpectedResult;
+    const memoized_receiver_index = memoized_receiver_absolute orelse return error.TestUnexpectedResult;
+    const original_receiver = checker.cir.where_marker_copy_witnesses.items.items[receiver_absolute];
+    var receiver_witness = &checker.cir.where_marker_copy_witnesses.items.items[receiver_absolute];
+    receiver_witness.action = @intFromEnum(ModuleEnv.WhereMarkerCopyWitness.Action.requirement_component_ingress);
+    const accepted_hidden_creation = validateWhereMarkerCopyProofLocal(checker.types, checker.cir);
+    receiver_witness.* = original_receiver;
+    try std.testing.expect(!accepted_hidden_creation);
+
+    receiver_witness.edge_kind = @intFromEnum(ModuleEnv.WhereMarkerCopyWitness.EdgeKind.tuple_element);
+    const accepted_structural_combined = validateWhereMarkerCopyProofLocal(checker.types, checker.cir);
+    receiver_witness.* = original_receiver;
+    try std.testing.expect(!accepted_structural_combined);
+
+    receiver_witness.raw_source_var = std.math.maxInt(u32);
+    const accepted_missing_raw_source = validateWhereMarkerCopyProofLocal(checker.types, checker.cir);
+    receiver_witness.* = original_receiver;
+    try std.testing.expect(!accepted_missing_raw_source);
+
+    receiver_witness.raw_destination_var = receiver_witness.raw_source_var;
+    const accepted_equal_endpoints = validateWhereMarkerCopyProofLocal(checker.types, checker.cir);
+    receiver_witness.* = original_receiver;
+    try std.testing.expect(!accepted_equal_endpoints);
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+
+    const interpolation_index = combined_interpolation_absolute orelse
+        return error.TestUnexpectedResult;
+    const interpolation_before = checker.cir.where_marker_copy_witnesses.items.items[
+        interpolation_index
+    ];
+    var interpolation_witness = &checker.cir.where_marker_copy_witnesses.items.items[
+        interpolation_index
+    ];
+    interpolation_witness.action = @intFromEnum(
+        ModuleEnv.WhereMarkerCopyWitness.Action.flex_fresh_flex_copy,
+    );
+    const accepted_structural_virtual_interpolation = validateWhereMarkerCopyProofLocal(
+        checker.types,
+        checker.cir,
+    );
+    interpolation_witness.* = interpolation_before;
+    try std.testing.expect(!accepted_structural_virtual_interpolation);
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+
+    const memoized_receiver_before = checker.cir.where_marker_copy_witnesses.items.items[
+        memoized_receiver_index
+    ];
+    try std.testing.expectEqual(
+        original_receiver.child_occurrence_offset,
+        memoized_receiver_before.child_occurrence_offset,
+    );
+    const memoized_child = occurrences[memoized_receiver_before.child_occurrence_offset];
+    var memoized_receiver = &checker.cir.where_marker_copy_witnesses.items.items[
+        memoized_receiver_index
+    ];
+    memoized_receiver.action = @intFromEnum(
+        ModuleEnv.WhereMarkerCopyWitness.Action.requirement_component_fresh_flex_copy,
+    );
+    memoized_receiver.raw_source_var = memoized_child.raw_source_var;
+    memoized_receiver.raw_destination_var = memoized_child.raw_destination_var;
+    const accepted_duplicate_virtual_allocation = validateWhereMarkerCopyProofLocal(
+        checker.types,
+        checker.cir,
+    );
+    memoized_receiver.* = memoized_receiver_before;
+    try std.testing.expect(!accepted_duplicate_virtual_allocation);
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(checker.types, checker.cir));
+
+    try checker.rebuildCheckedBoundaryWhereMethodState();
+    const canonical_once = try serializeModuleEnvForCanonicalComparison(std.testing.allocator, checker.cir);
+    defer std.testing.allocator.free(canonical_once);
+    try checker.rebuildCheckedBoundaryWhereMethodState();
+    const canonical_twice = try serializeModuleEnvForCanonicalComparison(std.testing.allocator, checker.cir);
+    defer std.testing.allocator.free(canonical_twice);
+    try std.testing.expectEqualSlices(u8, canonical_once, canonical_twice);
+
+    const buffer = try serializeModuleEnvForDeserializationTest(std.testing.allocator, checker.cir);
+    defer std.testing.allocator.free(buffer);
+    try std.testing.expectEqualSlices(u8, canonical_twice, buffer);
+    const base_addr = @intFromPtr(buffer.ptr);
+    const serialized: *const ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    try serialized.validate(buffer.len);
+
+    const readonly = try serialized.deserializeInto(
+        base_addr,
+        std.testing.allocator,
+        source,
+        "VirtualRequirementFreshFlexCopy",
+    );
+    defer {
+        readonly.imports.deinitMapOnly(std.testing.allocator);
+        readonly.import_mapping.deinit();
+        std.testing.allocator.destroy(readonly);
+    }
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(&readonly.types, readonly));
+    var readonly_combined_count: usize = 0;
+    for (readonly.where_marker_copy_witnesses.items.items) |witness| {
+        readonly_combined_count += @intFromBool(
+            witness.decodedAction() == .requirement_component_fresh_flex_copy,
+        );
+    }
+    try std.testing.expectEqual(@as(usize, 5), readonly_combined_count);
+    const readonly_bytes = try serializeModuleEnvForCanonicalComparison(std.testing.allocator, readonly);
+    defer std.testing.allocator.free(readonly_bytes);
+    try std.testing.expectEqualSlices(u8, canonical_twice, readonly_bytes);
+
+    const mutable = try serialized.deserializeWithMutableTypes(
+        base_addr,
+        std.testing.allocator,
+        source,
+        "VirtualRequirementFreshFlexCopy",
+    );
+    defer {
+        mutable.deinitCachedModule();
+        std.testing.allocator.destroy(mutable);
+    }
+    try std.testing.expect(validateWhereMarkerCopyProofLocal(&mutable.types, mutable));
+    var mutable_combined_count: usize = 0;
+    for (mutable.where_marker_copy_witnesses.items.items) |witness| {
+        mutable_combined_count += @intFromBool(
+            witness.decodedAction() == .requirement_component_fresh_flex_copy,
+        );
+    }
+    try std.testing.expectEqual(@as(usize, 5), mutable_combined_count);
+    const mutable_bytes = try serializeModuleEnvForCanonicalComparison(std.testing.allocator, mutable);
+    defer std.testing.allocator.free(mutable_bytes);
+    try std.testing.expectEqualSlices(u8, canonical_twice, mutable_bytes);
 }
 
 test "local detached scheme copied source has exact paired and identity-skip converses" {

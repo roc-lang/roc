@@ -1731,6 +1731,12 @@ producer path that writes the cache entry and the matching semantic admission
 validator, with invalidation governed by the cache key and explicit
 cache/selection format versions.
 
+An empty serialized `SafeMultiList` has zero length and zero capacity because
+no backing extent is serialized; reserved runtime capacity is not serialized
+authority. Its serialized offset remains the writer's current cursor and has
+no additional alignment requirement. Nonempty structure-of-arrays capacity
+and layout are unchanged.
+
 ### Checked Module Admission Authority
 
 A relocated or mutable-deserialized `ModuleEnv` is untrusted. Checked-module
@@ -5840,6 +5846,15 @@ probe-then-mutate rewrite requires a declared rule in this document first;
 
 ### Polarity: Output-Position Tag Unions Are Implicitly Open
 
+Implementation checkpoint (2026-09-10): W6a is implemented. W6b's ordinary
+and virtual-ingress fresh-flex allocation witnesses, exact allocation-claim
+uniqueness, interpolation-role validation, and canonical empty-list cache
+serialization are implemented and independently reviewed in WIP change
+`qpmsttws` (cache version 83). These are checked-boundary prerequisites, not
+completion of option (e)'s nested-row rejection or the direct-result/Try
+runtime adapters. Those mechanisms and full-suite verification remain open;
+`polarity_phase_two.md` section 8 records the verification and remaining work.
+
 Every type annotation is walked with a POLARITY: the root is positive
 (output), function argument positions negate the surrounding polarity, and
 all other positions (returns, type application args, record fields, tuple
@@ -6025,15 +6040,91 @@ copied-open-literal registration, and default-driver authorship; its original
 producer remains responsible for those lifecycles. The ledger is local to the
 checker traversal and is not durable settlement or checked-boundary evidence.
 
-When the exact copied root itself has no outgoing semantic edge that names its
-copy action, the step owns exactly one typed root-action witness whose parent
+An ordinary local root or structural request which actually allocates a fresh
+flex for a source flex records `flex_fresh_flex_copy` when
+`recordProofWitness` is called for that first allocating visit. The action
+carries no auxiliary origin: both auxiliary coordinates are zero. Its raw
+source and destination ids are present, in range, distinct, respectively
+identical to the witness child occurrence's raw source and destination, and
+project through that occurrence to the witness's exact canonical pair. A later
+request which finds the source in the traversal's memoized variable map is
+ordinary `traverse` to the already-authored destination, never a second
+creation action. The action-level policy domain is every local allocating
+policy: all seven `ranked_fresh_flex_*` policies, all six
+`ranked_substitute_rigids_*` policies, `all_fresh_rigid_preserve`, and
+`all_fresh_flex_preserve`; each copy-step origin remains independently
+restricted by the declared origin-to-policy matrix. It is illegal for
+`cross_module_import` and for the current checked
+`all_share_leaves_resolve_positive` origin. No current checked all-share origin
+invokes forced detached components: `generated_codec_snapshot` has no producer,
+and `instantiateWhereMethodForUse` uses no proof sink or explicit requirement
+copy. The non-forced rule is therefore the complete current checked domain; it
+does not infer safety merely from the root request, because detached function
+requests are forced at other origins. The lower-level instantiator may
+force-copy a root while leaf sharing is enabled; when that request genuinely
+allocates a flex, its caller must select one of the declared allocating
+policies and the same creation action remains mandatory. A future checked
+forced-root all-share operation would therefore require its own allocating
+policy rather than weakening the non-forced all-share rule.
+
+A virtual scheme-requirement receiver, function, interpolation-part, or
+interpolation-item request must retain its ingress role. When such a request's
+first visit takes either `flex_fresh_flex_copy` or `rigid_fresh_flex_cut` and
+therefore creates a fresh flex, `recordProofWitness` records the closed combined
+action `requirement_component_fresh_flex_copy`. The combined action is selected
+from that exact underlying allocation branch, not reconstructed from final flex
+shape. It carries no auxiliary origin; all inactive words are zero; its raw
+endpoints are present, in range, distinct, equal to the exact child occurrence
+endpoints, and project to that occurrence's canonical pair. Memoized revisits,
+shared identity requests, rigid-destination copies, and all nonallocating
+virtual requests remain `requirement_component_ingress`. A virtual
+polarity-open request remains ordinary `requirement_component_ingress`; its
+exact producer creates `Flex.init()` without attached constraints, so it
+supplies no attached-candidate creation authority. The combined action has the
+same fifteen-policy action domain and independent origin-policy restriction as
+`flex_fresh_flex_copy`; cross-module and current checked all-share origins
+reject it.
+
+For each exact raw source/destination mapping in one local copy step, at most
+one witness may claim fresh-flex allocation across the closed action union
+`flex_fresh_flex_copy`, `requirement_component_fresh_flex_copy`, and
+`rigid_fresh_flex_cut`. This is uniqueness of producer authority. Admission
+establishes it from the witnesses' already-validated child occurrences, whose
+raw source/destination tuples are unique within the step; it does not infer
+existence or traversal order from canonical BFS or from a canonical pair which
+later solving may cause distinct historical mappings to share.
+
+Both ingress actions are virtual for structural-outgoing counts and exact
+receiver/function/interpolation converses. The combined action is legal only
+on those four ingress edge kinds; an interpolation combined action shares its
+exact constraint pair with the unique `scheme_requirement_function` primary.
+It is never legal on `root_copy_action` or an ordinary structural edge. Future
+attached-candidate admission may consume this combined producer authority;
+paired detached admission consumes the exact ingress edge and requirement
+ordinal and never final shape.
+
+Every interpolation-part or interpolation-item witness's ingress-action
+classification is equivalent to its already-unique constraint-pair primary
+being a local detached `scheme_requirement_function` with auxiliary origin
+`none`. In that case the interpolation witness has both the primary's parent
+occurrence and the exact step root as its parent. A
+`static_dispatch_function` primary requires a non-ingress action. A composite
+binding-codec `scheme_requirement_function` with
+`binding_scheme_codec_requirement` auxiliary origin is a non-ingress
+exception: its interpolation metadata is structurally copied in the function
+component.
+
+Every root whose selected operation is a non-`traverse` cut or creation owns
+exactly one typed root-action witness, even when the copied root also has
+ordinary structural children or detached virtual requirement ingresses. An
+ordinary `traverse` root owns that self-addressed witness only when it has no
+ordinary structural outgoing witness. Detached receiver and function ingresses
+are virtual edges rather than structural children and do not suppress the
+ordinary zero-structural-outgoing root action. The root-action witness's parent
 and child both name the exact root occurrence, which projects to the sole root
-pair. This covers structural leaves and the
-finite root-level share, freshening, substitution, and preseed cuts. Admission
-does not treat that row as a graph self-edge or predecessor: it validates the
-action against the step's exact copy policy and, for a cut, the exact raw or
-binding-root/platform-substitution authority. A structurally traversed root
-with at least one outgoing witness has no root-action witness.
+pair. Admission does not treat the row as a graph self-edge or predecessor: it
+validates the action against the step's exact copy policy and, for a cut, the
+exact raw or binding-root/platform-substitution authority.
 
 "Complete" means exact replay
 under finite authenticated cut rules, not unconditional structural closure:
@@ -6852,17 +6943,17 @@ ordinary `static_dispatch_function` edge or its detached/binding
 interpolation edges, are references and do not satisfy this producer
 cardinality. Within a detached scheme step, each `(root occurrence,
 requirement ordinal)` has exactly one receiver ingress and at most one
-function ingress; both use `requirement_component_ingress`, the receiver and
-ordinary function use no auxiliary origin, and their parent is the exact step
-root. A receiver-only group is legal solely for its canonical local-identity
-raw occurrence. Thus an extra same-pair function witness or a same-shaped
-receiver sibling cannot survive merely because one otherwise valid copied
-source still names the expected witness.
+function ingress; both use one of the two declared requirement-component
+ingress actions, the receiver and ordinary function use no auxiliary origin,
+and their parent is the exact step root. A receiver-only group is legal solely
+for its canonical local-identity raw occurrence. Thus an extra same-pair
+function witness or a same-shaped receiver sibling cannot survive merely
+because one otherwise valid copied source still names the expected witness.
 
 Detached requirement ingresses are virtual edges from the copied scheme root,
 not structural children of that root's type shape. A root
 `root_copy_action/traverse` may therefore coexist with those exact
-`requirement_component_ingress` edges. The traverse action's zero-outgoing
+requirement-component ingress edges. The traverse action's zero-outgoing
 condition counts only ordinary structural edges; classifying a detached
 receiver or function ingress as structural would reject the producer-authored
 scheme relation even though its root graph itself is empty.
@@ -7056,6 +7147,14 @@ and cannot appear in checked output. For a root with several paths, the
 producer emits the lexicographically first shortest path under this closed
 edge order. Every path ends at its certificate's terminal constraint, so an
 empty path is invalid.
+
+That path-level exclusion is not a copy-proof root-action exception.
+`root_copy_action` is not a semantic traversal edge, so it cannot appear in a
+generalized dispatch path; the copy relation still applies the earlier exact
+root-action rule. In particular, a non-`traverse` cut or creation retains its
+typed root action even beside structural witnesses, while an ordinary
+`traverse` root publishes that action only when it has no ordinary structural
+outgoing witness.
 
 The settlement is the sole owner of generic handle/movement closure.
 `SelectedMethodDecision` retains its provider binding, exact finalized

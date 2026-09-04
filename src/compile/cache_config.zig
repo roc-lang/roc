@@ -196,7 +196,10 @@ pub const Constants = struct {
     ///     where-alias lookup and pre-relation call-operand recovery arms.
     /// 82: Canonical CIR node payload variants explicitly define all sixteen
     ///     serialized bytes, including zero-default reserved tails.
-    pub const CACHE_VERSION = 82;
+    /// 83: Marker-copy witnesses retain fresh-flex allocation authority,
+    ///     including virtual requirement ingresses; empty SafeMultiList cache
+    ///     descriptors require canonical zero capacity.
+    pub const CACHE_VERSION = 83;
 };
 
 /// Configuration for the Roc cache system.

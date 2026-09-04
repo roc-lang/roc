@@ -711,7 +711,7 @@ and `run-check-snapshots` run after W3, after W6b, and after W2b.
 6. (Closed 2026-09-03.) The 10121 harness tests pass on the stack; the CLI
    controls become fixtures under W4 so the two paths cannot drift.
 
-## 8. Handoff for the next agent (updated 2026-09-09; W6b in progress)
+## 8. Handoff for the next agent (updated 2026-09-10; W6b in progress)
 
 This section is self-contained: the session's scratchpad (research reports,
 probe programs, logs) does not survive, so everything a successor needs is
@@ -726,21 +726,27 @@ described in full, with trailers; W6b currently has its provisional title):
 |---|---|---|
 | `kusqzzsn` | W1 build fix | landed; drop at the next rebase once `main` fixes `any_negative` |
 | `kupupkyt`, `wyzrkrmn`, `wlylqvxq`, `rzysvtry`, `rprvoylp` | phase-one checker work | landed, reviewed, PR #10434 (draft) |
-| `wlzsxolu` | this plan | keep amending in place: edit the file in the working copy, then `jj squash --from @ --into wlzsxolu --use-destination-message polarity_phase_two.md` |
+| `wlzsxolu` | original plan | historical plan commit; current WIP checkpoints carry their own progress updates |
 | `tsrzvryw` | W2a | landed, implemented + adversarially reviewed; callable-node grounding only |
 | `wwnsvqrn` | W3 | landed, implemented + reviewed twice; full `run-test-zig` 5039/5046 (7 skipped) and `run-check-snapshots` clean on its tree |
 | `vrpryvko` | W4 | landed, implemented + reviewed; tests and fixtures only |
 | `wrtzpoum` | option (e) decision | declared in design.md |
 | `ktlykkxv` | W6a | implemented; producer, lifecycle, codec dominance, serialization/recheck, `requires_record`, and combined LIR focused gates green |
-| `qpmsttws` | W6b | in progress; bounded copy/provenance, target-handoff, selected-owner fixes, and staged target OOM coverage reviewed and passing; invalid-import call retirement, contributor/settlement normalization, option-(e) rejection, adapters, and phase acceptance remain open |
+| `ssvqsxro` / `cc8ace35` | W6b recovery/metadata checkpoint | pushed WIP; bounded 59-test gate green, but full checker gate is red: 1,257/1,383 pass, 6 fail, 120 crash |
+| `qpmsttws` | W6b allocation-witness/cache prerequisite checkpoint | independently reviewed and verified: combined gate 29/29 tests, 41/41 steps; cache version 83; WIP, not whole-W6b acceptance |
 
-The local bookmark `jared/polarity` points at `wrtzpoum`; verify the remote
-bookmark before publication. Jared authorized finishing W6b, updating both
-design documents, describing the jj change, pushing, and updating the PR
-description on 2026-09-07. After that, pause before W2b. The driver alone
-controls jj and publication; implementers and reviewers do not change VCS
-state. W6b is not ready to publish as complete; the separately requested
-unfinished-checkpoint decision is recorded below.
+The next reviewed WIP publication is `qpmsttws`, directly above the previously
+pushed checkpoint `ssvqsxro` / `cc8ace35`; the driver moves `jared/polarity`
+to this completed task and verifies the remote and draft PR after pushing.
+Jared's updated authorization
+on 2026-09-09 is to push WIP changes after each completed task and continue
+until the feature is complete; this supersedes the earlier pause-before-W2b
+instruction. Each task still requires independent adversarial review and
+targeted verification. The driver alone controls jj and publication;
+implementers and reviewers do not change VCS state. Pruning `.zig-cache` is
+authorized only if disk space runs out. The user also suggested an incremental
+watch build and compact diagnostics for a faster feedback loop. W6b is not
+ready to publish as complete.
 
 W6b checkpoint (2026-09-09):
 
@@ -749,11 +755,29 @@ invalidation retry, E2a/E2b, full-width CIR payloads, and the prior recovery
 matrix). Focused invalidation gate `34110` passes 7/7 steps and 6/6 tests;
 independent adversarial review accepts the bounded slice. Combined broader
 gate `50225` passes 10/10 steps and 59/59 tests (can 25, check 34).
-Full checker gate `30286` is running the compiled `c124f1eb` snapshot (only
-this progress document differs from code checkpoint `c8b4a737`). Its report
-is pending; observed test-process restarts indicate buffered crashes or
-timeouts, but do not yet identify the failing cases. W6b is unfinished and
-unaccepted as a whole; nothing has been pushed.**
+Full checker gate `30286` completed red on compiled `c124f1eb` (only this
+progress document differs from code checkpoint `c8b4a737`): 1,257/1,383 tests
+passed, 6 failed, and 120 crashed; 5/7 build steps succeeded. The full report
+is saved and grouped for targeted follow-up. W6b is unfinished and
+unaccepted as a whole. The reviewed recovery checkpoint was pushed as
+`cc8ace35`. The newer witness/cache prerequisite `qpmsttws` is independently
+accepted as a bounded task with combined gate `42891` green: 29/29 tests,
+41/41 steps. This does not certify the unresolved full-checker failures.**
+
+The active prerequisite adds ordinary and combined virtual-ingress fresh-flex
+allocation witnesses, with exact raw mapping authority and an at-most-one
+allocation-claim fence. Preliminary low-level types gate `78293` passes 5/5;
+checker fixtures and independent final review remain in progress. The first
+focused checker attempt found a preexisting empty `SafeMultiList` serialized
+capacity inconsistency; its bounded production correction is approved but not
+yet accepted. Incremental watcher `44170` was stopped after repeated generated
+object linker errors; regular builds with minimal diagnostics are the current
+verification mode. No disk-space error occurred and `.zig-cache` was not pruned.
+Contributor/settlement normalization, remaining failure producers, option-(e)
+rejection, downstream authority transport, adapters, and whole-phase gates are
+still open. The detailed current-task evidence appears near the end of this
+handoff section.
+
 The newer E1 core checkpoint `b1298b89` is independently reviewed and passes
 the unchanged historical invalid-import call regression: gate `6580` succeeds
 7/7 steps and 2/2 tests (7 seconds/28 MB). Both recursive call owners, exact
@@ -2903,8 +2927,185 @@ subsets below do not override this latest checkpoint.
   is pending. No witness or contributor migration is implemented yet.
   After approval, preparation may overlap execution of the already-compiled
   baseline binary: its result remains attributed only to `c124f1eb`, never
-  to subsequent edits. Only the driver may start builds, and no second build
-  starts before this gate completes.
+  to subsequent edits. Only the driver may start builds. The initial plan
+  serialized all gates; the later user-requested incremental-loop experiment
+  below permits one narrow watcher beside this already-compiled test run.
+- The independent proposal review still requests the following contributor
+  contract corrections: intern one pending token per complete key (repeated
+  insertion of that token is idempotent); immediately propagate tokens to
+  already-assigned candidate/literal drafts and transfer the whole union on
+  later assignment; keep pending/bound tokens checker-local, separate from
+  serialized group/event/contributor rows; permit only bound ids at quiescent
+  rebuilding; and retain the complete group slice of every retained step.
+  These are not waived and contributor migration remains deferred.
+  The independently valid witness-only prerequisite is now authorized and
+  in progress alongside the old compiled baseline gate. Its scope is only
+  the new action, its normative policy/root-action rule, translation and
+  admission, exact present/in-range/distinct raw endpoint validation, and
+  focused tests. It requires its own next cache-version and measured hash
+  gate; the later contributor migration requires another. No new witness
+  implementation has yet passed a dynamic gate or adversarial code review.
+- Under the new per-task WIP-push authorization, the driver duplicated the
+  accepted `ed49d30b` snapshot as unique change `ssvqsxro`, described it as
+  `WIP: checkpoint W6b checked-boundary recovery and metadata`, and pushed
+  `cc8ace35bc0973fae4da465b199fe21f7e537cf3` to `jared/polarity`. The duplicate
+  has an identical tree to `ed49d30b`; comparison with tested `c8b4a737` shows
+  only progress-document differences. This excludes every in-progress
+  witness edit. The driver fetched the exact remote bookmark before the
+  fast-forward push, updated PR #10434 with current verification and explicit
+  unfinished scope, and verified the remote head and retained draft status.
+  The driver rebased the frozen working change onto that checkpoint. The
+  resulting six-file conflict was resolved against the saved pre-rebase
+  snapshot `37ea50fb`; the complete resulting tree `24f9c13b` is byte-identical
+  to that snapshot. Only witness/progress changes remain above the pushed
+  parent. Formatting, AST checks, and conflict-marker checks pass; dynamic
+  verification of this task is not yet green. The full checker gate still
+  evaluates old `c124f1eb`.
+  Installed Zig help confirms `--watch`, `-fincremental`, and
+  `--error-style minimal`. The driver started narrowly filtered watcher
+  `44170` on frozen `24f9c13b` alongside the already-compiled baseline test
+  execution, with separate revision attribution; this is not a second full
+  suite. Stop that watcher before conflicting builds or cache pruning.
+  Compact diagnostics do not replace full saved output, test counts, or a
+  completed final verification gate. Its first cycle is red: 8/9 tests pass
+  (types 4/4, check 4/5). The sole failure is `local fresh-flex copy witness
+  survives exact validation rebuild and serde`, with equal serialized lengths
+  of 146868 and a first byte difference at offset 352 (expected a u64 value
+  of 784, actual zero). Independent source audits identify that exact word
+  as `TypeStore.Serialized.record_fields.capacity`: empty `SafeMultiList`
+  serialization writes no backing extent but retains reserved runtime
+  capacity, whereas both deserializers return zero capacity. Empty `tags`
+  has the same inconsistency later. The approved separate prerequisite is
+  canonical zero capacity on empty serialization and rejection of empty
+  serialized lists with nonzero capacity, preserving the current cursor
+  offset and all nonempty SoA layout. Keep whole-byte regression assertions;
+  no caller-state clearing, masking, or weakened equality is authorized.
+  During intermediate enum edits, types recompilation took 2–4 seconds and
+  compact diagnostics exposed missing exhaustive cases. The experiment then
+  twice failed in the generated Builtin compiler object with `string not
+  null terminated in '__TEXT,__cstring'`, followed by a compiler restart
+  `BrokenPipe`. Root stopped watcher `44170` (exit 1 after Ctrl-C). These
+  intermediate results are not source acceptance evidence. Continue final
+  focused gates in regular nonincremental mode with minimal diagnostics;
+  no compiler-source workaround or cache pruning was performed. This was
+  not a disk-space error, and old full checker `30286` remains separate.
+- Independent static review found that virtual requirement ingress overrides
+  can erase the new fresh-flex allocation action. A virtual component may
+  itself own attached constraints, so a wording-only exception would lose
+  authority needed for their creation. Root approved the exact design-first
+  combined `requirement_component_fresh_flex_copy` correction, preserving
+  both the ingress role and first allocation from a source flex or rigid.
+  It requires exact endpoint, allocating-policy, and virtual-edge validation;
+  virtual polarity opening remains ordinary ingress and creates no attached
+  constraints. The author is implementing it before the separate serializer
+  prerequisite. Neither correction is accepted yet; the witness checkpoint
+  remains unaccepted and unpushed.
+- A preliminary regular (nonincremental) types-only gate `78293` passes
+  4/4 steps and 5/5 tests: fresh constrained copy/memoized reuse, forced
+  shared-root creation, and the new virtual receiver/function/interpolation
+  part/item creation-plus-memoized-role case. Compilation took 4 seconds
+  (294 MB); tests took 288 ms (1 MB). `instantiate.zig` had identical pre/post
+  SHA-256 `5939115fed3242c8dcc9be03e92a931946ba9c6cf2313b10f32b4e0e7e31d6f7`.
+  This is only the low-level slice, not final checker/serializer acceptance.
+  Version-ownership review found that production `SafeMultiList.Serialized`
+  persistence goes through `TypeStore.Serialized` and `ModuleEnv.Serialized`;
+  the pending cache version 83 covers the empty-capacity narrowing too.
+  Builtin blobs must be regenerated, but no independently versioned
+  checked-artifact or LirImage format embeds that layout.
+- Checker-fixture review rejected a synthetic topology that reused the same
+  source constraint as both an attached row and a detached requirement while
+  making its receiver independently copyable. That would author two
+  destinations for one source, which the existing functional-pair invariant
+  correctly rejects; it is not a confirmed compiler defect. The approved
+  typed/local-publication fixture must use real detached registration,
+  `.scheme_copy` candidate capture, and the separately appended occurrence,
+  retaining its exact structural origin alongside a distinct attached row.
+  Pin both source/destination pairs and attached registration. This tests
+  local producer/validator authority, not parsed whole-module admission;
+  no pair-functionality relaxation or hand-swapped index is authorized.
+  The fixture's deferred-component input remains deliberately controlled:
+  manually supplied codec flags are not authenticated by registration or
+  capture, which only propagate them. Review requires that explicit scope
+  and rejects calling capture an upstream codec authenticity boundary. The
+  real imported binding-codec producer and parsed cross-provider tests are
+  separate evidence; they do not make this synthetic local input a genuine
+  generated-codec classification.
+- Adversarial admission review also found that a memoized revisit could be
+  relabeled as a second fresh allocation with otherwise correct raw endpoints.
+  Root approved a design-first allocation-free uniqueness fence: at most one
+  witness per exact raw source/destination mapping may use any of
+  `flex_fresh_flex_copy`, `requirement_component_fresh_flex_copy`, or
+  `rigid_fresh_flex_cut`. After occurrence validation, the unique raw child
+  occurrence is the equivalent key; the solved canonical pair is not, because
+  distinct historical mappings may later unify. Add ordinary repeated-tuple
+  and virtual-revisit forgery/restoration tests. This does not infer exact-one
+  existence, firstness from BFS order, or allocation from solved shape, and
+  does not broaden the rule to historical sharing/reuse/substitution actions.
+  The correction and independent final review remain pending.
+- The old full checker baseline `30286` has now completed, superseding every
+  earlier pending-status note above. It is red on compiled `c124f1eb`, the code
+  now pushed in `cc8ace35`: 1,257/1,383 passed, 6 failed, 120 crashed; 5/7
+  build steps passed. These results do not cover the newer witness changes.
+  The complete 39,770-character report is saved in session artifact
+  `/private/tmp/polarity-witness-gates.MlM03v/full-checker-c124f1eb-30286.txt`.
+  Reproducible grouping (all 120 crashes accounted for):
+
+  | Failure family | Crashes |
+  |---|---:|
+  | Call formal lost producer witness | 62 |
+  | Local copy witness absent raw occurrence | 24 |
+  | Aggregate consumer retirement erased-plan replay | 10 |
+  | Invalid call Expected topology | 7 |
+  | Projected aggregate child rejection changed producer plan | 4 |
+  | Preexisting runtime-error missing canonicalization authority | 4 |
+  | Invalid branch Expected topology | 3 |
+  | Disconnected copy pair | 2 |
+  | Invalid external lookup producer inventory | 1 |
+  | Projected aggregate child suppression changed producer plan | 1 |
+  | Unclassified cross-module preseed cut | 1 |
+  | Root alias substitution missing platform binding row | 1 |
+
+  The six ordinary failures are the Builtin Num lookup/apply authority test,
+  four branch Expected-plan assertions (`if`, `match`, refined accumulator,
+  and nested-plan preservation; expected `anchored`, found `related`), and
+  the declarative static-dispatch representative repeated-merge assertion
+  (expected variable 5, found 6). These are not approved expectation updates.
+  First reproduce targeted representatives on the next frozen source, then
+  fix and rerun each affected section; do not use the full checker or minici
+  as the inner retry loop. The independent witness task continues separately.
+  The draft PR description was updated and read back with the completed red
+  result, unchanged head `cc8ace35`, and retained draft status. Its earlier
+  green focused gates do not certify this broader checkpoint.
+- Witness snapshot `9474febf` completed its independent full-diff review.
+  Static verdict is REJECT solely for a missing interpolation action/primary
+  inverse: an attached structural interpolation allocation could be relabeled
+  as virtual combined ingress. The approved design-first correction binds
+  both interpolation edge kinds to the unique primary for their exact
+  constraint pair. Ingress actions are required exactly for a local detached
+  `scheme_requirement_function` with no auxiliary origin and the same root
+  parent; static primaries and composite binding-codec function-component
+  metadata require non-ingress actions. Add isolated structural-to-virtual
+  and reverse corruption/restoration checks. This correction is in progress.
+- The separate canonical-empty `SafeMultiList` prerequisite is frozen at
+  `55aa0ec4` (only its file and the Cache Boundary paragraph changed after
+  witness freeze). Formatting and AST checks pass. Collections gate `63893`
+  passes 4/4 steps and 7/7 tests, covering the expanded empty-capacity oracle
+  and all existing `SafeMultiList CompactWriter` tests plus SafeList edge
+  cases (2-second compile/215 MB; 345-ms run/1 MB). Independent static review
+  accepts this serializer slice with no blocker. The original ModuleEnv byte
+  oracle and measured version-83 hash verification are still required before
+  checkpoint acceptance. No new witness/serializer
+  changes have been pushed.
+- Interpolation correction `db3919ec` is frozen, formatted, AST-checked, and
+  independently STATIC ACCEPTED. It closes the sole remaining witness review
+  blocker, including both isolated relabel directions beside non-traverse
+  roots. The original binding-codec split-component/collapsed-raw-mapping
+  positive is unchanged. Combined regular focused gate `44474` is running on
+  this exact code, covering all instantiator-proof tests, new witness and
+  serializer tests, historical call-formal recovery, and that binding-codec
+  positive. This is not a green dynamic gate yet. The author remains read-only
+  during verification. Cache version 83's measured golden, native/wasm size
+  gate, and ModuleEnv round trips still precede the next WIP publication.
 - Remaining after that slice: contributor migration; exact terminal target,
   rejection, and generalization authorities; normalized settlement events;
   option (e)'s deferred readiness and pre-unification nested-row rejection;
@@ -2912,6 +3113,66 @@ subsets below do not override this latest checkpoint.
   completion; missing call-formal positives; final schema/version updates;
   full verification and independent adversarial review. W2b, W7, and W8 have
   not started.
+
+2026-09-10 verification continuation:
+
+- Focused gate `44474` on `db3919ec` completed with 11/13 build steps and
+  23/24 tests passing: types 8/8, collections 7/7, check 8/9. The sole failure
+  is the new virtual-requirement local-copy fixture's policy assertion:
+  expected `ranked_fresh_flex_close_scheme`, observed
+  `ranked_fresh_flex_close`. The author is checking the exact producer and
+  declared fixture intent before correcting anything. The failing check
+  section will be rerun first; static acceptance is not dynamic acceptance.
+  Full output: `/private/tmp/polarity-witness-gates.MlM03v/witness-db3919-focused-44474.txt`.
+- Cache version 83's comment now accounts for both allocation/virtual-ingress
+  witness semantics and canonical zero-capacity empty SafeMultiList cache
+  descriptors. Its measured golden and schema gates remain outstanding.
+- The sole fixture failure was traced to missing binding-scheme publication,
+  not the policy producer. The explicitly generalized synthetic root now
+  passes through the real `publishBindingScheme` operation after requirement
+  capture, with an immediate classification assertion; the original
+  `_scheme` expectation is retained. Side-table presence alone intentionally
+  does not authorize a forced scheme-root copy. Independent review ACCEPTS
+  this test-only correction and its controlled typed-local scope. Single-test
+  retry `14615` is running on `cf4398a2` before the schema/hash gate.
+- Retry `14615` completed GREEN: 7/7 steps, 2/2 tests. Schema gate `57855`
+  then passed native and wasm32 serialization-size builds and the native
+  size runner, plus all selected ModuleEnv round trips. Its only failure
+  (4/5 tests, 30/32 steps) was the intentionally stale version-82 golden.
+  The measured version-83 hash is
+  `95bf7a59b6ec0ede80052b639aa29aceaf79f1a0add795c6a8670980309796e5`.
+  Root applied exactly those bytes, with independent review ACCEPT and
+  formatting green; targeted golden retry `16537` is running on `53c83296`.
+  A combined final focused/schema gate will precede publication. Full
+  measured output is saved as `schema-measured-version83-57855.txt` in the
+  witness gate artifact directory above.
+- Targeted golden retry `16537` completed GREEN (2/2 tests, 25/25 steps).
+  Final combined gate `42891` completed GREEN on compiler source `53c83296`
+  (only progress documentation changed afterward): 29/29 tests, 41/41 steps;
+  types 8, checker 9, collections 7, compile/serde 5. This includes both new
+  allocation actions, raw allocation uniqueness, the interpolation iff
+  corruption/restoration checks, exact local rebuild and readonly/mutable
+  byte oracles, historical malformed-import call authority, the original
+  binding-codec split-component positive, and native/wasm32 size checks.
+  All changed Zig files pass formatting. The historical fixture's Roc source
+  is byte-for-byte unchanged; no hunk in this cohort touches that test.
+- Root accepts this bounded witness/cache task after independent adversarial
+  acceptance of the full witness slice, serializer, fixture lifecycle
+  correction, and measured golden update. WIP change `qpmsttws` is described
+  as `WIP: preserve W6b fresh-flex copy authority and canonical cache bytes`,
+  with a Codex coauthor trailer, and is the next fast-forward publication on
+  `jared/polarity` / draft PR #10434. The final report is
+  `witness-publication-combined-42891.txt` in the artifact directory above.
+- Next bounded task: reproduce the old record-update absent-occurrence
+  failure on this checkpoint, then declare and implement explicit root-request
+  versus resolved-share authority. Static audit found that a raw base request
+  can redirect to a shared root whose authentic occurrence is `R -> R`, while
+  publication incorrectly requests `V -> R`. Preserve actual sharing; do not
+  fabricate an occurrence, force a copy merely to satisfy the validator, or
+  choose a root through final canonical equality. Any new durable semantics
+  belong to a separate next cache-version checkpoint. An independent audit
+  of the 62 old call-formal witness crashes is also in progress. Neither
+  failure group is yet dynamically certified fixed on this newer source.
 
 The remaining option-(e) checker work has an audited integration route:
 replace the target-wait boolean with a closed `none` / `target_def` /

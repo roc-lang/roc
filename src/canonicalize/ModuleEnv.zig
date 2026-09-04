@@ -4505,10 +4505,11 @@ pub const WhereMarkerCopyWitness = extern struct {
     /// `edge_name`; alias and nominal argument rows additionally use the raw
     /// module-local origin and packed `types.SourceDecl` bits.
     pub const EdgeKind = enum(u32) {
-        /// A typed root action that is not named by an outgoing semantic edge.
-        /// Both occurrence offsets name the root occurrence; the action and
-        /// optional auxiliary row prove a structural leaf or one of the finite
-        /// root-level cuts. This is not a graph self-edge for BFS purposes.
+        /// A typed root action for every root-level non-traverse cut or
+        /// creation, or for an ordinary traverse with no structural outgoing
+        /// edge. Both occurrence offsets name the root occurrence. A
+        /// non-traverse action may coexist with structural or detached virtual
+        /// witnesses; this row is never a graph self-edge for BFS purposes.
         root_copy_action,
         static_dispatch_function,
         interpolation_part,
@@ -4531,9 +4532,10 @@ pub const WhereMarkerCopyWitness = extern struct {
         scheme_requirement_function,
     };
 
-    /// Whether replay follows the ordinary source/destination child edge or
-    /// authenticates one of the finite copy-policy cuts. A cycle/share revisit
-    /// is an ordinary `traverse` edge to an already discovered pair.
+    /// Whether replay follows the ordinary source/destination child edge,
+    /// authenticates one of the finite copy-policy cuts, or records the first
+    /// fresh-flex allocation. A cycle/share revisit is an ordinary `traverse`
+    /// edge to an already discovered pair.
     pub const Action = enum(u32) {
         traverse,
         local_raw_identity_share_cut,
@@ -4546,6 +4548,8 @@ pub const WhereMarkerCopyWitness = extern struct {
         binding_codec_reuse_cut,
         platform_preseed_cut,
         requirement_component_ingress,
+        flex_fresh_flex_copy,
+        requirement_component_fresh_flex_copy,
     };
 
     /// The table whose exact row or owner-relative offset is named by

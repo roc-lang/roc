@@ -818,8 +818,12 @@ pub fn SafeMultiList(comptime T: type) type {
 
             /// L-10: reject an `(offset, capacity)` whose `capacityInBytes` extent (the
             /// region `serialize` writes) reaches outside the `backing_len`-byte buffer.
+            /// Empty lists own no extent and therefore require canonical zero capacity.
             pub fn validateRelocations(self: *const Serialized, backing_len: u64) error{CorruptArtifact}!void {
-                if (self.len == 0) return;
+                if (self.len == 0) {
+                    if (self.capacity != 0) return error.CorruptArtifact;
+                    return;
+                }
                 if (self.capacity < self.len or self.capacity > std.math.maxInt(usize)) {
                     return error.CorruptArtifact;
                 }
@@ -922,7 +926,10 @@ pub fn SafeMultiList(comptime T: type) type {
                 // Store the offset, len, and capacity
                 self.offset = @intCast(data_offset);
                 self.len = safe_multi_list.items.len;
-                self.capacity = safe_multi_list.items.capacity;
+                self.capacity = if (safe_multi_list.items.len == 0)
+                    0
+                else
+                    safe_multi_list.items.capacity;
             }
 
             /// Deserialize into a SafeMultiList value (Option F: no in-place modification).
@@ -2026,50 +2033,97 @@ test "SafeMultiList CompactWriter verify exact memory layout" {
 
 test "SafeMultiList CompactWriter empty with capacity" {
     const gpa = testing.allocator;
-    const io = std.testing.io;
-
-    // Test that empty lists with capacity serialize correctly
     const TestStruct = struct {
         x: u32,
         y: u64,
         z: u8,
+        wide: u128,
     };
+    const serialize = struct {
+        fn run(
+            allocator: Allocator,
+            list: *const SafeMultiList(TestStruct),
+        ) ![]align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 {
+            var writer = CompactWriter.init();
+            defer writer.deinit(allocator);
+
+            const serialized = try writer.appendAlloc(
+                allocator,
+                SafeMultiList(TestStruct).Serialized,
+            );
+            try serialized.serialize(list, allocator, &writer);
+
+            const bytes = try allocator.alignedAlloc(
+                u8,
+                CompactWriter.SERIALIZATION_ALIGNMENT,
+                writer.total_bytes,
+            );
+            const written = try writer.writeToBuffer(bytes);
+            std.debug.assert(written.len == bytes.len);
+            return bytes;
+        }
+    }.run;
 
     var list = try SafeMultiList(TestStruct).initCapacity(gpa, 50);
     defer list.deinit(gpa);
-
-    // Verify it has capacity but no elements
     try testing.expect(list.items.capacity >= 50);
     try testing.expectEqual(@as(usize, 0), list.len());
+    const original_ptr = @intFromPtr(list.items.bytes);
+    const original_capacity = list.items.capacity;
 
-    var tmp_dir = testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
+    const first = try serialize(gpa, &list);
+    defer gpa.free(first);
+    const second = try serialize(gpa, &list);
+    defer gpa.free(second);
+    try testing.expectEqualSlices(u8, first, second);
+    try testing.expectEqual(
+        @as(usize, @sizeOf(SafeMultiList(TestStruct).Serialized)),
+        first.len,
+    );
 
-    const file = try tmp_dir.dir.createFile(io, "empty_capacity.dat", .{ .read = true });
-    defer file.close(io);
+    const serialized = @as(
+        *const SafeMultiList(TestStruct).Serialized,
+        @ptrCast(@alignCast(first.ptr)),
+    );
+    try testing.expectEqual(@as(u64, 0), serialized.len);
+    try testing.expectEqual(@as(u64, 0), serialized.capacity);
+    try testing.expectEqual(@as(i64, @intCast(first.len)), serialized.offset);
+    try serialized.validateRelocations(@intCast(first.len));
 
-    var writer = CompactWriter.init();
-    defer writer.deinit(gpa);
+    var malformed = serialized.*;
+    malformed.capacity = @intCast(original_capacity);
+    try testing.expectError(
+        error.CorruptArtifact,
+        malformed.validateRelocations(@intCast(first.len)),
+    );
 
-    const serialized = try writer.appendAlloc(gpa, SafeMultiList(TestStruct).Serialized);
-    try serialized.serialize(&list, gpa, &writer);
-    try writer.writeGather(file, io);
+    const readonly = serialized.deserializeInto(@intFromPtr(first.ptr));
+    try testing.expectEqual(@as(usize, 0), readonly.len());
+    try testing.expectEqual(@as(usize, 0), readonly.items.capacity);
+    const readonly_bytes = try serialize(gpa, &readonly);
+    defer gpa.free(readonly_bytes);
+    try testing.expectEqualSlices(u8, first, readonly_bytes);
 
-    // Read back
-    const file_size = writer.total_bytes;
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, @intCast(file_size));
-    defer gpa.free(buffer);
+    var mutable = try serialized.deserializeWithCopy(@intFromPtr(first.ptr), gpa);
+    defer mutable.deinit(gpa);
+    try testing.expectEqual(@as(usize, 0), mutable.len());
+    try testing.expectEqual(@as(usize, 0), mutable.items.capacity);
+    const mutable_bytes = try serialize(gpa, &mutable);
+    defer gpa.free(mutable_bytes);
+    try testing.expectEqualSlices(u8, first, mutable_bytes);
 
-    _ = try file.readPositionalAll(io, buffer, 0);
-
-    // Deserialize
-    const serialized_ptr = @as(*SafeMultiList(TestStruct).Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
-
-    // Verify it's still empty
-    try testing.expectEqual(@as(usize, 0), deserialized.len());
-    // Capacity should be 0 after compaction
-    try testing.expectEqual(@as(usize, 0), deserialized.items.capacity);
+    // Serialization compacts only the byte representation. It neither releases
+    // the caller's reserved runtime storage nor changes the logical empty list.
+    try testing.expectEqual(original_ptr, @intFromPtr(list.items.bytes));
+    try testing.expectEqual(original_capacity, list.items.capacity);
+    try testing.expectEqual(@as(usize, 0), list.len());
+    const appended = list.appendAssumeCapacity(.{ .x = 11, .y = 22, .z = 33, .wide = 44 });
+    try testing.expectEqual(
+        TestStruct{ .x = 11, .y = 22, .z = 33, .wide = 44 },
+        list.get(appended),
+    );
+    try testing.expectEqual(original_ptr, @intFromPtr(list.items.bytes));
+    try testing.expectEqual(original_capacity, list.items.capacity);
 }
 
 test "SafeList deserialization with high address (issue 8728)" {
