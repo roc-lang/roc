@@ -133,10 +133,10 @@ test "platform header targets and hosted rewrite share top-level selection" {
 
     const selected_main = findAssignedDef(&env, env.top_level_value_defs, "main") orelse return error.TestUnexpectedResult;
     const selected_helper = findAssignedDef(&env, env.top_level_value_defs, "helper!") orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(usize, 1), env.provides_entries.items.items.len);
-    try std.testing.expectEqual(selected_main, env.provides_entries.items.items[0].local_def.?);
-    try std.testing.expectEqual(@as(usize, 1), env.hosted_entries.items.items.len);
-    try std.testing.expectEqual(selected_helper, env.hosted_entries.items.items[0].target_def.?);
+    try std.testing.expectEqual(@as(u64, 1), env.provides_entries.len());
+    try std.testing.expectEqual(selected_main, env.provides_entries.get(.first).local_def.?);
+    try std.testing.expectEqual(@as(u64, 1), env.hosted_entries.len());
+    try std.testing.expectEqual(selected_helper, env.hosted_entries.get(.first).target_def.?);
 
     try HostedCompiler.replaceAnnoOnlyWithHosted(&env);
 

@@ -1055,7 +1055,7 @@ const subcommand_cases = [_]CliCase{
     // that declares its provided entrypoint twice reports the duplicate through
     // checking's diagnostics instead of publishing a hosted procedure whose def
     // has no checked template.
-    .{ .id = 0, .suite = .subcommands, .name = "issue 10850: duplicate platform entrypoint declaration reports without panic", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10850_duplicate_platform_entrypoint_annotation.roc", .exit = .failure, .stderr_min_len = 1, .not_contains = &.{ .{ .stream = .stderr, .text = "hosted procedure def has no checked template" }, .{ .stream = .stderr, .text = "checked artifact invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10850: duplicate platform entrypoint declaration reports without panic", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10850_duplicate_platform_entrypoint_annotation.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{.{ .stream = .stderr, .text = "duplicate definition" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "hosted procedure def has no checked template" }, .{ .stream = .stderr, .text = "checked artifact invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     // A hosted declaration the platform header never bound has no linker symbol,
     // so building one reports the invalid hosted section instead of lowering a
     // host boundary that cannot link.
