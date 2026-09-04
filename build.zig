@@ -5155,10 +5155,11 @@ pub fn build(b: *std.Build) void {
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
-                // The fixed cart is ~542 KB. The prior unbounded generated
+                // With hidden defaultable evidence resolved at checked edges,
+                // the fixed cart is ~723 KB. The prior unbounded generated
                 // callable expansion exceeded 815 KB before failing to lower.
                 "--max-bytes",
-                "600000",
+                "750000",
             });
             run_wasm_iter_recursive_concat_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_recursive_concat_test.step);
