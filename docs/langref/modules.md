@@ -398,7 +398,8 @@ Exactly what information goes in which headers will be discussed below.
 
 ## Package Modules
 
-Packages are collections of types that can depend on other packages.
+Packages are collections of modules that can depend on other packages and on
+one platform.
 
 A _package module_ provides types to be shared with packages, applications and platforms. The module header specifies which types are exposed, and also includes package aliases for importing other packages:
 
@@ -409,6 +410,28 @@ package [
     Decoder,
 ] { json: "..." }
 ```
+
+A platform-specific package marks its platform dependency with the same
+`platform` keyword used by an application:
+
+```roc
+package [FxHttp] {
+    pf: platform "https://example.com/platform/1.0.0/content-hash.tar.zst",
+    json: "https://example.com/json/2.0.0/content-hash.tar.zst",
+}
+
+import pf.Http
+```
+
+The package can use the platform's complete exposed API, including its types,
+functions, and hosted effects. It does not provide implementations for the
+platform's `requires` section; the application remains responsible for those.
+
+When an application uses a platform-specific package, every platform
+declaration in the dependency graph must identify exactly the same platform.
+For URL dependencies this includes the declared version and content hash;
+ordinary compatible-version upgrades do not apply to platform selection.
+Local declarations must resolve to the same platform root file.
 
 ### Package Shorthands
 
@@ -531,6 +554,10 @@ app [main!] {
     json: "../json/main.roc"
 }
 ```
+
+Packages used by the app may also declare a platform. Those declarations must
+exactly match the app's selected platform. The app is still the only module
+that supplies the values required by the platform.
 
 ### Pinning a Roc version
 

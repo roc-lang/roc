@@ -831,6 +831,28 @@ use recursive grammar functions, and it does not keep source substrings as an
 implicit parsing cursor. Source text may be consulted only through token
 metadata, for diagnostics, literal decoding, and identifier interning.
 
+### Platform Dependencies
+
+An app or package header may mark at most one dependency with the `platform`
+keyword. The marked edge is preserved explicitly through parsing and package
+resolution; later compilation stages must not infer platform identity by
+searching package kinds.
+
+Platform selection is global to the resolved dependency graph. Every marked
+edge must name the identical platform source. URL declarations must have the
+same URL identity, declared version, and content hash; compatible package
+version solving must never substitute a different platform version. Local
+declarations compare their normalized root paths, and compiler-owned
+declarations compare their explicit platform identifiers. Resolution rejects
+conflicts and outputs the single selected platform package index for build
+coordination to consume.
+
+A package may import the selected platform's complete exposed Roc API,
+including hosted functions, but it does not participate in satisfying the
+platform's `requires` clause. Only the root app is checked as the provider of
+platform requirements. Hosted lowering remains authorized solely by the
+selected platform's explicit hosted declarations.
+
 ### Import Targets
 
 The parser records every source import as a structured target. That structure

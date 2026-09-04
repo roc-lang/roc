@@ -1464,25 +1464,125 @@ fn parsePackageHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Id
         .malformed => |bad| return try self.pushMalformed(AST.Header.Idx, bad.tag, bad.pos),
     };
     try self.recordPackageHeaderModules(exposed.span);
-    const packages = if (self.peek() == .OpenCurly)
-        try self.parseOpenedRecordFieldCollectionTokens(
-            start,
-            .collection_packages,
-            .expected_package_platform_close_curly,
-        )
-    else
-        try self.store.addCollection(.collection_packages, .{
+    const deps = if (self.peek() == .OpenCurly) switch (try self.parseOpenedDependencyRecordTokens(start, false)) {
+        .ok => |ok| ok,
+        .malformed => |malformed| return malformed,
+    } else DependencyRecord{
+        .packages = try self.store.addCollection(.collection_packages, .{
             .span = base.DataSpan.empty(),
             .region = .{ .start = self.pos, .end = self.pos },
             .layout = .compact,
-        });
+        }),
+        .platform = null,
+    };
 
     return try self.store.addHeader(.{ .package = .{
         .exposes = exposed.collection,
-        .packages = packages,
-        .roc_version = try self.takeRocVersionField(packages, null),
+        .platform_idx = deps.platform,
+        .packages = deps.packages,
+        .roc_version = try self.takeRocVersionField(deps.packages, deps.platform),
         .region = .{ .start = start, .end = self.pos },
     } });
+}
+
+const DependencyRecord = struct {
+    packages: AST.Collection.Idx,
+    platform: ?AST.RecordField.Idx,
+};
+
+const DependencyRecordResult = union(enum) {
+    ok: DependencyRecord,
+    malformed: AST.Header.Idx,
+};
+
+/// Parse an already-opened app/package dependency record while preserving the
+/// platform entry in the ordinary collection for lossless formatting.
+fn parseOpenedDependencyRecordTokens(
+    self: *Parser,
+    header_start: Token.Idx,
+    strict_package_paths: bool,
+) std.mem.Allocator.Error!DependencyRecordResult {
+    var platform: ?AST.RecordField.Idx = null;
+    const packages_start = self.pos;
+    std.debug.assert(self.peek() == .OpenCurly);
+    self.advance();
+
+    const fields_scratch_top = self.store.scratchRecordFieldTop();
+    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        const entry_start = self.pos;
+        if (self.peek() != .LowerIdent) {
+            self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
+            return .{ .malformed = try self.pushMalformed(AST.Header.Idx, .expected_package_or_platform_name, header_start) };
+        }
+        const name_tok = self.pos;
+        if (self.isVarIdent(name_tok)) {
+            try self.pushDiagnostic(.record_field_name_cannot_be_var, .{ .start = name_tok, .end = name_tok + 1 });
+        }
+        self.advance();
+        var is_platform = false;
+        const field_value: AST.RecordField.Value = if (self.peek() != .OpColon) blk: {
+            if (strict_package_paths) {
+                self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
+                return .{ .malformed = try self.pushMalformed(AST.Header.Idx, .expected_package_or_platform_colon, header_start) };
+            }
+            break :blk .punned;
+        } else blk: {
+            self.advance();
+            is_platform = self.peek() == .KwPlatform;
+            const value = if (is_platform) platform_value: {
+                if (platform != null) {
+                    self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
+                    return .{ .malformed = try self.pushMalformed(AST.Header.Idx, .multiple_platforms, header_start) };
+                }
+                self.advance();
+                if (self.peek() == .StringStart) break :platform_value try self.parseStringExprTokens();
+                if (self.peek() == .LowerIdent and std.mem.eql(u8, self.tokenText(self.pos), "glue")) {
+                    const ident_tok = self.pos;
+                    self.advance();
+                    const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
+                    break :platform_value try self.store.addExpr(.{ .ident = .{
+                        .token = ident_tok,
+                        .qualifiers = empty_qualifiers,
+                        .region = .{ .start = ident_tok, .end = self.pos },
+                    } });
+                }
+                self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
+                return .{ .malformed = try self.pushMalformed(AST.Header.Idx, .expected_platform_string, header_start) };
+            } else ordinary_value: {
+                if (strict_package_paths and self.peek() != .StringStart) {
+                    self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
+                    return .{ .malformed = try self.pushMalformed(AST.Header.Idx, .expected_package_or_platform_string, header_start) };
+                }
+                break :ordinary_value try self.runExprRoot(0);
+            };
+            break :blk .{ .supplied = value };
+        };
+
+        const field = try self.store.addRecordField(.{
+            .name = name_tok,
+            .value = field_value,
+            .region = .{ .start = entry_start, .end = self.pos },
+        });
+        try self.store.addScratchRecordField(field);
+        if (is_platform) platform = field;
+
+        if (!self.consumeComma()) break;
+    }
+    if (self.peek() != .CloseCurly) {
+        self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
+        return .{ .malformed = try self.pushMalformed(AST.Header.Idx, .expected_package_platform_close_curly, header_start) };
+    }
+    const packages_layout = self.directCollectionLayout();
+    self.advance();
+    const packages_span = try self.store.recordFieldSpanFrom(fields_scratch_top);
+    return .{ .ok = .{
+        .packages = try self.store.addCollection(.collection_packages, .{
+            .span = packages_span.span,
+            .region = .{ .start = packages_start, .end = self.pos },
+            .layout = packages_layout,
+        }),
+        .platform = platform,
+    } };
 }
 
 /// The dependency-record key reserved for pinning the compiler version.
@@ -1537,7 +1637,6 @@ fn takeRocVersionField(
 }
 
 fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
-    var platform: ?AST.RecordField.Idx = null;
     const start = self.pos;
     std.debug.assert(self.peek() == .KwApp);
     self.advance();
@@ -1547,92 +1646,21 @@ fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
         .malformed => |bad| return try self.pushMalformed(AST.Header.Idx, bad.tag, bad.pos),
     };
 
-    const packages_start = self.pos;
-    self.expect(.OpenCurly) catch {
+    if (self.peek() != .OpenCurly) {
         return try self.pushMalformed(AST.Header.Idx, .expected_app_open_curly, start);
+    }
+    const deps = switch (try self.parseOpenedDependencyRecordTokens(start, true)) {
+        .ok => |ok| ok,
+        .malformed => |malformed| return malformed,
     };
-    const fields_scratch_top = self.store.scratchRecordFieldTop();
-    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
-        const entry_start = self.pos;
-        if (self.peek() != .LowerIdent) {
-            self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
-            return try self.pushMalformed(AST.Header.Idx, .expected_package_or_platform_name, start);
-        }
-        const name_tok = self.pos;
-        if (self.isVarIdent(name_tok)) {
-            try self.pushDiagnostic(.record_field_name_cannot_be_var, .{ .start = name_tok, .end = name_tok + 1 });
-        }
-        self.advance();
-        if (self.peek() != .OpColon) {
-            self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
-            return try self.pushMalformed(AST.Header.Idx, .expected_package_or_platform_colon, start);
-        }
-        self.advance();
-        if (self.peek() == .KwPlatform) {
-            if (platform != null) {
-                self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
-                return try self.pushMalformed(AST.Header.Idx, .multiple_platforms, start);
-            }
-            self.advance();
-            const value = if (self.peek() == .StringStart)
-                try self.parseStringExprTokens()
-            else if (self.peek() == .LowerIdent and std.mem.eql(u8, self.tokenText(self.pos), "glue")) blk: {
-                const ident_tok = self.pos;
-                self.advance();
-                const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
-                break :blk try self.store.addExpr(.{ .ident = .{
-                    .token = ident_tok,
-                    .qualifiers = empty_qualifiers,
-                    .region = .{ .start = ident_tok, .end = self.pos },
-                } });
-            } else {
-                self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
-                return try self.pushMalformed(AST.Header.Idx, .expected_platform_string, start);
-            };
-            const field = try self.store.addRecordField(.{
-                .name = name_tok,
-                .value = .{ .supplied = value },
-                .region = .{ .start = entry_start, .end = self.pos },
-            });
-            try self.store.addScratchRecordField(field);
-            platform = field;
-        } else {
-            if (self.peek() != .StringStart) {
-                self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
-                return try self.pushMalformed(AST.Header.Idx, .expected_package_or_platform_string, start);
-            }
-            const value = try self.parseStringExprTokens();
-            try self.store.addScratchRecordField(try self.store.addRecordField(.{
-                .name = name_tok,
-                .value = .{ .supplied = value },
-                .region = .{ .start = entry_start, .end = self.pos },
-            }));
-        }
-        if (!self.consumeComma()) {
-            break;
-        }
-    }
-    if (self.peek() != .CloseCurly) {
-        self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
-        return try self.pushMalformed(AST.Header.Idx, .expected_package_platform_close_curly, start);
-    }
-    const packages_layout = self.directCollectionLayout();
-    self.advance();
-
-    const packages_span = try self.store.recordFieldSpanFrom(fields_scratch_top);
-    const packages = try self.store.addCollection(.collection_packages, .{
-        .span = packages_span.span,
-        .region = .{ .start = packages_start, .end = self.pos },
-        .layout = packages_layout,
-    });
 
     // An app that names no platform gets the built-in Echo platform, the same
     // one a headerless app gets; its packages are its own.
     return try self.store.addHeader(.{ .app = .{
-        .platform_idx = platform,
+        .platform_idx = deps.platform,
         .provides = provided.collection,
-        .packages = packages,
-        .roc_version = try self.takeRocVersionField(packages, platform),
+        .packages = deps.packages,
+        .roc_version = try self.takeRocVersionField(deps.packages, deps.platform),
         .region = .{ .start = start, .end = self.pos },
     } });
 }

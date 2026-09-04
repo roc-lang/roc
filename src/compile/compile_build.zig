@@ -174,7 +174,7 @@ pub const PostCheckPublicationMode = enum {
 // Responsibilities:
 // - Parse headers of app/package/platform modules (local paths only)
 // - Build a package graph with shorthand alias maps
-// - Enforce package rules: only apps may depend on platforms; no package may depend on apps
+// - Enforce one explicit graph-wide platform selection; no package may depend on apps
 // - Coordinate all per-package and per-module build state
 // - Aggregate reports deterministically across the workspace (depth then module name)
 // - Keep ModuleEnv hermetic: the Coordinator passes each phase explicit dependency state
@@ -193,6 +193,8 @@ pub const BuildEnv = struct {
 
     // Map of package identity -> Package
     packages: std.StringHashMapUnmanaged(Package) = .{},
+    /// Borrowed key in `packages` for the resolver-selected platform.
+    selected_platform_package_name: ?[]const u8 = null,
     // Ordered sink over all packages (thread-safe, deterministic emission)
     sink: OrderedSink,
 
@@ -446,24 +448,18 @@ pub const BuildEnv = struct {
 
     /// Get the TargetsConfig from the platform package, if any.
     pub fn getPlatformTargetsConfig(self: *const BuildEnv) ?targets_config_mod.TargetsConfig {
-        var pit = self.packages.iterator();
-        while (pit.next()) |entry| {
-            if (entry.value_ptr.kind == .platform) {
-                return entry.value_ptr.targets_config;
-            }
-        }
-        return null;
+        const name = self.selected_platform_package_name orelse return null;
+        const platform = self.packages.get(name) orelse return null;
+        std.debug.assert(platform.kind == .platform);
+        return platform.targets_config;
     }
 
     /// Get the root_file of the platform package, if any.
     pub fn getPlatformRootFile(self: *const BuildEnv) ?[]const u8 {
-        var pit = self.packages.iterator();
-        while (pit.next()) |entry| {
-            if (entry.value_ptr.kind == .platform) {
-                return entry.value_ptr.root_file;
-            }
-        }
-        return null;
+        const name = self.selected_platform_package_name orelse return null;
+        const platform = self.packages.get(name) orelse return null;
+        std.debug.assert(platform.kind == .platform);
+        return platform.root_file;
     }
 
     /// Set the target for this build environment.
@@ -978,15 +974,15 @@ pub const BuildEnv = struct {
             }
         }
 
-        // Also queue the platform's root module if this is an app
-        // The platform's root module contains the `requires` clause which must be compiled
-        // for type checking against the app's exports
-        var pf_it = self.packages.iterator();
-        while (pf_it.next()) |pf_entry| {
-            const pf_pkg = pf_entry.value_ptr.*;
-            if (pf_pkg.kind == .platform) {
-                if (coord.getPackage(pf_entry.key_ptr.*)) |platform_coord_pkg| {
-                    coord.markPlatformPackage(platform_coord_pkg.name);
+        // Queue exactly the platform selected by dependency resolution.
+        if (self.selected_platform_package_name) |platform_name| {
+            const pf_pkg = self.packages.get(platform_name) orelse return error.Internal;
+            std.debug.assert(pf_pkg.kind == .platform);
+            if (coord.getPackage(platform_name)) |platform_coord_pkg| {
+                coord.markPlatformPackage(platform_coord_pkg.name);
+                // A selected platform that is itself the build root was
+                // already queued above; marking it is sufficient here.
+                if (!std.mem.eql(u8, platform_name, pkg_name)) {
                     const plat_module_name = base.module_path.getModuleName(pf_pkg.root_file);
                     const plat_root_id = try platform_coord_pkg.ensureModule(self.gpa, plat_module_name, pf_pkg.root_file);
                     if (platform_coord_pkg.modules.items[plat_root_id].phase == .Parse) {
@@ -995,9 +991,9 @@ pub const BuildEnv = struct {
                         platform_coord_pkg.root_module_id = plat_root_id;
                         platform_coord_pkg.remaining_modules += 1;
                         coord.total_remaining += 1;
-                        try coord.enqueueParseTask(pf_entry.key_ptr.*, plat_root_id);
+                        try coord.enqueueParseTask(platform_name, plat_root_id);
                         if (comptime trace_build) {
-                            std.debug.print("[BUILD] Queued platform root module: {s} in package {s}\n", .{ plat_module_name, pf_entry.key_ptr.* });
+                            std.debug.print("[BUILD] Queued platform root module: {s} in package {s}\n", .{ plat_module_name, platform_name });
                         }
                     }
                 }
@@ -1639,6 +1635,11 @@ pub const BuildEnv = struct {
                 null;
             try self.ensurePackage(package_keys.identity(i), kind, package.root_file, root_file_state, url_view);
         }
+
+        self.selected_platform_package_name = if (resolved.selected_platform_index) |index| blk: {
+            const entry = self.packages.getEntry(package_keys.identity(index)) orelse return error.Internal;
+            break :blk entry.key_ptr.*;
+        } else null;
 
         // Wire every package's shorthand aliases.
         for (resolved_packages, 0..) |package, i| {
@@ -3004,18 +3005,12 @@ pub const BuildEnv = struct {
 
     /// Get the root semantic data for the platform package (convenience method).
     pub fn getPlatformSemanticData(self: *BuildEnv) ?SemanticModuleData {
-        // Find platform package name
-        var pkg_it = self.packages.iterator();
-        while (pkg_it.next()) |entry| {
-            if (entry.value_ptr.kind == .platform) {
-                const coord = self.coordinator orelse return null;
-                const pkg = coord.packages.get(entry.key_ptr.*) orelse continue;
-                const root_id = pkg.root_module_id orelse continue;
-                const root = pkg.getModule(root_id) orelse continue;
-                return root.semanticData();
-            }
-        }
-        return null;
+        const platform_name = self.selected_platform_package_name orelse return null;
+        const coord = self.coordinator orelse return null;
+        const pkg = coord.packages.get(platform_name) orelse return null;
+        const root_id = pkg.root_module_id orelse return null;
+        const root = pkg.getModule(root_id) orelse return null;
+        return root.semanticData();
     }
 
     pub fn getExecutableRootSemanticData(self: *BuildEnv) ?SemanticModuleData {
