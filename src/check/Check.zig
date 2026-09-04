@@ -30283,13 +30283,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                         break :fn_result probed_result;
                     };
-                    if (fn_result.isEstablished()) {
-                        try self.recordSuccessfulStaticDispatch(constraint);
-                    } else {
-                        if (fn_result.isProblem()) {
+                    switch (fn_result) {
+                        .unified => try self.recordSuccessfulStaticDispatch(constraint),
+                        .suppressed_by_error, .problem, .mismatch => {
                             try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
-                        }
-                        try self.markStaticDispatchRejected(constraint);
+                            try self.markStaticDispatchRejected(constraint);
+                        },
                     }
                 }
                 break :dispatch_resolution;
@@ -30607,13 +30606,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             .method_name = constraint.fn_name,
                         },
                     });
-                    if (fn_result.isEstablished()) {
-                        try self.recordSuccessfulStaticDispatch(constraint);
-                    } else {
-                        if (fn_result.isProblem()) {
+                    switch (fn_result) {
+                        .unified => try self.recordSuccessfulStaticDispatch(constraint),
+                        .suppressed_by_error, .problem, .mismatch => {
                             try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
-                        }
-                        try self.markStaticDispatchRejected(constraint);
+                            try self.markStaticDispatchRejected(constraint);
+                        },
                     }
                 }
                 break :dispatch_resolution;
