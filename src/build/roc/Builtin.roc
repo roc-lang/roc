@@ -4346,6 +4346,19 @@ Builtin :: [].{
 			$result
 		}
 
+		## Checks if at least one element of the list satisfies the predicate.
+		##```roc
+		##expect [1, 2, 3].has_any_match(|item| item == 4) == False
+		##expect [1, 2, 3].has_any_match(|item| item == 2) == True
+		##```
+		has_any_match : List(item), (item -> Bool) -> Bool
+		has_any_match = |items, predicate| {
+			for item in items {
+				if predicate(item) return True
+			}
+			False
+		}
+
 		## Run the given function on each item of a list, and return all the
 		## items for which the function returned `Bool.True`.
 		## ```roc
