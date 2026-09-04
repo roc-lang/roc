@@ -30517,13 +30517,6 @@ pub const CheckedModuleArtifact = struct {
                 return .{ .kind = .scheme_vars_out_of_bounds, .index = @intCast(scope_index) };
             }
             const params = templates.evidence_params_pool[scope.evidence_params.start .. scope.evidence_params.start + scope.evidence_params.len];
-            for (params) |param| {
-                if (param.slot >= scope.scheme_vars.len or
-                    templates.scheme_vars_pool[scope.scheme_vars.start + param.slot] != param.dispatcher_ty)
-                {
-                    return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(scope_index), .method = param.method };
-                }
-            }
             for (params, 0..) |param, param_offset| {
                 const path = templates.evidenceParamPath(param);
                 const source_root = switch (param.source) {
@@ -30540,6 +30533,13 @@ pub const CheckedModuleArtifact = struct {
                         .index = scope.evidence_params.start + @as(u32, @intCast(param_offset)),
                         .method = param.method,
                     };
+                }
+            }
+            for (params) |param| {
+                if (param.slot >= scope.scheme_vars.len or
+                    templates.scheme_vars_pool[scope.scheme_vars.start + param.slot] != param.dispatcher_ty)
+                {
+                    return .{ .kind = .evidence_param_slot_out_of_bounds, .index = @intCast(scope_index), .method = param.method };
                 }
             }
         }

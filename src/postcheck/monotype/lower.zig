@@ -39170,16 +39170,18 @@ const BodyContext = struct {
             }
         }
 
-        // The scheme's constraint callables instantiate over the request's
-        // slots in `scheme_ctx`, so relating a selected target to its
-        // constraint binds every quantified variable only that callable
-        // reaches. Each such binding can resolve another requirement's
-        // receiver, so the derivation runs to a fixpoint before any receiver
-        // is judged open. A requirement the site recorded as structural,
-        // unreachable, or rejected relates no target callable: a structural
-        // derivation's callable mentions only its receiver, which the slot
-        // already binds. The context is created by the first target relation,
-        // since an edge whose requirements the site recorded needs none.
+        // At a compiler-generated edge the scheme's constraint callables
+        // instantiate over the request's slots in `scheme_ctx`, so relating a
+        // selected target to its constraint binds every quantified variable
+        // only that callable reaches. Each such binding can resolve another
+        // requirement's receiver, so the derivation runs to a fixpoint before
+        // any receiver is judged open. A checked instantiation record already
+        // binds every slot, hidden ones included, so its edge relates no
+        // target callable; nor does a requirement the site recorded as
+        // structural, unreachable, or rejected, since a structural
+        // derivation's callable mentions only its receiver. The context is
+        // created by the first relation.
+        const relate_targets = site_refs == null;
         var scheme_ctx: ?BodyContext = null;
         defer if (scheme_ctx) |*ctx| ctx.deinit();
         var progress = true;
@@ -39192,6 +39194,7 @@ const BodyContext = struct {
                 out[k] = try self.synthesizeComponentEvidenceAtNodeForPurpose(schema.view, param.method, param.structural, node, purpose);
                 derived[k] = true;
                 progress = true;
+                if (!relate_targets) continue;
                 switch (out[k]) {
                     .target => |target| {
                         if (scheme_ctx == null) {
