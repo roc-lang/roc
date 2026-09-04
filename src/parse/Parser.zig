@@ -6534,13 +6534,13 @@ fn runExprStatementKernel(
                     self.advance();
                     if (self.peek() == .KwAs) {
                         self.advance();
-                        if (self.peek() != .LowerIdent) {
+                        if (self.peek() != .LowerIdent and self.peek() != .NamedUnderscore) {
                             last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
                             continue :expr_kernel .pattern_complete;
                         }
                         name = self.pos;
                         self.advance();
-                    } else if (self.peek() == .LowerIdent) {
+                    } else if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
                         last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_list_rest_old_syntax, self.pos);
                         continue :expr_kernel .pattern_complete;
                     }
@@ -6842,11 +6842,11 @@ fn runExprStatementKernel(
                 var rest_name: ?Token.Idx = null;
                 if (self.peek() == .KwAs) {
                     self.advance();
-                    if (self.peek() == .LowerIdent) {
+                    if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
                         rest_name = self.pos;
                         self.advance();
                     }
-                } else if (self.peek() == .LowerIdent) {
+                } else if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
                     rest_name = self.pos;
                     self.advance();
                     try self.pushDiagnostic(.pattern_list_rest_old_syntax, .{ .start = rest_start, .end = self.pos });

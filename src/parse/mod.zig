@@ -1120,3 +1120,40 @@ test "parser does not create a type path for malformed associated type headers" 
         }
     }
 }
+
+test "issue 11109: list rest aliases accept ordinary and named-underscore identifiers" {
+    const gpa = std.testing.allocator;
+    const sources = [_][]const u8{
+        \\b = |lst| {
+        \\    match lst {
+        \\        [h, .. as tail] if h < 4 => "a"
+        \\        _ => ""
+        \\    }
+        \\}
+        \\
+        \\expect [3] |> b |> Str.is_eq("a")
+        \\expect [] |> b |> Str.is_eq("")
+        ,
+        \\b = |lst| {
+        \\    match lst {
+        \\        [h, .. as _tail] if h < 4 => "a"
+        \\        _ => ""
+        \\    }
+        \\}
+        \\
+        \\expect [3] |> b |> Str.is_eq("a")
+        \\expect [] |> b |> Str.is_eq("")
+        ,
+    };
+
+    for (sources) |source| {
+        var env = try CommonEnv.init(gpa, source);
+        defer env.deinit(gpa);
+
+        const ast = try file(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+    }
+}
