@@ -10489,7 +10489,8 @@ accepts neither and only follows the explicit decisions.
 
 Exact ownership and certifier path snapshots use persistent sparse proc-local
 state. A control-flow fork shares the unchanged state root, and a transition
-stores only bounded-depth paths to changed resource, local, or value facts.
+stores only bounded-depth paths to changed `OwnedEntry` values, liveness words,
+or certifier `State` entries.
 Fresh one-owner states update their paths in place until the first fork; meets
 share equal subtrees and allocate only changed subtrees. Procedure width is
 therefore paid once by the producer-owned domains and summaries, not once per
