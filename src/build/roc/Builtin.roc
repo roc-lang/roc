@@ -4354,7 +4354,7 @@ Builtin :: [].{
 			$result
 		}
 
-		## Checks if at least one element of the list satisfies the predicate.
+		## Checks if at least one item of the list satisfies the predicate.
 		##```roc
 		##expect [1, 2, 3].has_any_match(|item| item == 4) == False
 		##expect [1, 2, 3].has_any_match(|item| item == 2) == True
