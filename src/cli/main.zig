@@ -15821,6 +15821,7 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.specialization.nested_misses = 102;
     diagnostics.graph.nodes_created = 201;
     diagnostics.graph.generated_private_nodes_visited = 202;
+    diagnostics.graph.nominal_backing_tombstone_deletions = 203;
     diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
     diagnostics.body.deferred_template_reuses = 305;
@@ -15837,6 +15838,8 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 201), graph[1].count);
     try std.testing.expectEqualStrings("Generated-private nodes visited", graph[16].name);
     try std.testing.expectEqual(@as(u64, 202), graph[16].count);
+    try std.testing.expectEqualStrings("Nominal backing tombstone deletions", graph[21].name);
+    try std.testing.expectEqual(@as(u64, 203), graph[21].count);
 
     const body = monotypeBodyCounters(diagnostics);
     try std.testing.expectEqualStrings("Type instantiation scopes", body[1].name);
