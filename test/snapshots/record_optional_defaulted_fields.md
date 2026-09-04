@@ -17,20 +17,17 @@ bad_direct_access : Config -> U16
 bad_direct_access = |c| c.port
 ~~~
 # EXPECTED
-TYPE MISMATCH - record_optional_defaulted_fields.md:10:25:10:26
+TYPE MISMATCH - record_optional_defaulted_fields.md:10:26:10:31
 # PROBLEMS
-── ✗ type mismatch ─────────────────── record_optional_defaulted_fields.md:10:25
+── ✗ type mismatch ─────────────────── record_optional_defaulted_fields.md:10:26
 
-This is not a record, so it does not have any fields to access.
+The port field is optional, but it is being accessed as if it is always present.
 
 bad_direct_access = |c| c.port
-                        ^
+                         ^^^^^
 
-It is:
-
-    Config
-
-But I need a record with a port field.
+An optional field may be missing from the record. Use .? to access it—that
+produces a Try you can match on or default with ??.
 
 # TOKENS
 ~~~zig

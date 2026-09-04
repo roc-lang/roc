@@ -445,6 +445,30 @@ test "cross-module mono: importing module can reference methods from imported ty
     try testing.expect(a_ident_in_b != null);
 }
 
+test "cross-module mono: names bound by top-level destructures import like plain names" {
+    // Module A exposes a value and a function it binds through destructures.
+    const source_a =
+        \\module [greeting, shout, mark]
+        \\
+        \\{ greeting, shout } = { greeting: "hi", shout: |s| Str.concat(s, "!") }
+        \\(mark, _unused) = ("?", 2)
+    ;
+    var env_a = try MonoTestEnv.init("A", source_a);
+    defer env_a.deinit();
+    try testing.expectEqual(@as(usize, 0), env_a.checker.problems.problems.items.len);
+
+    // Module B reaches them qualified, like any exposed value.
+    const source_b =
+        \\import A
+        \\
+        \\main : Str
+        \\main = A.shout(Str.concat(A.greeting, A.mark))
+    ;
+    var env_b = try MonoTestEnv.initWithImport("B", source_b, "A", &env_a);
+    defer env_b.deinit();
+    try testing.expectEqual(@as(usize, 0), env_b.checker.problems.problems.items.len);
+}
+
 test "cross-module mono: static dispatch method registration in type module" {
     // This tests that when a type module defines methods, they are properly
     // registered so that other modules can look them up for static dispatch
