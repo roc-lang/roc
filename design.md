@@ -529,7 +529,7 @@ emits a `.malformed` header annotation for every declaration kind. Nominal and
 opaque declarations may use an underscore-prefixed name such as `_a` for an
 intentionally phantom parameter; aliases and where aliases reject those names.
 This keeps every valid declaration formal's identity explicit through checking and
-checked-artifact publication.
+`CheckedModule` construction.
 
 After all local type declarations have been generated, checking computes the
 transitive closure of invalidity over those recorded dependency edges. This
