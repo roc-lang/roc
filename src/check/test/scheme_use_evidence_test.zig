@@ -108,7 +108,7 @@ test "recursive reference provenance marks the annotated self use but not an ext
     defer test_env.deinit();
     try test_env.assertDefType("main", "U64");
 
-    const self_use_offset = std.mem.indexOf(u8, source, "grow(n - 1)") orelse unreachable;
+    const self_use_offset = std.mem.find(u8, source, "grow(n - 1)") orelse unreachable;
     const env = test_env.module_env;
     var recursive_records: usize = 0;
     for (env.scheme_uses.items.items) |record| {
