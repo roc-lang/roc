@@ -39848,9 +39848,9 @@ const BodyContext = struct {
         return slots;
     }
 
-    /// Materialize only the producer data that substitution-derived evidence
-    /// cannot reconstruct. Direct targets retain their checked callable
-    /// instantiation only for a requirement whose declared source is a
+    /// Materialize only checked producer data not represented by the
+    /// substitution-derived evidence. Direct targets retain their checked
+    /// callable instantiation only for a requirement whose declared source is a
     /// constraint callable, where that relation binds hidden scheme slots.
     /// Their nested contract is retained recursively only when it contains
     /// such a relation or a terminal checked verdict/structural contract.
@@ -40006,8 +40006,8 @@ const BodyContext = struct {
 
     /// Evidence for every requirement of a scheme under a substitution.
     /// Target identity is selected from the substituted receiver. Checked
-    /// entries contribute only contracts and terminal verdicts that the
-    /// substitution cannot reconstruct.
+    /// entries contribute their explicit contracts and terminal verdicts
+    /// alongside the substitution-derived target identity.
     fn deriveEvidenceVector(
         self: *BodyContext,
         schema: SchemeRequirements,
