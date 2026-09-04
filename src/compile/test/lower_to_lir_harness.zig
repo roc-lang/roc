@@ -162,6 +162,13 @@ pub fn expectAppPathLowersToLir(app_path: []const u8) LowerToLirHarnessError!voi
     try lowerAppPathToLir(std.testing.allocator, app_path, null, .{}, null, null);
 }
 
+/// Lower an app at `app_path` to LIR with explicit lowering options. Reaching
+/// the end without a panic is the assertion, so `allow_user_errors` programs
+/// use this to pin that a rejected app still lowers to a checked crash.
+pub fn expectAppPathLowersToLirWithOptions(app_path: []const u8, opts: LirLoweringOptions) LowerToLirHarnessError!void {
+    try lowerAppPathToLir(std.testing.allocator, app_path, null, opts, null, null);
+}
+
 /// Lower an app at `app_path` through Monotype specialization, without running
 /// later LIR transforms or ARC insertion.
 pub fn expectAppPathLowersToMonotype(app_path: []const u8) LowerToLirHarnessError!void {
