@@ -75,7 +75,8 @@ pub fn RekeyingHashMap(
         }
 
         pub fn putNoClobber(self: *Self, key: K, value: V) Allocator.Error!void {
-            try self.ensureTotalCapacity(self.size + 1);
+            const required_count = std.math.add(usize, self.size, 1) catch return error.OutOfMemory;
+            try self.ensureTotalCapacity(required_count);
             self.putAssumeCapacityNoClobber(key, value);
         }
 
@@ -201,6 +202,16 @@ const CollisionContext = struct {
     }
 };
 
+const ClusteredContext = struct {
+    pub fn hash(_: ClusteredContext, key: u32) u64 {
+        return key % 17;
+    }
+
+    pub fn eql(_: ClusteredContext, left: u32, right: u32) bool {
+        return left == right;
+    }
+};
+
 const WideLookupContext = struct {
     pub fn hash(_: WideLookupContext, key: u64) u64 {
         return key;
@@ -244,7 +255,7 @@ test "rekeying hash map grows and supports adapted lookup" {
 }
 
 test "rekeying hash map matches an oracle through repeated collision churn" {
-    const Map = RekeyingHashMap(u32, u32, CollisionContext, 80);
+    const Map = RekeyingHashMap(u32, u32, ClusteredContext, 80);
     var map = Map.init(std.testing.allocator, .{});
     defer map.deinit();
 
