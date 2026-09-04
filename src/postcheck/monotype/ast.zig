@@ -335,18 +335,6 @@ pub fn fnEvidenceDigest(
                     );
                 } else writeU8(&hasher, 0);
             },
-            .constraint_callable => |source| {
-                writeBytes(&hasher, &source.view.bytes);
-                writeBytes(&hasher, &source.callable_key.bytes);
-                writeU32(&hasher, @intFromEnum(source.source.plan));
-                writeU32(&hasher, @intFromEnum(source.source.method));
-                writeU32(&hasher, source.source.path.start);
-                writeU32(&hasher, source.source.path.len);
-                if (source.source.structural) |kind| {
-                    writeU8(&hasher, 1);
-                    writeU8(&hasher, @intFromEnum(kind));
-                } else writeU8(&hasher, 0);
-            },
             .unreachable_value, .checked_error => {},
         }
     }
@@ -382,20 +370,11 @@ pub fn fnEvidenceEql(
                 .target => |right_target| {
                     if (!fnEvidenceTargetEql(left_target, right_target)) return false;
                 },
-                .constraint_callable, .structural, .unreachable_value, .checked_error => return false,
+                .structural, .unreachable_value, .checked_error => return false,
             },
             .structural => |left_structural| switch (right) {
                 .structural => |right_structural| if (!std.meta.eql(left_structural, right_structural)) return false,
-                .target, .constraint_callable, .unreachable_value, .checked_error => return false,
-            },
-            .constraint_callable => |left_source| switch (right) {
-                .constraint_callable => |right_source| if (!std.meta.eql(left_source.view, right_source.view) or
-                    !std.meta.eql(left_source.callable_key, right_source.callable_key) or
-                    left_source.source.plan != right_source.source.plan or
-                    left_source.source.method != right_source.source.method or
-                    !std.meta.eql(left_source.source.structural, right_source.source.structural) or
-                    !std.meta.eql(left_source.source.path, right_source.source.path)) return false,
-                .target, .structural, .unreachable_value, .checked_error => return false,
+                .target, .unreachable_value, .checked_error => return false,
             },
             .unreachable_value => if (right != .unreachable_value) return false,
             .checked_error => if (right != .checked_error) return false,
@@ -512,34 +491,6 @@ test "function evidence identity uses checked callable type keys" {
 
     right[0].target.method_callable_key = method_key;
     right[0].target.instantiation.?.callable_key.bytes[0] = 9;
-    try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
-    try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
-}
-
-test "constraint callable evidence identity ignores checked type replay payload" {
-    var callable_key: names.CanonicalTypeKey = .{};
-    callable_key.bytes[0] = 1;
-    const frames = [_]check.ConstStore.ConstFnEvidenceFrame{
-        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),
-    };
-    const left = [_]check.ConstStore.ConstFnEvidence{.{ .constraint_callable = .{
-        .view = .{},
-        .callable_key = callable_key,
-        .source = .{
-            .plan = @enumFromInt(2),
-            .callable_ty = @enumFromInt(3),
-            .method = @enumFromInt(4),
-            .structural = null,
-            .path = .{ .start = 5, .len = 1 },
-        },
-    } }};
-    var right = left;
-    right[0].constraint_callable.source.callable_ty = @enumFromInt(6);
-
-    try std.testing.expect(fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
-    try std.testing.expectEqual(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0));
-
-    right[0].constraint_callable.callable_key.bytes[0] = 9;
     try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
     try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
 }

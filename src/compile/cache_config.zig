@@ -166,7 +166,9 @@ pub const Constants = struct {
     ///     specialization-conditional method capabilities.
     /// 74: Canonicalization warns on a `?` applied to a function's return
     ///     value (new diagnostic).
-    pub const CACHE_VERSION = 74;
+    /// 75: Checked dispatch data drops symbolic constraint-callable evidence
+    ///     and records recursive resolved references explicitly.
+    pub const CACHE_VERSION = 75;
 };
 
 /// Configuration for the Roc cache system.

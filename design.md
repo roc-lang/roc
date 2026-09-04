@@ -2916,33 +2916,42 @@ kinds.
 
 Every procedure evidence parameter also carries an explicit dispatcher source.
 The source is exactly one of: a checked component path over the procedure's
-scheme callable; a checked component path over the exact checked dispatch-plan
-callable whose constraint introduced a specialization-time defaultable
-parameter; a nested constraint requirement resolved only by checked use-site
-evidence; an explicit specialization-time literal default; or an erased
-open-row remainder. Defaultable constraint-callable sources retain the
-dispatch plan identity and their path relative to that plan's callable in
-checked evidence at each instantiation edge. An empty path is not a defaulting
-signal and consumers must never infer one source category from path length.
-Dispatch plans owned by standalone default-field expressions are the explicit
-exception: their dispatch requirements consume the default root's checked
-use-site evidence, because that root has no enclosing template specialization
-whose interface replay could discharge symbolic constraint-callable evidence.
+scheme callable; a checked component path over the scheme-side constraint
+callable through which a hidden dispatcher with a specialization-time literal
+default was enumerated; a nested constraint requirement resolved only by
+checked use-site evidence; an explicit specialization-time literal default; or
+an erased open-row remainder. An empty path is not a defaulting signal and
+consumers must never infer one source category from path length. A literal
+dispatcher whose constraint was introduced by a dispatch plan owned by a
+standalone default-field expression is marked use-site-only: the default root
+always instantiates its local procedures with checked use-site evidence, and
+Boxy reads that literal's descriptor from the evidence instead of binding a
+runtime dictionary.
 
-Monotype preserves a constraint-callable source as symbolic specialization
-evidence while constructing the specialization key. Interface relation replay
-then relates the source plan's checked callable and operands to the concrete
-request. Before a method dictionary or literal descriptor consumes that
-evidence, Monotype walks the producer-authored path over that now-related
-callable node at the exact dispatch consumption that requires it and resolves
-the concrete method evidence. It must not default the checked dispatcher,
-search another plan by method or type shape, or scan the solved graph for a
-matching component. Non-defaultable nested constraint requirements are marked
-use-site-only and must arrive as checked use-site evidence; they cannot be
-synthesized from a template. For runtime-dictionary requirements the checked
-entry remains a forwarded constraint slot: Boxy consumes its explicit slot and
-callable type in checked dictionary order, while the source recipe is retained
-for Monotype's specialization-time checked component-path walk.
+A hidden dispatcher is one reachable only through a constraint callable, so it
+has no component in the procedure's callable type and no request type can
+pin it. At every checked instantiation edge the edge's fresh copy of that
+dispatcher is resolved exactly like any other evidence parameter: a pinned copy
+selects its concrete target, a copy owned by the enclosing callable's own
+evidence params forwards `constraint(k)`, and an unpinned copy resolves
+against its default owner. Checking can always decide this at the edge: a
+copy the requester's specializations could still pin would be reachable from
+the requester's interface and therefore be one of its own evidence params. No
+edge records a symbolic dispatch-plan reference for Monotype to re-execute,
+and Monotype never
+instantiates a dispatch plan outside the specialization that owns it.
+
+A compiler-generated edge has no checked instantiation, so it derives a hidden
+dispatcher from the target's checked scheme: the requester instantiates the
+scheme root in the target's own instantiation context, relates it to the
+request, reads the scheme-side dispatcher variable in that context, and, when
+the relation leaves it open, commits its checked literal default there—the
+same rule that seals an unpinned literal leaf. Non-defaultable nested
+constraint requirements are marked use-site-only and must arrive as checked
+use-site evidence; they cannot be synthesized from a template. For
+runtime-dictionary requirements the checked entry remains a forwarded
+constraint slot: Boxy consumes its explicit slot and callable type in checked
+dictionary order.
 
 Boxy dictionary planning consumes those entries one-for-one in dictionary slot
 order. Each planned slot records the selected worker or structural operation,
@@ -3938,13 +3947,23 @@ explicit public source and producer topology. It must not depend on operand
 order or keep the imported root and thereby discard the only data capable of
 authoring a forced-dynamic representation.
 
-The recursive edge itself is also producer-authored. Every draft function and
-globally reserved root records the owner that created it, forming an explicit
-active ownership tree. A partial open-interface match may reuse an in-progress
-specialization only when the current owner descends from that specialization in
-this tree. Shared graph cells alone cannot classify two sibling calls as
-recursion. Exact completed interfaces may still deduplicate normally, but only
-an explicit ancestor edge invokes recursive-interface unification and records
+The recursive edge itself is producer-authored by checking. A lookup that
+checking related monomorphically to a definition still in flight is recorded
+as a shared scheme use, and the checked module marks the resolved reference
+`recursive_reference`. Only such a reference may join an
+in-progress specialization whose interface its fresh cells have not yet joined:
+every draft function and globally reserved root records the owner that created
+it, forming an explicit active ownership tree, and the reference names the
+in-progress specialization of the same procedure, with the same evidence, on
+that chain. Every other request—a scheme instantiation, a dispatch plan, a
+generated codec's component call, or a compiler-generated component edge—is a
+fresh instantiation; it identifies with an existing specialization only
+through an exact interface and otherwise becomes its own request, even when it
+descends from a specialization of the same procedure with equal evidence.
+Neither ownership descent, shared graph cells, argument-class overlap, nor
+capture identity classifies a request as recursion. Exact interfaces may still
+deduplicate normally, but only a checked recursive reference invokes
+recursive-interface unification against a not-yet-joined interface and records
 recursive representation growth.
 
 Finalization rebuilds a selected forced-dynamic class with exactly one public
@@ -6053,6 +6072,13 @@ Other solved-graph mutations:
   and the strictly growing rejected chain pin all sides of the rule.
 - `instantiate.zig` / `copy_import.zig` `dangerousSetVarDesc`—mechanism:
   instantiation and import copying build fresh disjoint graphs.
+- `deduplicateGeneralizedDispatchRequirements` (`setVarContent` of a retained
+  constraint list, `unifyEquivalentGeneralizedCallables` committed probe)—
+  policy: evidence-param collapse of same-shape requirements as declared in
+  Static Dispatch At The Checked Boundary ("Evidence params"). The duplicate
+  callable is unified with the retained one through an ordinary committed
+  probe before the receiver's constraint list is rewritten without it; a probe
+  that cannot establish the pair rolls back and keeps both.
 
 Stamped-plan restamps on CIR nodes (discharge time): the restamp rule—
 only the node's own constraint may restamp a node that already carries a
@@ -7924,7 +7950,15 @@ rank-1 instantiation can vary types but cannot vary a declaration's argument
 count or known effect mode. Once a scheme's public type is fixed, equivalent
 requirements whose only differences are private generalized variables collapse;
 public type variables remain identity anchors, so requirements a caller can
-specialize differently stay separate. Independent same-name callable relations
+specialize differently stay separate. Collapsing unifies the duplicate's
+callable with the retained one before dropping it, so the union-find records
+which retained private variable each dropped variable stands for: scheme-use
+pairs, nested evidence keys, and body expressions typed by the dropped callable
+all resolve to the retained relation. The anchored shape digest only selects
+the candidate pair; the unifier is the exact equality authority, and a pair it
+cannot establish stays separate. Because merging two callables can bring their
+private receivers' own same-name requirements together, those receivers are
+revisited until no receiver holds two same-shape callables. Independent same-name callable relations
 share one evidence parameter: the runtime target is selected by dispatcher and
 method, while each dispatch plan checks and instantiates that target against its
 own callable relation.
