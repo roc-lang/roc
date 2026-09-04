@@ -2542,7 +2542,12 @@ pub fn reserveC(
     update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
-    return reserve(string, @intCast(spare_u64), update_mode, roc_ops);
+    // Make sure on 32-bit targets we don't accidentally wrap when we cast our
+    // U64 spare down to U32. Clamping loses nothing: a spare that does not fit
+    // in `usize` cannot be satisfied on this target either way, and `reserve`
+    // carries it down to the allocation guard, which crashes on it.
+    const spare: usize = @intCast(@min(spare_u64, @as(u64, std.math.maxInt(usize))));
+    return reserve(string, spare, update_mode, roc_ops);
 }
 
 /// See reserveC.
@@ -2554,10 +2559,17 @@ pub fn reserve(
 ) RocStr {
     const old_length = string.len();
 
-    if (string.getCapacity() >= old_length + spare) {
+    // `spare` is Roc-controlled, so `old_length + spare` can overflow `usize`.
+    // A wrapped sum is always below the current capacity, which would silently
+    // turn the reserve into a no-op; saturating instead carries the impossible
+    // request into `reallocate`, whose allocation guard crashes on it. This
+    // mirrors `listReserve`.
+    const desired_length = old_length +| spare;
+
+    if (string.getCapacity() >= desired_length) {
         return string;
     } else {
-        var output = string.reallocate(old_length + spare, update_mode, roc_ops);
+        var output = string.reallocate(desired_length, update_mode, roc_ops);
         output.setLen(old_length);
         return output;
     }

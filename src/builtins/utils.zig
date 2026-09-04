@@ -875,6 +875,53 @@ pub inline fn geometricGrowth(old_capacity: usize, element_width: usize) usize {
     }
 }
 
+/// Refuse an allocation whose size arithmetic overflowed `usize`.
+///
+/// List and Str capacities and lengths come from the running Roc program, so
+/// the `count * element_width` (and `+ header`) that sizes a heap allocation is
+/// attacker-influenced. In a ReleaseFast build those operators are undefined on
+/// overflow: the product wraps to a small value, the allocation comes back far
+/// smaller than the collection's advertised capacity, and the next element
+/// write runs off the end of the buffer. That is a heap-overflow primitive
+/// reachable from ordinary Roc code, including the pure package code the
+/// compiler evaluates at compile time, so a wrap here can corrupt the
+/// compiler's or the running program's memory and escape Roc's guarantees.
+/// Detecting the overflow turns it into a deterministic, in-bounds crash.
+///
+/// These checks sit on the allocate/grow path, never per element, so they add a
+/// single predictable branch to an operation that already touches the allocator
+/// and stay off the hot loop.
+// `noinline` keeps the cold crash setup (message load plus the host call) out
+// of the caller's body, so the guard costs a hot path only the overflow branch
+// itself and does not bloat entrypoints that inline an allocation.
+noinline fn crashAllocationTooLarge(roc_ops: *RocOps) noreturn {
+    roc_ops.crash("Attempted to allocate a collection larger than the platform address space");
+    // A conforming host never returns from `crash` (the compile-time host
+    // longjmps; a platform's handler terminates the process), so this is dead
+    // code there. The wasm host is the exception: it cannot longjmp across the
+    // VM boundary, so it records the message and returns. `@trap()` stops the
+    // fall-through that would otherwise continue with the wrapped size and run
+    // off the buffer this guard exists to protect, and it costs nothing on the
+    // hot path because it sits behind the overflow branch in a cold function.
+    @trap();
+}
+
+/// Returns `count * element_width`, or crashes if the product overflows `usize`.
+/// See `crashAllocationTooLarge` for why the overflow must not be allowed to wrap.
+pub inline fn checkedByteCount(count: usize, element_width: usize, roc_ops: *RocOps) usize {
+    const product, const overflowed = @mulWithOverflow(count, element_width);
+    if (overflowed != 0) crashAllocationTooLarge(roc_ops);
+    return product;
+}
+
+/// Returns `data_bytes + header_bytes`, or crashes if the sum overflows `usize`.
+/// See `crashAllocationTooLarge` for why the overflow must not be allowed to wrap.
+pub inline fn checkedAllocLen(data_bytes: usize, header_bytes: usize, roc_ops: *RocOps) usize {
+    const total, const overflowed = @addWithOverflow(data_bytes, header_bytes);
+    if (overflowed != 0) crashAllocationTooLarge(roc_ops);
+    return total;
+}
+
 /// Allocates memory with space for a reference count, for C compatibility
 /// Thin wrapper around allocateWithRefcount that preserves the C calling convention
 pub fn allocateWithRefcountC(
@@ -901,7 +948,10 @@ pub fn allocateWithRefcount(
     const alignment = @max(ptr_width, element_alignment);
     const required_space: usize = if (elements_refcounted) (2 * ptr_width) else ptr_width;
     const extra_bytes = @max(required_space, element_alignment);
-    const length = extra_bytes + data_bytes;
+    // `data_bytes` is a Roc-controlled size; guard the header addition so an
+    // over-large request crashes deterministically instead of wrapping to a
+    // tiny allocation. See `crashAllocationTooLarge`.
+    const length = checkedAllocLen(data_bytes, extra_bytes, roc_ops);
 
     const new_bytes = @as([*]u8, @ptrCast(roc_ops.tryAlloc(length, alignment)));
 
@@ -939,8 +989,17 @@ pub fn unsafeReallocate(
     const required_space: usize = if (elements_refcounted) (2 * ptr_width) else ptr_width;
     const extra_bytes = @max(required_space, element_alignment);
 
+    // `new_length` is a Roc-controlled growth target, so guard its
+    // `count * width (+ header)`: a request that overflows `usize` must crash
+    // rather than wrap to a tiny allocation. See `crashAllocationTooLarge`.
+    const new_data_bytes = checkedByteCount(new_length, element_width, roc_ops);
+    const new_width = checkedAllocLen(new_data_bytes, extra_bytes, roc_ops);
+
+    // Every caller only ever grows, which is what lets `old_width` skip the
+    // same guard: it is bounded by the `new_width` just checked, so it cannot
+    // overflow either.
+    std.debug.assert(old_length <= new_length);
     const old_width = extra_bytes + old_length * element_width;
-    const new_width = extra_bytes + new_length * element_width;
 
     if (old_width >= new_width) {
         return source_ptr;

@@ -57,9 +57,17 @@ cd "$repo_root"
 # interact rather than adding their separate instruction-count changes: the
 # resulting entrypoint totals are 106 on x64musl and 92 on arm64musl. The
 # pinned compare loop itself is unchanged.
+# Both counts rose (x64musl 106 to 109, arm64musl 92 to 100) when the list
+# allocation builtins gained overflow guards on their size arithmetic: a
+# `capacity * element_width (+ header)` that overflows `usize` now crashes
+# deterministically instead of wrapping to a tiny allocation and letting the
+# next write run off the heap buffer (a primitive reachable from pure Roc
+# code the compiler also evaluates at compile time). The added branch inlines
+# into the one-time `List.repeat` buffer setup this entrypoint performs; the
+# pinned eight-byte compare loop, which allocates nothing, is unchanged.
 expectations=(
-    "x64musl:106"
-    "arm64musl:92"
+    "x64musl:109"
+    "arm64musl:100"
 )
 
 failed=0
