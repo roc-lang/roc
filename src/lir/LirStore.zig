@@ -543,6 +543,12 @@ pub fn procDebugName(self: *const Self, id: LirProcSpecId) ?[]const u8 {
     return self.getString(idx);
 }
 
+/// Stored debug-name string id for a proc, used when a procedure boundary is
+/// replaced by an explicit virtual inline frame.
+pub fn procDebugNameString(self: *const Self, id: LirProcSpecId) base.StringLiteral.Idx {
+    return self.procDebugNameIndex(id) orelse base.StringLiteral.Idx.none;
+}
+
 fn procDebugNameIndex(self: *const Self, id: LirProcSpecId) ?base.StringLiteral.Idx {
     const proc = @intFromEnum(id);
     for (self.proc_debug_names.unsafeRawItemsForView()) |entry| {

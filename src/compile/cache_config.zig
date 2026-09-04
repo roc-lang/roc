@@ -162,14 +162,18 @@ pub const Constants = struct {
     ///     records the source region of the annotated name.
     /// 72: Checked binding schemes serialize generated-codec relations that
     ///     downstream specializations must revalidate.
-    /// 73: Constraint-callable dispatch-plan references are gone and resolved
-    ///     value uses record checked recursive references.
-    /// 74: Scheme uses record their substitution; schemes record their
+    /// 73: Generated codec contracts retain structural body shapes and mark
+    ///     specialization-conditional method capabilities.
+    /// 74: Canonicalization warns on a `?` applied to a function's return
+    ///     value (new diagnostic).
+    /// 75: Checked dispatch data drops symbolic constraint-callable evidence
+    ///     and records recursive resolved references explicitly.
+    /// 76: Scheme uses record their substitution; schemes record their
     ///     quantified variables and each evidence parameter its slot.
-    /// 75: Evidence parameters record their constraint callable type.
-    /// 76: Procedure templates record their root evidence.
-    /// 77: Recursive-reference provenance is separate from shared scheme uses.
-    pub const CACHE_VERSION = 77;
+    /// 77: Evidence parameters record their constraint callable type.
+    /// 78: Procedure templates record their root evidence.
+    /// 79: Recursive-reference provenance is separate from shared scheme uses.
+    pub const CACHE_VERSION = 79;
 };
 
 /// Configuration for the Roc cache system.

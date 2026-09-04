@@ -10,7 +10,6 @@ c = a
 ~~~
 # EXPECTED
 CIRCULAR VALUE DEFINITION - top_level_destructure_value_cycle_with_plain_def.md:1:2:1:3
-CIRCULAR VALUE DEFINITION - top_level_destructure_value_cycle_with_plain_def.md:1:5:1:6
 CIRCULAR VALUE DEFINITION - top_level_destructure_value_cycle_with_plain_def.md:2:1:2:2
 # PROBLEMS
 ── ✗ circular value definition ─ top_level_destructure_value_cycle_with_plain_def.md:1:2
@@ -19,16 +18,6 @@ The value a is part of a recursive non-function definition cycle.
 
 {a, b} = { a: c, b: 1 }
  ^
-
-Only functions can be recursive. Non-function top-level values must be fully
-computable without depending on themselves through other values.
-
-── ✗ circular value definition ─ top_level_destructure_value_cycle_with_plain_def.md:1:5
-
-The value b is part of a recursive non-function definition cycle.
-
-{a, b} = { a: c, b: 1 }
-    ^
 
 Only functions can be recursive. Non-function top-level values must be fully
 computable without depending on themselves through other values.
@@ -77,15 +66,11 @@ c = a
 ~~~clojure
 (can-ir
 	(d-let
-		(p-record-destructure
-			(destructs
-				(record-destruct (label "a") (ident "a")
-					(required
-						(p-assign (ident "a"))))
-				(record-destruct (label "b") (ident "b")
-					(required
-						(p-assign (ident "b"))))))
+		(p-assign (ident "a"))
 		(e-runtime-error (tag "circular_value_definition")))
+	(d-let
+		(p-assign (ident "b"))
+		(e-num (value "1")))
 	(d-let
 		(p-assign (ident "c"))
 		(e-runtime-error (tag "circular_value_definition"))))
@@ -94,8 +79,11 @@ c = a
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "Error"))
+		(patt (type "Dec"))
 		(patt (type "Error")))
 	(expressions
 		(expr (type "Error"))
+		(expr (type "Dec"))
 		(expr (type "Error"))))
 ~~~

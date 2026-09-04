@@ -109,31 +109,42 @@ pub const ErrorContext = struct {
     reason: PathValidationReason,
 };
 
+/// A file to read from `base_dir` and the distinct portable path to store in
+/// the archive.
+pub const Entry = struct {
+    source_path: []const u8,
+    archive_path: []const u8,
+};
+
+/// The content-addressed archive filename and total size of its input files.
+pub const Result = struct {
+    filename: []u8,
+    uncompressed_size: u64,
+};
+
 /// Bundle files into a compressed tar archive.
 ///
-/// The file_path_iter must yield file paths that are valid for use with `Dir.openFile`.
-/// This means paths must be relative (not absolute), must not contain ".." components,
-/// and on Windows must use forward slashes. File paths are limited to 255 bytes for
-/// tar compatibility. Paths must be encoded as WTF-8 on Windows, UTF-8 elsewhere.
-///
-/// If path_prefix is provided, it will be stripped from the beginning of each file path
-/// before adding to the tar archive.
+/// The entry iterator supplies a source path for `Dir.openFile` and a separate
+/// archive path. Archive paths must be relative, must not contain `..`
+/// components, and are limited to 255 bytes for tar compatibility. On Windows,
+/// archive paths are converted to forward slashes. Paths must be encoded as
+/// WTF-8 on Windows and UTF-8 elsewhere.
 ///
 /// Compression level should be between 1 (fastest) and 22 (best compression).
 /// Level 3 is a good default for speed/size tradeoff.
 ///
-/// Returns the filename (base58-encoded blake3 hash + .tar.zst). Caller must free the returned string.
+/// Returns the filename (base58-encoded blake3 hash + .tar.zst) and the total
+/// input size. The caller must free `filename`.
 /// If an InvalidPath error is returned, error_context will contain details about the invalid path.
 pub fn bundle(
-    file_path_iter: anytype,
+    entry_iter: anytype,
     compression_level: c_int,
     allocator: *std.mem.Allocator,
     io: std.Io,
     output_writer: *std.Io.Writer,
     base_dir: std.Io.Dir,
-    path_prefix: ?[]const u8,
     error_context: ?*ErrorContext,
-) BundleError![]u8 {
+) BundleError!Result {
     // Create compressing hash writer that chains: tar → compress → hash → output
     var compress_writer = streaming_writer.CompressingHashWriter.init(
         allocator,
@@ -148,10 +159,43 @@ pub fn bundle(
 
     // Create tar writer that writes to the compressing writer
     var tar_writer = std.tar.Writer{ .underlying_writer = &compress_writer.interface };
+    var uncompressed_size: u64 = 0;
 
     // Process files one at a time
-    while (try file_path_iter.next()) |file_path| {
-        const file = base_dir.openFile(io, file_path, .{}) catch |err| switch (err) {
+    while (try entry_iter.next()) |entry| {
+        // Standardize archive names on forward slashes. Valid Unix source
+        // paths can contain backslashes, but archive names remain portable.
+        var normalized_tar_path: ?[]u8 = null;
+        defer if (normalized_tar_path) |path| allocator.free(path);
+        const has_backslash = std.mem.find(u8, entry.archive_path, "\\") != null;
+        const tar_path = if (builtin.target.os.tag == .windows and has_backslash) blk: {
+            const path = try allocator.dupe(u8, entry.archive_path);
+            std.mem.replaceScalar(u8, path, '\\', '/');
+            normalized_tar_path = path;
+            break :blk path;
+        } else if (!has_backslash) entry.archive_path else {
+            if (error_context) |ctx| {
+                ctx.path = entry.archive_path;
+                ctx.reason = .contained_backslash_on_unix;
+            }
+            return error.InvalidPath;
+        };
+
+        if (pathHasBundleErr(tar_path)) |validation_error| {
+            if (error_context) |ctx| {
+                // Keep the caller-owned path rather than the temporary
+                // forward-slash copy used on Windows.
+                ctx.path = entry.archive_path;
+                ctx.reason = validation_error.reason;
+            }
+            return error.InvalidPath;
+        }
+
+        if (tar_path.len > TAR_PATH_MAX_LENGTH) {
+            return error.FilePathTooLong;
+        }
+
+        const file = base_dir.openFile(io, entry.source_path, .{}) catch |err| switch (err) {
             error.AntivirusInterference,
             error.BadPathName,
             error.Canceled,
@@ -192,46 +236,7 @@ pub fn bundle(
         };
 
         const file_size = std.math.cast(usize, stat.size) orelse return error.FileTooLarge;
-
-        // Strip path prefix if provided
-        const unescaped_path = if (path_prefix) |prefix| blk: {
-            if (std.mem.startsWith(u8, file_path, prefix)) {
-                break :blk file_path[prefix.len..];
-            } else {
-                break :blk file_path;
-            }
-        } else file_path;
-
-        // Standardize on forward slashes for directory separators.
-        //
-        // Valid UNIX paths can technically contain backslashes; if one does, give an error.
-        const tar_path = if (builtin.target.os.tag == .windows) blk: {
-            // On Windows, replace backslashes with forward slashes
-            const path_buf = try allocator.alloc(u8, unescaped_path.len);
-            @memcpy(path_buf, unescaped_path);
-            std.mem.replaceScalar(u8, path_buf, '\\', '/');
-            break :blk path_buf;
-        } else if (std.mem.find(u8, unescaped_path, "\\") == null) unescaped_path else {
-            if (error_context) |ctx| {
-                ctx.path = unescaped_path;
-                ctx.reason = .contained_backslash_on_unix;
-            }
-            return error.InvalidPath;
-        };
-        defer if (builtin.target.os.tag == .windows) allocator.free(tar_path);
-
-        // Validate the tar path after prefix stripping and forward-slash standardization.
-        if (pathHasBundleErr(tar_path)) |validation_error| {
-            if (error_context) |ctx| {
-                ctx.path = validation_error.path;
-                ctx.reason = validation_error.reason;
-            }
-            return error.InvalidPath;
-        }
-
-        if (tar_path.len > TAR_PATH_MAX_LENGTH) {
-            return error.FilePathTooLong;
-        }
+        uncompressed_size = std.math.add(u64, uncompressed_size, stat.size) catch return error.FileTooLarge;
 
         // Write tar header and stream file content
         const Options = @TypeOf(tar_writer).Options;
@@ -267,7 +272,7 @@ pub fn bundle(
 
     // Create filename with .tar.zst extension
     const filename = try std.fmt.allocPrint(allocator.*, "{s}{s}", .{ base58_hash, TAR_EXTENSION });
-    return filename;
+    return .{ .filename = filename, .uncompressed_size = uncompressed_size };
 }
 
 /// Validate a base58-encoded hash string and return the decoded hash.

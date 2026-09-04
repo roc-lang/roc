@@ -439,6 +439,10 @@ pub const TypeMismatch = struct {
     types: TypePair,
     /// Where this type mismatch occurred (for contextual error messages)
     context: Context = .none,
+    /// Exact structural evidence retained by unification so reports can show
+    /// a nested mismatch hidden behind the root operands. This is populated
+    /// only for contexts that consume it.
+    evidence: TypeMismatchEvidence = .none,
 };
 
 /// The expected and actual types in a type mismatch
@@ -450,6 +454,18 @@ pub const TypePair = struct {
     /// The specific region where this constraint originated from (e.g., dot access expression)
     /// If present, this region should be highlighted instead of the variable's region
     constraint_origin_var: ?Var = null,
+};
+
+/// Exact mismatch operands selected by unification after a record-backed
+/// nominal application has been opened and instantiated. Root `TypePair`
+/// snapshots preserve the user's named types; this evidence preserves the
+/// structural reason those types failed to relate.
+pub const TypeMismatchEvidence = union(enum) {
+    none,
+    record: struct {
+        expected_snapshot: SnapshotContentIdx,
+        actual_snapshot: SnapshotContentIdx,
+    },
 };
 
 /// Problem data for platform requirement type mismatches

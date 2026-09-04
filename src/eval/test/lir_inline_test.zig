@@ -4305,6 +4305,76 @@ fn reachableProcDebugName(
     return false;
 }
 
+const PerElementProcSummary = struct {
+    count: usize,
+    named: bool,
+};
+
+fn perElementProcSummary(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    expected_name: ?[]const u8,
+) TestError!PerElementProcSummary {
+    const store = @constCast(&lowered.lir_result.store);
+    var reachable = std.ArrayList(LIR.LirProcSpecId).empty;
+    defer reachable.deinit(allocator);
+    try reachable.append(allocator, try rootProc(lowered));
+    var reachable_visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
+    defer reachable_visited.deinit();
+
+    var hot = std.ArrayList(LIR.LirProcSpecId).empty;
+    defer hot.deinit(allocator);
+    while (reachable.pop()) |proc_id| {
+        const proc_entry = try reachable_visited.getOrPut(proc_id);
+        if (proc_entry.found_existing) continue;
+        const proc_body = store.getProcSpec(proc_id).body orelse continue;
+
+        const calls = try collectAssignCallProcs(allocator, lowered, proc_id);
+        defer allocator.free(calls);
+        for (calls) |call| try reachable.append(allocator, call);
+
+        var proc_stmts = try lir.BodyClone.ReachableStmts.init(store, proc_body);
+        defer proc_stmts.deinit();
+        while (try proc_stmts.next()) |stmt_id| {
+            const stmt = store.getCFStmt(stmt_id);
+            if (stmt != .join or !try containsJumpTo(store, stmt.join.body, stmt.join.id)) continue;
+            var loop_stmts = try lir.BodyClone.ReachableStmts.init(store, stmt.join.body);
+            defer loop_stmts.deinit();
+            while (try loop_stmts.next()) |loop_stmt_id| {
+                const loop_stmt = store.getCFStmt(loop_stmt_id);
+                if (loop_stmt == .assign_call) try hot.append(allocator, loop_stmt.assign_call.proc);
+            }
+        }
+    }
+
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
+    defer visited.deinit();
+    var count: usize = 0;
+    var named = false;
+    while (hot.pop()) |proc_id| {
+        const entry = try visited.getOrPut(proc_id);
+        if (entry.found_existing) continue;
+        count += 1;
+        if (store.procDebugName(proc_id)) |name| {
+            if (expected_name) |expected| {
+                if (std.mem.eql(u8, name, expected)) named = true;
+            }
+        }
+        const calls = try collectAssignCallProcs(allocator, lowered, proc_id);
+        defer allocator.free(calls);
+        for (calls) |call| try hot.append(allocator, call);
+    }
+    return .{ .count = count, .named = named };
+}
+
+fn perElementProcDebugName(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    expected_name: []const u8,
+) TestError!bool {
+    return (try perElementProcSummary(allocator, lowered, expected_name)).named;
+}
+
 fn procOrInlineScopeDebugName(
     allocator: Allocator,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
@@ -4412,6 +4482,76 @@ fn findSingleLoopJoin(
         found = stmt.join;
     }
     return found orelse error.TestUnexpectedResult;
+}
+
+const PerElementConstructionSummary = struct {
+    struct_assign_count: usize = 0,
+    tag_assign_count: usize = 0,
+    single_variant_tag_assign_count: usize = 0,
+    store_struct_count: usize = 0,
+    store_tag_count: usize = 0,
+};
+
+fn perElementConstructionSummary(
+    allocator: Allocator,
+    lowered: *lir.CheckedPipeline.LoweredProgram,
+) TestError!PerElementConstructionSummary {
+    const store = &lowered.lir_result.store;
+    const root_body = store.getProcSpec(try rootProc(lowered)).body orelse return error.MissingRootProcedure;
+    const loop = try findSingleLoopJoin(store, root_body);
+
+    var bodies = std.ArrayList(LIR.CFStmtId).empty;
+    defer bodies.deinit(allocator);
+    try bodies.append(allocator, loop.body);
+
+    var visited_procs = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
+    defer visited_procs.deinit();
+
+    var summary = PerElementConstructionSummary{};
+    while (bodies.pop()) |body| {
+        var walk = try lir.BodyClone.ReachableStmts.init(store, body);
+        defer walk.deinit();
+        while (try walk.next()) |stmt_id| {
+            const stmt = store.getCFStmt(stmt_id);
+            if (stmt == .assign_struct) summary.struct_assign_count += 1;
+            if (stmt == .assign_tag) {
+                summary.tag_assign_count += 1;
+                const target_layout = lowered.lir_result.layouts.getLayout(store.getLocal(stmt.assign_tag.target).layout_idx);
+                if (target_layout.tag == .tag_union and lowered.lir_result.layouts.getTagUnionInfo(target_layout).variants.len == 1) {
+                    summary.single_variant_tag_assign_count += 1;
+                }
+            }
+            if (stmt == .store_struct) summary.store_struct_count += 1;
+            if (stmt == .store_tag) summary.store_tag_count += 1;
+            if (stmt == .assign_call) {
+                const entry = try visited_procs.getOrPut(stmt.assign_call.proc);
+                if (!entry.found_existing) {
+                    const proc_body = store.getProcSpec(stmt.assign_call.proc).body orelse continue;
+                    try bodies.append(allocator, proc_body);
+                }
+            }
+        }
+    }
+    return summary;
+}
+
+fn loopCarriedWrapperCount(lowered: *lir.CheckedPipeline.LoweredProgram) TestError!usize {
+    const store = &lowered.lir_result.store;
+    const layouts = &lowered.lir_result.layouts;
+    const root_body = store.getProcSpec(try rootProc(lowered)).body orelse return error.MissingRootProcedure;
+    const loop = try findSingleLoopJoin(store, root_body);
+    const params = store.getLocalSpan(loop.params);
+    var count: usize = 0;
+    for (0..params.len) |index| {
+        const param_layout = layouts.getLayout(store.getLocal(GuardedList.at(params, index)).layout_idx);
+        if (param_layout.tag == .struct_ or param_layout.tag == .closure) {
+            count += 1;
+        } else if (param_layout.tag == .tag_union) {
+            const info = layouts.getTagUnionInfo(param_layout);
+            if (info.variants.len == 1) count += 1;
+        }
+    }
+    return count;
 }
 
 fn countLocalDecrefs(
@@ -4860,6 +5000,57 @@ test "F32 and F64 range syntax fuses without Iter.next" {
             return error.TestUnexpectedResult;
         }
         try expectLoweredIterChainAllocatesNothing(allocator, &optimized.lowered);
+    }
+}
+
+test "issue 10991 dev loops do not rebuild their iterators every element" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { name: []const u8, source: []const u8, counted_loop: bool }{
+        .{ .name = "range", .counted_loop = true, .source =
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    var $total = 0.U64
+        \\    for d in 1..=n {
+        \\        $total = $total + (d % 7)
+        \\    }
+        \\    $total
+        \\}
+        },
+        .{ .name = "List.fold", .counted_loop = false, .source =
+        \\main : U64 -> U64
+        \\main = |n| List.repeat(3.U64, n).fold(0.U64, |acc, d| acc + d)
+        },
+    };
+
+    for (cases) |case| {
+        for ([_]lir.CheckedPipeline.InlineMode{ .none, .wrappers }) |inline_mode| {
+            var lowered = try lowerModuleWithOptions(allocator, case.source, inline_mode, .{ .proc_debug_names = true });
+            defer lowered.deinit(allocator);
+
+            if (case.counted_loop) {
+                const constructions = try perElementConstructionSummary(allocator, &lowered.lowered);
+                const carried_wrappers = try loopCarriedWrapperCount(&lowered.lowered);
+                if (constructions.single_variant_tag_assign_count != 0 or carried_wrappers != 0) {
+                    const procs = try perElementProcSummary(allocator, &lowered.lowered, null);
+                    std.debug.print("{s} {s} loop retained {any}, {d} loop-carried wrappers, across {d} per-element callees\n", .{
+                        @tagName(inline_mode),
+                        case.name,
+                        constructions,
+                        carried_wrappers,
+                        procs.count,
+                    });
+                }
+                try std.testing.expectEqual(@as(usize, 0), constructions.single_variant_tag_assign_count);
+                try std.testing.expectEqual(@as(usize, 0), carried_wrappers);
+            }
+
+            for ([_][]const u8{ "Builtin.Iter.custom", "iter_from_step" }) |name| {
+                if (try perElementProcDebugName(allocator, &lowered.lowered, name)) {
+                    std.debug.print("{s} remained on the per-element path of a {s} {s} loop\n", .{ name, @tagName(inline_mode), case.name });
+                    return error.TestUnexpectedResult;
+                }
+            }
+        }
     }
 }
 
@@ -6159,7 +6350,7 @@ test "static list iter append loop eliminates public iter adapters" {
 //     try std.testing.expectEqual(@as(u32, 0), lowered.lowered.post_check_stats.optimized_contexts);
 // }
 
-test "post-check lowering mode gates public iter adapter elimination" {
+test "post-check lowering modes eliminate public iter adapters" {
     const allocator = std.testing.allocator;
     const source =
         \\sum_points : U64 -> U64
@@ -6190,7 +6381,7 @@ test "post-check lowering mode gates public iter adapter elimination" {
     defer ordinary.deinit(allocator);
 
     try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.append"));
-    try std.testing.expect(try reachableProcDebugName(allocator, &ordinary.lowered, "Builtin.Iter.append"));
+    try std.testing.expect(!try reachableProcDebugName(allocator, &ordinary.lowered, "Builtin.Iter.append"));
 }
 
 // Ported pending iterator redesign: this test constructs state_loop/state_continue lifted IR that the current lifted AST does not define.
@@ -6923,9 +7114,9 @@ test "spec constr specializes match-joined record state carried by while loop" {
 // both through the interpreter against `RuntimeHostEnv`, then asserts the two
 // runs are observationally identical:
 //
-//   * `.wrappers` is the optimized/inlined lowering (the closest proxy the tree
-//     has for the lower-all-known-wrappers path).
-//   * `.none` is the naive, un-inlined lowering ("unfused").
+//   * `.wrappers` is the fully optimized/inlined lowering (the closest proxy
+//     the tree has for the lower-all-known-wrappers path).
+//   * `.none` runs only the bounded iterator-fusion subset used by dev builds.
 //
 // The two runs must agree on:
 //   * crash-versus-no-crash (`RecordedRun.termination`), and

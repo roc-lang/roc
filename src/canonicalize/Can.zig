@@ -484,6 +484,7 @@ const TypeAnno = CIR.TypeAnno;
 const Annotation = CIR.Annotation;
 const WhereClause = CIR.WhereClause;
 const Diagnostic = CIR.Diagnostic;
+const DependencyGraph = @import("DependencyGraph.zig");
 const RecordField = CIR.RecordField;
 
 /// Struct to track fields that have been seen before during canonicalization
@@ -4559,7 +4560,12 @@ pub fn canonicalizeFile(
                                     break :blk name_ident.eql(decl_ident);
                                 }
                                 break :blk false;
-                            } else false;
+                            } else
+                                // A destructured literal splits into a def per
+                                // name, and the annotation attaches to the def
+                                // of the name it annotates.
+                                self.destructuredLiteralShapesMatch(decl.pattern, decl.body) and
+                                try self.destructuredLiteralPatternBindsName(decl.pattern, name_ident);
 
                             if (names_match) {
                                 i = next_i;
@@ -4740,7 +4746,6 @@ pub fn canonicalizeFile(
     try DefaultCycles.checkDefaultCycles(self.env, self.env.gpa);
 
     // Compute dependency-based evaluation order using SCC analysis
-    const DependencyGraph = @import("DependencyGraph.zig");
     var graph = try DependencyGraph.buildDependencyGraph(
         self.env,
         self.env.all_defs,
@@ -4785,7 +4790,6 @@ fn poisonRecursiveNonFunctionDefs(
         region: Region,
     };
 
-    const DependencyGraph = @import("DependencyGraph.zig");
     var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
     defer binders.deinit(self.env.gpa);
     var binder_scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
@@ -5199,6 +5203,8 @@ fn canonicalizeStmtDecl(
 
     const parser_decl_idx = self.parse_ir.decl_index.declForStatement(@intFromEnum(ast_stmt_idx));
 
+    if (mb_validated_anno == null and try self.canonicalizeDestructuredLiteralDecl(decl, parser_decl_idx, mb_last_anno)) return;
+
     // Canonicalize the decl (with the validated anno)
     const def_idx = try self.canonicalizeDeclWithAnnotation(
         decl,
@@ -5212,21 +5218,391 @@ fn canonicalizeStmtDecl(
     // If this declaration successfully defined an exposed value, remove it from exposed_ident_texts
     // and add the node index to exposed_items
     const pattern = self.parse_ir.store.getPattern(decl.pattern);
+    if (pattern != .ident) {
+        try self.recordExposedDestructuredNames(def_idx);
+    }
     if (pattern == .ident) {
         const token_region = self.parse_ir.tokens.resolve(@intCast(pattern.ident.ident_tok));
         const ident_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
-
-        // Top-level associated items (identifiers ending with '!') are automatically exposed
-        const is_associated_item = ident_text.len > 0 and ident_text[ident_text.len - 1] == '!';
         const idx = try self.env.insertIdent(base.Ident.for_text(ident_text));
+        try self.recordExposedNamedDef(idx, ident_text, def_idx);
+    }
+}
 
-        // If this identifier is exposed (or is an associated item), add it to exposed_items
-        if (self.exposed_ident_texts.contains(ident_text) or is_associated_item) {
-            // Store the def index as u16 in exposed_items
-            const def_idx_u32: u32 = @intFromEnum(def_idx);
-            try self.env.setExposedValueNodeIndexById(idx, def_idx_u32);
+/// Bookkeep a plainly named top-level def against the module's exposed items:
+/// an exposed name (or an associated `!` item) becomes an exposed item pointing
+/// at the def, and leaves the pending exposed set.
+fn recordExposedNamedDef(self: *Self, ident: Ident.Idx, ident_text: []const u8, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
+    // Top-level associated items (identifiers ending with '!') are automatically exposed
+    const is_associated_item = ident_text.len > 0 and ident_text[ident_text.len - 1] == '!';
+    if (self.exposed_ident_texts.contains(ident_text) or is_associated_item) {
+        try self.env.setExposedValueNodeIndexById(ident, @intFromEnum(def_idx));
+    }
+    _ = self.exposed_ident_texts.remove(ident_text);
+}
+
+/// A top-level destructure of a record or tuple literal whose shape matches
+/// the pattern field for field binds each name to that field's expression and
+/// nothing else: `{ a, b } = { a: E1, b: E2 }` means `a = E1` and `b = E2`,
+/// and `(a, b) = (E1, E2)` likewise. It canonicalizes as exactly those defs,
+/// so each name is a plain top-level def (a function among them generalizes
+/// like any function def), and a nested matching literal splits the same way.
+/// A pending annotation naming one of the fields annotates that field's def.
+/// Returns false, leaving the declaration to `canonicalizeDeclWithAnnotation`,
+/// when the shapes do not match.
+///
+/// The walk is an explicit worklist (zero-recursion policy).
+fn canonicalizeDestructuredLiteralDecl(
+    self: *Self,
+    decl: AST.Statement.Decl,
+    parser_decl_idx: ?AST.DeclIndex.DeclIdx,
+    mb_anno: ?TypeAnnoIdent,
+) std.mem.Allocator.Error!bool {
+    if (!self.destructuredLiteralShapesMatch(decl.pattern, decl.body)) return false;
+
+    const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
+    var pending: std.ArrayList(PendingDestructuredLiteralPart) = .empty;
+    defer pending.deinit(self.env.gpa);
+    try self.pushDestructuredLiteralParts(&pending, decl.pattern, decl.body);
+    while (pending.pop()) |item| {
+        if (item.part == .pattern and self.destructuredLiteralShapesMatch(item.part.pattern, item.value_expr)) {
+            try self.pushDestructuredLiteralParts(&pending, item.part.pattern, item.value_expr);
+            continue;
         }
+        try self.canonicalizeDestructuredLiteralDef(item, parser_decl_idx, mb_anno, region);
+    }
+    return true;
+}
 
+/// Whether `pattern` is a record or tuple pattern and `expr` a literal of the
+/// same kind with exactly the pattern's fields: the same labels once each with
+/// a supplied value and no extension for a record, the same arity for a tuple,
+/// and every field pattern a name or a nested record or tuple pattern. An
+/// empty pattern, or one with a refutable field pattern, keeps the ordinary
+/// path and its own diagnostics.
+fn destructuredLiteralShapesMatch(self: *const Self, pattern_idx: AST.Pattern.Idx, expr_idx: AST.Expr.Idx) bool {
+    const store = &self.parse_ir.store;
+    switch (store.getPattern(pattern_idx)) {
+        .record => |pattern_record| {
+            const expr = store.getExpr(expr_idx);
+            if (expr != .record) return false;
+            if (expr.record.ext != null) return false;
+            const pattern_fields = store.patternRecordFieldSlice(pattern_record.fields);
+            const expr_fields = store.recordFieldSlice(expr.record.fields);
+            if (pattern_fields.len == 0 or pattern_fields.len != expr_fields.len) return false;
+            for (pattern_fields, 0..) |pattern_field_idx, pattern_index| {
+                const pattern_field = store.getPatternRecordField(pattern_field_idx);
+                if (pattern_field.rest) return false;
+                const name_tok = pattern_field.name orelse return false;
+                const name = self.parse_ir.tokens.resolveIdentifier(name_tok) orelse return false;
+                if (pattern_field.value) |sub_pattern| {
+                    if (!self.destructuredLiteralFieldPatternIsBinding(sub_pattern)) return false;
+                }
+                for (pattern_fields[0..pattern_index]) |earlier_idx| {
+                    const earlier = store.getPatternRecordField(earlier_idx);
+                    const earlier_tok = earlier.name orelse return false;
+                    const earlier_name = self.parse_ir.tokens.resolveIdentifier(earlier_tok) orelse return false;
+                    if (earlier_name.eql(name)) return false;
+                }
+                if (self.literalFieldSupplyingName(expr_fields, name) == null) return false;
+            }
+            return true;
+        },
+        .tuple => |pattern_tuple| {
+            const expr = store.getExpr(expr_idx);
+            if (expr != .tuple) return false;
+            const item_patterns = store.patternSlice(pattern_tuple.patterns);
+            if (item_patterns.len == 0 or item_patterns.len != store.exprSlice(expr.tuple.items).len) return false;
+            for (item_patterns) |item_pattern| {
+                if (!self.destructuredLiteralFieldPatternIsBinding(item_pattern)) return false;
+            }
+            return true;
+        },
+        .ident,
+        .var_ident,
+        .tag,
+        .int,
+        .frac,
+        .typed_int,
+        .typed_frac,
+        .string,
+        .single_quote,
+        .list,
+        .list_rest,
+        .underscore,
+        .alternatives,
+        .as,
+        .malformed,
+        => return false,
+    }
+}
+
+/// Whether a field's pattern is a name, or a record or tuple pattern that
+/// either splits further or becomes a destructuring def of its own.
+fn destructuredLiteralFieldPatternIsBinding(self: *const Self, pattern_idx: AST.Pattern.Idx) bool {
+    return switch (self.parse_ir.store.getPattern(pattern_idx)) {
+        .ident, .record, .tuple => true,
+        .var_ident,
+        .tag,
+        .int,
+        .frac,
+        .typed_int,
+        .typed_frac,
+        .string,
+        .single_quote,
+        .list,
+        .list_rest,
+        .underscore,
+        .alternatives,
+        .as,
+        .malformed,
+        => false,
+    };
+}
+
+/// The expression a record literal supplies for the field `name`, if the
+/// literal has exactly one such field and it is written out.
+fn literalFieldSupplyingName(self: *const Self, expr_fields: []const AST.RecordField.Idx, name: Ident.Idx) ?AST.Expr.Idx {
+    var found: ?AST.Expr.Idx = null;
+    for (expr_fields) |field_idx| {
+        const field = self.parse_ir.store.getRecordField(field_idx);
+        const field_name = self.parse_ir.tokens.resolveIdentifier(field.name) orelse return null;
+        if (!field_name.eql(name)) continue;
+        if (found != null) return null;
+        found = switch (field.value) {
+            .supplied => |value| value,
+            .punned, .unset => return null,
+        };
+    }
+    return found;
+}
+
+const DestructuredLiteralPart = union(enum) {
+    /// The field's own sub-pattern, or a tuple item's pattern.
+    pattern: AST.Pattern.Idx,
+    /// A punned record field, which binds the field's name itself.
+    name: struct { ident: Ident.Idx, region: Region },
+};
+
+const PendingDestructuredLiteralPart = struct {
+    part: DestructuredLiteralPart,
+    value_expr: AST.Expr.Idx,
+};
+
+/// Push a matching literal's parts so that popping them yields pattern order.
+fn pushDestructuredLiteralParts(
+    self: *Self,
+    pending: *std.ArrayList(PendingDestructuredLiteralPart),
+    pattern_idx: AST.Pattern.Idx,
+    expr_idx: AST.Expr.Idx,
+) std.mem.Allocator.Error!void {
+    const store = &self.parse_ir.store;
+    switch (store.getPattern(pattern_idx)) {
+        .record => |pattern_record| {
+            const expr_fields = store.recordFieldSlice(store.getExpr(expr_idx).record.fields);
+            const pattern_fields = store.patternRecordFieldSlice(pattern_record.fields);
+            var index = pattern_fields.len;
+            while (index > 0) {
+                index -= 1;
+                const pattern_field = store.getPatternRecordField(pattern_fields[index]);
+                const name = self.parse_ir.tokens.resolveIdentifier(pattern_field.name.?).?;
+                const value_expr = self.literalFieldSupplyingName(expr_fields, name).?;
+                const part: DestructuredLiteralPart = if (pattern_field.value) |sub_pattern|
+                    .{ .pattern = sub_pattern }
+                else
+                    .{ .name = .{ .ident = name, .region = self.parse_ir.tokenizedRegionToRegion(pattern_field.region) } };
+                try pending.append(self.env.gpa, .{ .part = part, .value_expr = value_expr });
+            }
+        },
+        .tuple => |pattern_tuple| {
+            const item_patterns = store.patternSlice(pattern_tuple.patterns);
+            const items = store.exprSlice(store.getExpr(expr_idx).tuple.items);
+            var index = item_patterns.len;
+            while (index > 0) {
+                index -= 1;
+                try pending.append(self.env.gpa, .{ .part = .{ .pattern = item_patterns[index] }, .value_expr = items[index] });
+            }
+        },
+        .ident,
+        .var_ident,
+        .tag,
+        .int,
+        .frac,
+        .typed_int,
+        .typed_frac,
+        .string,
+        .single_quote,
+        .list,
+        .list_rest,
+        .underscore,
+        .alternatives,
+        .as,
+        .malformed,
+        => unreachable,
+    }
+}
+
+/// One field of a destructured literal as its own top-level def.
+fn canonicalizeDestructuredLiteralDef(
+    self: *Self,
+    item: PendingDestructuredLiteralPart,
+    parser_decl_idx: ?AST.DeclIndex.DeclIdx,
+    mb_anno: ?TypeAnnoIdent,
+    region: Region,
+) std.mem.Allocator.Error!void {
+    const reassign_targets_start = self.scratch_reassign_targets.top();
+    // Only the binder adopts a placeholder created for a reference ahead of
+    // the declaration; a binder nested in the field's value is a different
+    // name.
+    const pattern_idx = blk: {
+        const saved_adopting_forward_decl = self.adopting_forward_decl;
+        self.adopting_forward_decl = parser_decl_idx;
+        defer self.adopting_forward_decl = saved_adopting_forward_decl;
+        break :blk switch (item.part) {
+            .pattern => |sub_pattern| try self.canonicalizePatternOrMalformed(sub_pattern),
+            .name => |name| try self.bindDestructuredName(name.ident, name.region),
+        };
+    };
+    if (self.currentScopeIdx() == 0) {
+        try self.markBoundPatternsGloballyResolvable(pattern_idx);
+    }
+
+    const pattern = self.env.store.getPattern(pattern_idx);
+    const mb_anno_idx: ?Annotation.Idx = if (mb_anno) |anno_info| anno: {
+        if (pattern != .assign or !pattern.assign.ident.eql(anno_info.name)) break :anno null;
+        break :anno try self.createAnnotationFromTypeAnno(
+            anno_info.anno_idx,
+            anno_info.where,
+            self.env.store.getPatternRegion(pattern_idx),
+            anno_info.name_region,
+        );
+    } else null;
+
+    // Track the def's bound binders so a reference to one of them on the RHS
+    // is reported as a self-referential definition, as for any def.
+    const is_lambda = self.parse_ir.store.getExpr(item.value_expr) == .lambda;
+    const saved_defining_bound_vars = self.defining_bound_vars;
+    if (!is_lambda) {
+        self.defining_bound_vars = try self.beginDefiningBoundVars(pattern_idx, reassign_targets_start);
+    }
+    self.scratch_reassign_targets.clearFrom(reassign_targets_start);
+
+    const can_expr = try self.canonicalizeExprOrMalformed(item.value_expr);
+
+    self.endDefiningBoundVars(saved_defining_bound_vars);
+
+    const def_idx = try self.env.addDef(.{
+        .pattern = pattern_idx,
+        .expr = can_expr.idx,
+        .annotation = mb_anno_idx,
+        .kind = .let,
+    }, region);
+    try self.env.store.addScratchDef(def_idx);
+    try self.recordGlobalValueDef(def_idx);
+    if (pattern == .assign) {
+        try self.recordExposedNamedDef(pattern.assign.ident, self.env.getIdent(pattern.assign.ident), def_idx);
+    } else {
+        try self.recordExposedDestructuredNames(def_idx);
+    }
+}
+
+/// Whether a declaration pattern binds `name` directly as a field name or an
+/// identifier sub-pattern, at any nesting of record and tuple patterns.
+///
+/// The walk is an explicit worklist (zero-recursion policy).
+fn destructuredLiteralPatternBindsName(self: *Self, root: AST.Pattern.Idx, name: Ident.Idx) std.mem.Allocator.Error!bool {
+    const store = &self.parse_ir.store;
+    var pending: std.ArrayList(AST.Pattern.Idx) = .empty;
+    defer pending.deinit(self.env.gpa);
+    try pending.append(self.env.gpa, root);
+    while (pending.pop()) |pattern_idx| {
+        switch (store.getPattern(pattern_idx)) {
+            .ident => |ident| {
+                const bound = self.parse_ir.tokens.resolveIdentifier(ident.ident_tok) orelse continue;
+                if (bound.eql(name)) return true;
+            },
+            .record => |record| {
+                for (store.patternRecordFieldSlice(record.fields)) |field_idx| {
+                    const field = store.getPatternRecordField(field_idx);
+                    if (field.value) |sub_pattern| {
+                        try pending.append(self.env.gpa, sub_pattern);
+                    } else if (field.name) |name_tok| {
+                        const bound = self.parse_ir.tokens.resolveIdentifier(name_tok) orelse continue;
+                        if (bound.eql(name)) return true;
+                    }
+                }
+            },
+            .tuple => |tuple| {
+                for (store.patternSlice(tuple.patterns)) |item| try pending.append(self.env.gpa, item);
+            },
+            .var_ident,
+            .tag,
+            .int,
+            .frac,
+            .typed_int,
+            .typed_frac,
+            .string,
+            .single_quote,
+            .list,
+            .list_rest,
+            .underscore,
+            .alternatives,
+            .as,
+            .malformed,
+            => {},
+        }
+    }
+    return false;
+}
+
+/// Bind a name a top-level destructured literal introduces: the placeholder
+/// of a reference ahead of the declaration when there is one, otherwise a new
+/// binder introduced into scope like a punned record field's.
+fn bindDestructuredName(self: *Self, ident: Ident.Idx, region: Region) std.mem.Allocator.Error!Pattern.Idx {
+    if (self.adoptForwardBinder(ident, region)) |placeholder| return placeholder;
+    const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{ .ident = ident } }, region);
+    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident, pattern_idx, false, true)) {
+        .success => {},
+        .shadowing_warning => |shadowed_pattern_idx| {
+            try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                .ident = ident,
+                .region = region,
+                .original_region = self.env.store.getPatternRegion(shadowed_pattern_idx),
+            } });
+        },
+        // is_var=false
+        .top_level_var_error => unreachable,
+        // is_declaration=true
+        .var_across_function_boundary, .var_reassignment_ok => unreachable,
+    }
+    return pattern_idx;
+}
+
+/// Whether a module's exposed items may name values bound by top-level
+/// destructures. A plain module's exposed values are reached only through
+/// value lookups, which accept a binder pattern as the target; an app's
+/// provided entrypoints and a platform's provided and hosted entries are
+/// consumed as defs.
+fn destructuredNamesAreExposable(self: *const Self) bool {
+    return self.env.module_kind == .module;
+}
+
+/// Bookkeep each exposed name a destructuring def binds the way a plainly
+/// named def is: it becomes an exposed item pointing at the name's binder
+/// pattern and leaves the pending exposed set.
+fn recordExposedDestructuredNames(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
+    if (!self.destructuredNamesAreExposable()) return;
+    var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binders.deinit(self.env.gpa);
+    var binder_scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binder_scratch.deinit(self.env.gpa);
+    const def = self.env.store.getDef(def_idx);
+    try DependencyGraph.appendPatternBinders(self.env, def.pattern, &binders, &binder_scratch, self.env.gpa);
+    for (binders.items) |binder| {
+        const ident = defPatternIdent(&self.env.store, binder) orelse continue;
+        const ident_text = self.env.getIdent(ident);
+        if (!self.exposed_ident_texts.contains(ident_text)) continue;
+        try self.env.setExposedValueNodeIndexById(ident, @intFromEnum(binder));
         _ = self.exposed_ident_texts.remove(ident_text);
     }
 }
@@ -6096,6 +6472,11 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
     // Check each definition to see if it corresponds to an exposed item.
     // We check exposed_idents which only contains items from the exposing clause,
     // not associated items like "Color.as_str" which are registered separately.
+    var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binders.deinit(self.env.gpa);
+    var binder_scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer binder_scratch.deinit(self.env.gpa);
+
     for (defs_slice) |def_idx| {
         const def = self.env.store.getDef(def_idx);
         const pattern = self.env.store.getPattern(def.pattern);
@@ -6105,6 +6486,21 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
             if (self.exposed_idents.contains(pattern.assign.ident)) {
                 try self.env.store.addScratchDef(def_idx);
                 try self.env.setExposedValueNodeIndexById(pattern.assign.ident, @intFromEnum(def_idx));
+            }
+            continue;
+        }
+
+        // A destructuring def in a plain module exposes each exposed name it
+        // binds. The exposed item points at the name's binder pattern: its var
+        // is the name's type, and the checked artifact publishes the name's
+        // extraction root under it.
+        if (!self.destructuredNamesAreExposable()) continue;
+        binders.clearRetainingCapacity();
+        try DependencyGraph.appendPatternBinders(self.env, def.pattern, &binders, &binder_scratch, self.env.gpa);
+        for (binders.items) |binder| {
+            const ident = defPatternIdent(&self.env.store, binder) orelse continue;
+            if (self.exposed_idents.contains(ident)) {
+                try self.env.setExposedValueNodeIndexById(ident, @intFromEnum(binder));
             }
         }
     }
@@ -8579,6 +8975,105 @@ fn addTryReturnErr(
         } });
 }
 
+/// Warn about every `?` that produces the value a function returns. `expr_idx`
+/// is a function body or a `return` operand; its tail positions are followed
+/// through blocks and through `if` and `match` branches, and each `?` reached
+/// that way applies to the function's return value.
+fn warnTrailingTrySuffix(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!void {
+    switch (self.env.store.getExpr(expr_idx)) {
+        .e_block => |block| try self.warnTrailingTrySuffix(block.final_expr),
+        .e_if => |if_expr| {
+            for (self.env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                try self.warnTrailingTrySuffix(self.env.store.getIfBranch(branch_idx).body);
+            }
+            try self.warnTrailingTrySuffix(if_expr.final_else);
+        },
+        .e_match => |match_expr| {
+            if (match_expr.is_try_suffix) {
+                try self.env.pushDiagnostic(Diagnostic{ .trailing_try_suffix = .{
+                    .region = self.trySuffixOperatorRegion(expr_idx),
+                } });
+            } else {
+                for (self.env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                    try self.warnTrailingTrySuffix(self.env.store.getMatchBranch(branch_idx).value);
+                }
+            }
+        },
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_num_from_numeral,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_str_segment,
+        .e_str,
+        .e_bytes_literal,
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
+        .e_lookup_required,
+        .e_list,
+        .e_empty_list,
+        .e_tuple,
+        .e_call,
+        .e_record,
+        .e_empty_record,
+        .e_tag,
+        .e_nominal,
+        .e_nominal_external,
+        .e_zero_argument_tag,
+        .e_closure,
+        .e_lambda,
+        .e_binop,
+        .e_unary_minus,
+        .e_unary_not,
+        .e_field_access,
+        .e_method_call,
+        .e_dispatch_call,
+        .e_interpolation,
+        .e_structural_eq,
+        .e_structural_hash,
+        .e_method_eq,
+        .e_type_method_call,
+        .e_type_dispatch_call,
+        .e_tuple_access,
+        .e_runtime_error,
+        .e_crash,
+        .e_dbg,
+        .e_expect_err,
+        .e_expect,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_derived_method,
+        .e_return,
+        .e_break,
+        .e_for,
+        .e_hosted_lambda,
+        .e_run_low_level,
+        => {},
+    }
+}
+
+/// The region to highlight for a `?` desugared into `expr_idx`: just the `?`
+/// itself when the expression's source ends with it (the suffix form), and the
+/// whole expression otherwise (the `lhs ? handler` form).
+fn trySuffixOperatorRegion(self: *const Self, expr_idx: Expr.Idx) Region {
+    const region = self.env.store.getExprRegion(expr_idx);
+    const source = self.env.getSource(region);
+    if (source.len > 0 and source[source.len - 1] == '?') {
+        return Region{
+            .start = .{ .offset = region.end.offset - 1 },
+            .end = region.end,
+        };
+    }
+    return region;
+}
+
 fn addTryMatch(
     self: *Self,
     cond: Expr.Idx,
@@ -9760,6 +10255,7 @@ fn canonicalizeStandaloneBlockStatement(
         .@"return" => |return_stmt| {
             const region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region);
             const expr = try self.canonicalizeExprOrMalformed(return_stmt.expr);
+            try self.warnTrailingTrySuffix(expr.idx);
             const stmt_idx = if (self.enclosing_lambda) |lambda_idx|
                 try self.env.addStatement(Statement{ .s_return = .{
                     .expr = expr.idx,
@@ -12001,6 +12497,7 @@ fn runExprKernel(
             const result_start = child_slots.items.len - 1;
             const expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
             child_slots.shrinkRetainingCapacity(state.block.result_start);
+            try self.warnTrailingTrySuffix(expr.idx);
             if (state.final_expr) {
                 const return_expr_idx = if (self.enclosing_lambda) |lambda_idx|
                     try self.env.addExpr(Expr{ .e_return = .{
@@ -12450,6 +12947,7 @@ fn runExprKernel(
                 continue :expr_kernel_loop .dispatch;
             };
 
+            try self.warnTrailingTrySuffix(can_inner.idx);
             const return_expr = if (self.enclosing_lambda) |lambda_idx|
                 try self.env.addExpr(Expr{ .e_return = .{
                     .expr = can_inner.idx,
@@ -13230,6 +13728,7 @@ fn runExprKernel(
             }
 
             self.scratch_free_vars.clearFrom(state.body_free_vars_start);
+            try self.warnTrailingTrySuffix(can_body.idx);
             self.env.store.updateLambdaBody(state.lambda_idx, can_body.idx);
 
             const captures_slice = self.scratch_captures.sliceFromStart(state.captures_top);

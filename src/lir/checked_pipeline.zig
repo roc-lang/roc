@@ -17,6 +17,9 @@ const BoxReuse = @import("box_reuse.zig");
 const ReturnSlot = @import("return_slot.zig");
 const StrAppend = @import("str_append.zig");
 const ScalarizeJoins = @import("scalarize_joins.zig");
+const SingleUseInline = @import("single_use_inline.zig");
+const ForwardingJoinInline = @import("forwarding_join_inline.zig");
+const TagCaseFusion = @import("tag_case_fusion.zig");
 const LoopAppendPromote = @import("loop_append_promote.zig");
 const RangeProve = @import("range_prove.zig");
 const TagReachability = @import("tag_reachability.zig");
@@ -720,7 +723,12 @@ pub fn lowerCheckedModulesToLir(
         const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsage(allocator, &lifted, target.spec_constr_clone_inlining);
         spec_constr_timing_scope.end();
         break :blk usage;
-    } else postcheck.MonotypeLifted.SpecConstr.OwnedProcedureUsage.empty(allocator);
+    } else blk: {
+        const spec_constr_started_ns = if (target.timing) |timing| timing.start() else 0;
+        try postcheck.MonotypeLifted.SpecConstr.runIteratorFusion(allocator, &lifted);
+        if (target.timing) |timing| timing.finish(spec_constr_started_ns, .spec_constr);
+        break :blk postcheck.MonotypeLifted.SpecConstr.OwnedProcedureUsage.empty(allocator);
+    };
     defer procedure_usage.deinit();
 
     if (target.lifted_expr_count_out) |slot| slot.* = lifted.exprCount();
@@ -784,6 +792,11 @@ fn finishLoweredOutput(
     // calls and changes allocation sites, and ARC panics on pre-existing RC
     // statements (see src/lir/trmc.zig).
     try Trmc.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    if (target.specialization_strategy == .lss and target.inline_mode == .none) {
+        try SingleUseInline.run(&lowered.lir_result);
+        try ForwardingJoinInline.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+        try TagCaseFusion.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    }
     try ScalarizeJoins.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     if (target.promote_loop_appends) {
         try LoopAppendPromote.run(&lowered.lir_result.store, &lowered.lir_result.layouts);

@@ -738,12 +738,14 @@ pub const GeneratedCodecDerivation = extern struct {
     source_constraint_fn_var: u32,
     source_runtime_fn_var: u32,
     source_shape_var: u32,
+    source_body_shape_var: u32,
     source_encoding_var: u32,
     source_state_var: u32,
     source_error_var: u32,
     constraint_fn_var: u32,
     runtime_fn_var: u32,
     shape_var: u32,
+    body_shape_var: u32,
     encoding_var: u32,
     state_var: u32,
     error_var: u32,
@@ -761,6 +763,9 @@ pub const GeneratedCodecDerivation = extern struct {
 /// One exact method callable used inside a checked generated codec.
 pub const GeneratedCodecCall = extern struct {
     method_ident: u32,
+    /// Nonzero when checking proved this call as an available specialization
+    /// capability rather than an unconditional generated-body edge.
+    conditional: u32,
     dispatcher_var: u32,
     callable_var: u32,
     /// Exact generated callable relation whose dispatch-target record owns the
@@ -3621,6 +3626,51 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .trailing_try_suffix => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Trailing `?`", "", .warning);
+            try report.headline.addReflowingText("This ");
+            try report.headline.addAnnotated("?", .inline_code);
+            try report.headline.addReflowingText(" is applied to the value this function returns:");
+
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("A ");
+            try report.document.addAnnotated("?", .inline_code);
+            try report.document.addReflowingText(" here is almost always a mistake. On ");
+            try report.document.addAnnotated("Err", .inline_code);
+            try report.document.addReflowingText(", it returns the error from the function early. On ");
+            try report.document.addAnnotated("Ok", .inline_code);
+            try report.document.addReflowingText(", it unwraps the payload and returns that instead of the ");
+            try report.document.addAnnotated("Try", .inline_code);
+            try report.document.addReflowingText(", which only type-checks when the payload is itself a ");
+            try report.document.addAnnotated("Try", .inline_code);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("If you meant to return the ");
+            try report.document.addAnnotated("Try", .inline_code);
+            try report.document.addReflowingText(" as-is, remove the ");
+            try report.document.addAnnotated("?", .inline_code);
+            try report.document.addReflowingText(". If you really do want to unwrap a nested ");
+            try report.document.addAnnotated("Try", .inline_code);
+            try report.document.addReflowingText(" here, write that as a ");
+            try report.document.addAnnotated("match", .inline_code);
+            try report.document.addReflowingText(" instead, because a trailing ");
+            try report.document.addAnnotated("?", .inline_code);
+            try report.document.addReflowingText(" is confusing to read.");
+
+            break :blk report;
+        },
         .return_outside_fn => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -4545,12 +4595,14 @@ pub fn recordGeneratedCodecDerivation(
     source_constraint_fn_var: TypeVar,
     source_runtime_fn_var: TypeVar,
     source_shape_var: TypeVar,
+    source_body_shape_var: TypeVar,
     source_encoding_var: TypeVar,
     source_state_var: TypeVar,
     source_error_var: TypeVar,
     constraint_fn_var: TypeVar,
     runtime_fn_var: TypeVar,
     shape_var: TypeVar,
+    body_shape_var: TypeVar,
     encoding_var: TypeVar,
     state_var: TypeVar,
     error_var: TypeVar,
@@ -4579,12 +4631,14 @@ pub fn recordGeneratedCodecDerivation(
         .source_constraint_fn_var = @intFromEnum(source_constraint_fn_var),
         .source_runtime_fn_var = @intFromEnum(source_runtime_fn_var),
         .source_shape_var = @intFromEnum(source_shape_var),
+        .source_body_shape_var = @intFromEnum(source_body_shape_var),
         .source_encoding_var = @intFromEnum(source_encoding_var),
         .source_state_var = @intFromEnum(source_state_var),
         .source_error_var = @intFromEnum(source_error_var),
         .constraint_fn_var = @intFromEnum(constraint_fn_var),
         .runtime_fn_var = @intFromEnum(runtime_fn_var),
         .shape_var = @intFromEnum(shape_var),
+        .body_shape_var = @intFromEnum(body_shape_var),
         .encoding_var = @intFromEnum(encoding_var),
         .state_var = @intFromEnum(state_var),
         .error_var = @intFromEnum(error_var),
