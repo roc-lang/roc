@@ -1,9 +1,11 @@
 //! Coordinator for the actor-based compilation model.
 //!
-//! The Coordinator is the single owner of all mutable state in the compilation pipeline.
+//! The Coordinator owns shared mutable compilation state. Frontend workers
+//! return owned results; after the frontend barrier, post-check callbacks may
+//! additionally retain private mutable caches on their exclusive worker lane.
 //! This eliminates races by design:
 //! - Single-threaded state mutations (no locks needed for state)
-//! - Workers are pure: they receive tasks, return results
+//! - Worker-lane state is never accessed by overlapping callbacks
 //! - Communication happens via bounded channels
 //!
 //! Architecture:
@@ -407,14 +409,20 @@ pub const WorkerAllocators = struct {
     /// its own `WorkerAllocators`, so this arena is never touched concurrently.
     arena_impl: base.SingleThreadArena,
 
+    /// Type-erased post-check state tied to this physical worker rather than to
+    /// any individual lowering coordinator.
+    post_check_lane_state: post_check_executor.LaneState,
+
     pub fn init(backing: Allocator) WorkerAllocators {
         return .{
             .gpa = backing,
             .arena_impl = base.SingleThreadArena.init(backing),
+            .post_check_lane_state = post_check_executor.LaneState.init(backing),
         };
     }
 
     pub fn deinit(self: *WorkerAllocators) void {
+        self.post_check_lane_state.deinit();
         self.arena_impl.deinit();
     }
 
@@ -1067,6 +1075,11 @@ pub const Coordinator = struct {
 
     /// Worker threads
     workers: std.ArrayList(Thread),
+    /// Persistent lane used when the executor runs inline. Keeping it on the
+    /// coordinator gives lane-local state the same lifetime in both modes.
+    inline_worker_allocs: WorkerAllocators,
+    /// Inline sessions have capacity one, so one coordinator-owned slot is enough.
+    inline_post_check_completion: ?post_check_executor.Completion,
 
     /// Number of tasks currently being processed by workers (atomic for thread safety)
     inflight: std.atomic.Value(usize),
@@ -1083,7 +1096,7 @@ pub const Coordinator = struct {
     worker_oom: std.atomic.Value(bool),
 
     /// Prevents nested or concurrent use of the shared worker result channel.
-    post_check_batch_active: std.atomic.Value(bool),
+    post_check_session_active: std.atomic.Value(bool),
     /// Set only after the frontend coordinator loop has drained every task and
     /// result. Post-check work shares those channels and cannot start earlier.
     frontend_complete: bool,
@@ -1204,10 +1217,12 @@ pub const Coordinator = struct {
             .result_channel = try Channel(WorkerResult).init(channel_allocator, channel.DEFAULT_CAPACITY, roc_ctx.std_io),
             .task_channel = try Channel(WorkerTask).init(channel_allocator, initial_task_capacity, roc_ctx.std_io),
             .workers = std.ArrayList(Thread).empty,
+            .inline_worker_allocs = WorkerAllocators.init(gpa),
+            .inline_post_check_completion = null,
             .inflight = std.atomic.Value(usize).init(0),
             .shutting_down = std.atomic.Value(bool).init(false),
             .worker_oom = std.atomic.Value(bool).init(false),
-            .post_check_batch_active = std.atomic.Value(bool).init(false),
+            .post_check_session_active = std.atomic.Value(bool).init(false),
             .frontend_complete = false,
             .total_remaining = 0,
             .app_package_name = null,
@@ -1244,6 +1259,7 @@ pub const Coordinator = struct {
         }
         // Stop workers
         self.shutdown();
+        self.inline_worker_allocs.deinit();
 
         if (comptime trace_build) {
             std.debug.print("[COORD DEINIT] shutdown done, freeing packages...\n", .{});
@@ -2688,12 +2704,15 @@ pub const Coordinator = struct {
     }
 
     /// Shutdown workers and wait for them to complete.
+    ///
+    /// Coordinator lifecycle and post-check session methods are single-owner;
+    /// callers must not race shutdown against session begin or submission.
     /// Workers stop promptly: they finish their current task but do not
     /// pick up additional queued work.
     pub fn shutdown(self: *Coordinator) void {
         if (!threads_available) return;
-        if (self.post_check_batch_active.load(.acquire)) {
-            @panic("compiler coordinator shut down during a post-check batch");
+        if (self.post_check_session_active.load(.acquire)) {
+            @panic("compiler coordinator shut down during a post-check session");
         }
 
         // Signal workers to stop before closing channels, so workers that
@@ -2775,8 +2794,6 @@ pub const Coordinator = struct {
 
     /// Main coordinator loop - unified for single and multi-threaded modes
     pub fn coordinatorLoop(self: *Coordinator) (Allocator.Error || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound })!void {
-        var inline_worker_allocs = WorkerAllocators.init(self.gpa);
-        defer inline_worker_allocs.deinit();
         var iterations_without_progress: u32 = 0;
 
         while (!self.isComplete()) {
@@ -2789,8 +2806,8 @@ pub const Coordinator = struct {
             if (!threads_available or self.mode == .single_threaded or self.max_threads <= 1) {
                 // Single-threaded: process tasks inline
                 if (self.task_channel.tryRecv()) |task| {
-                    const result = try self.executeTaskInline(task, inline_worker_allocs.taskAllocators());
-                    inline_worker_allocs.resetArena();
+                    const result = try self.executeTaskInline(task, self.inline_worker_allocs.taskAllocators());
+                    self.inline_worker_allocs.resetArena();
                     try self.handleResult(result);
                     made_progress = true;
                 }
@@ -2927,6 +2944,8 @@ pub const Coordinator = struct {
     /// A stage-independent view over the persistent compilation workers.
     ///
     /// Call this only after `coordinatorLoop` has completed and before shutdown.
+    /// The returned executor is owned by the coordinator thread and must not be
+    /// used concurrently with coordinator lifecycle methods.
     pub fn postCheckExecutor(self: *Coordinator) post_check_executor.Executor {
         if (!self.frontend_complete or self.shutting_down.load(.acquire)) {
             @panic("post-check executor requested outside the completed frontend lifetime");
@@ -2937,76 +2956,77 @@ pub const Coordinator = struct {
                 self.workers.items.len
             else
                 1,
-            .runFn = runPostCheckTasks,
+            .beginFn = beginPostCheckSession,
+            .submitFn = submitPostCheckTask,
+            .receiveFn = receivePostCheckCompletion,
+            .endFn = endPostCheckSession,
         };
     }
 
-    fn runPostCheckTasks(
-        context: *anyopaque,
-        tasks: []const post_check_executor.Task,
-        completions: []post_check_executor.Completion,
-    ) Allocator.Error!void {
+    fn beginPostCheckSession(context: *anyopaque) void {
         const self: *Coordinator = @ptrCast(@alignCast(context));
-        std.debug.assert(tasks.len == completions.len);
         if (!self.frontend_complete or self.shutting_down.load(.acquire)) {
-            @panic("post-check batch started outside the completed frontend lifetime");
+            @panic("post-check session started outside the completed frontend lifetime");
         }
-        if (self.post_check_batch_active.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) {
-            @panic("compiler coordinator started overlapping post-check batches");
+        if (self.post_check_session_active.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) {
+            @panic("compiler coordinator started overlapping post-check sessions");
         }
-        defer self.post_check_batch_active.store(false, .release);
-        if (tasks.len == 0) return;
+        std.debug.assert(self.inline_post_check_completion == null);
+    }
 
+    fn submitPostCheckTask(context: *anyopaque, task: post_check_executor.Task) Allocator.Error!void {
+        const self: *Coordinator = @ptrCast(@alignCast(context));
         if (!threads_available or self.mode == .single_threaded or self.workers.items.len == 0) {
-            var allocs = WorkerAllocators.init(self.gpa);
-            defer allocs.deinit();
-            const allocator = allocs.taskAllocators().module;
-            for (tasks, completions) |task, *completion| {
-                completion.* = .{
-                    .id = task.id,
-                    .worker_id = 0,
-                    .value = task.run(task.context, .{
-                        .id = 0,
-                        .allocator = allocator,
-                        .scratch = allocs.taskAllocators().scratch,
-                    }),
-                };
-                allocs.resetArena();
-            }
+            std.debug.assert(self.inline_post_check_completion == null);
+            const allocator = self.inline_worker_allocs.taskAllocators().module;
+            defer self.inline_worker_allocs.resetArena();
+            self.inline_post_check_completion = .{
+                .id = task.id,
+                .worker_id = 0,
+                .value = task.run(task.context, .{
+                    .id = 0,
+                    .allocator = allocator,
+                    .scratch = self.inline_worker_allocs.taskAllocators().scratch,
+                    .lane_state = &self.inline_worker_allocs.post_check_lane_state,
+                }),
+            };
             return;
         }
+        // enqueueTask increments inflight before sending and rolls it back if
+        // channel growth fails, so a failed submit accepts no work.
+        try self.enqueueTask(.{ .post_check = task });
+    }
 
-        var sent: usize = 0;
-        var received: usize = 0;
-        var enqueue_oom = false;
-        const width = self.workers.items.len;
-        while (received < tasks.len and (!enqueue_oom or received < sent)) {
-            while (sent < tasks.len and sent - received < width) : (sent += 1) {
-                self.enqueueTask(.{ .post_check = tasks[sent] }) catch {
-                    enqueue_oom = true;
-                    break;
-                };
-            }
-            if (received == sent) break;
-            const result = self.result_channel.recv() orelse
-                @panic("post-check result channel closed while a batch was active");
-            _ = self.inflight.fetchSub(1, .monotonic);
-            switch (result) {
-                .post_check => |completion| {
-                    completions[received] = completion;
-                    received += 1;
-                },
-                .parsed,
-                .canonicalized,
-                .type_checked,
-                .parse_failed,
-                .compile_failed,
-                .cycle_detected,
-                .worker_oom,
-                => unreachable,
-            }
+    fn receivePostCheckCompletion(context: *anyopaque) post_check_executor.Completion {
+        const self: *Coordinator = @ptrCast(@alignCast(context));
+        if (!threads_available or self.mode == .single_threaded or self.workers.items.len == 0) {
+            const completion = self.inline_post_check_completion orelse
+                @panic("inline post-check receive without a submitted task");
+            self.inline_post_check_completion = null;
+            return completion;
         }
-        if (enqueue_oom) return error.OutOfMemory;
+        const result = self.result_channel.recv() orelse
+            @panic("post-check result channel closed while a session was active");
+        _ = self.inflight.fetchSub(1, .monotonic);
+        return switch (result) {
+            .post_check => |completion| completion,
+            .parsed,
+            .canonicalized,
+            .type_checked,
+            .parse_failed,
+            .compile_failed,
+            .cycle_detected,
+            .worker_oom,
+            => unreachable,
+        };
+    }
+
+    fn endPostCheckSession(context: *anyopaque) void {
+        const self: *Coordinator = @ptrCast(@alignCast(context));
+        std.debug.assert(self.inline_post_check_completion == null);
+        std.debug.assert(self.inflight.load(.acquire) == 0);
+        std.debug.assert(self.task_channel.isEmpty());
+        self.post_check_session_active.store(false, .release);
     }
 
     fn createOwnedSemanticResult(
@@ -5458,6 +5478,7 @@ pub const Coordinator = struct {
                         .id = worker_id,
                         .allocator = worker_allocs.taskAllocators().module,
                         .scratch = worker_allocs.taskAllocators().scratch,
+                        .lane_state = &worker_allocs.post_check_lane_state,
                     }),
                 } };
                 worker_allocs.resetArena();
@@ -7454,7 +7475,7 @@ test "Coordinator shutdown stops spawned workers promptly" {
     try std.testing.expectEqual(@as(usize, 0), coord.workers.items.len);
 }
 
-test "Coordinator post-check executor completes repeated bounded batches" {
+test "Coordinator post-check executor supports incremental sessions and repeated batches" {
     if (is_freestanding) return error.SkipZigTest;
 
     var coord = try Coordinator.init(
@@ -7471,9 +7492,26 @@ test "Coordinator post-check executor completes repeated bounded batches" {
     try coord.start();
     try coord.coordinatorLoop();
 
+    const LaneData = struct {
+        allocator: Allocator,
+        destroyed: *std.atomic.Value(usize),
+        runs: usize = 0,
+
+        fn destroy(opaque_value: *anyopaque) void {
+            const value: *@This() = @ptrCast(@alignCast(opaque_value));
+            const allocator = value.allocator;
+            _ = value.destroyed.fetchAdd(1, .monotonic);
+            allocator.destroy(value);
+        }
+    };
+    const LaneKey = struct {
+        var value: u8 = undefined;
+    };
     const TaskContext = struct {
         hits: *std.atomic.Value(usize),
         active_by_worker: []std.atomic.Value(bool),
+        lane_data_by_worker: []?*LaneData,
+        destroyed_lane_data: *std.atomic.Value(usize),
 
         fn run(opaque_context: *anyopaque, worker: post_check_executor.Worker) ?*anyopaque {
             const context: *@This() = @ptrCast(@alignCast(opaque_context));
@@ -7484,6 +7522,31 @@ test "Coordinator post-check executor completes repeated bounded batches" {
                 @panic("post-check executor overlapped callbacks on one worker id");
             }
             defer context.active_by_worker[worker.id].store(false, .release);
+
+            const key: *const anyopaque = @ptrCast(&LaneKey.value);
+            const lane_data: *LaneData = if (worker.lane_state.get(key)) |opaque_value|
+                @ptrCast(@alignCast(opaque_value))
+            else blk: {
+                const value = worker.allocator.create(LaneData) catch
+                    @panic("post-check test could not allocate lane data");
+                value.* = .{
+                    .allocator = worker.allocator,
+                    .destroyed = context.destroyed_lane_data,
+                };
+                worker.lane_state.put(key, value, LaneData.destroy) catch {
+                    worker.allocator.destroy(value);
+                    @panic("post-check test could not retain lane data");
+                };
+                break :blk value;
+            };
+            if (context.lane_data_by_worker[worker.id]) |existing| {
+                if (existing != lane_data) {
+                    @panic("post-check executor replaced persistent lane data");
+                }
+            } else {
+                context.lane_data_by_worker[worker.id] = lane_data;
+            }
+            lane_data.runs += 1;
             _ = context.hits.fetchAdd(1, .monotonic);
             return context;
         }
@@ -7494,6 +7557,8 @@ test "Coordinator post-check executor completes repeated bounded batches" {
         std.atomic.Value(bool).init(false),
     };
     var hits = std.atomic.Value(usize).init(0);
+    var destroyed_lane_data = std.atomic.Value(usize).init(0);
+    var lane_data_by_worker = [_]?*LaneData{ null, null };
     var contexts: [7]TaskContext = undefined;
     var tasks: [7]post_check_executor.Task = undefined;
     var completions: [7]post_check_executor.Completion = undefined;
@@ -7501,6 +7566,8 @@ test "Coordinator post-check executor completes repeated bounded batches" {
         context.* = .{
             .hits = &hits,
             .active_by_worker = &active_by_worker,
+            .lane_data_by_worker = &lane_data_by_worker,
+            .destroyed_lane_data = &destroyed_lane_data,
         };
         task.* = .{
             .id = index,
@@ -7510,7 +7577,23 @@ test "Coordinator post-check executor completes repeated bounded batches" {
     }
 
     const executor = coord.postCheckExecutor();
-    try executor.run(&tasks, &completions);
+    var session = executor.begin();
+    try session.submit(tasks[0]);
+    try session.submit(tasks[1]);
+    try std.testing.expect(!session.canSubmit());
+    completions[0] = session.receive();
+    try std.testing.expect(session.canSubmit());
+
+    var submitted: usize = 2;
+    var received: usize = 1;
+    while (received < tasks.len) {
+        while (submitted < tasks.len and session.canSubmit()) : (submitted += 1) {
+            try session.submit(tasks[submitted]);
+        }
+        completions[received] = session.receive();
+        received += 1;
+    }
+    session.end();
     var observed = [_]bool{false} ** tasks.len;
     for (completions) |completion| {
         try std.testing.expect(completion.id < tasks.len);
@@ -7525,6 +7608,81 @@ test "Coordinator post-check executor completes repeated bounded batches" {
 
     try executor.run(tasks[0..3], completions[0..3]);
     try std.testing.expectEqual(tasks.len + 3, hits.load(.monotonic));
+    var initialized_lanes: usize = 0;
+    var retained_runs: usize = 0;
+    for (lane_data_by_worker) |maybe_lane_data| {
+        const lane_data = maybe_lane_data orelse continue;
+        initialized_lanes += 1;
+        retained_runs += lane_data.runs;
+    }
+    try std.testing.expectEqual(tasks.len + 3, retained_runs);
+    coord.shutdown();
+    try std.testing.expectEqual(initialized_lanes, destroyed_lane_data.load(.monotonic));
+}
+
+test "Coordinator inline post-check executor supports repeated session tasks" {
+    if (is_freestanding) return error.SkipZigTest;
+
+    var coord = try Coordinator.init(
+        std.testing.allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        undefined,
+        "test",
+        null,
+        CoreCtx.os(std.testing.allocator, std.testing.allocator, std.testing.io),
+    );
+    defer coord.deinit();
+    try coord.start();
+    try coord.coordinatorLoop();
+
+    const TaskContext = struct {
+        runs: usize = 0,
+        lane_state: ?*post_check_executor.LaneState = null,
+
+        fn run(opaque_context: *anyopaque, worker: post_check_executor.Worker) ?*anyopaque {
+            const self: *@This() = @ptrCast(@alignCast(opaque_context));
+            if (worker.id != 0) @panic("inline post-check executor changed worker id");
+            if (self.lane_state) |existing| {
+                if (existing != worker.lane_state) {
+                    @panic("inline post-check executor replaced its lane state");
+                }
+            } else {
+                self.lane_state = worker.lane_state;
+            }
+            const scratch = worker.scratch.alloc(u8, 1) catch
+                @panic("inline post-check executor scratch allocation failed");
+            scratch[0] = @intCast(self.runs);
+            self.runs += 1;
+            return self;
+        }
+    };
+
+    var context = TaskContext{};
+    const tasks = [_]post_check_executor.Task{
+        .{ .id = 10, .context = &context, .run = TaskContext.run },
+        .{ .id = 11, .context = &context, .run = TaskContext.run },
+        .{ .id = 12, .context = &context, .run = TaskContext.run },
+    };
+    const executor = coord.postCheckExecutor();
+    try std.testing.expectEqual(@as(usize, 1), executor.worker_count);
+
+    var session = executor.begin();
+    try session.submit(tasks[0]);
+    try std.testing.expect(!session.canSubmit());
+    const first = session.receive();
+    try session.submit(tasks[1]);
+    const second = session.receive();
+    session.end();
+    try std.testing.expectEqual(@as(usize, 10), first.id);
+    try std.testing.expectEqual(@as(usize, 11), second.id);
+
+    var completion: [1]post_check_executor.Completion = undefined;
+    try executor.run(tasks[2..], &completion);
+    try std.testing.expectEqual(@as(usize, 12), completion[0].id);
+    try std.testing.expectEqual(@as(usize, 3), context.runs);
+    coord.shutdown();
 }
 
 test "Coordinator enqueueParseTask flow" {
