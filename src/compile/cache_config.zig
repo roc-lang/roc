@@ -168,7 +168,9 @@ pub const Constants = struct {
     ///     value (new diagnostic).
     /// 75: Checked dispatch data drops symbolic constraint-callable evidence
     ///     and records recursive resolved references explicitly.
-    pub const CACHE_VERSION = 75;
+    /// 76: Stored functions retain callable-path dispatch evidence across
+    ///     reusable compile-time values.
+    pub const CACHE_VERSION = 76;
 };
 
 /// Configuration for the Roc cache system.

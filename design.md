@@ -7916,9 +7916,10 @@ the specialization and every repeated call is an O(1) hit before durable type
 or evidence digests are rebuilt. Graph-participating targets consume their
 producer-authored graph protocol instead of taking this sealed-interface path.
 
-Nothing else exists. Monotype lowering never derives a method owner from type
-content, never searches a registry by method name, and never intersects
-constraints to guess a target.
+Nothing else exists. Absent an explicit checker-authored callable path,
+Monotype lowering never derives a method owner from type content, never
+searches a registry by method name, and never intersects constraints to guess
+a target.
 
 The `.lss` strategy consumes these plans while producing Monotype IR. The
 `.boxy` strategy does not enter Monotype; it consumes the same checked dispatch
@@ -7976,6 +7977,21 @@ specialization's evidence vector at each call edge and passes it to the callee
 specialization; a plan resolved `constraint(k)` reads entry `k` of the
 innermost vector (walking lexical parents for nested local functions by
 `depth`).
+
+When an edge uses a procedure as data, an otherwise-unpinned requirement that
+is reachable through the procedure's own callable type is not
+`unreachable`. Checker output records `from_callable(k)` at that construction
+site, where `k` is the requirement's template evidence-param index and its
+evidence-param record owns the exact dispatcher path. If compile-time
+evaluation stores that function inside another value before the callable is
+concrete, `ConstStore` retains the same symbolic entry in the function's
+evidence vector. Restoring the function projects the recorded path over the
+consumer's concrete callable request, selects the exact method evidence, and
+uses the resolved vector as the specialization identity. This work is linear
+only in the function's evidence vector at a specialization request; the
+existing specialization cache prevents duplicate function bodies. Aggregate
+restoration neither scans nested values nor reconstructs where a function came
+from.
 
 **The default rule.** A constrained var no edge can pin follows exactly the
 rule Monotype uses to materialize unresolved variables: numeral literals and
@@ -12166,6 +12182,9 @@ When a later compilation materializes a cached const, Monotype lowering turns
   alpha-renaming its parameters, and binding each captured symbol to the
   ordinary Monotype expression materialized from the corresponding captured
   `ConstNodeId`
+- stored function evidence marked `from_callable(k)` is resolved from the
+  checker-authored path of evidence param `k` over the consumer's concrete
+  function request before the checked template is specialized
 - generated parser runtime functions materialize through their explicit generated
   function kind: Monotype lowering recovers the checked static-dispatch plan,
   materializes generated captures such as transformed field-name strings by their

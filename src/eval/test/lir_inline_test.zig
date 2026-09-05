@@ -3413,6 +3413,43 @@ test "boxy lowering preserves a runtime-built crash message" {
     return error.TestUnexpectedResult;
 }
 
+test "issue 11099 boxy dispatches an imported procedure stored in a record" {
+    const allocator = std.testing.allocator;
+    const tp_module =
+        \\Tp := [].{
+        \\    effects = { send: send }
+        \\
+        \\    send = |x| x.concat("!")
+        \\}
+    ;
+    const source =
+        \\import Tp
+        \\
+        \\main = {
+        \\    send = Tp.effects.send
+        \\    send("hi")
+        \\}
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{.{ .name = "Tp", .source = tp_module }},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("\"hi!\"", output);
+}
+
 test "spec constr preserves direct call argument effect order" {
     try expectOptimizedDbgEvents(
         \\State : { n : I64 }

@@ -791,6 +791,12 @@ const MethodLookup = struct {
 const SpecEvidence = union(enum) {
     target: *const SpecEvidenceTarget,
     structural: SpecStructuralEvidence,
+    /// Callable-reachable evidence that remains symbolic while a reusable
+    /// compile-time value is produced and resolves from the eventual request.
+    from_callable: struct {
+        index: u32,
+        independent_callable: bool,
+    },
     /// The edge left the requirement's dispatcher unsolved: no value of that
     /// type can ever reach the dispatch. Monotype represents that non-returning
     /// path with an ordinary Roc runtime crash instead of a dispatch call.
@@ -1749,11 +1755,15 @@ fn specEvidenceEql(a: SpecEvidence, b: SpecEvidence) bool {
                 }
                 break :blk true;
             },
-            .structural, .unreachable_value, .checked_error => false,
+            .structural, .from_callable, .unreachable_value, .checked_error => false,
         },
         .structural => |a_structural| switch (b) {
             .structural => |b_structural| specStructuralEvidenceEql(a_structural, b_structural),
-            .target, .unreachable_value, .checked_error => false,
+            .target, .from_callable, .unreachable_value, .checked_error => false,
+        },
+        .from_callable => |a_use| switch (b) {
+            .from_callable => |b_use| std.meta.eql(a_use, b_use),
+            .target, .structural, .unreachable_value, .checked_error => false,
         },
         .unreachable_value => b == .unreachable_value,
         .checked_error => b == .checked_error,
@@ -1805,7 +1815,7 @@ fn specEvidenceRequiresLocalContext(evidence: []const SpecEvidence) bool {
                 .synthesize => {},
             }
         },
-        .structural, .unreachable_value, .checked_error => {},
+        .structural, .from_callable, .unreachable_value, .checked_error => {},
     };
     return false;
 }
@@ -1817,7 +1827,7 @@ fn specEvidenceContainsStructural(evidence: []const SpecEvidence) bool {
             .synthesize => {},
         },
         .structural => return true,
-        .unreachable_value, .checked_error => {},
+        .from_callable, .unreachable_value, .checked_error => {},
     };
     return false;
 }
@@ -1893,7 +1903,7 @@ fn specEvidenceLocalOwner(
                 .synthesize => {},
             }
         },
-        .structural, .unreachable_value, .checked_error => {},
+        .structural, .from_callable, .unreachable_value, .checked_error => {},
     };
     return owner;
 }
@@ -4427,6 +4437,12 @@ const Builder = struct {
                     .generated_codec_derivation = checked_structural.evidence.generated_codec_derivation,
                 } else null,
             } }),
+            .from_callable => |use| {
+                try nodes.append(self.allocator, .{ .from_callable = .{
+                    .index = use.index,
+                    .independent_callable = use.independent_callable,
+                } });
+            },
             .unreachable_value => try nodes.append(self.allocator, .unreachable_value),
             .checked_error => try nodes.append(self.allocator, .checked_error),
         };
@@ -5731,10 +5747,16 @@ const Builder = struct {
         if (partial_evidence.len > template.evidence_params.len) {
             Common.invariant("draft procedure specialization received more evidence than its checked requirements");
         }
-        const evidence = if (partial_evidence.len == template.evidence_params.len)
+        const completed_evidence = if (partial_evidence.len == template.evidence_params.len)
             partial_evidence
         else
             try self.completeRootTemplateEvidence(view, template_ref, template, partial_evidence);
+        const evidence = try source_ctx.resolveCallableEvidenceAtNode(
+            view,
+            template,
+            completed_evidence,
+            request_fn_node,
+        );
         const family = DraftTemplateFamilyAddress.init(template_ref, source_ctx.method_scope.key, source_fn_key);
 
         // The globally reserved root is the active ancestor of recursive calls
@@ -22807,8 +22829,8 @@ const BodyContext = struct {
                 .imported_proc,
                 .hosted_proc,
                 .promoted_top_level_proc,
-                => |proc| return try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), null, record.recursive_reference),
-                .platform_required_proc => |proc| return try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), proc.root_evidence, record.recursive_reference),
+                => |proc| return try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), record.expr, null, record.recursive_reference),
+                .platform_required_proc => |proc| return try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), record.expr, proc.root_evidence, record.recursive_reference),
                 .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => {},
             }
         }
@@ -31914,8 +31936,8 @@ const BodyContext = struct {
             .imported_proc,
             .hosted_proc,
             .promoted_top_level_proc,
-            => |proc| try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), null, record.recursive_reference),
-            .platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), try self.evidenceForUseSite(record.expr), proc.root_evidence, record.recursive_reference),
+            => |proc| try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), record.expr, null, record.recursive_reference),
+            .platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), record.expr, proc.root_evidence, record.recursive_reference),
             .top_level_const,
             .imported_const,
             .platform_required_const,
@@ -32030,14 +32052,14 @@ const BodyContext = struct {
             => |proc| return try self.lowerProcedureUseValueAtNode(
                 proc,
                 expected_node,
-                try self.evidenceForUseSite(record.expr),
+                record.expr,
                 null,
                 record.recursive_reference,
             ),
             .platform_required_proc => |proc| return try self.lowerProcedureUseValueAtNode(
                 proc.procedure,
                 expected_node,
-                try self.evidenceForUseSite(record.expr),
+                record.expr,
                 proc.root_evidence,
                 record.recursive_reference,
             ),
@@ -32118,7 +32140,7 @@ const BodyContext = struct {
         self: *BodyContext,
         proc: checked.ProcedureUseTemplate,
         request_fn_node: NodeId,
-        evidence: []const SpecEvidence,
+        site_expr: checked.CheckedExprId,
         root_evidence: ?checked.CheckedEvidenceSpan,
         recursive_reference: bool,
     ) Allocator.Error!DraftExprId {
@@ -32127,9 +32149,10 @@ const BodyContext = struct {
                 callable_eval.view,
                 callable_eval.template,
                 request_fn_node,
-                evidence,
+                try self.evidenceForUseSite(site_expr),
             );
         }
+        const evidence = try self.evidenceForProcedureValue(proc, site_expr);
         const source_fn_ty = proc.source_fn_ty_payload orelse
             Common.invariant("checked procedure value reached Monotype without a requested function type");
         const slot = try self.draftFnSlotForProcedureUseAtNode(
@@ -39182,6 +39205,10 @@ const BodyContext = struct {
                         };
                         break :blk .{ .target = independent };
                     },
+                    .from_callable => |use| .{ .from_callable = .{
+                        .index = use.index,
+                        .independent_callable = true,
+                    } },
                     .structural, .unreachable_value, .checked_error => entry,
                 };
             },
@@ -39189,7 +39216,7 @@ const BodyContext = struct {
                 .derivation = evidence.derivation,
                 .checked = .{ .view = self.view, .evidence = evidence },
             } },
-            .from_callable => Common.invariant("callable-derived checked evidence escaped a nested procedure construction recipe"),
+            .from_callable => Common.invariant("callable-derived checked evidence escaped a procedure construction recipe"),
             .checked_error => return .checked_error,
             .unreachable_value => return .unreachable_value,
         }
@@ -39397,11 +39424,102 @@ const BodyContext = struct {
                         .checked = restored_checked,
                     } };
                 },
+                .from_callable => |use| .{ .from_callable = .{
+                    .index = use.index,
+                    .independent_callable = use.independent_callable,
+                } },
                 .unreachable_value => .unreachable_value,
                 .checked_error => .checked_error,
             };
         }
         return out;
+    }
+
+    /// Materialize a procedure value's checked construction recipe. Evidence
+    /// that is reachable through the function's own type remains symbolic
+    /// until that request has a concrete dispatcher; this is what lets a
+    /// function survive inside a reusable compile-time record or collection.
+    fn evidenceForProcedureValue(
+        self: *BodyContext,
+        proc: checked.ProcedureUseTemplate,
+        expr: checked.CheckedExprId,
+    ) Allocator.Error![]const SpecEvidence {
+        const refs = self.view.static_dispatch_plans.siteEvidence(expr) orelse return &.{};
+        const template_ref = self.builder.templateRefForProcedureUse(proc);
+        const template_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(template_ref));
+        const template = template_view.templates.get(template_ref.template);
+        const params = template_view.templates.evidenceParams(&template);
+        if (refs.len != params.len) {
+            Common.invariant("procedure value evidence recipe length differed from its checked template");
+        }
+        if (refs.len == 0) return &.{};
+
+        const arena = self.builder.evidence_arena.allocator();
+        const evidence = try arena.alloc(SpecEvidence, refs.len);
+        for (refs, 0..) |ref, index| {
+            evidence[index] = switch (ref.resolution) {
+                .from_callable => .{ .from_callable = .{
+                    .index = @intCast(index),
+                    .independent_callable = false,
+                } },
+                .direct, .constraint, .structural, .checked_error, .unreachable_value => try self.materializeEvidenceRef(ref, .body_lowering),
+            };
+        }
+        return evidence;
+    }
+
+    /// Resolve every symbolic callable-path entry whose dispatcher is already
+    /// known in the live specialization graph. Entries left open here are
+    /// retained by ConstStore and resolved when that stored function is used.
+    fn resolveCallableEvidenceAtNode(
+        self: *BodyContext,
+        view: ModuleView,
+        template: checked.CheckedProcedureTemplate,
+        evidence: []const SpecEvidence,
+        request_fn_node: NodeId,
+    ) Allocator.Error![]const SpecEvidence {
+        var has_symbolic = false;
+        for (evidence) |entry| {
+            if (entry == .from_callable) {
+                has_symbolic = true;
+                break;
+            }
+        }
+        if (!has_symbolic) return evidence;
+
+        const params = view.templates.evidenceParams(&template);
+        if (evidence.len != params.len) {
+            Common.invariant("callable-derived evidence length differed from its checked template");
+        }
+        const arena = self.builder.evidence_arena.allocator();
+        const resolved = try arena.dupe(SpecEvidence, evidence);
+        for (resolved) |*entry| switch (entry.*) {
+            .from_callable => |recipe| {
+                if (recipe.index >= params.len) {
+                    Common.invariant("callable-derived evidence referenced an unknown checked parameter");
+                }
+                const param = params[recipe.index];
+                const path = view.templates.evidenceParamPath(param);
+                if (path.len == 0) {
+                    Common.invariant("callable-derived evidence named a pathless checked parameter");
+                }
+                const component_node = try self.walkEvidencePathNode(view, request_fn_node, path) orelse
+                    Common.invariant("callable-derived evidence path did not match its function request");
+                const resolvable = self.methodOwnerFromNode(component_node) != null or
+                    param.structural != null or
+                    try self.nodeIsProvenUninhabited(component_node);
+                if (resolvable) {
+                    entry.* = try self.synthesizeComponentEvidenceAtNode(
+                        view,
+                        param.method,
+                        param.structural,
+                        component_node,
+                    );
+                }
+            },
+            .target, .structural, .unreachable_value, .checked_error => {},
+        };
+        return resolved;
     }
 
     /// Evidence vector for the constrained scheme instantiated at `expr` (a
@@ -39442,7 +39560,7 @@ const BodyContext = struct {
                         .resolved => |nested| .{ .resolved = nested },
                         .synthesize => .synthesize,
                     },
-                    .structural, .unreachable_value, .checked_error => Common.invariant("method target selected unresolved or non-target checked evidence"),
+                    .structural, .from_callable, .unreachable_value, .checked_error => Common.invariant("method target selected unresolved or non-target checked evidence"),
                 };
             },
             .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
@@ -39471,7 +39589,7 @@ const BodyContext = struct {
                         .resolved => |nested| .{ .resolved = nested },
                         .synthesize => .synthesize,
                     },
-                    .structural, .unreachable_value, .checked_error => Common.invariant("iterator target selected unresolved or non-target checked evidence"),
+                    .structural, .from_callable, .unreachable_value, .checked_error => Common.invariant("iterator target selected unresolved or non-target checked evidence"),
                 };
             },
             .direct_pending => Common.invariant("unfinalized iterator direct call reached Monotype"),
@@ -39517,7 +39635,7 @@ const BodyContext = struct {
                     .structural => |derivation| .{ .structural = derivation },
                     // Unreachable and checked-error dispatches crash before
                     // target resolution.
-                    .unreachable_value, .checked_error => null,
+                    .from_callable, .unreachable_value, .checked_error => null,
                 };
             },
             .structural => |derivation| return .{ .structural = .{
@@ -39652,7 +39770,7 @@ const BodyContext = struct {
             .@"unreachable" => .unreachable_value,
             .checked_error => .checked_error,
             .evidence_dependent => |dependent| if (self.evidence.at(dependent.index)) |entry| switch (entry) {
-                .unreachable_value => .unreachable_value,
+                .from_callable, .unreachable_value => .unreachable_value,
                 .checked_error => .checked_error,
                 .target, .structural => null,
             } else Common.invariant("dispatch runtime evidence was absent from its lexical chain"),
@@ -51489,7 +51607,7 @@ const BodyContext = struct {
                         target.instantiation,
                     .local_proc_context = target.local_proc_context,
                 },
-                .structural, .unreachable_value, .checked_error => Common.invariant("iterator dispatch evidence was not a resolved callable target"),
+                .structural, .from_callable, .unreachable_value, .checked_error => Common.invariant("iterator dispatch evidence was not a resolved callable target"),
             } else Common.invariant("iterator method evidence was absent from its lexical chain"),
             .direct_pending => Common.invariant("unfinalized iterator direct call reached Monotype"),
             .structural, .checked_error, .@"unreachable" => Common.invariant("iterator dispatch plan resolution was not a callable target"),
