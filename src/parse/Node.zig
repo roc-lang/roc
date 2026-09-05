@@ -299,10 +299,10 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     string_patt,
-    /// DESCRIPTION
-    /// Example: EXAMPLE
-    /// * lhs - LHS DESCRIPTION
-    /// * rhs - RHS DESCRIPTION
+    /// A codepoint literal pattern, with an optional type suffix.
+    /// * main_token - Token index containing the codepoint
+    /// * lhs - Ident index of the optional type suffix
+    /// * rhs - Whether lhs contains a type suffix Ident index
     single_quote_patt,
     /// DESCRIPTION
     /// Example: EXAMPLE
@@ -368,12 +368,12 @@ pub const Tag = enum {
     /// * lhs - Ident index of the type
     /// * rhs - NumericLiteral.Idx
     typed_frac,
-    /// A character literal enclosed in single quotes
-    /// Example: 'a'
-    /// * main_token - Token index containing the character
+    /// A codepoint literal enclosed in single quotes
+    /// Example: 'a' or 'a'.U8
+    /// * main_token - Token index containing the codepoint
     /// * region - Source region containing the single quote literal
-    /// * lhs - Unused
-    /// * rhs - Unused
+    /// * lhs - Ident index of the optional type suffix
+    /// * rhs - Whether lhs contains a type suffix Ident index
     single_quote,
     /// DESCRIPTION
     /// Example: EXAMPLE

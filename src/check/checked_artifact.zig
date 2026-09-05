@@ -1826,6 +1826,36 @@ test "compile-time roots reject undetermined record field kinds" {
     try std.testing.expect(!try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, root));
 }
 
+test "compile-time data roots with reachable callables require producer type evidence" {
+    const allocator = std.testing.allocator;
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    const leaf: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .empty_record));
+
+    const callable: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .function = .{
+        .kind = .pure,
+        .ret = leaf,
+    } }));
+
+    const root: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    const fields = try allocator.alloc(CheckedRecordField, 1);
+    fields[0] = .{
+        .name = testIndexId(canonical.RecordFieldLabelId, 7),
+        .ty = callable,
+        .kind = .required,
+    };
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .record = .{
+        .fields = fields,
+        .ext = leaf,
+    } }));
+
+    try std.testing.expect(!try checkedTypeIsContextFreeCompileTimeRoot(allocator, &store, false, root));
+    try std.testing.expect(try checkedTypeIsContextFreeCompileTimeRoot(allocator, &store, true, root));
+}
+
 fn checkedTagsAreConcreteCompileTimeRoots(
     comptime walk: ConcreteRootWalk,
     checked_types: *const CheckedTypeStore,
@@ -19029,6 +19059,30 @@ const EvidencePass = struct {
         const source_node = self.source_by_checked_expr.get(site_key) orelse return;
 
         if (self.value_use_by_node.get(source_node)) |record_idx| {
+            const procedure_value = switch (rec.ref) {
+                .top_level_proc,
+                .imported_proc,
+                .hosted_proc,
+                .promoted_top_level_proc,
+                .platform_required_proc,
+                => true,
+                .local_param,
+                .local_value,
+                .local_mutable_version,
+                .pattern_binder,
+                .local_proc,
+                .selected_hoisted_const,
+                .top_level_const,
+                .imported_const,
+                .platform_required_declaration,
+                .platform_required_checked_error,
+                .platform_required_const,
+                => false,
+            };
+            if (procedure_value) {
+                try self.emitProcedureValueSiteEvidence(record_idx, site_key, chain);
+                return;
+            }
             try self.emitSchemeUseSiteEvidence(record_idx, site_key, chain);
             return;
         }
@@ -19077,6 +19131,57 @@ const EvidencePass = struct {
         // have no site evidence. Shared recursive uses are explicit records
         // and therefore returned through the branch above.
         return;
+    }
+
+    /// Publish a procedure value's evidence without committing an unpinned
+    /// callable component to `unreachable`. A containing record,
+    /// tuple, list, tag, or nominal can cross a module boundary before that
+    /// component is selected; its eventual function request supplies every
+    /// path-bearing entry exactly.
+    fn emitProcedureValueSiteEvidence(
+        self: *EvidencePass,
+        record_idx: u32,
+        site_key: u32,
+        chain: []const []const EvidenceParam,
+    ) Allocator.Error!void {
+        if (self.site_seen.contains(site_key)) return;
+
+        self.current_chain = chain;
+        defer self.current_chain = &.{};
+
+        const module_env = self.module.moduleEnvConst();
+        const record = module_env.scheme_uses.items.items[record_idx];
+        const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+        var params = std.ArrayListUnmanaged(EvidenceParam).empty;
+        defer params.deinit(self.allocator);
+        try self.enumerateParams(@enumFromInt(record.scheme_root), &params);
+
+        var entries = std.ArrayListUnmanaged(static_dispatch.CheckedEvidence).empty;
+        defer entries.deinit(self.allocator);
+        try entries.ensureTotalCapacity(self.allocator, params.items.len);
+        for (params.items) |param| {
+            if (try self.evidenceForRecordParam(pairs, param, false)) |evidence| {
+                entries.appendAssumeCapacity(evidence);
+                continue;
+            }
+            if (param.path.len == 0 or param.source == .constraint_callable) {
+                entries.appendAssumeCapacity((try self.evidenceForRecordParam(pairs, param, true)).?);
+                continue;
+            }
+            const dispatcher_root = self.types.resolveVar(param.dispatcher_var).var_;
+            const dispatcher_var = self.pairForResolved(pairs, dispatcher_root) orelse param.dispatcher_var;
+            const dispatcher_ty = self.checked_types.rootForSourceVar(self.module, dispatcher_var) orelse
+                checkedArtifactInvariant("checked procedure-value dispatcher type was not published", .{});
+            entries.appendAssumeCapacity(.{
+                .dispatcher_ty = dispatcher_ty,
+                .runtime_dictionary = param.constraint.origin.literalKind() == null,
+                .resolution = .from_callable,
+            });
+        }
+
+        const span = try self.appendEvidenceRefs(entries.items);
+        try self.site_seen.put(site_key, {});
+        try self.site_evidence.append(self.allocator, .{ .key = site_key, .start = span.start, .len = span.len });
     }
 
     fn emitSchemeUseSiteEvidence(
@@ -24845,7 +24950,7 @@ pub const CompileTimeRootTable = struct {
             );
         }
 
-        try publishCompileTimeRootRequestEligibility(allocator, checked_types, checked_bodies, roots.items);
+        try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, checked_bodies, roots.items);
 
         return .{ .roots = try roots.toOwnedSlice(allocator) };
     }
@@ -24995,17 +25100,52 @@ pub const CompileTimeRootTable = struct {
 
 fn publishCompileTimeRootRequestEligibility(
     allocator: Allocator,
+    module: TypedCIR.Module,
     checked_types: *const CheckedTypePublication,
     checked_bodies: *const CheckedBodyStore,
     roots: []CompileTimeRoot,
 ) Allocator.Error!void {
     for (roots) |*root| {
-        const concrete = try checkedTypeIsConcreteCompileTimeRoot(allocator, &checked_types.store, root.checked_type);
+        const producer_callable_type_is_fixed = switch (root.kind) {
+            .callable_binding => true,
+            .constant => switch (root.source) {
+                .def => |def_idx| module.def(def_idx).data.annotation != null,
+                .expr, .statement, .hoisted, .required_binding => false,
+            },
+            .hoisted_constant,
+            .hoisted_validation,
+            .expect,
+            .numeral_conversion,
+            .quote_conversion,
+            .repl_expr,
+            => false,
+        };
+        const context_free = try checkedTypeIsContextFreeCompileTimeRoot(
+            allocator,
+            &checked_types.store,
+            producer_callable_type_is_fixed,
+            root.checked_type,
+        );
         // The checker already owns this diagnostic; evaluating the root would
         // only add a secondary compile-time crash for its replacement node.
-        const eligible = concrete and !checked_bodies.exprContainsDiagnosticError(root.expr);
+        const eligible = context_free and !checked_bodies.exprContainsDiagnosticError(root.expr);
         root.request_eligibility = if (eligible) .eligible else .ineligible;
     }
+}
+
+fn checkedTypeIsContextFreeCompileTimeRoot(
+    allocator: Allocator,
+    checked_types: *const CheckedTypeStore,
+    producer_callable_type_is_fixed: bool,
+    root: CheckedTypeId,
+) Allocator.Error!bool {
+    if (!try checkedTypeIsConcreteCompileTimeRoot(allocator, checked_types, root)) return false;
+
+    // A callable root or an annotated data producer fixes its callable graph at
+    // the producer. An unannotated data root can instead receive callable type
+    // relations from a use site, so it must not seal a context-free graph first.
+    return producer_callable_type_is_fixed or
+        try checkedTypeHasNoReachableCallableSlots(allocator, checked_types, root);
 }
 
 fn deinitCompileTimeRootSlice(allocator: Allocator, roots: []CompileTimeRoot) void {
@@ -30257,7 +30397,9 @@ pub const CheckedModuleArtifact = struct {
     // from the codec's public value shape.
     // Version 80 removes symbolic constraint-callable evidence and records
     // recursive resolved references explicitly.
-    const serialized_layout_version: u32 = 80;
+    // Version 81 retains callable-path recipes in stored function evidence so
+    // procedure values inside reusable constants specialize at their uses.
+    const serialized_layout_version: u32 = 81;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -36672,8 +36814,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x15, 0xF4, 0x73, 0x04, 0xA4, 0x9B, 0xDF, 0xB5, 0x32, 0x33, 0x3B, 0x16, 0x74, 0xE3, 0x1B, 0xE5,
-        0x5E, 0xED, 0x3F, 0x74, 0x3E, 0x6A, 0x45, 0xCB, 0x45, 0xCD, 0xBE, 0xF4, 0x31, 0x16, 0x18, 0x6B,
+        0x8B, 0x29, 0xE9, 0x7E, 0xBE, 0x36, 0x91, 0xD4, 0xAF, 0xFB, 0xF0, 0x44, 0x0A, 0x09, 0x06, 0x43,
+        0x00, 0xDB, 0xC2, 0x9C, 0x13, 0xDB, 0xDE, 0xFE, 0xF5, 0x1C, 0xB3, 0xCE, 0x4B, 0x91, 0x19, 0xC7,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
