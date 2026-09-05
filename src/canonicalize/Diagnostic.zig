@@ -17,13 +17,24 @@ pub const DeclaredTypeKind = enum(u8) {
     alias,
     @"opaque",
     where_alias,
+    nominal,
 
-    /// The noun to use when describing this declaration to the user.
-    pub fn label(self: DeclaredTypeKind) []const u8 {
+    /// The headline of an underscore diagnostic for this declaration.
+    pub fn underscoreHeadline(self: DeclaredTypeKind) []const u8 {
         return switch (self) {
-            .alias => "alias",
-            .@"opaque" => "opaque type",
-            .where_alias => "where alias",
+            .alias => "Underscores are not allowed in type alias declarations.",
+            .where_alias => "Underscores are not allowed in where alias declarations.",
+            .@"opaque" => "A bare underscore is not allowed in opaque type declarations.",
+            .nominal => "A bare underscore is not allowed in nominal type declarations.",
+        };
+    }
+
+    /// The title of an underscore diagnostic for this declaration.
+    pub fn underscoreReportTitle(self: DeclaredTypeKind) []const u8 {
+        return switch (self) {
+            .alias, .where_alias => "Underscore In Type Alias",
+            .@"opaque" => "Underscore In Opaque Type",
+            .nominal => "Underscore In Nominal Type",
         };
     }
 };

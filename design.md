@@ -523,6 +523,14 @@ referenced declaration. This evidence comes from the normal annotation-generatio
 traversal; validity must not be reconstructed later by rescanning source syntax or
 solved type structure.
 
+A declaration header parameter is always a named rigid type variable. Bare `_` is
+an inferred type annotation, not a binder, so canonicalization diagnoses it and
+emits a `.malformed` header annotation for every declaration kind. Nominal and
+opaque declarations may use an underscore-prefixed name such as `_a` for an
+intentionally phantom parameter; aliases and where aliases reject those names.
+This keeps every valid declaration formal's identity explicit through checking and
+`CheckedModule` construction.
+
 After all local type declarations have been generated, checking computes the
 transitive closure of invalidity over those recorded dependency edges. This
 finalization is linear in the number of declarations plus recorded references,
