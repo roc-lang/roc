@@ -1266,7 +1266,7 @@ performing, but they must not duplicate the type-binding collision matrix.
 Source binding mutability comes only from an explicit `var` construct. CIR
 represents a mutable binder as `Pattern.var_assign` and an immutable binder as
 `Pattern.assign`; scope insertion, reassignment validation, checking, checked
-module publication, and every later consumer use that explicit distinction.
+module construction, and every later consumer use that explicit distinction.
 They must not infer mutability from identifier text. The `$` byte remains part
 of an identifier's exact identity, so `$value` and `value` are distinct names.
 
@@ -1274,9 +1274,9 @@ The `$` prefix is a naming convention enforced only as a declaration-site
 warning. Canonicalization reports a mutable binder whose name lacks `$`, or an
 immutable binder whose name starts with `$`, when it identifies the source
 construct as a declaration. Identifier references do not report this warning,
-and neither parsing nor identifier interning assigns semantic meaning to `$`.
-Checked module publication copies a binder's reassignability directly from its
-CIR pattern tag.
+and neither parsing nor identifier interning treats `$` as a mutability marker.
+`CheckedBodyStoreBuilder` copies a binder's reassignability directly from its CIR
+pattern tag.
 
 Canonicalization also outputs two exact module-global value-definition lists.
 The selected-name list contains one definition for each source-visible value
