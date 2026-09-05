@@ -170,7 +170,9 @@ pub const Constants = struct {
     ///     and records recursive resolved references explicitly.
     /// 76: CIR has an explicit mutable-binder pattern and binding-name warning
     ///     diagnostic node tags.
-    pub const CACHE_VERSION = 76;
+    /// 77: Stored functions retain callable-path dispatch evidence across
+    ///     reusable compile-time values.
+    pub const CACHE_VERSION = 77;
 };
 
 /// Configuration for the Roc cache system.
