@@ -2958,6 +2958,21 @@ test "Repl - unconstrained lambda function value renders as <function>" {
     try expectAllNative("|x, y| x + y", "<function>");
 }
 
+test "Repl - local field receivers remain local across stored definitions" {
+    // `exposes` is reserved in record literals, so exercise these paths while
+    // type-checking an open-record function stored by the production REPL.
+    const steps = &[_][2][]const u8{
+        .{
+            "getter = |pkg| (pkg.exposes, pkg.other.exposes)",
+            "assigned `getter`",
+        },
+        .{ "getter_alias = getter", "assigned `getter_alias`" },
+        .{ "getter_alias", "<function>" },
+    };
+    try expectStateful(.interpreter, steps);
+    try expectStateful(.dev, steps);
+}
+
 test "Repl - recursive function preserves an unconstrained empty list" {
     const steps = &[_][2][]const u8{
         .{
