@@ -896,13 +896,23 @@ pub inline fn geometricGrowth(old_capacity: usize, element_width: usize) usize {
 // itself and does not bloat entrypoints that inline an allocation.
 noinline fn crashAllocationTooLarge(roc_ops: *RocOps) noreturn {
     roc_ops.crash("Attempted to allocate a collection larger than the platform address space");
-    // A conforming host never returns from `crash` (the compile-time host
-    // longjmps; a platform's handler terminates the process), so this is dead
-    // code there. The wasm host is the exception: it cannot longjmp across the
-    // VM boundary, so it records the message and returns. `@trap()` stops the
-    // fall-through that would otherwise continue with the wrapped size and run
-    // off the buffer this guard exists to protect, and it costs nothing on the
-    // hot path because it sits behind the overflow branch in a cold function.
+    // Most hosts never return from `crash`: the compile-time host longjmps and
+    // a platform's handler terminates the process, so this is dead code there.
+    // Two return by design instead. The wasm host cannot longjmp across the VM
+    // boundary, and the LLVM backend on aarch64 Linux deliberately reports
+    // crashes by returning to its Zig caller, because longjmping through
+    // LLVM-generated frames is unreliable there (see `emitCrashBytes`, which
+    // emits `ret void` after the callback on that target, and
+    // `RuntimeHostEnv.longjmp_on_crash`).
+    //
+    // That contract covers Roc-level `crash` expressions, whose frames the
+    // backend emits and can return from. A Zig builtin has no such frame to
+    // unwind, so halting is the only remaining option -- the same one every
+    // other builtin crash site takes (see `str.repeatC`). `@trap()` makes it
+    // deterministic rather than leaving `unreachable` to fall through with the
+    // wrapped size and run off the buffer this guard exists to protect, and it
+    // costs nothing on the hot path because it sits behind the overflow branch
+    // in a cold function.
     @trap();
 }
 
