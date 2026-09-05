@@ -1873,19 +1873,17 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .underscore_in_type_declaration => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            const headline = try std.fmt.allocPrint(allocator, "Underscores are not allowed in type {s} declarations.", .{data.declared.label()});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "Underscore In Type Alias", headline, .runtime_error);
+            var report = try Report.init(allocator, data.declared.underscoreReportTitle(), data.declared.underscoreHeadline(), .runtime_error);
 
             // Add source context with location
             const owned_filename = try report.addOwnedString(filename);
             try report.addSourceContext(region_info, owned_filename, self.getSourceAll(), self.getLineStartsAll());
 
             try report.document.addLineBreak();
-            const explanation = try std.fmt.allocPrint(allocator, "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.", .{});
-            defer allocator.free(explanation);
-            const owned_explanation = try report.addOwnedString(explanation);
-            try report.document.addReflowingText(owned_explanation);
+            switch (data.declared) {
+                .alias, .where_alias => try report.document.addReflowingText("Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead."),
+                .nominal, .@"opaque" => try report.document.addReflowingText("A bare underscore in a type annotation means \"I don't care about this type\", so it does not declare a type parameter. If this parameter is intentionally phantom, give it an underscore-prefixed name like `_a` instead."),
+            }
 
             break :blk report;
         },
@@ -2425,6 +2423,66 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getLineStartsAll(),
             );
 
+            break :blk report;
+        },
+        .binding_name_does_not_match_mutability => |data| blk: {
+            const ident_name = self.getIdent(data.ident);
+            const region_info = self.calcRegionInfo(data.region);
+            const title = switch (data.mutability) {
+                .mutable => "Var Name Missing `$`",
+                .immutable => "Dollar Prefix Without `var`",
+            };
+            var report = try Report.init(allocator, title, "", .warning);
+            const owned_ident = try report.addOwnedString(ident_name);
+
+            switch (data.mutability) {
+                .mutable => {
+                    try report.headline.addReflowingText("The mutable binding ");
+                    try report.headline.addUnqualifiedSymbol(owned_ident);
+                    try report.headline.addReflowingText(" is declared with ");
+                    try report.headline.addKeyword("var");
+                    try report.headline.addReflowingText(" but its name does not start with ");
+                    try report.headline.addInlineCode("$");
+                    try report.headline.addReflowingText(".");
+
+                    const suggested = try std.fmt.allocPrint(allocator, "${s}", .{ident_name});
+                    defer allocator.free(suggested);
+                    const owned_suggested = try report.addOwnedString(suggested);
+                    try report.document.addReflowingText("Rename this binding and all of its uses to ");
+                    try report.document.addUnqualifiedSymbol(owned_suggested);
+                    try report.document.addReflowingText(". The name is only a convention; mutability comes from the ");
+                    try report.document.addKeyword("var");
+                    try report.document.addReflowingText(" declaration.");
+                },
+                .immutable => {
+                    try report.headline.addReflowingText("The immutable binding ");
+                    try report.headline.addUnqualifiedSymbol(owned_ident);
+                    try report.headline.addReflowingText(" starts with ");
+                    try report.headline.addInlineCode("$");
+                    try report.headline.addReflowingText(" but is not declared with ");
+                    try report.headline.addKeyword("var");
+                    try report.headline.addReflowingText(".");
+
+                    const suggested = if (ident_name.len > 0) ident_name[1..] else ident_name;
+                    const owned_suggested = try report.addOwnedString(suggested);
+                    try report.document.addReflowingText("Either rename this binding and all of its uses to ");
+                    try report.document.addUnqualifiedSymbol(owned_suggested);
+                    try report.document.addReflowingText(", or declare it with ");
+                    try report.document.addKeyword("var");
+                    try report.document.addReflowingText(" if it should be mutable.");
+                },
+            }
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
             break :blk report;
         },
         .empty_tuple => |data| blk: {
@@ -3625,9 +3683,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const region_info = self.calcRegionInfo(data.region);
 
             var report = try Report.init(allocator, "Trailing `?`", "", .warning);
-            try report.headline.addReflowingText("This ");
+            try report.headline.addReflowingText("It's usually a mistake to use a postfix ");
             try report.headline.addAnnotated("?", .inline_code);
-            try report.headline.addReflowingText(" is applied to the value this function returns:");
+            try report.headline.addReflowingText(" on values being returned implicitly at the end of a function like this:");
 
             try report.document.addSourceRegion(
                 region_info,
@@ -3638,31 +3696,78 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             );
             try report.document.addLineBreak();
 
-            try report.document.addReflowingText("A ");
+            try report.document.addReflowingText("This is because ");
             try report.document.addAnnotated("?", .inline_code);
-            try report.document.addReflowingText(" here is almost always a mistake. On ");
-            try report.document.addAnnotated("Err", .inline_code);
-            try report.document.addReflowingText(", it returns the error from the function early. On ");
-            try report.document.addAnnotated("Ok", .inline_code);
-            try report.document.addReflowingText(", it unwraps the payload and returns that instead of the ");
+            try report.document.addReflowingText(" is syntax sugar for doing a ");
+            try report.document.addAnnotated("match", .inline_code);
+            try report.document.addReflowingText(" on a ");
             try report.document.addAnnotated("Try", .inline_code);
-            try report.document.addReflowingText(", which only type-checks when the payload is itself a ");
-            try report.document.addAnnotated("Try", .inline_code);
-            try report.document.addReflowingText(".");
+            try report.document.addReflowingText(" value like this:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.startAnnotation(.code_block);
+            try report.document.addIndent(1);
+            try report.document.addKeyword("match");
+            try report.document.addText(" ");
+            try report.document.addUnqualifiedSymbol("value_before_question_mark");
+            try report.document.addText(" {");
+            try report.document.addLineBreak();
+            try report.document.addIndent(2);
+            try report.document.addTagName("Ok");
+            try report.document.addText("(");
+            try report.document.addUnqualifiedSymbol("ok_payload");
+            try report.document.addText(") ");
+            try report.document.addBinaryOperator("=>");
+            try report.document.addText(" ");
+            try report.document.addUnqualifiedSymbol("ok_payload");
+            try report.document.addLineBreak();
+            try report.document.addIndent(2);
+            try report.document.addTagName("Err");
+            try report.document.addText("(");
+            try report.document.addUnqualifiedSymbol("err_payload");
+            try report.document.addText(") ");
+            try report.document.addBinaryOperator("=>");
+            try report.document.addText(" ");
+            try report.document.addKeyword("return");
+            try report.document.addText(" ");
+            try report.document.addTagName("Err");
+            try report.document.addText("(");
+            try report.document.addUnqualifiedSymbol("err_payload");
+            try report.document.addText(")");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addText("}");
+            try report.document.endAnnotation();
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
-            try report.document.addReflowingText("If you meant to return the ");
-            try report.document.addAnnotated("Try", .inline_code);
-            try report.document.addReflowingText(" as-is, remove the ");
+            try report.document.addReflowingText("When you use ");
             try report.document.addAnnotated("?", .inline_code);
-            try report.document.addReflowingText(". If you really do want to unwrap a nested ");
+            try report.document.addReflowingText(" on the value at the end of a function, it changes \"implicitly return this ");
             try report.document.addAnnotated("Try", .inline_code);
-            try report.document.addReflowingText(" here, write that as a ");
+            try report.document.addReflowingText(" value\" to \"return this ");
+            try report.document.addAnnotated("Try", .inline_code);
+            try report.document.addReflowingText(" value if it's an ");
+            try report.document.addAnnotated("Err", .inline_code);
+            try report.document.addReflowingText(", but if it's ");
+            try report.document.addAnnotated("Ok", .inline_code);
+            try report.document.addReflowingText(", unwrap its ");
+            try report.document.addAnnotated("Ok", .inline_code);
+            try report.document.addReflowingText(" payload and return that instead\" - which can only possibly type-check when returning ");
+            try report.document.addAnnotated("Try(Try(..., ...), ...)", .inline_code);
+            try report.document.addReflowingText(", which is so unusual that using ");
+            try report.document.addAnnotated("?", .inline_code);
+            try report.document.addReflowingText(" here is almost always a mistake in practice.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Usually removing the ");
+            try report.document.addAnnotated("?", .inline_code);
+            try report.document.addReflowingText(" here is what makes the most sense, but if you really want this behavior, make it clear by using an explicit ");
             try report.document.addAnnotated("match", .inline_code);
-            try report.document.addReflowingText(" instead, because a trailing ");
+            try report.document.addReflowingText(" instead of the ");
             try report.document.addAnnotated("?", .inline_code);
-            try report.document.addReflowingText(" is confusing to read.");
+            try report.document.addReflowingText(" syntax sugar.");
 
             break :blk report;
         },

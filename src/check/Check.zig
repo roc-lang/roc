@@ -369,7 +369,7 @@ platform_requirement_solutions: std.ArrayListUnmanaged(requirement_solution.Solu
 /// sequentially scoped), so this is always a single self/enclosing chain.
 local_processing_ptrns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, LocalDefProcessed) = .{},
 
-/// Every local binding root (`x = ..` / `var x = ..` statement pattern)
+/// Every local binding root (`x = ..` / `var $x = ..` statement pattern)
 /// encountered while checking, in solve order. The settled-state occurs sweep
 /// checks these alongside the top-level defs: a local binding's cyclic type
 /// may never be reachable from the enclosing def's root type, and checking
@@ -3143,7 +3143,7 @@ fn recordHoistPatternProvenance(
     if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return;
 
     switch (self.cir.store.getPattern(pattern)) {
-        .assign => {},
+        .assign, .var_assign => {},
         .as,
         .tuple,
         .record_destructure,
@@ -3193,7 +3193,7 @@ fn recordHoistPatternValidationCandidate(
 
 fn patternIntroducesValueBinding(self: *const Self, pattern: CIR.Pattern.Idx) bool {
     return switch (self.cir.store.getPattern(pattern)) {
-        .assign, .as => true,
+        .assign, .var_assign, .as => true,
         .tuple => |tuple| blk: {
             for (self.cir.store.slicePatterns(tuple.patterns)) |child| {
                 if (self.patternIntroducesValueBinding(child)) break :blk true;
@@ -3248,6 +3248,7 @@ fn patternIntroducesValueBinding(self: *const Self, pattern: CIR.Pattern.Idx) bo
 fn patternCanOwnHoistedBindingRoot(self: *Self, pattern: CIR.Pattern.Idx) bool {
     return switch (self.cir.store.getPattern(pattern)) {
         .assign,
+        .var_assign,
         .as,
         => true,
         .tuple,
@@ -3292,6 +3293,7 @@ fn recordHoistSingleBranchMatchPatternProvenance(
 fn patternIsIrrefutableForHoistExtraction(self: *Self, pattern: CIR.Pattern.Idx) bool {
     return switch (self.cir.store.getPattern(pattern)) {
         .assign,
+        .var_assign,
         .underscore,
         => true,
         .as => |as_pattern| self.patternIsIrrefutableForHoistExtraction(as_pattern.pattern),
@@ -3356,7 +3358,7 @@ fn recordHoistPatternExtractionProvenanceHelp(
     selection: HoistPatternExtractionSelection,
 ) Allocator.Error!void {
     switch (self.cir.store.getPattern(pattern)) {
-        .assign => {
+        .assign, .var_assign => {
             try self.recordHoistPatternExtractionProvenance(pattern, base_expr, scrutinee_pattern);
             if (selection == .immediate) {
                 _ = try self.ensureHoistedBindingRoot(pattern);
@@ -3442,7 +3444,7 @@ fn recordHoistContextualPatternBindings(
     owner_frame_index: usize,
 ) Allocator.Error!void {
     switch (self.cir.store.getPattern(pattern)) {
-        .assign => {
+        .assign, .var_assign => {
             try self.recordHoistContextualBinding(pattern, owner_frame_index);
         },
         .as => |as_pattern| {
@@ -9268,7 +9270,7 @@ fn hoistedTopLevelDefForNode(
 /// The walk is an explicit worklist (zero-recursion policy).
 fn patternBindsNode(module: *const ModuleEnv, root: CIR.Pattern.Idx, node: CIR.Node.Idx) bool {
     if (ModuleEnv.nodeIdxFrom(root) == node) return true;
-    if (module.store.getPattern(root) == .assign) return false;
+    if (module.store.getPattern(root) == .assign or module.store.getPattern(root) == .var_assign) return false;
 
     var stack_allocator_state = std.heap.stackFallback(2048, module.gpa);
     const stack_allocator = stack_allocator_state.get();
@@ -9279,7 +9281,7 @@ fn patternBindsNode(module: *const ModuleEnv, root: CIR.Pattern.Idx, node: CIR.N
     while (pending.pop()) |current| {
         if (ModuleEnv.nodeIdxFrom(current) == node) return true;
         switch (module.store.getPattern(current)) {
-            .assign => {},
+            .assign, .var_assign => {},
             .as => |as_pattern| pending.append(stack_allocator, as_pattern.pattern) catch return false,
             .applied_tag => |tag| {
                 for (module.store.slicePatterns(tag.args)) |arg| {
@@ -9600,6 +9602,7 @@ fn hoistedRootPatternSelectedDependenciesAreKept(
 
     return switch (self.cir.store.getPattern(pattern)) {
         .assign,
+        .var_assign,
         .underscore,
         .runtime_error,
         .num_literal,
@@ -9661,7 +9664,7 @@ fn hoistedRootPatternBindersAreConcrete(
     pattern: CIR.Pattern.Idx,
 ) Allocator.Error!bool {
     return switch (self.cir.store.getPattern(pattern)) {
-        .assign => try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(pattern)),
+        .assign, .var_assign => try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(pattern)),
         .as => |as_pattern| (try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(pattern))) and
             try self.hoistedRootPatternBindersAreConcrete(as_pattern.pattern),
         .tuple => |tuple| blk: {
@@ -9726,7 +9729,7 @@ fn appendHoistedDependencyPatternBinders(
     kind: HoistedDependencyBindingKind,
 ) Allocator.Error!void {
     switch (self.cir.store.getPattern(pattern)) {
-        .assign => {
+        .assign, .var_assign => {
             try context.append(self.gpa, pattern, kind);
         },
         .as => |as_pattern| {
@@ -16298,7 +16301,7 @@ fn checkPatternHelp(
     };
 
     switch (pattern) {
-        .assign => {
+        .assign, .var_assign => {
             // Assigned variables start out as flex (initialized in preflight),
             // and their type is refined by usage. Reassignments reuse the same
             // pattern var, so never overwrite existing constraints here.
@@ -16651,6 +16654,7 @@ fn getPatternIdent(self: *const Self, ptrn_idx: CIR.Pattern.Idx) ?Ident.Idx {
     const pattern = self.cir.store.getPattern(ptrn_idx);
     switch (pattern) {
         .assign => |assign| return assign.ident,
+        .var_assign => |assign| return assign.ident,
         .as => |as_pattern| return as_pattern.ident,
         .applied_tag,
         .nominal,
@@ -16681,6 +16685,7 @@ const CirPatternRefutabilityAdapter = struct {
         const pattern = self.checker.cir.store.getPattern(pattern_idx);
         return switch (pattern) {
             .assign,
+            .var_assign,
             .underscore,
             .runtime_error,
             => .cannot_miss,
@@ -16711,6 +16716,7 @@ const CirPatternRefutabilityAdapter = struct {
             .nominal => |nominal| nominal.backing_pattern,
             .nominal_external => |nominal| nominal.backing_pattern,
             .assign,
+            .var_assign,
             .applied_tag,
             .record_destructure,
             .list,
@@ -16734,6 +16740,7 @@ const CirPatternRefutabilityAdapter = struct {
         return switch (pattern) {
             .tuple => |tuple| self.checker.cir.store.slicePatterns(tuple.patterns).len,
             .assign,
+            .var_assign,
             .as,
             .applied_tag,
             .nominal,
@@ -16759,6 +16766,7 @@ const CirPatternRefutabilityAdapter = struct {
         return switch (pattern) {
             .tuple => |tuple| self.checker.cir.store.slicePatterns(tuple.patterns)[index],
             .assign,
+            .var_assign,
             .as,
             .applied_tag,
             .nominal,
@@ -16784,6 +16792,7 @@ const CirPatternRefutabilityAdapter = struct {
         return switch (pattern) {
             .record_destructure => |destructure| self.checker.cir.store.sliceRecordDestructs(destructure.destructs).len,
             .assign,
+            .var_assign,
             .as,
             .applied_tag,
             .nominal,
@@ -16813,6 +16822,7 @@ const CirPatternRefutabilityAdapter = struct {
                 break :blk destruct.kind.toPatternIdx();
             },
             .assign,
+            .var_assign,
             .as,
             .applied_tag,
             .nominal,
@@ -16838,6 +16848,7 @@ const CirPatternRefutabilityAdapter = struct {
         return switch (pattern) {
             .list => |list| self.checker.cir.store.slicePatterns(list.patterns).len,
             .assign,
+            .var_assign,
             .as,
             .applied_tag,
             .nominal,
@@ -16863,6 +16874,7 @@ const CirPatternRefutabilityAdapter = struct {
         return switch (pattern) {
             .list => |list| list.rest_info != null,
             .assign,
+            .var_assign,
             .as,
             .applied_tag,
             .nominal,
@@ -16888,6 +16900,7 @@ const CirPatternRefutabilityAdapter = struct {
         return switch (pattern) {
             .list => |list| list.rest_info.?.pattern,
             .assign,
+            .var_assign,
             .as,
             .applied_tag,
             .nominal,
@@ -16964,6 +16977,7 @@ fn collectPatternBindings(
     const pattern = self.cir.store.getPattern(pattern_idx);
     switch (pattern) {
         .assign => |assign| try out.append(self.gpa, .{ .ident = assign.ident, .pattern_idx = pattern_idx }),
+        .var_assign => |assign| try out.append(self.gpa, .{ .ident = assign.ident, .pattern_idx = pattern_idx }),
         .as => |as_pat| {
             try out.append(self.gpa, .{ .ident = as_pat.ident, .pattern_idx = pattern_idx });
             try self.collectPatternBindings(as_pat.pattern, out);
@@ -19710,8 +19724,9 @@ fn getExprPatternIdent(self: *const Self, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
     if (func_expr != .e_lookup_local) return null;
     // Get the pattern that defines this identifier
     const pattern = self.cir.store.getPattern(func_expr.e_lookup_local.pattern_idx);
-    if (pattern != .assign) return null;
-    return pattern.assign.ident;
+    if (pattern == .assign) return pattern.assign.ident;
+    if (pattern == .var_assign) return pattern.var_assign.ident;
+    return null;
 }
 
 fn validateToInspectMethodTypes(self: *Self, env: *Env) Allocator.Error!void {
@@ -20161,13 +20176,14 @@ fn patternIdentInModule(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?Ide
     const tag = module_env.store.nodes.get(ModuleEnv.nodeIdxFrom(def_idx)).tag;
     const pattern_idx: CIR.Pattern.Idx = if (tag == .def)
         module_env.store.getDef(def_idx).pattern
-    else if (tag == .pattern_identifier or tag == .pattern_as)
+    else if (tag == .pattern_identifier or tag == .pattern_var_identifier or tag == .pattern_as)
         @enumFromInt(@intFromEnum(def_idx))
     else
         return null;
     const pattern = module_env.store.getPattern(pattern_idx);
     return switch (pattern) {
         .assign => |assign| assign.ident,
+        .var_assign => |assign| assign.ident,
         .as => |as_pattern| as_pattern.ident,
         .applied_tag,
         .nominal,

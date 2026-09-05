@@ -157,6 +157,7 @@ NAME NOT IN SCOPE - fuzz_crash_019.md:59:3:59:7
 UNUSED VARIABLE - fuzz_crash_019.md:60:12:60:15
 NAME NOT IN SCOPE - fuzz_crash_019.md:72:2:72:4
 UNDECLARED TYPE - fuzz_crash_019.md:74:9:74:15
+VAR NAME MISSING `$` - fuzz_crash_019.md:77:6:77:8
 NAME NOT IN SCOPE - fuzz_crash_019.md:78:9:78:14
 UNRECOGNIZED SYNTAX - fuzz_crash_019.md:83:2:83:5
 NAME NOT IN SCOPE - fuzz_crash_019.md:86:9:86:11
@@ -501,6 +502,16 @@ The type Listlt is not declared in this scope.
 
 main! : Listlt({}, _)
         ^^^^^^
+
+── ● var name missing `$` ─────────────────────────────── fuzz_crash_019.md:77:6
+
+The mutable binding er is declared with var but its name does not start with $.
+
+var er = 123
+    ^^
+
+Rename this binding and all of its uses to $er. The name is only a convention;
+mutability comes from the var declaration.
 
 ── ✗ name not in scope ────────────────────────────────── fuzz_crash_019.md:78:9
 

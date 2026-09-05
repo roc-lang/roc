@@ -19,9 +19,19 @@ product = {
 expect product == 180
 ~~~
 # EXPECTED
-NIL
+VAR NAME MISSING `$` - for_loop_nested.md:3:6:3:13
 # PROBLEMS
-NIL
+── ● var name missing `$` ─────────────────────────────── for_loop_nested.md:3:6
+
+The mutable binding result_ is declared with var but its name does not start
+with $.
+
+var result_ = 0
+    ^^^^^^^
+
+Rename this binding and all of its uses to $result_. The name is only a
+convention; mutability comes from the var declaration.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -90,7 +100,7 @@ NO CHANGE
 		(p-assign (ident "product"))
 		(e-block
 			(s-var
-				(p-assign (ident "result_"))
+				(p-var-assign (ident "result_"))
 				(e-num (value "0")))
 			(s-for
 				(p-assign (ident "i"))
@@ -108,13 +118,13 @@ NO CHANGE
 								(e-num (value "20"))))
 						(e-block
 							(s-reassign
-								(p-assign (ident "result_"))
-								(e-dispatch-call (method "plus") (constraint-fn-var 360)
+								(p-var-assign (ident "result_"))
+								(e-dispatch-call (method "plus") (constraint-fn-var 361)
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "result_"))))
+											(p-var-assign (ident "result_"))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 358)
+										(e-dispatch-call (method "times") (constraint-fn-var 359)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "i"))))
@@ -124,7 +134,7 @@ NO CHANGE
 							(e-empty_record)))
 					(e-empty_record)))
 			(e-lookup-local
-				(p-assign (ident "result_"))))
+				(p-var-assign (ident "result_"))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect

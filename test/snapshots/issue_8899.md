@@ -166,10 +166,10 @@ EndOfFile,
 				(p-assign (ident "l")))
 			(e-block
 				(s-var
-					(p-assign (ident "$total"))
+					(p-var-assign (ident "$total"))
 					(e-typed-int (value "0") (type "I64")))
 				(s-var
-					(p-assign (ident "$acc"))
+					(p-var-assign (ident "$acc"))
 					(e-list
 						(elems
 							(e-typed-int (value "0") (type "I64")))))
@@ -179,16 +179,16 @@ EndOfFile,
 						(p-assign (ident "l")))
 					(e-block
 						(s-reassign
-							(p-assign (ident "$acc"))
+							(p-var-assign (ident "$acc"))
 							(e-call (constraint-fn-var 305)
 								(e-lookup-external
 									(builtin))
 								(e-lookup-local
-									(p-assign (ident "$acc")))
+									(p-var-assign (ident "$acc")))
 								(e-lookup-local
 									(p-assign (ident "e")))))
 						(s-reassign
-							(p-assign (ident "$total"))
+							(p-var-assign (ident "$total"))
 							(e-match
 								(match
 									(cond
@@ -196,7 +196,7 @@ EndOfFile,
 											(e-lookup-external
 												(builtin))
 											(e-lookup-local
-												(p-assign (ident "$acc")))))
+												(p-var-assign (ident "$acc")))))
 									(branches
 										(branch
 											(patterns
@@ -206,7 +206,7 @@ EndOfFile,
 												(e-dispatch-call (method "plus") (constraint-fn-var 323)
 													(receiver
 														(e-lookup-local
-															(p-assign (ident "$total"))))
+															(p-var-assign (ident "$total"))))
 													(args
 														(e-lookup-local
 															(p-assign (ident "last")))))))
@@ -216,10 +216,10 @@ EndOfFile,
 													(p-applied-tag)))
 											(value
 												(e-lookup-local
-													(p-assign (ident "$total")))))))))
+													(p-var-assign (ident "$total")))))))))
 						(e-empty_record)))
 				(e-lookup-local
-					(p-assign (ident "$total"))))))
+					(p-var-assign (ident "$total"))))))
 	(e-call (constraint-fn-var 378)
 		(e-lookup-local
 			(p-assign (ident "sum_with_last")))

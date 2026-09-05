@@ -1214,8 +1214,8 @@ test "hoist roots are not selected for branch-local binding dependencies" {
 test "hoist roots are not selected for mutable local dependencies" {
     var test_env = try TestEnv.init("Test",
         \\main = |_| {
-        \\    var x = 41.I64
-        \\    y = x + 1.I64
+        \\    var $x = 41.I64
+        \\    y = $x + 1.I64
         \\    y
         \\}
     );

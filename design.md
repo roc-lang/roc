@@ -523,6 +523,14 @@ referenced declaration. This evidence comes from the normal annotation-generatio
 traversal; validity must not be reconstructed later by rescanning source syntax or
 solved type structure.
 
+A declaration header parameter is always a named rigid type variable. Bare `_` is
+an inferred type annotation, not a binder, so canonicalization diagnoses it and
+emits a `.malformed` header annotation for every declaration kind. Nominal and
+opaque declarations may use an underscore-prefixed name such as `_a` for an
+intentionally phantom parameter; aliases and where aliases reject those names.
+This keeps every valid declaration formal's identity explicit through checking and
+`CheckedModule` construction.
+
 After all local type declarations have been generated, checking computes the
 transitive closure of invalidity over those recorded dependency edges. This
 finalization is linear in the number of declarations plus recorded references,
@@ -1262,6 +1270,21 @@ decides whether a source type name is inserted, shadows another type, replaces
 an auto-imported type, redeclares an existing type, or repeats the same external
 type must live in one place. Callers may choose which source operation they are
 performing, but they must not duplicate the type-binding collision matrix.
+
+Source binding mutability comes only from an explicit `var` construct. CIR
+represents a mutable binder as `Pattern.var_assign` and an immutable binder as
+`Pattern.assign`; scope insertion, reassignment validation, checking, checked
+module construction, and every later consumer use that explicit distinction.
+They must not infer mutability from identifier text. The `$` byte remains part
+of an identifier's exact identity, so `$value` and `value` are distinct names.
+
+The `$` prefix is a naming convention enforced only as a declaration-site
+warning. Canonicalization reports a mutable binder whose name lacks `$`, or an
+immutable binder whose name starts with `$`, when it identifies the source
+construct as a declaration. Identifier references do not report this warning,
+and neither parsing nor identifier interning treats `$` as a mutability marker.
+`CheckedBodyStoreBuilder` copies a binder's reassignability directly from its CIR
+pattern tag.
 
 Canonicalization also outputs two exact module-global value-definition lists.
 The selected-name list contains one definition for each source-visible value
@@ -6838,6 +6861,11 @@ columns, not hash tables keyed by node id. Union-find redirects may change which
 node is a class root, but they never renumber a node; root-owned columns are
 updated explicitly when a union moves that ownership.
 
+Declaration-backed nominal reuse is indexed by declaration identity plus the
+current argument-root tuple. Root unions rekey affected entries, so lookup cost
+must depend only on the current live index: the history of earlier root
+migrations must not lengthen future probe paths.
+
 A context-free callee body never joins the caller group's graph. Instead
 CheckedModule stores a complete specialization-interface relation table for
 every procedure template. Its records explicitly name checked equalities,
@@ -10502,6 +10530,15 @@ results, and decision slices are discarded together only after the proc body
 and metadata have been committed. `ArcPlan` is the phase boundary: dependency
 solving may query ownership and liveness while filling a slot; its materializer
 accepts neither and only follows the explicit decisions.
+
+Exact ownership and certifier path snapshots use persistent sparse proc-local
+state. A control-flow fork shares the unchanged state root, and a transition
+stores only bounded-depth paths to changed `OwnedEntry` values, liveness words,
+or certifier `State` entries.
+Fresh one-owner states update their paths in place until the first fork; meets
+share equal subtrees and allocate only changed subtrees. Procedure width is
+therefore paid once by the producer-owned domains and summaries, not once per
+branch, join arrival, plan endpoint, or certifier work item.
 
 Immediate `incref`/matching-`decref` cancellation is part of retain
 construction: count one cancels the pair and larger counts are reduced by one.

@@ -4068,6 +4068,7 @@ fn renameTargetAt(module_env: *ModuleEnv, offset: u32) ?RenameTarget {
     const pattern_idx = cir_queries.resolveSymbolAtOffset(module_env, offset) orelse return null;
     return switch (module_env.store.getPattern(pattern_idx)) {
         .assign => |assign| .{ .pattern = pattern_idx, .ident = assign.ident },
+        .var_assign => |assign| .{ .pattern = pattern_idx, .ident = assign.ident },
         .as,
         .applied_tag,
         .nominal,

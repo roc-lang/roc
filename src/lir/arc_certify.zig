@@ -113,6 +113,7 @@ const rc_effect_rules = base.rc_effect_rules;
 const arc_sig = @import("arc_sig.zig");
 const arc_dismantle = @import("arc_dismantle.zig");
 const arc_solve = @import("arc_solve.zig");
+const ArcSnapshot = @import("arc_state.zig").Snapshot;
 const debug_print = @import("debug_print.zig");
 
 const LIR = core.LIR;
@@ -213,6 +214,7 @@ fn certifyStoreWithWorkStats(
         .rc_local = rc_local,
         .maybe_uninitialized = &maybe_uninitialized,
         .lender_arena = std.heap.ArenaAllocator.init(allocator),
+        .state_arena = std.heap.ArenaAllocator.init(allocator),
         .records = collections.DenseMap(LIR.JoinPointId, JoinRecord).init(allocator),
         .memo = std.AutoHashMap(MemoEntry, void).init(allocator),
         .repr_scratch = collections.DenseMap(ValueId, u32).init(allocator),
@@ -1226,49 +1228,39 @@ const ValueInfo = struct {
     call_restitution: []const RestitutionReceipt = &.{},
 };
 
-/// One forked ownership state along a control-flow path.
-/// Retired certifier states, kept so a fork can refill one instead of
-/// allocating a fresh set of buffers.
-///
-/// A state holds one array per refcounted local plus four indexed by value,
-/// and every branch clones the whole thing. On a wide derived codec that is
-/// tens of thousands of clone/free pairs of multi-kilobyte buffers, which in
-/// a Debug build means the same number of trips through the page allocator.
-/// Reusing them keeps the buffers hot and the allocator out of the loop.
-/// Entries are sized for one procedure, so the pool is drained between
-/// procedures.
-const StatePool = std.ArrayList(State);
-
+/// One exact ownership state along a control-flow path. Forks share all
+/// unchanged facts; a transfer allocates only bounded-depth paths to the facts
+/// it changes in the current procedure's state arena.
 const State = struct {
-    allocator: Allocator,
-    /// Where this state's buffers go when it dies, or null to free them.
-    pool: ?*StatePool = null,
+    /// True until the state first forks. Before that point its tree nodes have
+    /// one owner and construction can update them in place.
+    unique: bool = true,
     /// Dense proc-local position per store local, owned by the certifier and
     /// stable for the lifetime of every state for the current proc.
     local_dense: []const u32,
     /// Value bound to each reference-counted local used by this proc;
     /// `no_value` when unbound.
-    local_value: []ValueId,
+    local_value: ArcSnapshot(ValueId, no_value),
     /// Ownership units per value. Values created after a fork are absent in
     /// sibling states; absent means zero.
-    balance: std.ArrayList(i32),
+    balance: ArcSnapshot(i32, 0),
     /// Aggregate value currently holding a moved-in unit of this value, or
     /// `no_value`. Keeps consumed operands live until the holder dies.
-    holder: std.ArrayList(ValueId),
+    holder: ArcSnapshot(ValueId, no_value),
     /// Presence condition for a value that represents conditional ownership.
     /// `no_dense` means the value is ordinary. A conditional value carries a
     /// possible ownership unit: if the condition is true, the unit exists and
     /// must be released; if false, the payload was never initialized.
-    conditional_condition: std.ArrayList(u32),
-    conditional_condition_mask: std.ArrayList(u64),
+    conditional: ArcSnapshot(ConditionalEntry, .{}),
     /// Fields of a value whose stored units have been claimed by field
     /// takes. A claimed value's remaining unit covers only its unclaimed
     /// fields: it can no longer be released or consumed whole, and at a
     /// terminal it must be fully claimed and residual-released instead.
-    claims: std.AutoHashMapUnmanaged(ValueId, u64),
+    claims: ArcSnapshot(u64, 0),
     /// Scalar discriminant locals explicitly read from a direct call result
     /// carrying outcome-conditioned ownership.
-    outcome_discriminants: std.AutoHashMapUnmanaged(LIR.LocalId, ValueId),
+    outcome_discriminants: ArcSnapshot(ValueId, no_value),
+    outcome_discriminant_count: usize = 0,
     /// Statically known discriminant of the current proc's top-level result
     /// along this exact path. The initial restitution capability consumes it
     /// before a terminal jump/return, so it never crosses a join summary.
@@ -1278,236 +1270,60 @@ const State = struct {
     /// declaration is an exact LIR scope boundary: nested joins preserve its
     /// symbolic cells until a switch resolves them, while joins that precede
     /// or sit outside the declaration must not manufacture them.
-    maybe_uninitialized_unresolved: std.bit_set.DynamicBitSetUnmanaged,
+    maybe_uninitialized_unresolved: ArcSnapshot(bool, false),
     /// Payload cells that may already have been spent by a guarded release on
     /// one path. The bit is a may-fact: joins union it, a fresh payload write or
     /// producer-authored conditional join clears it, and another guarded read
     /// before either transition is a possible double release.
-    maybe_uninitialized_released: std.bit_set.DynamicBitSetUnmanaged,
+    maybe_uninitialized_released: ArcSnapshot(bool, false),
     /// Some value on this path has a negative balance: an aggregate move
     /// consumed a field read whose take has not settled yet.
     any_negative: bool = false,
 
+    const ConditionalEntry = struct {
+        condition: u32 = no_dense,
+        mask: u64 = 0,
+    };
+
     fn init(allocator: Allocator, local_dense: []const u32, proc_local_count: usize) Allocator.Error!State {
-        const local_value = try allocator.alloc(ValueId, proc_local_count);
-        errdefer allocator.free(local_value);
-        @memset(local_value, no_value);
-        var maybe_uninitialized_unresolved = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_local_count);
-        errdefer maybe_uninitialized_unresolved.deinit(allocator);
-        const maybe_uninitialized_released = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_local_count);
         return .{
-            .allocator = allocator,
             .local_dense = local_dense,
-            .local_value = local_value,
-            .balance = .empty,
-            .holder = .empty,
-            .conditional_condition = .empty,
-            .conditional_condition_mask = .empty,
-            .claims = .empty,
-            .outcome_discriminants = .empty,
+            .local_value = ArcSnapshot(ValueId, no_value).init(allocator, proc_local_count),
+            .balance = ArcSnapshot(i32, 0).init(allocator, proc_local_count),
+            .holder = ArcSnapshot(ValueId, no_value).init(allocator, proc_local_count),
+            .conditional = ArcSnapshot(ConditionalEntry, .{}).init(allocator, proc_local_count),
+            .claims = ArcSnapshot(u64, 0).init(allocator, proc_local_count),
+            .outcome_discriminants = ArcSnapshot(ValueId, no_value).init(allocator, local_dense.len),
             .result_discriminant = no_dense,
-            .maybe_uninitialized_unresolved = maybe_uninitialized_unresolved,
-            .maybe_uninitialized_released = maybe_uninitialized_released,
+            .maybe_uninitialized_unresolved = ArcSnapshot(bool, false).init(allocator, proc_local_count),
+            .maybe_uninitialized_released = ArcSnapshot(bool, false).init(allocator, proc_local_count),
             .any_negative = false,
         };
     }
 
-    fn deinit(self: *State) void {
-        if (self.pool) |pool| {
-            self.balance.clearRetainingCapacity();
-            self.holder.clearRetainingCapacity();
-            self.conditional_condition.clearRetainingCapacity();
-            self.conditional_condition_mask.clearRetainingCapacity();
-            self.claims.clearRetainingCapacity();
-            self.outcome_discriminants.clearRetainingCapacity();
-            // Recycling is an optimization; if the pool cannot grow, fall
-            // through and free the buffers as usual.
-            pool.append(self.allocator, self.*) catch {
-                self.freeBuffers();
-                return;
-            };
-            self.* = undefined;
-            return;
+    fn deinit(_: *State) void {}
+
+    fn clone(self: *State) Allocator.Error!State {
+        self.unique = false;
+        var cloned = self.*;
+        cloned.unique = false;
+        return cloned;
+    }
+
+    fn put(self: *State, snapshot: anytype, index: u32, value: anytype) Allocator.Error!void {
+        if (self.unique) {
+            try snapshot.putUnique(index, value);
+        } else {
+            try snapshot.put(index, value);
         }
-        self.freeBuffers();
-    }
-
-    fn freeBuffers(self: *State) void {
-        self.allocator.free(self.local_value);
-        self.balance.deinit(self.allocator);
-        self.holder.deinit(self.allocator);
-        self.conditional_condition.deinit(self.allocator);
-        self.conditional_condition_mask.deinit(self.allocator);
-        self.claims.deinit(self.allocator);
-        self.outcome_discriminants.deinit(self.allocator);
-        self.maybe_uninitialized_unresolved.deinit(self.allocator);
-        self.maybe_uninitialized_released.deinit(self.allocator);
-    }
-
-    fn clone(self: *const State) Allocator.Error!State {
-        if (self.pool) |pool| {
-            if (pool.pop()) |recycled| {
-                var reused = recycled;
-                errdefer reused.freeBuffers();
-                try reused.refillFrom(self);
-                return reused;
-            }
-        }
-
-        const local_value = try self.allocator.dupe(ValueId, self.local_value);
-        errdefer self.allocator.free(local_value);
-        var balance = try self.balance.clone(self.allocator);
-        errdefer balance.deinit(self.allocator);
-        var holder = try self.holder.clone(self.allocator);
-        errdefer holder.deinit(self.allocator);
-        var conditional_condition = try self.conditional_condition.clone(self.allocator);
-        errdefer conditional_condition.deinit(self.allocator);
-        var conditional_condition_mask = try self.conditional_condition_mask.clone(self.allocator);
-        errdefer conditional_condition_mask.deinit(self.allocator);
-        var claims = try self.claims.clone(self.allocator);
-        errdefer claims.deinit(self.allocator);
-        var outcome_discriminants = try self.outcome_discriminants.clone(self.allocator);
-        errdefer outcome_discriminants.deinit(self.allocator);
-        var maybe_uninitialized_unresolved = try self.maybe_uninitialized_unresolved.clone(self.allocator);
-        errdefer maybe_uninitialized_unresolved.deinit(self.allocator);
-        const maybe_uninitialized_released = try self.maybe_uninitialized_released.clone(self.allocator);
-        return .{
-            .allocator = self.allocator,
-            .pool = self.pool,
-            .local_dense = self.local_dense,
-            .local_value = local_value,
-            .balance = balance,
-            .holder = holder,
-            .conditional_condition = conditional_condition,
-            .conditional_condition_mask = conditional_condition_mask,
-            .claims = claims,
-            .outcome_discriminants = outcome_discriminants,
-            .result_discriminant = self.result_discriminant,
-            .maybe_uninitialized_unresolved = maybe_uninitialized_unresolved,
-            .maybe_uninitialized_released = maybe_uninitialized_released,
-            .any_negative = self.any_negative,
-        };
-    }
-
-    /// Overwrites a recycled state with `source`, keeping the buffers it
-    /// already owns. `refilled_fields` holds this to every field of `State`.
-    fn refillFrom(self: *State, source: *const State) Allocator.Error!void {
-        if (self.local_value.len != source.local_value.len) {
-            self.local_value = try self.allocator.realloc(self.local_value, source.local_value.len);
-        }
-        @memcpy(self.local_value, source.local_value);
-
-        try copyList(i32, &self.balance, &source.balance, self.allocator);
-        try copyList(ValueId, &self.holder, &source.holder, self.allocator);
-        try copyList(u32, &self.conditional_condition, &source.conditional_condition, self.allocator);
-        try copyList(u64, &self.conditional_condition_mask, &source.conditional_condition_mask, self.allocator);
-        try copyBitSet(&self.maybe_uninitialized_unresolved, &source.maybe_uninitialized_unresolved, self.allocator);
-        try copyBitSet(&self.maybe_uninitialized_released, &source.maybe_uninitialized_released, self.allocator);
-
-        self.claims.clearRetainingCapacity();
-        try self.claims.ensureTotalCapacity(self.allocator, source.claims.count());
-        var claim_it = source.claims.iterator();
-        while (claim_it.next()) |entry| self.claims.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
-
-        self.outcome_discriminants.clearRetainingCapacity();
-        try self.outcome_discriminants.ensureTotalCapacity(self.allocator, source.outcome_discriminants.count());
-        var discriminant_it = source.outcome_discriminants.iterator();
-        while (discriminant_it.next()) |entry| {
-            self.outcome_discriminants.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
-        }
-
-        try self.maybe_uninitialized_unresolved.resize(
-            self.allocator,
-            source.maybe_uninitialized_unresolved.capacity(),
-            false,
-        );
-        self.maybe_uninitialized_unresolved.unsetAll();
-        self.maybe_uninitialized_unresolved.setUnion(source.maybe_uninitialized_unresolved);
-
-        try self.maybe_uninitialized_released.resize(
-            self.allocator,
-            source.maybe_uninitialized_released.capacity(),
-            false,
-        );
-        self.maybe_uninitialized_released.unsetAll();
-        self.maybe_uninitialized_released.setUnion(source.maybe_uninitialized_released);
-
-        self.local_dense = source.local_dense;
-        self.pool = source.pool;
-        self.result_discriminant = source.result_discriminant;
-        self.any_negative = source.any_negative;
-    }
-
-    /// Every field `refillFrom` copies out of the source state.
-    const refilled_fields = [_][]const u8{
-        "local_value",
-        "balance",
-        "holder",
-        "conditional_condition",
-        "conditional_condition_mask",
-        "maybe_uninitialized_unresolved",
-        "maybe_uninitialized_released",
-        "claims",
-        "outcome_discriminants",
-        "local_dense",
-        "pool",
-        "result_discriminant",
-        "any_negative",
-    };
-
-    /// Fields a refill leaves as the recycled state already has them. Every
-    /// state in a pool is built with the certifier's allocator, so the one a
-    /// recycled state holds is already the source's.
-    const refill_exempt_fields = [_][]const u8{
-        "allocator",
-    };
-
-    // A recycled state keeps whatever the previous walk left in a field the
-    // refill skips, and a leftover fact reads as one this path established:
-    // the certifier then reports a finding against a path it never walked, or
-    // misses one it did. Neither shows up as a crash, so a field added to
-    // `State` fails to compile until it is accounted for above.
-    comptime {
-        for (@typeInfo(State).@"struct".fields) |field| {
-            var accounted = false;
-            for (refilled_fields) |name| {
-                if (std.mem.eql(u8, name, field.name)) accounted = true;
-            }
-            for (refill_exempt_fields) |name| {
-                if (std.mem.eql(u8, name, field.name)) accounted = true;
-            }
-            if (!accounted) @compileError(
-                "State." ++ field.name ++ " is neither copied by refillFrom nor listed as exempt",
-            );
-        }
-    }
-
-    fn copyList(
-        comptime T: type,
-        destination: *std.ArrayList(T),
-        source: *const std.ArrayList(T),
-        allocator: Allocator,
-    ) Allocator.Error!void {
-        destination.clearRetainingCapacity();
-        try destination.appendSlice(allocator, source.items);
-    }
-
-    fn copyBitSet(
-        destination: *std.bit_set.DynamicBitSetUnmanaged,
-        source: *const std.bit_set.DynamicBitSetUnmanaged,
-        allocator: Allocator,
-    ) Allocator.Error!void {
-        try destination.resize(allocator, source.capacity(), false);
-        destination.unsetAll();
-        destination.setUnion(source.*);
     }
 
     fn claimsOf(self: *const State, value: ValueId) u64 {
-        return self.claims.get(value) orelse 0;
+        return self.claims.get(value);
     }
 
     fn setClaims(self: *State, value: ValueId, mask: u64) Allocator.Error!void {
-        try self.claims.put(self.allocator, value, mask);
+        try self.put(&self.claims, value, mask);
     }
 
     fn denseIndex(self: *const State, local: LIR.LocalId) usize {
@@ -1519,105 +1335,114 @@ const State = struct {
     }
 
     fn valueOf(self: *const State, local: LIR.LocalId) ValueId {
-        return self.local_value[self.denseIndex(local)];
+        return self.valueAtDense(self.denseIndex(local));
     }
 
     fn valueAtDense(self: *const State, dense: usize) ValueId {
-        return self.local_value[dense];
+        return self.local_value.get(@intCast(dense));
     }
 
     fn maybeUninitializedIsUnresolved(self: *const State, dense: usize) bool {
-        return self.maybe_uninitialized_unresolved.isSet(dense);
+        return self.maybe_uninitialized_unresolved.get(@intCast(dense));
     }
 
     fn maybeUninitializedMayBeReleased(self: *const State, dense: usize) bool {
-        return self.maybe_uninitialized_released.isSet(dense);
+        return self.maybe_uninitialized_released.get(@intCast(dense));
     }
 
-    fn bindValue(self: *State, local: LIR.LocalId, value: ValueId) void {
-        self.local_value[self.denseIndex(local)] = value;
+    fn setMaybeUninitializedUnresolved(self: *State, dense: usize, value: bool) Allocator.Error!void {
+        try self.put(&self.maybe_uninitialized_unresolved, @intCast(dense), value);
+    }
+
+    fn setMaybeUninitializedReleased(self: *State, dense: usize, value: bool) Allocator.Error!void {
+        try self.put(&self.maybe_uninitialized_released, @intCast(dense), value);
+    }
+
+    fn bindValue(self: *State, local: LIR.LocalId, value: ValueId) Allocator.Error!void {
+        try self.put(&self.local_value, @intCast(self.denseIndex(local)), value);
     }
 
     fn balanceOf(self: *const State, value: ValueId) i32 {
-        if (value >= self.balance.items.len) return 0;
-        return self.balance.items[value];
+        return self.balance.get(value);
     }
 
     fn holderOf(self: *const State, value: ValueId) ValueId {
-        if (value >= self.holder.items.len) return no_value;
-        return self.holder.items[value];
+        return self.holder.get(value);
     }
 
     fn conditionalConditionOf(self: *const State, value: ValueId) ?PresenceCondition {
-        if (value >= self.conditional_condition.items.len) return null;
-        const condition = self.conditional_condition.items[value];
-        if (condition == no_dense) return null;
-        return .{ .local = @enumFromInt(condition), .mask = self.conditional_condition_mask.items[value] };
-    }
-
-    fn growToValue(self: *State, value: ValueId) Allocator.Error!void {
-        while (self.balance.items.len <= value) {
-            try self.balance.append(self.allocator, 0);
-        }
-        while (self.holder.items.len <= value) {
-            try self.holder.append(self.allocator, no_value);
-        }
-        while (self.conditional_condition.items.len <= value) {
-            try self.conditional_condition.append(self.allocator, no_dense);
-        }
-        while (self.conditional_condition_mask.items.len <= value) {
-            try self.conditional_condition_mask.append(self.allocator, 0);
-        }
+        const entry = self.conditional.get(value);
+        if (entry.condition == no_dense) return null;
+        return .{ .local = @enumFromInt(entry.condition), .mask = entry.mask };
     }
 
     fn addBalance(self: *State, value: ValueId, delta: i32) Allocator.Error!void {
-        try self.growToValue(value);
-        self.balance.items[value] += delta;
-        if (self.balance.items[value] < 0) self.any_negative = true;
+        const next = self.balanceOf(value) + delta;
+        try self.put(&self.balance, value, next);
+        if (next < 0) self.any_negative = true;
     }
 
     fn setHolder(self: *State, value: ValueId, holder_value: ValueId) Allocator.Error!void {
-        try self.growToValue(value);
-        self.holder.items[value] = holder_value;
+        try self.put(&self.holder, value, holder_value);
     }
 
     fn setConditional(self: *State, value: ValueId, condition: PresenceCondition) Allocator.Error!void {
-        try self.growToValue(value);
-        self.conditional_condition.items[value] = @intFromEnum(condition.local);
-        self.conditional_condition_mask.items[value] = condition.mask;
+        try self.put(&self.conditional, value, ConditionalEntry{ .condition = @intFromEnum(condition.local), .mask = condition.mask });
     }
 
-    fn markDefinitelyInitialized(self: *State, value: ValueId) void {
-        if (value >= self.conditional_condition.items.len) return;
-        self.conditional_condition.items[value] = no_dense;
-        self.conditional_condition_mask.items[value] = 0;
+    fn markDefinitelyInitialized(self: *State, value: ValueId) Allocator.Error!void {
+        try self.put(&self.conditional, value, ConditionalEntry{});
+    }
+
+    fn outcomeDiscriminantCount(self: *const State) usize {
+        return self.outcome_discriminant_count;
+    }
+
+    fn outcomeDiscriminant(self: *const State, local: LIR.LocalId) ?ValueId {
+        const value = self.outcome_discriminants.get(@intFromEnum(local));
+        return if (value == no_value) null else value;
+    }
+
+    fn hasOutcomeDiscriminant(self: *const State, local: LIR.LocalId) bool {
+        return self.outcomeDiscriminant(local) != null;
+    }
+
+    fn setOutcomeDiscriminant(self: *State, local: LIR.LocalId, value: ValueId) Allocator.Error!void {
+        const index = @intFromEnum(local);
+        if (self.outcome_discriminants.get(index) == no_value) self.outcome_discriminant_count += 1;
+        try self.put(&self.outcome_discriminants, index, value);
+    }
+
+    fn removeOutcomeDiscriminant(self: *State, local: LIR.LocalId) Allocator.Error!void {
+        const index = @intFromEnum(local);
+        if (self.outcome_discriminants.get(index) == no_value) return;
+        try self.put(&self.outcome_discriminants, index, no_value);
+        self.outcome_discriminant_count -= 1;
+    }
+
+    fn clearOutcomeDiscriminants(self: *State) void {
+        self.outcome_discriminants.clear();
+        self.outcome_discriminant_count = 0;
     }
 };
 
-test "recycled state copies maybe-uninitialized facts" {
-    var source = try State.init(testing.allocator, &.{}, 4);
-    defer source.deinit();
-    source.maybe_uninitialized_unresolved.set(1);
-    source.maybe_uninitialized_released.set(2);
+test "forked state shares unchanged maybe-uninitialized facts" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
 
-    var recycled = try State.init(testing.allocator, &.{}, 6);
-    defer recycled.deinit();
-    recycled.maybe_uninitialized_unresolved.set(0);
-    recycled.maybe_uninitialized_unresolved.set(3);
-    recycled.maybe_uninitialized_released.set(0);
-    recycled.maybe_uninitialized_released.set(3);
+    var source = try State.init(arena.allocator(), &.{}, 4);
+    try source.setMaybeUninitializedUnresolved(1, true);
+    try source.setMaybeUninitializedReleased(2, true);
 
-    try recycled.refillFrom(&source);
+    var forked = try source.clone();
+    try forked.setMaybeUninitializedUnresolved(0, true);
+    try forked.setMaybeUninitializedReleased(2, false);
 
-    try testing.expectEqual(@as(usize, 4), recycled.maybe_uninitialized_unresolved.capacity());
-    try testing.expect(!recycled.maybe_uninitialized_unresolved.isSet(0));
-    try testing.expect(recycled.maybe_uninitialized_unresolved.isSet(1));
-    try testing.expect(!recycled.maybe_uninitialized_unresolved.isSet(2));
-    try testing.expect(!recycled.maybe_uninitialized_unresolved.isSet(3));
-    try testing.expect(!recycled.maybe_uninitialized_released.isSet(0));
-    try testing.expect(!recycled.maybe_uninitialized_released.isSet(1));
-    try testing.expect(recycled.maybe_uninitialized_released.isSet(2));
-    try testing.expect(!recycled.maybe_uninitialized_released.isSet(3));
+    try testing.expect(!source.maybeUninitializedIsUnresolved(0));
+    try testing.expect(source.maybeUninitializedIsUnresolved(1));
+    try testing.expect(source.maybeUninitializedMayBeReleased(2));
+    try testing.expect(forked.maybeUninitializedIsUnresolved(0));
+    try testing.expect(!forked.maybeUninitializedMayBeReleased(2));
 }
 
 /// Sparse lifetime provenance for one alias-class representative. Ownership
@@ -1833,6 +1658,8 @@ const Certifier = struct {
     maybe_uninitialized: *const MaybeUninitializedConditions,
     values: std.ArrayList(ValueInfo) = .empty,
     lender_arena: std.heap.ArenaAllocator,
+    /// Persistent path-state nodes share this procedure-scoped lifetime.
+    state_arena: std.heap.ArenaAllocator,
     records: collections.DenseMap(LIR.JoinPointId, JoinRecord),
     memo: std.AutoHashMap(MemoEntry, void),
     /// Statements with more than one structural predecessor. Only these
@@ -1844,9 +1671,6 @@ const Certifier = struct {
     /// Hash-conses sparse descriptors within one proc so join comparisons
     /// usually reduce to pointer equality and repeated walks retain no copies.
     provenance_interner: SummaryProvenanceInterner = .empty,
-    /// Retired states for the procedure being certified. Sized per procedure,
-    /// so `certifyProc` drains it before moving on.
-    state_pool: StatePool = .empty,
     /// Reused while normalizing sparse provenance for one summary entry.
     provenance_value_scratch: std.ArrayList(ValueId) = .empty,
     provenance_lender_scratch: std.ArrayList(u32) = .empty,
@@ -1892,6 +1716,7 @@ const Certifier = struct {
     fn deinit(self: *Certifier) void {
         self.values.deinit(self.allocator);
         self.lender_arena.deinit();
+        self.state_arena.deinit();
         self.clearRecords();
         self.records.deinit();
         self.memo.deinit();
@@ -1899,8 +1724,6 @@ const Certifier = struct {
         self.summary_scratch.deinit(self.allocator);
         self.repr_scratch.deinit();
         self.provenance_interner.deinit(self.allocator);
-        self.drainStatePool();
-        self.state_pool.deinit(self.allocator);
         self.provenance_value_scratch.deinit(self.allocator);
         self.provenance_lender_scratch.deinit(self.allocator);
         self.provenance_holder_scratch.deinit(self.allocator);
@@ -1998,7 +1821,7 @@ const Certifier = struct {
     ) CertifyError!ValueId {
         const value = try self.newValue(local, lenders, always_live);
         try state.addBalance(value, units);
-        state.bindValue(local, value);
+        try state.bindValue(local, value);
         return value;
     }
 
@@ -2008,8 +1831,7 @@ const Certifier = struct {
         local: LIR.LocalId,
     ) CertifyError!ValueId {
         const value = try self.newValue(local, &.{}, true);
-        try state.growToValue(value);
-        state.bindValue(local, value);
+        try state.bindValue(local, value);
         return value;
     }
 
@@ -2225,7 +2047,22 @@ const Certifier = struct {
             => return false,
         };
         const existing = state.claimsOf(container);
-        if (existing & bit != 0) return false;
+        if (existing & bit != 0) {
+            // Same-value aliases can own independent retained units. A
+            // complete projection may spend one intact surplus unit without
+            // claiming the already-dismantled unit's fields a second time.
+            // Partial projections still cannot repeat a field claim.
+            if (self.requiredClaimMask(container) != bit or
+                !self.hasIntactSurplusUnit(state, container)) return false;
+            const before = state.balanceOf(container);
+            try state.addBalance(container, -1);
+            if (mutations) |list| try list.append(self.allocator, .{ .balance = .{
+                .value = container,
+                .before = before,
+                .after = before - 1,
+            } });
+            return true;
+        }
         if (!try self.ensureClaimContainerUnit(state, container, seen, mutations)) return false;
         try state.setClaims(container, existing | bit);
         if (mutations) |list| try list.append(self.allocator, .{ .claims = .{
@@ -2354,12 +2191,12 @@ const Certifier = struct {
     /// rescues balances that were already failures before field takes.
     fn settleNegativeClaims(self: *Certifier, state: *State) Allocator.Error!void {
         var remaining = false;
-        for (0..state.balance.items.len) |value_index| {
-            while (state.balance.items[value_index] < 0) {
+        for (0..self.values.items.len) |value_index| {
+            while (state.balanceOf(@intCast(value_index)) < 0) {
                 if (!try self.tryClaim(state, @intCast(value_index))) break;
-                state.balance.items[value_index] += 1;
+                try state.addBalance(@intCast(value_index), 1);
             }
-            if (state.balance.items[value_index] < 0) remaining = true;
+            if (state.balanceOf(@intCast(value_index)) < 0) remaining = true;
         }
         state.any_negative = remaining;
     }
@@ -2367,7 +2204,8 @@ const Certifier = struct {
     fn checkLeaks(self: *Certifier, state: *State) CertifyError!void {
         try self.settleNegativeClaims(state);
 
-        for (state.balance.items, 0..) |units, value_index| {
+        for (0..self.values.items.len) |value_index| {
+            const units = state.balanceOf(@intCast(value_index));
             const claims = state.claimsOf(@intCast(value_index));
             if (claims != 0) {
                 // A dismantled value's own unit must still be in hand, and
@@ -2441,7 +2279,7 @@ const Certifier = struct {
             if (self.values.items[value].origin != param or
                 state.balanceOf(value) != 1 or
                 state.claimsOf(value) != 0 or
-                (value < state.holder.items.len and state.holder.items[value] != no_value))
+                state.holderOf(value) != no_value)
             {
                 return self.fail(
                     "outcome {d} did not preserve the exact entry unit of parameter {d}",
@@ -2862,27 +2700,16 @@ const Certifier = struct {
         return hasher.final();
     }
 
-    /// Frees every recycled state. Buffers are sized for one procedure's
-    /// local count, so they must not outlive it.
-    fn drainStatePool(self: *Certifier) void {
-        while (self.state_pool.pop()) |retired| {
-            var state = retired;
-            state.pool = null;
-            state.freeBuffers();
-        }
-    }
-
     /// Rebuilds a fresh state from an agreed join-entry summary. Alias sets
     /// share one fresh value; borrows are re-linked to the fresh values of the
     /// locals their liveness anchors on.
     fn stateFromSummary(self: *Certifier, summary: []const LocalSummary) CertifyError!State {
-        var state = try State.init(self.allocator, self.local_dense.items, self.proc_locals.items.len);
-        state.pool = &self.state_pool;
+        var state = try State.init(self.state_arena.allocator(), self.local_dense.items, self.proc_locals.items.len);
         errdefer state.deinit();
 
         for (summary, 0..) |entry, dense| {
-            if (entry.maybe_uninitialized_unresolved) state.maybe_uninitialized_unresolved.set(dense);
-            if (entry.maybe_uninitialized_released) state.maybe_uninitialized_released.set(dense);
+            if (entry.maybe_uninitialized_unresolved) try state.setMaybeUninitializedUnresolved(dense, true);
+            if (entry.maybe_uninitialized_released) try state.setMaybeUninitializedReleased(dense, true);
         }
 
         // Allocate every representative before attaching provenance. Lender,
@@ -2910,7 +2737,7 @@ const Certifier = struct {
             if (representative == no_value) {
                 return self.fail("join summary alias at dense local {d} had no representative", .{dense});
             }
-            state.bindValue(self.proc_locals.items[dense], representative);
+            try state.bindValue(self.proc_locals.items[dense], representative);
         }
 
         var dependency_values = std.ArrayList(ValueId).empty;
@@ -2951,7 +2778,6 @@ const Certifier = struct {
                 try state.setHolder(value, dependency_values.items[0]);
             } else if (dependency_values.items.len > 1) {
                 const synthetic_holder = try self.newValue(origin, dependency_values.items, false);
-                try state.growToValue(synthetic_holder);
                 try state.setHolder(value, synthetic_holder);
             }
 
@@ -4533,7 +4359,8 @@ const Certifier = struct {
         // a relevant local; anything else can never be released again. A
         // fully dismantled value is exempt: its unit is already spent by its
         // claims and owes no further release.
-        for (state.balance.items, 0..) |units, value_index| {
+        for (0..self.values.items.len) |value_index| {
+            const units = state.balanceOf(@intCast(value_index));
             if (units == 0) continue;
             if (self.claimsSpendUnit(state, @intCast(value_index))) continue;
             const origin = self.values.items[value_index].origin;
@@ -4582,8 +4409,7 @@ const Certifier = struct {
         self.current_proc = proc_id;
         self.current_sig = self.sigs.get(proc_id);
         self.current_proc_body = body;
-        // Recycled buffers are sized for this procedure's local count.
-        defer self.drainStatePool();
+        _ = self.state_arena.reset(.retain_capacity);
         self.current_return_local = null;
         self.values.clearRetainingCapacity();
         self.provenance_interner.clearRetainingCapacity();
@@ -4642,8 +4468,7 @@ const Certifier = struct {
         try self.collectMemoPoints(body);
         try self.relevant_scratch.resize(self.allocator, self.proc_locals.items.len, false);
 
-        var state = try State.init(self.allocator, self.local_dense.items, self.proc_locals.items.len);
-        state.pool = &self.state_pool;
+        var state = try State.init(self.state_arena.allocator(), self.local_dense.items, self.proc_locals.items.len);
         {
             errdefer state.deinit();
             const proc_args = self.store.getLocalSpan(proc.args);
@@ -4654,8 +4479,7 @@ const Certifier = struct {
                     .owned => _ = try self.bindFresh(&state, param, 1, &.{}),
                     .borrowed => {
                         const value = try self.newValue(param, &.{}, true);
-                        try state.growToValue(value);
-                        state.bindValue(param, value);
+                        try state.bindValue(param, value);
                     },
                 }
             }
@@ -4716,8 +4540,8 @@ const Certifier = struct {
         errdefer body_state.deinit();
         var declared = record.maybe_uninitialized.iterator(.{});
         while (declared.next()) |dense| {
-            body_state.maybe_uninitialized_unresolved.unset(dense);
-            body_state.maybe_uninitialized_released.unset(dense);
+            try body_state.setMaybeUninitializedUnresolved(dense, false);
+            try body_state.setMaybeUninitializedReleased(dense, false);
         }
         try work.append(self.allocator, .{ .segment = .{
             .cursor = record.body,
@@ -4764,9 +4588,9 @@ const Certifier = struct {
                     if (target == return_local) state.result_discriminant = no_dense;
                 }
             }
-            if (state.outcome_discriminants.count() != 0) {
+            if (state.outcomeDiscriminantCount() != 0) {
                 const consumes_refinement = stmt == .switch_stmt and
-                    state.outcome_discriminants.contains(stmt.switch_stmt.cond);
+                    state.hasOutcomeDiscriminant(stmt.switch_stmt.cond);
                 // ARC may insert explicit RC bookkeeping after the source
                 // discriminant read and before its immediately refining
                 // switch. Those statements cannot change the established
@@ -4779,7 +4603,7 @@ const Certifier = struct {
                     stmt_tag == .decref_if_initialized or
                     stmt_tag == .free;
                 if (!consumes_refinement and !preserves_refinement) {
-                    state.outcome_discriminants.clearRetainingCapacity();
+                    state.clearOutcomeDiscriminants();
                 }
             }
             switch (stmt) {
@@ -4793,11 +4617,11 @@ const Certifier = struct {
                         },
                         .discriminant => |op| {
                             const source_value = try self.requireLive(&state, op.source);
-                            _ = state.outcome_discriminants.remove(assign.target);
+                            try state.removeOutcomeDiscriminant(assign.target);
                             if (source_value != no_value and
                                 !self.values.items[source_value].call_outcomes.isEmpty())
                             {
-                                try state.outcome_discriminants.put(self.allocator, assign.target, source_value);
+                                try state.setOutcomeDiscriminant(assign.target, source_value);
                             }
                         },
                         .field => |op| try self.bindPayloadRead(
@@ -4831,11 +4655,11 @@ const Certifier = struct {
                 },
                 .init_uninitialized => |init| {
                     if (self.isRc(init.target)) {
-                        state.bindValue(init.target, no_value);
+                        try state.bindValue(init.target, no_value);
                         const dense = self.denseOf(init.target);
                         if (dense != no_dense) {
-                            state.maybe_uninitialized_unresolved.unset(dense);
-                            state.maybe_uninitialized_released.unset(dense);
+                            try state.setMaybeUninitializedUnresolved(dense, false);
+                            try state.setMaybeUninitializedReleased(dense, false);
                         }
                     }
                     cursor = init.next;
@@ -5041,15 +4865,15 @@ const Certifier = struct {
                     if (assign.target != assign.value) {
                         _ = try self.requireLive(&state, assign.value);
                         if (self.isRc(assign.target)) {
-                            state.bindValue(assign.target, state.valueOf(assign.value));
+                            try state.bindValue(assign.target, state.valueOf(assign.value));
                         }
                     }
                     if (assign.mode == .initialize_join_param and self.maybe_uninitialized.get(assign.target) != null) {
                         const dense = self.denseOf(assign.target);
-                        if (dense != no_dense) state.maybe_uninitialized_unresolved.set(dense);
+                        if (dense != no_dense) try state.setMaybeUninitializedUnresolved(dense, true);
                     }
                     const target_dense = self.denseOf(assign.target);
-                    if (target_dense != no_dense) state.maybe_uninitialized_released.unset(target_dense);
+                    if (target_dense != no_dense) try state.setMaybeUninitializedReleased(target_dense, false);
                     cursor = assign.next;
                 },
                 .debug => |debug_stmt| {
@@ -5089,10 +4913,10 @@ const Certifier = struct {
                     }
                     if (state.valueOf(rc.value) != no_value) {
                         try self.applyRelease(&state, rc.value);
-                        state.bindValue(rc.value, no_value);
-                        if (dense != no_dense) state.maybe_uninitialized_released.set(dense);
+                        try state.bindValue(rc.value, no_value);
+                        if (dense != no_dense) try state.setMaybeUninitializedReleased(dense, true);
                     }
-                    if (dense != no_dense) state.maybe_uninitialized_unresolved.unset(dense);
+                    if (dense != no_dense) try state.setMaybeUninitializedUnresolved(dense, false);
                     cursor = rc.next;
                 },
                 .free => |rc| {
@@ -5102,12 +4926,12 @@ const Certifier = struct {
                 .switch_stmt => |switch_stmt| {
                     _ = try self.requireLive(&state, switch_stmt.cond);
                     const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
-                    const outcome_result = state.outcome_discriminants.get(switch_stmt.cond);
+                    const outcome_result = state.outcomeDiscriminant(switch_stmt.cond);
                     for (0..GuardedList.borrowLen(branches)) |branch_index| {
                         const branch = GuardedList.at(branches, branch_index);
                         var branch_state = try state.clone();
                         errdefer branch_state.deinit();
-                        branch_state.outcome_discriminants.clearRetainingCapacity();
+                        branch_state.clearOutcomeDiscriminants();
                         if (outcome_result) |result| {
                             if (self.callOutcomeMask(result, branch.value)) |mask| {
                                 try self.restoreCallOutcome(&branch_state, result, mask);
@@ -5117,7 +4941,7 @@ const Certifier = struct {
                     }
                     var default_state = try state.clone();
                     errdefer default_state.deinit();
-                    default_state.outcome_discriminants.clearRetainingCapacity();
+                    default_state.clearOutcomeDiscriminants();
                     if (outcome_result) |result| {
                         if (self.defaultCallOutcomeMask(result, branches)) |mask| {
                             try self.restoreCallOutcome(&default_state, result, mask);
@@ -5150,16 +4974,16 @@ const Certifier = struct {
 
                                 var initialized_state = try state.clone();
                                 errdefer initialized_state.deinit();
-                                initialized_state.markDefinitelyInitialized(payload_value);
-                                if (payload_dense != no_dense) initialized_state.maybe_uninitialized_unresolved.unset(payload_dense);
+                                try initialized_state.markDefinitelyInitialized(payload_value);
+                                if (payload_dense != no_dense) try initialized_state.setMaybeUninitializedUnresolved(payload_dense, false);
                                 try work.append(self.allocator, .{ .segment = .{ .cursor = switch_stmt.initialized_branch, .state = initialized_state, .origin_join = segment.origin_join } });
 
                                 var uninitialized_state = try state.clone();
                                 errdefer uninitialized_state.deinit();
                                 const units = uninitialized_state.balanceOf(payload_value);
                                 if (units > 0) try uninitialized_state.addBalance(payload_value, -units);
-                                uninitialized_state.bindValue(switch_stmt.payload, no_value);
-                                if (payload_dense != no_dense) uninitialized_state.maybe_uninitialized_unresolved.unset(payload_dense);
+                                try uninitialized_state.bindValue(switch_stmt.payload, no_value);
+                                if (payload_dense != no_dense) try uninitialized_state.setMaybeUninitializedUnresolved(payload_dense, false);
                                 try work.append(self.allocator, .{ .segment = .{ .cursor = switch_stmt.uninitialized_branch, .state = uninitialized_state, .origin_join = segment.origin_join } });
                                 return;
                             }
@@ -5172,7 +4996,7 @@ const Certifier = struct {
                             switch_stmt.uninitialized_branch;
                         var branch_state = try state.clone();
                         errdefer branch_state.deinit();
-                        if (payload_dense != no_dense) branch_state.maybe_uninitialized_unresolved.unset(payload_dense);
+                        if (payload_dense != no_dense) try branch_state.setMaybeUninitializedUnresolved(payload_dense, false);
                         try work.append(self.allocator, .{ .segment = .{ .cursor = target, .state = branch_state, .origin_join = segment.origin_join } });
                         return;
                     }
@@ -5194,7 +5018,7 @@ const Certifier = struct {
                         switch (step.capture) {
                             .discard => {},
                             .view => |local| if (self.isRc(local)) {
-                                match_state.bindValue(local, source_value);
+                                try match_state.bindValue(local, source_value);
                             },
                         }
                     }
@@ -5218,7 +5042,7 @@ const Certifier = struct {
                             switch (step.capture) {
                                 .discard => {},
                                 .view => |local| if (self.isRc(local)) {
-                                    match_state.bindValue(local, source_value);
+                                    try match_state.bindValue(local, source_value);
                                 },
                             }
                         }
@@ -5235,8 +5059,8 @@ const Certifier = struct {
                     for (0..GuardedList.borrowLen(maybe_uninitialized_params)) |index| {
                         const dense = self.denseOf(GuardedList.at(maybe_uninitialized_params, index));
                         if (dense != no_dense) {
-                            state.maybe_uninitialized_unresolved.set(dense);
-                            state.maybe_uninitialized_released.unset(dense);
+                            try state.setMaybeUninitializedUnresolved(dense, true);
+                            try state.setMaybeUninitializedReleased(dense, false);
                         }
                     }
                     const record = try self.records.getOrPut(join_stmt.id);
@@ -5490,7 +5314,7 @@ const Certifier = struct {
                 .{ @intFromEnum(target), @intFromEnum(source) },
             );
         }
-        state.bindValue(target, source_value);
+        try state.bindValue(target, source_value);
     }
 
     fn bindSameValue(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId) CertifyError!void {
@@ -5505,7 +5329,7 @@ const Certifier = struct {
                 .{ @intFromEnum(target), @intFromEnum(source) },
             );
         }
-        state.bindValue(target, source_value);
+        try state.bindValue(target, source_value);
     }
 
     fn applyRelease(self: *Certifier, state: *State, local: LIR.LocalId) CertifyError!void {
@@ -5700,8 +5524,7 @@ const Certifier = struct {
                     // The payload source is implicit (the executing frame's
                     // capture environment); it is live for the whole call.
                     target_value = try self.newValue(assign.target, &.{}, true);
-                    try state.growToValue(target_value);
-                    state.bindValue(assign.target, target_value);
+                    try state.bindValue(assign.target, target_value);
                 } else {
                     target_value = try self.bindFresh(state, assign.target, 0, lenders_buffer[0..lender_count]);
                 }
@@ -5843,18 +5666,20 @@ test "certifier state indexes explicit proc locals" {
     const first: LIR.LocalId = @enumFromInt(1);
     const second: LIR.LocalId = @enumFromInt(3);
     const local_dense = [_]u32{ no_dense, 0, no_dense, 1 };
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
 
-    var state = try State.init(testing.allocator, &local_dense, 2);
+    var state = try State.init(arena.allocator(), &local_dense, 2);
     defer state.deinit();
-    state.bindValue(first, 7);
-    state.bindValue(second, 11);
+    try state.bindValue(first, 7);
+    try state.bindValue(second, 11);
 
     try testing.expectEqual(@as(ValueId, 7), state.valueOf(first));
     try testing.expectEqual(@as(ValueId, 11), state.valueOf(second));
 
     var cloned = try state.clone();
     defer cloned.deinit();
-    cloned.bindValue(first, 13);
+    try cloned.bindValue(first, 13);
     try testing.expectEqual(@as(ValueId, 13), cloned.valueOf(first));
     try testing.expectEqual(@as(ValueId, 7), state.valueOf(first));
 }
@@ -8031,6 +7856,54 @@ test "certify rejects a dismantled record moved whole without a retained surplus
     try testing.expect(std.mem.find(u8, f.diag.message(), "partially dismantled") != null);
 }
 
+test "certify complete projections spend exactly the retained units" {
+    for ([_]bool{ false, true }) |tagged| {
+        for (0..3) |retains| {
+            var f = try CertifyTest.init(testing.allocator);
+            defer f.deinit();
+            const singleton = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = .str }});
+            const container_layout = if (tagged)
+                try f.layouts.putTagUnion(&.{ try f.layouts.ensureZstLayout(), .str })
+            else
+                singleton;
+            const container = try f.local(container_layout);
+            const first = try f.local(.str);
+            const second = try f.local(.str);
+            const pair = try f.local(f.pair_str);
+            const ret = try f.ret(pair);
+            const join_id = f.freshJoinPointId();
+            const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+            var body = try f.store.addCFStmt(.{ .assign_struct = .{
+                .target = pair,
+                .fields = try f.store.addLocalSpan(&.{ first, second }),
+                .next = jump,
+            } });
+            for ([_]LIR.LocalId{ second, first }) |target| {
+                const op: LIR.RefOp = if (tagged)
+                    .{ .tag_payload = .{ .source = container, .payload_idx = 0, .variant_index = 1, .tag_discriminant = 1 } }
+                else
+                    .{ .field = .{ .source = container, .field_idx = 0 } };
+                body = try f.store.addCFStmt(.{ .assign_ref = .{ .target = target, .op = op, .next = body } });
+            }
+            for (0..retains) |_| body = try f.increfStmt(container, container_layout, body);
+            const join = try f.store.addCFStmt(.{ .join = .{
+                .id = join_id,
+                .params = LIR.LocalSpan.empty(),
+                .body = ret,
+                .remainder = body,
+            } });
+            _ = try f.addProc(&.{container}, join, f.pair_str);
+            // Two complete projections need two units. One unit is a double
+            // consume; three units leave a leak. Neither may be accepted.
+            if (retains == 1) {
+                try f.certify();
+            } else {
+                try testing.expectError(error.Certification, f.certify());
+            }
+        }
+    }
+}
+
 test "certify accepts a fully dismantled record via field takes" {
     // Both refcounted fields of a dying owned pair are read without retains
     // and released; each release claims the pair's stored unit for its
@@ -8276,23 +8149,4 @@ test "certify rejects consuming Box.unbox after the ARC boundary" {
 
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "post-ARC LIR retained a consuming Box.unbox") != null);
-}
-
-test "reused certifier state copies maybe-uninitialized bits exactly" {
-    const local_dense = [_]u32{ 0, 1, 2, 3 };
-
-    var source = try State.init(testing.allocator, &local_dense, local_dense.len);
-    defer source.deinit();
-    source.maybe_uninitialized_unresolved.set(1);
-    source.maybe_uninitialized_released.set(2);
-
-    var reused = try State.init(testing.allocator, &local_dense, local_dense.len);
-    defer reused.deinit();
-    reused.maybe_uninitialized_unresolved.set(0);
-    reused.maybe_uninitialized_released.set(3);
-
-    try reused.refillFrom(&source);
-
-    try testing.expect(reused.maybe_uninitialized_unresolved.eql(source.maybe_uninitialized_unresolved));
-    try testing.expect(reused.maybe_uninitialized_released.eql(source.maybe_uninitialized_released));
 }
