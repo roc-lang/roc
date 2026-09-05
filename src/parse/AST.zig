@@ -524,6 +524,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .nominal_associated_cannot_have_final_expression => reportParseProblem(ctx, "Unexpected Associated Expression", "I was parsing associated items for a nominal type, and I found a plain final expression.", "Associated item blocks can contain associated types and values. Remove the trailing expression or turn it into a named associated value.", .{ .example = "Id := U64 implements [\n    zero = @Id 0\n]" }),
         .type_alias_cannot_have_associated => reportParseProblem(ctx, "Type Alias With Associated Items", "I was parsing a type alias, but only nominal types can have associated items.", "Use `:=` to define a nominal type with associated items, or remove the associated item block from this alias.", .{ .example = "Id := U64 implements [\n    zero = @Id 0\n]" }),
         .where_alias_cannot_have_associated => reportParseProblem(ctx, "Where Alias With Associated Items", "I was parsing a where alias, but only nominal types can have associated items.", "A where alias names a set of method constraints, so it has no associated items. Remove the associated item block.", .{ .example = "a.Sortable : where [a.order_relative_to : a -> [Before, Same, After]]" }),
+        .where_alias_expected_colon => reportParseProblem(ctx, "Expected Where Alias Colon", "I was parsing a where alias declaration, and I expected `:` after its name.", "A where alias separates its name from its `where` clause with a colon.", .{ .example = "a.Sortable : where [a.order_relative_to : a -> [Before, Same, After]]" }),
         .where_alias_expected_where => reportParseProblem(ctx, "Expected Where Clause", "I was parsing a where alias declaration, and I expected `where` after the `:`.", "A where alias is declared by naming a type variable and giving it a set of method constraints.", .{ .example = "a.Sortable : where [a.order_relative_to : a -> [Before, Same, After]]" }),
         .deprecated_number_suffix => reportDeprecatedNumberSuffix(ctx),
         .expected_targets_colon => reportParseProblem(ctx, "Expected Targets Colon", "I was parsing a `targets` section, and I expected `:` after `targets`.", "The targets section starts with `targets:` followed by a configuration record.", .{ .example = "targets: { linux: { inputs: [app] } }" }),
@@ -663,6 +664,7 @@ pub const Diagnostic = struct {
         nominal_associated_cannot_have_final_expression,
         type_alias_cannot_have_associated,
         where_alias_cannot_have_associated,
+        where_alias_expected_colon,
         where_alias_expected_where,
         deprecated_number_suffix,
 
@@ -1357,6 +1359,7 @@ pub const Pattern = union(enum) {
     },
     single_quote: struct {
         token: Token.Idx,
+        type_ident: ?base.Ident.Idx = null,
         region: TokenizedRegion,
     },
     record: struct {
@@ -1515,6 +1518,9 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-single-quote");
                 try ast.appendRegionInfoToSexprTree(env, tree, sq.region);
                 try tree.pushStringPair("raw", ast.resolve(sq.token));
+                if (sq.type_ident) |type_ident| {
+                    try tree.pushStringPair("type", env.getIdent(type_ident));
+                }
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -2832,6 +2838,7 @@ pub const Expr = union(enum) {
     },
     single_quote: struct {
         token: Token.Idx,
+        type_ident: ?base.Ident.Idx = null,
         region: TokenizedRegion,
     },
     string_part: struct { // TODO: this should be more properly represented in its own union enum
@@ -3074,6 +3081,9 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-single-quote");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
+                if (a.type_ident) |type_ident| {
+                    try tree.pushStringPair("type", env.getIdent(type_ident));
+                }
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },

@@ -45,6 +45,7 @@ pub const RunWithStdIoError = CreateLogFileError || std.Io.File.Reader.Error || 
     InvalidHeader,
     MissingContentLength,
     PayloadTooLarge,
+    WriteFailed,
 };
 
 /// Factory for the Roc LSP server. Handles the state and request handlers.
@@ -58,9 +59,11 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
     return struct {
         const Self = @This();
         const TransportType = makeTransport(ReaderType, WriterType);
-        const HandlerError = Allocator.Error || error{ InvalidParams, WriteFailed };
-        const NotificationError = Allocator.Error;
-        const PayloadError = Allocator.Error || std.json.ParseError(std.json.Scanner) || HandlerError || NotificationError || error{InvalidIdType};
+        const HandlerError = Allocator.Error || error{WriteFailed};
+        const NotificationError = Allocator.Error || error{WriteFailed};
+        const PayloadError = HandlerError || NotificationError;
+        /// Errors that terminate the server because input or output can no longer be processed reliably.
+        pub const RunError = TransportType.ReadMessageError || PayloadError;
         const RunSyntaxCheckError = SyntaxDriverType.CheckError || Allocator.Error || error{WriteFailed};
         const HandlerFn = fn (*Self, *protocol.JsonId, ?std.json.Value) HandlerError!void;
         const HandlerPtr = *const HandlerFn;
@@ -158,11 +161,11 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             self.syntax_checker.deinit();
         }
 
-        pub fn run(self: *Self) TransportType.ReadMessageError!void {
+        pub fn run(self: *Self) RunError!void {
             while (try self.processNextMessage()) {}
         }
 
-        fn processNextMessage(self: *Self) TransportType.ReadMessageError!bool {
+        fn processNextMessage(self: *Self) RunError!bool {
             if (self.state == .exit_success or self.state == .exit_failure) {
                 return false;
             }
@@ -178,39 +181,93 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             };
             defer self.allocator.free(payload);
 
-            self.handlePayload(payload) catch |err| {
-                log.err("failed to process message: {s}", .{@errorName(err)});
-            };
+            try self.handlePayload(payload);
 
             return self.state != .exit_success and self.state != .exit_failure;
         }
 
         fn handlePayload(self: *Self, payload: []u8) PayloadError!void {
-            var parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, payload, .{});
+            var parsed = std.json.parseFromSlice(std.json.Value, self.allocator, payload, .{}) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => {
+                    try self.sendError(null, .parse_error, "parse error");
+                    return;
+                },
+            };
             defer parsed.deinit();
 
             const root = parsed.value;
             if (std.meta.activeTag(root) != .object) {
-                log.err("received non-object JSON-RPC message", .{});
+                try self.sendError(null, .invalid_request, "invalid request");
                 return;
             }
             const obj = root.object;
 
-            const method_value = obj.get("method") orelse return;
-            if (std.meta.activeTag(method_value) != .string) return;
+            var maybe_id: ?protocol.JsonId = if (obj.get("id")) |id_node|
+                protocol.JsonId.fromJsonValue(self.allocator, id_node) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.InvalidIdType => {
+                        try self.sendError(null, .invalid_request, "invalid request");
+                        return;
+                    },
+                }
+            else
+                null;
+            defer if (maybe_id) |*id| id.deinit(self.allocator);
+
+            const jsonrpc_value = obj.get("jsonrpc") orelse {
+                try self.sendInvalidRequest(if (maybe_id) |*id| id else null);
+                return;
+            };
+            if (std.meta.activeTag(jsonrpc_value) != .string or !std.mem.eql(u8, jsonrpc_value.string, "2.0")) {
+                try self.sendInvalidRequest(if (maybe_id) |*id| id else null);
+                return;
+            }
+
+            const method_value = obj.get("method") orelse {
+                try self.sendInvalidRequest(if (maybe_id) |*id| id else null);
+                return;
+            };
+            if (std.meta.activeTag(method_value) != .string) {
+                try self.sendInvalidRequest(if (maybe_id) |*id| id else null);
+                return;
+            }
             const method = method_value.string;
 
-            if (obj.get("id")) |id_node| {
-                var id = try protocol.JsonId.fromJsonValue(self.allocator, id_node);
-                defer id.deinit(self.allocator);
+            if (obj.get("params")) |params| {
+                switch (std.meta.activeTag(params)) {
+                    .object, .array => {},
+                    .null, .bool, .integer, .float, .number_string, .string => {
+                        try self.sendInvalidRequest(if (maybe_id) |*id| id else null);
+                        return;
+                    },
+                }
+            }
 
-                try self.handleRequest(method, &id, obj.get("params"));
+            if (maybe_id) |*id| {
+                try self.handleRequest(method, id, obj.get("params"));
             } else {
                 try self.handleNotification(method, obj.get("params"));
             }
         }
 
         fn handleRequest(self: *Self, method: []const u8, id: *protocol.JsonId, maybe_params: ?std.json.Value) HandlerError!void {
+            switch (self.state) {
+                .waiting_for_initialize => if (!std.mem.eql(u8, method, "initialize")) {
+                    try self.sendError(id, .server_not_initialized, "server not initialized");
+                    return;
+                },
+                .waiting_for_initialized => if (!std.mem.eql(u8, method, "initialize")) {
+                    try self.sendError(id, .server_not_initialized, "server not initialized");
+                    return;
+                },
+                .running => {},
+                .shutdown, .exit_success, .exit_failure => {
+                    try self.sendError(id, .invalid_request, "server is shutting down");
+                    return;
+                },
+            }
+
             if (request_handlers.get(method)) |handler| {
                 try handler(self, id, maybe_params);
                 return;
@@ -219,23 +276,31 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             try self.sendError(id, .method_not_found, "method not implemented");
         }
 
-        fn handleNotification(self: *Self, method: []const u8, params: ?std.json.Value) Allocator.Error!void {
-            if (std.mem.eql(u8, method, "initialized")) {
-                if (self.state == .waiting_for_initialized) {
-                    self.state = .running;
-                }
-                return;
-            }
+        fn sendInvalidRequest(self: *Self, maybe_id: ?*protocol.JsonId) (Allocator.Error || error{WriteFailed})!void {
+            try self.sendError(maybe_id, .invalid_request, "invalid request");
+        }
 
+        fn handleNotification(self: *Self, method: []const u8, params: ?std.json.Value) NotificationError!void {
             if (std.mem.eql(u8, method, "exit")) {
                 self.state = if (self.state == .shutdown) .exit_success else .exit_failure;
                 return;
             }
 
+            switch (self.state) {
+                .waiting_for_initialized => {
+                    if (std.mem.eql(u8, method, "initialized")) {
+                        self.state = .running;
+                    }
+                    return;
+                },
+                .running => {},
+                .waiting_for_initialize, .shutdown, .exit_success, .exit_failure => return,
+            }
+
+            if (std.mem.eql(u8, method, "initialized")) return;
+
             if (notification_handlers.get(method)) |handler| {
-                handler(self, params) catch |err| {
-                    log.err("notification handler {s} failed: {s}", .{ method, @errorName(err) });
-                };
+                try handler(self, params);
                 return;
             }
 
@@ -255,15 +320,15 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             });
         }
 
-        pub fn sendError(self: *Self, id: *protocol.JsonId, code: protocol.ErrorCode, message: []const u8) (Allocator.Error || error{WriteFailed})!void {
+        pub fn sendError(self: *Self, id: ?*protocol.JsonId, code: protocol.ErrorCode, message: []const u8) (Allocator.Error || error{WriteFailed})!void {
             const Response = struct {
                 jsonrpc: []const u8 = "2.0",
-                id: protocol.JsonId,
+                id: ?protocol.JsonId,
                 @"error": protocol.ResponseError,
             };
 
             try self.transport.sendJson(Response{
-                .id = id.*,
+                .id = if (id) |value| value.* else null,
                 .@"error" = .{ .code = code, .message = message },
             });
         }
@@ -281,9 +346,13 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             });
         }
 
-        pub fn onDocumentChanged(self: *Self, uri: []const u8) void {
+        pub fn onDocumentChanged(self: *Self, uri: []const u8) (Allocator.Error || error{WriteFailed})!void {
             self.runSyntaxCheck(uri) catch |err| {
-                log.err("syntax check failed for {s}: {s}", .{ uri, @errorName(err) });
+                switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.WriteFailed => return error.WriteFailed,
+                    else => log.err("syntax check failed for {s}: {s}", .{ uri, @errorName(err) }),
+                }
             };
         }
 

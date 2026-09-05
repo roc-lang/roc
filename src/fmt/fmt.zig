@@ -1589,6 +1589,10 @@ const Formatter = struct {
             },
             .single_quote => |s| {
                 try fmt.pushTokenText(s.token);
+                if (s.type_ident) |type_ident| {
+                    try fmt.push('.');
+                    try fmt.pushAll(fmt.ast.env.getIdent(type_ident));
+                }
             },
             .ident => |i| {
                 const qualifier_tokens = fmt.ast.store.tokenSlice(i.qualifiers);
@@ -2427,6 +2431,10 @@ const Formatter = struct {
             .single_quote => |sq| {
                 region = sq.region;
                 try fmt.formatIdent(sq.token, null);
+                if (sq.type_ident) |type_ident| {
+                    try fmt.push('.');
+                    try fmt.pushAll(fmt.ast.env.getIdent(type_ident));
+                }
             },
             .int => |n| {
                 region = n.region;

@@ -8030,9 +8030,20 @@ fn canonicalizeSingleQuote(
     self: *Self,
     token_region: AST.TokenizedRegion,
     token: Token.Idx,
+    type_ident: ?Ident.Idx,
     comptime Idx: type,
 ) std.mem.Allocator.Error!?Idx {
     const region = self.parse_ir.tokenizedRegionToRegion(token_region);
+
+    const suffix_target = if (type_ident) |ident|
+        (try self.resolveNumericSuffixTarget(ident)) orelse {
+            return try self.env.pushMalformed(Idx, Diagnostic{ .undeclared_type = .{
+                .name = ident,
+                .region = region,
+            } });
+        }
+    else
+        null;
 
     // Resolve to a string slice from the source
     const token_text = self.parse_ir.resolve(token);
@@ -8061,13 +8072,21 @@ fn canonicalizeSingleQuote(
     }
 
     if (comptime Idx == Expr.Idx) {
-        const expr_idx = try self.env.addExpr(CIR.Expr{
-            .e_num = .{
+        const expr = if (type_ident) |ident|
+            CIR.Expr{ .e_typed_int = .{
+                .value = value_content,
+                .type_name = ident,
+            } }
+        else
+            CIR.Expr{ .e_num = .{
                 .value = value_content,
                 .kind = .int_unbound,
-            },
-        }, region);
+            } };
+        const expr_idx = try self.env.addExpr(expr, region);
         try self.env.recordNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), digits[0..digit_len], &.{}, 0, false, false, false, true);
+        if (suffix_target) |target| {
+            try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(expr_idx), target);
+        }
         return expr_idx;
     } else if (comptime Idx == Pattern.Idx) {
         const pat_idx = try self.env.addPattern(Pattern{ .num_literal = .{
@@ -8075,6 +8094,9 @@ fn canonicalizeSingleQuote(
             .kind = .int_unbound,
         } }, region);
         try self.env.recordNumeralLiteral(ModuleEnv.nodeIdxFrom(pat_idx), digits[0..digit_len], &.{}, 0, false, false, false, true);
+        if (suffix_target) |target| {
+            try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(pat_idx), target);
+        }
         return pat_idx;
     } else {
         @compileError("Unsupported Idx type");
@@ -11219,7 +11241,7 @@ fn runExprKernel(
                     try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
                 },
                 .single_quote => |e| {
-                    const expr_idx = try self.canonicalizeSingleQuote(e.region, e.token, Expr.Idx) orelse {
+                    const expr_idx = try self.canonicalizeSingleQuote(e.region, e.token, e.type_ident, Expr.Idx) orelse {
                         try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
                         continue :expr_kernel_loop .dispatch;
                     };
@@ -18104,7 +18126,7 @@ pub fn canonicalizePattern(
                     last_pattern = try self.canonicalizeStringPattern(e);
                 },
                 .single_quote => |e| {
-                    last_pattern = try self.canonicalizeSingleQuote(e.region, e.token, Pattern.Idx);
+                    last_pattern = try self.canonicalizeSingleQuote(e.region, e.token, e.type_ident, Pattern.Idx);
                 },
                 .tag => |e| {
                     const tag_name = self.parse_ir.tokens.resolveIdentifier(e.tag_tok) orelse {

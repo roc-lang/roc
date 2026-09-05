@@ -475,6 +475,7 @@ test "NodeStore round trip - Pattern" {
         .single_quote = .{
             .region = rand_region(random),
             .token = rand_token_idx(random),
+            .type_ident = rand_idx(random, base.Ident.Idx),
         },
     });
     try patterns.append(gpa, AST.Pattern{
@@ -713,6 +714,7 @@ test "NodeStore round trip - Expr" {
         .single_quote = .{
             .region = rand_region(random),
             .token = rand_token_idx(random),
+            .type_ident = rand_idx(random, base.Ident.Idx),
         },
     });
     try expressions.append(gpa, AST.Expr{

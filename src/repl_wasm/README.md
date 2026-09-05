@@ -51,7 +51,7 @@ For example:
 
 | Operation | Contract |
 | --- | --- |
-| `capabilities` | Reports protocol operations, ownership boundaries, and the one-way effect interface. |
+| `capabilities` | Reports protocol operations, ownership boundaries, and supported features. |
 | `eval` | Parser-backed multiline/batch input; evaluates left to right and stops at the first failed snippet. Earlier successful definitions remain committed. |
 | `analyze` | Reports whether input is complete, incomplete, or invalid without changing the session. |
 | `complete` | Filters session definitions by the identifier prefix ending at `params.cursor` and returns insertion text plus an explicit replacement range. |
@@ -70,42 +70,21 @@ Revisions are unsigned 32-bit counters scoped to one WASM instance, so they are
 exact JavaScript numbers. Hosts must not compare revisions across instances.
 
 Expression values, checked types, definition metadata, diagnostics, and ordered
-runtime events are separate fields. Diagnostics have a stable `code`,
-`severity`, human-readable `message`, and nullable `region`. Runtime crashes are
-language-level results and do not poison the next request.
+`dbg` events are separate fields. Diagnostics have a stable `code`, `severity`,
+human-readable `message`, and nullable `region`. A failed compile-time `expect`
+or user-written `crash` is a checking diagnostic and does not poison the next
+request.
 
 Version 1 enumerates blocking diagnostics only; non-blocking compiler warnings
 are not part of the current contract. This is reported by the capabilities
 response rather than being left implicit.
 
-## One-way host effects
+## Compile-time evaluation
 
-The reserved, built-in `Repl` module provides one generic function:
-
-```roc
-import Repl
-
-Repl.emit!({ name: "log", payload: "hello" })
-```
-
-`emit!` accepts `{ name : Str, payload : Str }` and returns `{}`. Each call adds
-an ordered `{ "kind": "effect", "name": ..., "payload": ... }` event to the
-evaluated snippet. Names and payloads are caller-defined UTF-8 strings; the
-module does not parse them, run an effect, or wait for a response. Hosts choose
-an allowlist and encoding for their own handlers. Unknown names must remain
-observable so a caller can report or ignore them deliberately.
-
-Effects emitted before a crash remain in the ordered event trace because they
-were observed during execution. A host decides whether to act on events from a
-failed snippet. The bundled demo deliberately marks them as suppressed and
-runs handlers only when the snippet status is `ok`.
-
-`Repl` is reserved and cannot be replaced through `set_modules`. The evaluator
-receives its hosted-call dispatcher as an explicit dependency; other inspected
-execution rejects hosted calls. The internal hosted symbol and runtime
-signature are validated before an event is recorded. The dispatcher copies the
-event payload and then releases the refcounted arguments whose ownership LIR
-ARC transferred at the hosted-call boundary.
+REPL expressions are explicit compile-time roots. Pure expressions produce an
+inspected value, and `dbg` observations become ordered structured events.
+Effectful expressions are rejected with an `Effectful Compile Time Expression`
+diagnostic; the WebAssembly module does not expose a platform-effect boundary.
 
 ## Text offsets and completion
 
@@ -130,12 +109,10 @@ typed commands to `executeCommandWithConfig`; they are not recognized by the
 WASM protocol. The browser demo renders only structured fields and never parses
 compiler display text.
 
-The module has no filesystem, network, package resolver, stdin, or history
-store. Apart from the explicit one-way `Repl.emit!` event boundary, it has no
-platform capabilities. Hosts own persistence, effect handling, and
-cancellation. The demo uses a Web Worker; Stop terminates the worker, creates a
-new module instance, and replays the exact structured `definition_source`
-returned by `get_state`.
+The module has no filesystem, network, package resolver, stdin, history store,
+or platform effects. Hosts own persistence and cancellation. The demo uses a
+Web Worker; Stop terminates the worker, creates a new module instance, and
+replays the exact structured `definition_source` returned by `get_state`.
 
 The demo keeps the complete editable notebook source in one textarea. A line
 containing only `#%%` separates cells; Ctrl/Command-Enter evaluates the active
