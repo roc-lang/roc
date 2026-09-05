@@ -9387,6 +9387,84 @@ test "optional record fields publish through solver-side record copy" {
     try std.testing.expectEqualSlices(u8, &source_key.bytes, &checked_key.bytes);
 }
 
+test "checked binder mutability comes from the CIR var tag, not identifier spelling" {
+    const testing = std.testing;
+    const TestEnv = @import("test/TestEnv.zig");
+    const allocator = testing.allocator;
+
+    var test_env = try TestEnv.init("Main",
+        \\main = |_| {
+        \\    var $mutable = {}
+        \\    $immutable = {}
+        \\    $mutable = {}
+        \\    ($mutable, $immutable)
+        \\}
+    );
+    defer test_env.deinit();
+    try testing.expectEqual(@as(usize, 0), test_env.checker.problems.problems.items.len);
+
+    const mutable_ident = try test_env.module_env.insertIdent(Ident.for_text("$mutable"));
+    const immutable_ident = try test_env.module_env.insertIdent(Ident.for_text("$immutable"));
+
+    const source_modules = [_]TypedCIR.Modules.SourceModule{
+        .{ .precompiled = test_env.module_env },
+    };
+    var modules = try TypedCIR.Modules.init(allocator, &source_modules);
+    defer modules.deinit();
+    const module = modules.module(0);
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    try internLoweringVisibleNames(module.moduleEnvConst(), &names);
+
+    var source_nodes = try CheckedSourceNodes.init(allocator, module);
+    defer source_nodes.deinit(allocator);
+    var checked_type_publication = try CheckedTypeStore.fromModule(
+        allocator,
+        module,
+        &names,
+        CheckedModuleArtifactKey{},
+        &.{},
+        &.{},
+        &source_nodes,
+        &.{},
+    );
+    defer checked_type_publication.deinit(allocator);
+    var checked_body_builder = try CheckedBodyStoreBuilder.fromModule(
+        allocator,
+        module,
+        &names,
+        &checked_type_publication,
+        &source_nodes,
+    );
+    defer checked_body_builder.deinit(allocator);
+    const checked_bodies = checked_body_builder.storePtr();
+
+    var saw_mutable = false;
+    var saw_immutable = false;
+    var raw_node: u32 = 0;
+    while (raw_node < module.nodeCount()) : (raw_node += 1) {
+        const source_pattern: CIR.Pattern.Idx = @enumFromInt(raw_node);
+        const tag = module.moduleEnvConst().store.nodes.get(@enumFromInt(raw_node)).tag;
+        if (tag != .pattern_identifier and tag != .pattern_var_identifier) continue;
+        const pattern = module.pattern(source_pattern).data;
+        const ident = if (pattern == .assign) pattern.assign.ident else pattern.var_assign.ident;
+        if (ident != mutable_ident and ident != immutable_ident) continue;
+
+        const binder = checked_bodies.patternBinderForSource(source_pattern) orelse return error.TestUnexpectedResult;
+        if (ident == mutable_ident) {
+            try testing.expect(checked_bodies.patternBinderIsReassignable(binder));
+            saw_mutable = true;
+        } else {
+            try testing.expect(!checked_bodies.patternBinderIsReassignable(binder));
+            saw_immutable = true;
+        }
+    }
+
+    try testing.expect(saw_mutable);
+    try testing.expect(saw_immutable);
+}
+
 test "poisoned record field presence preserves its value type and canonical key" {
     const testing = std.testing;
     const TestEnv = @import("test/TestEnv.zig");
@@ -11514,6 +11592,7 @@ const CheckedSourceNodes = struct {
                 }
             },
             .assign,
+            .var_assign,
             .num_literal,
             .num_from_numeral_literal,
             .small_dec_literal,
@@ -14256,7 +14335,7 @@ const CheckedBodyPayloadCopier = struct {
     fn copyPatternData(self: *@This(), pattern_idx: CIR.Pattern.Idx) Allocator.Error!CheckedPatternData {
         const pattern = self.module.pattern(pattern_idx).data;
         return switch (pattern) {
-            .assign => .{ .assign = try self.patternBinder(pattern_idx) },
+            .assign, .var_assign => .{ .assign = try self.patternBinder(pattern_idx) },
             .as => |as| .{ .as = .{
                 .pattern = self.checkedPattern(as.pattern),
                 .binder = try self.patternBinder(pattern_idx),
@@ -14320,14 +14399,8 @@ const CheckedBodyPayloadCopier = struct {
         const statement = self.module.getStatement(statement_idx);
         return switch (statement) {
             .s_decl => |decl| .{ .decl = .{ .pattern = self.checkedPattern(decl.pattern), .expr = self.checkedExpr(decl.expr) } },
-            .s_var => |var_| blk: {
-                try self.markSourcePatternBindersReassignable(var_.pattern_idx);
-                break :blk .{ .var_ = .{ .pattern = self.checkedPattern(var_.pattern_idx), .expr = self.checkedExpr(var_.expr) } };
-            },
-            .s_var_uninitialized => |var_| blk: {
-                try self.markSourcePatternBindersReassignable(var_.pattern_idx);
-                break :blk .{ .var_uninitialized = .{ .pattern = self.checkedPattern(var_.pattern_idx) } };
-            },
+            .s_var => |var_| .{ .var_ = .{ .pattern = self.checkedPattern(var_.pattern_idx), .expr = self.checkedExpr(var_.expr) } },
+            .s_var_uninitialized => |var_| .{ .var_uninitialized = .{ .pattern = self.checkedPattern(var_.pattern_idx) } },
             .s_reassign => |reassign| .{ .reassign = .{
                 .pattern = self.checkedPattern(reassign.pattern_idx),
                 .expr = self.checkedExpr(reassign.expr),
@@ -14598,6 +14671,10 @@ const CheckedBodyPayloadCopier = struct {
                 .ident = assign.ident,
                 .binder = try self.patternBinder(pattern_idx),
             }),
+            .var_assign => |assign| try out.append(self.allocator, .{
+                .ident = assign.ident,
+                .binder = try self.patternBinder(pattern_idx),
+            }),
             .as => |as| {
                 try self.collectSourcePatternBinders(as.pattern, out);
                 try out.append(self.allocator, .{
@@ -14692,56 +14769,6 @@ const CheckedBodyPayloadCopier = struct {
         return out;
     }
 
-    fn markSourcePatternBindersReassignable(self: *@This(), pattern_idx: CIR.Pattern.Idx) Allocator.Error!void {
-        const pattern = self.module.pattern(pattern_idx).data;
-        switch (pattern) {
-            .assign => {
-                const binder = try self.patternBinder(pattern_idx);
-                self.pattern_binders.items[@intFromEnum(binder)].reassignable = true;
-            },
-            .as => |as| {
-                const binder = try self.patternBinder(pattern_idx);
-                self.pattern_binders.items[@intFromEnum(binder)].reassignable = true;
-                try self.markSourcePatternBindersReassignable(as.pattern);
-            },
-            .applied_tag => |tag| {
-                for (self.module.slicePatterns(tag.args)) |child| try self.markSourcePatternBindersReassignable(child);
-            },
-            .nominal => |nominal| try self.markSourcePatternBindersReassignable(nominal.backing_pattern),
-            .nominal_external => |nominal| try self.markSourcePatternBindersReassignable(nominal.backing_pattern),
-            .record_destructure => |record| {
-                for (self.module.sliceRecordDestructs(record.destructs)) |destruct_idx| {
-                    const destruct = self.module.getRecordDestruct(destruct_idx);
-                    try self.markSourcePatternBindersReassignable(destruct.kind.toPatternIdx());
-                }
-            },
-            .list => |list| {
-                for (self.module.slicePatterns(list.patterns)) |child| try self.markSourcePatternBindersReassignable(child);
-                if (list.rest_info) |rest| if (rest.pattern) |child| try self.markSourcePatternBindersReassignable(child);
-            },
-            .tuple => |tuple| {
-                for (self.module.slicePatterns(tuple.patterns)) |child| try self.markSourcePatternBindersReassignable(child);
-            },
-            .str_interpolation => |str| {
-                var step_offset: u32 = 0;
-                while (step_offset < str.steps.span.len) : (step_offset += 1) {
-                    const step = self.module.moduleEnvConst().store.getStrPatternStep(str.steps, step_offset);
-                    if (step.capture) |capture| try self.markSourcePatternBindersReassignable(capture);
-                }
-            },
-            .num_literal,
-            .num_from_numeral_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
-            .str_literal,
-            .underscore,
-            .runtime_error,
-            => {},
-        }
-    }
-
     fn copyReassignedBinders(self: *@This(), pattern_idx: CIR.Pattern.Idx) Allocator.Error![]const PatternBinderId {
         var binders = std.ArrayList(PatternBinderId).empty;
         defer binders.deinit(self.allocator);
@@ -14757,7 +14784,7 @@ const CheckedBodyPayloadCopier = struct {
     ) Allocator.Error!void {
         const pattern = self.module.pattern(pattern_idx).data;
         switch (pattern) {
-            .assign => try self.appendReassignedBinder(pattern_idx, out),
+            .assign, .var_assign => try self.appendReassignedBinder(pattern_idx, out),
             .as => |as| {
                 try self.appendReassignedBinder(pattern_idx, out);
                 try self.collectReassignedBinders(as.pattern, out);
@@ -14856,9 +14883,27 @@ const CheckedBodyPayloadCopier = struct {
 
     fn sourcePatternBinderIsReassignable(self: *const @This(), pattern: CIR.Pattern.Idx) bool {
         const pattern_data = self.module.pattern(pattern).data;
-        if (pattern_data == .assign) return pattern_data.assign.ident.attributes.reassignable;
-        if (pattern_data == .as) return pattern_data.as.ident.attributes.reassignable;
-        return checkedArtifactInvariant("checked artifact invariant violated: non-binder pattern requested a pattern binder", .{});
+        return switch (pattern_data) {
+            .assign, .as => false,
+            .var_assign => true,
+            .applied_tag,
+            .nominal,
+            .nominal_external,
+            .record_destructure,
+            .list,
+            .tuple,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .num_from_numeral_literal,
+            .str_literal,
+            .str_interpolation,
+            .underscore,
+            .runtime_error,
+            => checkedArtifactInvariant("checked artifact invariant violated: non-binder pattern requested a pattern binder", .{}),
+        };
     }
 
     fn checkedStatement(self: *const @This(), statement: CIR.Statement.Idx) CheckedStatementId {
@@ -16470,7 +16515,7 @@ fn collectPublishedExportBinders(
         if (raw_node_idx >= node_count) continue;
         const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
         const tag = module.nodeTag(node_idx);
-        if (tag != .pattern_identifier and tag != .pattern_as) continue;
+        if (tag != .pattern_identifier and tag != .pattern_var_identifier and tag != .pattern_as) continue;
         const binder: CIR.Pattern.Idx = @enumFromInt(raw_node_idx);
         for (binders.items) |seen| {
             if (seen == binder) break;
@@ -16715,6 +16760,7 @@ fn patternIsBinder(module: TypedCIR.Module, pattern: CIR.Pattern.Idx) bool {
     }
     const tag = module.nodeTag(@enumFromInt(raw));
     return tag == .pattern_identifier or
+        tag == .pattern_var_identifier or
         tag == .pattern_as or
         tag == .pattern_applied_tag or
         tag == .pattern_nominal or
@@ -33297,6 +33343,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
                 switch (pattern) {
                     .applied_tag => |tag_pattern| try visitor.tag(tag_pattern.name),
                     .assign,
+                    .var_assign,
                     .as,
                     .nominal,
                     .nominal_external,
@@ -33451,6 +33498,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .ty_malformed,
             .where_malformed,
             .pattern_identifier,
+            .pattern_var_identifier,
             .pattern_as,
             .pattern_nominal,
             .pattern_nominal_external,
@@ -33518,6 +33566,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .diag_invalid_main_type_rename_in_exposing,
             .diag_var_across_function_boundary,
             .diag_shadowing_warning,
+            .diag_binding_name_does_not_match_mutability,
             .diag_type_redeclared,
             .diag_undeclared_type,
             .diag_undeclared_type_var,

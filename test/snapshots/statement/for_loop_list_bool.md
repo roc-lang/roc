@@ -21,9 +21,19 @@ result = {
 expect result == Bool.False
 ~~~
 # EXPECTED
-NIL
+VAR NAME MISSING `$` - for_loop_list_bool.md:3:6:3:14
 # PROBLEMS
-NIL
+── ● var name missing `$` ──────────────────────────── for_loop_list_bool.md:3:6
+
+The mutable binding allTrue_ is declared with var but its name does not start
+with $.
+
+var allTrue_ = Bool.True
+    ^^^^^^^^
+
+Rename this binding and all of its uses to $allTrue_. The name is only a
+convention; mutability comes from the var declaration.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -91,7 +101,7 @@ NO CHANGE
 		(p-assign (ident "result"))
 		(e-block
 			(s-var
-				(p-assign (ident "allTrue_"))
+				(p-var-assign (ident "allTrue_"))
 				(e-nominal-external
 					(builtin)
 					(e-tag (name "True"))))
@@ -122,7 +132,7 @@ NO CHANGE
 											(e-tag (name "False")))))
 								(e-block
 									(s-reassign
-										(p-assign (ident "allTrue_"))
+										(p-var-assign (ident "allTrue_"))
 										(e-nominal-external
 											(builtin)
 											(e-tag (name "False"))))
@@ -131,7 +141,7 @@ NO CHANGE
 							(e-block
 								(e-empty_record))))))
 			(e-lookup-local
-				(p-assign (ident "allTrue_"))))
+				(p-var-assign (ident "allTrue_"))))
 		(annotation
 			(ty-lookup (name "Bool") (builtin))))
 	(s-expect

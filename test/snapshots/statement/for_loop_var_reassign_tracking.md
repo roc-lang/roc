@@ -23,9 +23,31 @@ result = {
 expect result == 31
 ~~~
 # EXPECTED
-NIL
+VAR NAME MISSING `$` - for_loop_var_reassign_tracking.md:3:6:3:10
+VAR NAME MISSING `$` - for_loop_var_reassign_tracking.md:4:6:4:10
 # PROBLEMS
-NIL
+── ● var name missing `$` ──────────────── for_loop_var_reassign_tracking.md:3:6
+
+The mutable binding sum_ is declared with var but its name does not start with
+$.
+
+var sum_ = 0
+    ^^^^
+
+Rename this binding and all of its uses to $sum_. The name is only a
+convention; mutability comes from the var declaration.
+
+── ● var name missing `$` ──────────────── for_loop_var_reassign_tracking.md:4:6
+
+The mutable binding max_ is declared with var but its name does not start with
+$.
+
+var max_ = 0
+    ^^^^
+
+Rename this binding and all of its uses to $max_. The name is only a
+convention; mutability comes from the var declaration.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -106,10 +128,10 @@ NO CHANGE
 		(p-assign (ident "result"))
 		(e-block
 			(s-var
-				(p-assign (ident "sum_"))
+				(p-var-assign (ident "sum_"))
 				(e-num (value "0")))
 			(s-var
-				(p-assign (ident "max_"))
+				(p-var-assign (ident "max_"))
 				(e-num (value "0")))
 			(s-for
 				(p-assign (ident "n"))
@@ -122,40 +144,40 @@ NO CHANGE
 						(e-num (value "1"))))
 				(e-block
 					(s-reassign
-						(p-assign (ident "sum_"))
-						(e-dispatch-call (method "plus") (constraint-fn-var 342)
+						(p-var-assign (ident "sum_"))
+						(e-dispatch-call (method "plus") (constraint-fn-var 344)
 							(receiver
 								(e-lookup-local
-									(p-assign (ident "sum_"))))
+									(p-var-assign (ident "sum_"))))
 							(args
 								(e-lookup-local
 									(p-assign (ident "n"))))))
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 345)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 347)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "n"))))
 									(args
 										(e-lookup-local
-											(p-assign (ident "max_")))))
+											(p-var-assign (ident "max_")))))
 								(e-block
 									(s-reassign
-										(p-assign (ident "max_"))
+										(p-var-assign (ident "max_"))
 										(e-lookup-local
 											(p-assign (ident "n"))))
 									(e-empty_record))))
 						(if-else
 							(e-block
 								(e-empty_record))))))
-			(e-dispatch-call (method "plus") (constraint-fn-var 351)
+			(e-dispatch-call (method "plus") (constraint-fn-var 353)
 				(receiver
 					(e-lookup-local
-						(p-assign (ident "sum_"))))
+						(p-var-assign (ident "sum_"))))
 				(args
 					(e-lookup-local
-						(p-assign (ident "max_"))))))
+						(p-var-assign (ident "max_"))))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect
