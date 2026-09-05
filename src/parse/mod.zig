@@ -1143,3 +1143,49 @@ test "issue 11109: list rest aliases accept ordinary and named-underscore identi
         try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
     }
 }
+
+test "issue 10887: a parenthesized non-type argument after a dotted upper name is a parse error" {
+    // Repro for https://github.com/roc-lang/roc/issues/10887: `a.E(())` looks like
+    // a where alias header, but `()` is not a valid type argument, so the parser
+    // must report a parse error for the statement instead of committing to the
+    // where alias shape.
+    const gpa = std.testing.allocator;
+    const source =
+        \\a.E(()):
+    ;
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try file(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expect(ast.parse_diagnostics.items.len > 0);
+
+    for (ast.parse_diagnostics.items) |diagnostic| {
+        var report = try ast.parseDiagnosticToReport(&env, diagnostic, gpa, "test");
+        defer report.deinit();
+    }
+}
+
+test "a dotted upper where alias candidate without a colon is a parse error" {
+    const gpa = std.testing.allocator;
+    const source =
+        \\a.E()
+    ;
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try file(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), ast.parse_diagnostics.items.len);
+    try std.testing.expectEqual(AST.Diagnostic.Tag.where_alias_expected_colon, ast.parse_diagnostics.items[0].tag);
+
+    const e_ident = env.findIdent("E") orelse return error.MissingEIdent;
+    try std.testing.expectEqual(null, ast.decl_index.findTypePathBySegments(&.{e_ident}));
+
+    var report = try ast.parseDiagnosticToReport(&env, ast.parse_diagnostics.items[0], gpa, "test");
+    defer report.deinit();
+}
