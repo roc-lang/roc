@@ -154,6 +154,7 @@ pub const Tag = enum {
     where_malformed,
     // Patterns
     pattern_identifier,
+    pattern_var_identifier,
     pattern_as,
     pattern_applied_tag,
     pattern_nominal,
@@ -245,6 +246,7 @@ pub const Tag = enum {
     diag_invalid_main_type_rename_in_exposing,
     diag_var_across_function_boundary,
     diag_shadowing_warning,
+    diag_binding_name_does_not_match_mutability,
     diag_type_redeclared,
     diag_undeclared_type,
     diag_undeclared_type_var,
@@ -383,6 +385,7 @@ pub const Payload = extern union {
     expr_return: ExprReturn,
     // === Pattern payloads ===
     pattern_identifier: PatternIdentifier,
+    pattern_var_identifier: PatternIdentifier,
     pattern_as: PatternAs,
     pattern_applied_tag: PatternAppliedTag,
     pattern_record_destructure: PatternRecordDestructure,

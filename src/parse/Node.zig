@@ -66,7 +66,7 @@ pub const Tag = enum {
     /// * rhs - value node index
     decl,
     /// A declaration of a reassignable binding
-    /// Example: `var a_ = some_expr`
+    /// Example: `var $a_ = some_expr`
     /// * main_token - pattern node index
     /// * lhs - value node index
     @"var",

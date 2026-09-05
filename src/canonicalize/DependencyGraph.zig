@@ -953,6 +953,7 @@ const DemandAnalyzer = struct {
                 }
             },
             .assign,
+            .var_assign,
             .num_literal,
             .num_from_numeral_literal,
             .small_dec_literal,
@@ -1106,6 +1107,7 @@ fn appendChildPatterns(
             }
         },
         .assign,
+        .var_assign,
         .num_literal,
         .num_from_numeral_literal,
         .small_dec_literal,
@@ -1143,7 +1145,7 @@ pub fn appendPatternBinders(
 /// Whether a pattern node itself binds a name (nested binders aside).
 fn patternBindsName(pattern: CIR.Pattern) bool {
     return switch (pattern) {
-        .assign, .as => true,
+        .assign, .var_assign, .as => true,
         .applied_tag,
         .nominal,
         .nominal_external,

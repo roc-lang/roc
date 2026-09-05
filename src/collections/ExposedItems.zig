@@ -13,7 +13,7 @@ const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuilder;
 const CompactWriter = @import("CompactWriter.zig");
 
 // We use u32 which is the bit representation of base.Ident.Idx
-// This includes both the 29-bit index AND the 3-bit attributes (effectful, ignored, reassignable)
+// This includes both the 29-bit index AND the 3-bit attributes (effectful, ignored, reserved)
 // This is critical because foo, foo!, and _foo are different identifiers
 const IdentIdx = u32;
 

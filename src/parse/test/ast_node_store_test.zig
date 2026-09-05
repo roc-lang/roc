@@ -15,7 +15,7 @@ fn rand_idx(random: std.Random, comptime T: type) T {
             .attributes = .{
                 .effectful = random.boolean(),
                 .ignored = random.boolean(),
-                .reassignable = random.boolean(),
+                .reserved = random.boolean(),
             },
             .idx = random.int(u29),
         };

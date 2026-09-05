@@ -279,15 +279,15 @@ EndOfFile,
 		(field (name "codepoint")
 			(e-typed-int (value "65") (type "U8")))
 		(field (name "u8Neg")
-			(e-typed-int (value "-123") (type "U8")))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(field (name "u16Neg")
-			(e-typed-int (value "-123") (type "U16")))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(field (name "u32Neg")
-			(e-typed-int (value "-123") (type "U32")))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(field (name "u64Neg")
-			(e-typed-int (value "-123") (type "U64")))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(field (name "u128Neg")
-			(e-typed-int (value "-123") (type "U128")))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(field (name "i8Neg")
 			(e-typed-int (value "-123") (type "I8")))
 		(field (name "i16Neg")
@@ -323,5 +323,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ codepoint: U8, dec: Dec, decNeg: Dec, i128: I128, i128Bin: I128, i128Neg: I128, i16: I16, i16Bin: I16, i16Neg: I16, i32: I32, i32Bin: I32, i32Neg: I32, i64: I64, i64Bin: I64, i64Neg: I64, i8: I8, i8Bin: I8, i8Neg: I8, u128: U128, u128Bin: U128, u128Neg: Error, u16: U16, u16Bin: U16, u16Neg: Error, u32: U32, u32Bin: U32, u32Neg: Error, u64: U64, u64Bin: U64, u64Neg: Error, u8: U8, u8Bin: U8, u8Neg: Error }"))
+(expr (type "{ codepoint: U8, dec: Dec, decNeg: Dec, i128: I128, i128Bin: I128, i128Neg: I128, i16: I16, i16Bin: I16, i16Neg: I16, i32: I32, i32Bin: I32, i32Neg: I32, i64: I64, i64Bin: I64, i64Neg: I64, i8: I8, i8Bin: I8, i8Neg: I8, u128: U128, u128Bin: U128, u128Neg: U128, u16: U16, u16Bin: U16, u16Neg: U16, u32: U32, u32Bin: U32, u32Neg: U32, u64: U64, u64Bin: U64, u64Neg: U64, u8: U8, u8Bin: U8, u8Neg: U8 }"))
 ~~~

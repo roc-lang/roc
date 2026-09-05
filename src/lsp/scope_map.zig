@@ -410,6 +410,15 @@ pub const ScopeMap = struct {
                     .is_parameter = is_parameter,
                 });
             },
+            .var_assign => |p| {
+                try self.bindings.append(self.allocator, .{
+                    .ident = p.ident,
+                    .pattern_idx = pattern_idx,
+                    .visible_from = visible_from,
+                    .visible_to = visible_to,
+                    .is_parameter = is_parameter,
+                });
+            },
             .as => |p| {
                 // The identifier is bound
                 try self.bindings.append(self.allocator, .{

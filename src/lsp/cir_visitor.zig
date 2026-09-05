@@ -548,6 +548,7 @@ pub fn CirVisitor(comptime Context: type) type {
                 },
                 // Leaf patterns - no children to traverse
                 .assign,
+                .var_assign,
                 .num_literal,
                 .num_from_numeral_literal,
                 .small_dec_literal,

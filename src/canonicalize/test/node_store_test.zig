@@ -1349,6 +1349,21 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .binding_name_does_not_match_mutability = .{
+            .ident = rand_ident_idx(),
+            .mutability = .mutable,
+            .region = rand_region(),
+        },
+    });
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .binding_name_does_not_match_mutability = .{
+            .ident = rand_ident_idx(),
+            .mutability = .immutable,
+            .region = rand_region(),
+        },
+    });
+
     // Test the round-trip for all diagnostics
     for (diagnostics.items) |diagnostic| {
         const idx = try store.addDiagnostic(diagnostic);
@@ -1547,6 +1562,11 @@ test "NodeStore round trip - Pattern" {
     // Test all Pattern variants to ensure complete coverage
     try patterns.append(gpa, CIR.Pattern{
         .assign = .{
+            .ident = rand_ident_idx(),
+        },
+    });
+    try patterns.append(gpa, CIR.Pattern{
+        .var_assign = .{
             .ident = rand_ident_idx(),
         },
     });
