@@ -58,8 +58,9 @@ pub const WasmImportMemory = enum {
 
 /// Optional wasm-specific settings from a target record in a platform header.
 pub const WasmTargetConfig = struct {
-    /// Final host-visible function exports. The platform header is the sole
-    /// authority: `null` and an explicit empty slice both export no functions.
+    /// Final host-visible function exports. Null records an omitted field while
+    /// parsing; linked wasm targets reject it before compilation. An explicit
+    /// empty slice exports no functions.
     exports: ?[]const []const u8 = null,
     import_memory: WasmImportMemory = .no,
     minimum_memory: ?usize = null,
@@ -1031,6 +1032,7 @@ test "fromAST captures punned wasm identifier config" {
         \\        wasm32: {
         \\            inputs: ["libhost.a", app],
         \\            output: Shared,
+        \\            exports: [],
         \\            import_memory,
         \\            minimum_memory,
         \\            maximum_memory,

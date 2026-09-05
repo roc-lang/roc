@@ -12437,11 +12437,13 @@ linked module.
 For wasm targets, `exports:` is the complete final host-visible function ABI.
 Every named function is a link root and is emitted in the module export
 section; no other host function becomes public. An explicitly empty list means
-that the final module has no exported functions. Omitting the field preserves
-compatibility with older platforms by exporting the public function symbols
-found in their wasm object inputs. New platforms should always declare the
-field so object visibility cannot accidentally enlarge the final ABI or retain
-link-only code.
+that the final module has no exported functions. Every linked wasm target
+(`Exe` or `Shared`) must declare the field; omitting it is an invalid target
+configuration. `Archive` targets are exempt because they do not produce a
+final linked module. Every declared export must resolve to a defined function
+during the final link. Undefined functions referenced by the linked objects may
+remain host imports, but the linker must not treat a missing declared export as
+such an import or silently discard it.
 
 After the final wasm link, size builds run Binaryen at optimize level 2 and
 shrink level 2, validate the resulting module, and remove debug, producer, and

@@ -362,6 +362,7 @@ const CliMainError =
         MissingFilesDirectory,
         MissingTargetFile,
         MissingTargetsSection,
+        MissingWasmExports,
         NativeCompilationFailed,
         NoCacheDir,
         NoPlatformSource,
@@ -8445,9 +8446,12 @@ fn selectBuildPlatformTarget(
     targets_config: roc_target.TargetsConfig,
     platform_source: ?[]const u8,
     target_arg: ?[]const u8,
-) error{ InvalidTarget, UnsupportedTarget, WriteFailed }!target_selection.SelectedTarget {
+) (Allocator.Error || error{ InvalidTarget, MissingWasmExports, UnsupportedTarget, WriteFailed })!target_selection.SelectedTarget {
     return switch (target_selection.selectBuildTarget(targets_config, target_arg, roc_target.host_cpu.level())) {
-        .selected => |selected| selected,
+        .selected => |selected| blk: {
+            try requireLinkedWasmExports(ctx, selected, platform_source);
+            break :blk selected;
+        },
         .invalid_target => |target_str| {
             renderValidationError(ctx, .{ .invalid_target = .{ .target_str = target_str } });
             return error.InvalidTarget;
@@ -8489,6 +8493,42 @@ fn selectBuildPlatformTarget(
         },
         .not_runnable_on_host => unreachable,
     };
+}
+
+fn requireLinkedWasmExports(
+    ctx: *CliCtx,
+    selected: target_selection.SelectedTarget,
+    platform_source: ?[]const u8,
+) (Allocator.Error || error{ MissingWasmExports, WriteFailed })!void {
+    if (selected.target.toCpuArch() != .wasm32 or selected.output == .archive) return;
+    if (selected.link_spec.wasm) |wasm| {
+        if (wasm.exports != null) return;
+    }
+
+    var report = try reporting.Report.init(
+        ctx.arena,
+        "Missing Wasm Exports",
+        "Linked WebAssembly targets must explicitly declare their host-visible function exports.",
+        .runtime_error,
+    );
+    defer report.deinit();
+
+    try report.document.addText("Platform: ");
+    try report.document.addAnnotated(platform_source orelse "<unknown>", .path);
+    try report.document.addLineBreak();
+    try report.document.addText("Target: ");
+    try report.document.addAnnotated(@tagName(selected.target), .emphasized);
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Add an `exports:` field to this target. Use `exports: []` when the module intentionally exports no functions.");
+
+    try reporting.renderReportToTerminal(
+        &report,
+        ctx.io.stderr(),
+        reporting.ColorUtils.getPaletteForConfig(ctx.reportConfig(.stderr)),
+        ctx.reportConfig(.stderr),
+    );
+    return error.MissingWasmExports;
 }
 
 fn selectRunPlatformTarget(
@@ -8981,26 +9021,34 @@ fn wasmOptimizeMode(opt: cli_args.OptLevel) linker.WasmOptimizeMode {
     };
 }
 
-fn wasmPlatformExports(link_inputs: PlatformLinkInputs) []const []const u8 {
-    if (link_inputs.wasm) |wasm| {
-        if (wasm.exports) |exports| return exports;
-    }
-    return &.{};
+fn requiredWasmPlatformExports(link_inputs: PlatformLinkInputs) []const []const u8 {
+    const wasm = link_inputs.wasm orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("linked wasm target reached the linker without an exports declaration", .{});
+        }
+        unreachable;
+    };
+    return wasm.exports orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("linked wasm target reached the linker without an exports declaration", .{});
+        }
+        unreachable;
+    };
 }
 
 test "wasm platform exports are exactly the header declaration" {
-    const inputs_without_exports = PlatformLinkInputs{
+    const explicit_empty = PlatformLinkInputs{
         .target_name = "wasm32",
         .platform_files_dir = "targets/wasm32",
         .platform_files_pre = &.{},
         .platform_files_post = &.{},
-        .wasm = .{},
+        .wasm = .{ .exports = &.{} },
     };
-    try std.testing.expectEqual(@as(usize, 0), wasmPlatformExports(inputs_without_exports).len);
+    try std.testing.expectEqual(@as(usize, 0), requiredWasmPlatformExports(explicit_empty).len);
 
-    var explicit = inputs_without_exports;
+    var explicit = explicit_empty;
     explicit.wasm.?.exports = &.{ "run", "result_len" };
-    const exports = wasmPlatformExports(explicit);
+    const exports = requiredWasmPlatformExports(explicit);
     try std.testing.expectEqual(@as(usize, 2), exports.len);
     try std.testing.expectEqualStrings("run", exports[0]);
     try std.testing.expectEqualStrings("result_len", exports[1]);
@@ -9152,7 +9200,7 @@ fn rocBuildWasm(
 
     const object_files = try ctx.arena.alloc([]const u8, 1);
     object_files[0] = obj_path;
-    const wasm_exports = wasmPlatformExports(link_inputs);
+    const wasm_exports = requiredWasmPlatformExports(link_inputs);
     const link_config = linker.LinkConfig{
         .target_format = .wasm,
         .target_abi = null,
@@ -9603,7 +9651,7 @@ fn rocBuildWasmLlvm(
     const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
     const object_files = try ctx.arena.alloc([]const u8, 1);
     object_files[0] = combined_obj;
-    const wasm_exports = wasmPlatformExports(link_inputs);
+    const wasm_exports = requiredWasmPlatformExports(link_inputs);
 
     const link_config = linker.LinkConfig{
         .target_format = .wasm,
