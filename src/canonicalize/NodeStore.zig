@@ -137,6 +137,7 @@ const WhereNodeTag = enum { where_method, where_method_effectful, where_alias, w
 
 const PatternNodeTag = enum {
     pattern_identifier,
+    pattern_var_identifier,
     pattern_as,
     pattern_applied_tag,
     pattern_nominal,
@@ -206,6 +207,7 @@ const DiagnosticNodeTag = enum {
     diag_if_expr_without_else,
     diag_var_across_function_boundary,
     diag_shadowing_warning,
+    diag_binding_name_does_not_match_mutability,
     diag_type_redeclared,
     diag_undeclared_type,
     diag_type_alias_but_needed_nominal,
@@ -263,6 +265,7 @@ const DiagnosticNodeTag = enum {
     diag_underscore_in_type_declaration,
     diag_break_outside_loop,
     diag_infinite_loop_never_exits,
+    diag_trailing_try_suffix,
     diag_return_outside_fn,
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
@@ -749,7 +752,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 95;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 97;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
@@ -757,7 +760,7 @@ pub const MODULEENV_STATEMENT_NODE_COUNT = 21;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
-pub const MODULEENV_PATTERN_NODE_COUNT = 18;
+pub const MODULEENV_PATTERN_NODE_COUNT = 19;
 
 comptime {
     // Check the number of CIR.Diagnostic nodes
@@ -2335,6 +2338,14 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                 },
             };
         },
+        .pattern_var_identifier => {
+            const p = payload.pattern_var_identifier;
+            return CIR.Pattern{
+                .var_assign = .{
+                    .ident = @bitCast(p.ident),
+                },
+            };
+        },
         .pattern_as => {
             const p = payload.pattern_as;
             return CIR.Pattern{
@@ -3635,6 +3646,12 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         .assign => |p| {
             node.tag = .pattern_identifier;
             node.setPayload(.{ .pattern_identifier = .{
+                .ident = @bitCast(p.ident),
+            } });
+        },
+        .var_assign => |p| {
+            node.tag = .pattern_var_identifier;
+            node.setPayload(.{ .pattern_var_identifier = .{
                 .ident = @bitCast(p.ident),
             } });
         },
@@ -5363,6 +5380,14 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.region;
             node.setPayload(.{ .diag_ident_with_region = .{ .ident = @bitCast(r.ident), .region_start = r.original_region.start.offset, .region_end = r.original_region.end.offset } });
         },
+        .binding_name_does_not_match_mutability => |r| {
+            node.tag = .diag_binding_name_does_not_match_mutability;
+            region = r.region;
+            node.setPayload(.{ .diag_two_idents = .{
+                .ident1 = @bitCast(r.ident),
+                .ident2 = @intFromEnum(r.mutability),
+            } });
+        },
         .type_redeclared => |r| {
             node.tag = .diag_type_redeclared;
             region = r.redeclared_region;
@@ -5561,6 +5586,10 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_infinite_loop_never_exits;
             region = r.region;
         },
+        .trailing_try_suffix => |r| {
+            node.tag = .diag_trailing_try_suffix;
+            region = r.region;
+        },
         .return_outside_fn => |r| {
             node.tag = .diag_return_outside_fn;
             region = r.region;
@@ -5754,6 +5783,14 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                     .start = .{ .offset = p.region_start },
                     .end = .{ .offset = p.region_end },
                 },
+            } };
+        },
+        .diag_binding_name_does_not_match_mutability => {
+            const p = payload.diag_two_idents;
+            return CIR.Diagnostic{ .binding_name_does_not_match_mutability = .{
+                .ident = @bitCast(p.ident1),
+                .mutability = @enumFromInt(p.ident2),
+                .region = store.getRegionAt(node_idx),
             } };
         },
         .diag_type_redeclared => {
@@ -6091,6 +6128,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_infinite_loop_never_exits => return CIR.Diagnostic{ .infinite_loop_never_exits = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_trailing_try_suffix => return CIR.Diagnostic{ .trailing_try_suffix = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_return_outside_fn => {

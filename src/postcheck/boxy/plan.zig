@@ -1994,31 +1994,21 @@ const Builder = struct {
             typeRef(store_view, fn_value.source_fn_ty),
         );
         const view = self.moduleForId(.{ .bytes = checked_names.procTemplateModuleDigest(selected.owner).bytes });
-        var found: ?static_dispatch.GeneratedCodecDerivation = null;
-        for (view.static_dispatch_plans.generated_codec_derivations) |derivation| {
-            if (derivation.kind != selected.derivation_kind) continue;
-            if (!try self.storedTypeMatchesCheckedType(store_view, stored_type, view, derivation.source_runtime_ty)) continue;
-            if (found) |existing| {
-                if (existing.constructor_ty != derivation.constructor_ty or
-                    existing.runtime_ty != derivation.runtime_ty or
-                    existing.shape_ty != derivation.shape_ty or
-                    existing.encoding_ty != derivation.encoding_ty or
-                    existing.state_ty != derivation.state_ty or
-                    existing.error_ty != derivation.error_ty)
-                {
-                    boxyPlanInvariant("stored generated codec type matched multiple checked derivations");
-                }
-                continue;
-            }
-            found = derivation;
+        const selected_contract = self.generatedCodecContractForRuntimeExpr(
+            view,
+            selected.expr,
+            selected.derivation_kind,
+        );
+        const derivation = selected_contract.derivation;
+        if (!try self.storedTypeMatchesCheckedType(store_view, stored_type, view, derivation.source_runtime_ty)) {
+            boxyPlanInvariant("stored generated codec runtime type disagreed with its checked contract");
         }
-        const derivation = found orelse
-            boxyPlanInvariant("stored generated codec type had no checked derivation");
         return .{ .generated_codec = .{
             .kind = selected.kind,
             .shape = typeRef(view, derivation.shape_ty),
             .runtime_type = typeRef(view, derivation.runtime_ty),
             .capture_type = typeRef(view, derivation.encoding_ty),
+            .contract_derivation = selected_contract.id,
             .contract_expr = .{ .module = view.key, .expr = selected.expr },
         } };
     }
@@ -2418,36 +2408,59 @@ const Builder = struct {
         kind: GeneratedCodecKind,
         derivation_kind: static_dispatch.GeneratedCodecDerivationKind,
     ) GeneratedCodecSource {
-        const dispatch = self.dispatchPlanForGeneratedRuntime(view, expr_id);
-        const constructor = checkedFunctionPayload(view, dispatch.callable_ty);
-        if (constructor.args.len != 1) {
-            boxyPlanInvariant("stored generated codec constructor did not have one encoding argument");
+        const selected = self.generatedCodecContractForRuntimeExpr(view, expr_id, derivation_kind);
+        const derivation = selected.derivation;
+        if (derivation.source_runtime_ty != stored_runtime_ty or
+            checkedFunctionPayload(view, derivation.source_constructor_ty).args.len != 1)
+        {
+            boxyPlanInvariant("stored generated codec runtime disagreed with its checked contract");
         }
-        var found: ?static_dispatch.GeneratedCodecDerivation = null;
-        for (view.static_dispatch_plans.generated_codec_derivations) |derivation| {
-            if (derivation.kind != derivation_kind or
-                derivation.source_runtime_ty != stored_runtime_ty or
-                derivation.source_encoding_ty != constructor.args[0])
-            {
-                continue;
-            }
-            if (found) |existing| {
-                if (!generatedCodecDerivationsEql(view.static_dispatch_plans, existing, derivation)) {
-                    boxyPlanInvariant("stored generated codec runtime matched multiple checked derivations");
-                }
-                continue;
-            }
-            found = derivation;
-        }
-        const derivation = found orelse
-            boxyPlanInvariant("stored generated codec runtime had no checked derivation");
         return .{
             .kind = kind,
             .shape = typeRef(view, derivation.shape_ty),
             .runtime_type = typeRef(view, derivation.runtime_ty),
             .capture_type = typeRef(view, derivation.encoding_ty),
+            .contract_derivation = selected.id,
             .contract_expr = .{ .module = view.key, .expr = expr_id },
         };
+    }
+
+    const GeneratedCodecContract = struct {
+        id: static_dispatch.GeneratedCodecDerivationId,
+        derivation: static_dispatch.GeneratedCodecDerivation,
+    };
+
+    fn generatedCodecContractForRuntimeExpr(
+        self: *Builder,
+        view: ModuleView,
+        expr_id: checked.CheckedExprId,
+        expected_kind: static_dispatch.GeneratedCodecDerivationKind,
+    ) GeneratedCodecContract {
+        const dispatch = self.dispatchPlanForGeneratedRuntime(view, expr_id);
+        const structural_kind = switch (dispatch.resolution) {
+            .structural => |derivation| derivation.kind(),
+            .direct_pending, .direct_closed, .direct_parametric, .evidence_dependent, .checked_error, .@"unreachable" => boxyPlanInvariant("stored generated codec source plan was not structural"),
+        };
+        const expected_structural: static_dispatch.StructuralKind = switch (expected_kind) {
+            .parser => .parser,
+            .encoder => .encoder,
+        };
+        if (structural_kind != expected_structural) {
+            boxyPlanInvariant("stored generated codec source plan had the wrong structural kind");
+        }
+        const derivation_id = dispatch.generated_codec_derivation orelse
+            boxyPlanInvariant("stored generated codec source plan had no checked contract identity");
+        if (@intFromEnum(derivation_id) >= view.static_dispatch_plans.generated_codec_derivations.len) {
+            boxyPlanInvariant("stored generated codec source plan referenced a missing checked contract");
+        }
+        const derivation = view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(derivation_id)];
+        if (derivation.kind != expected_kind or
+            !std.meta.eql(view.checked_types.rootKey(derivation.source_constructor_ty), view.checked_types.rootKey(dispatch.callable_ty)) or
+            !std.meta.eql(view.checked_types.structuralRootKey(derivation.source_shape_ty), view.checked_types.structuralRootKey(dispatch.dispatcher_ty)))
+        {
+            boxyPlanInvariant("stored generated codec source plan disagreed with its checked contract");
+        }
+        return .{ .id = derivation_id, .derivation = derivation };
     }
 
     fn dispatchPlanForGeneratedRuntime(
@@ -2669,16 +2682,47 @@ const Builder = struct {
             if (std.mem.eql(u8, planned_names.methodNameText(planned.method), method_text)) return planned;
         }
 
-        const owner = methodOwnerForModuleType(contract.view, exact_call.dispatcher_ty) orelse
-            boxyPlanInvariant("generated codec dispatch type had no method owner");
-        const lookup = self.lookupMethodTarget(contract.view, owner, contract.view, exact_call.method) orelse
-            boxyPlanInvariant("checked generated codec method target was absent from the method registry");
-        const source = self.workerSourceForMethodTarget(
-            lookup,
-            dispatch_type,
-            exact_call.generated_codec_derivation,
-        );
-        const source_fn_type = CheckedTypeIdentity{ .module = lookup.view.key, .ty = lookup.target.callable_ty };
+        var source: WorkerSource = undefined;
+        var source_fn_type: CheckedTypeIdentity = undefined;
+        var checked_evidence: Span = .{};
+        switch (exact_call.resolution) {
+            .callable => |node_id| blk: {
+                const node = contract.view.static_dispatch_plans.evidenceNode(node_id);
+                const target_view = switch (node.target.kind) {
+                    .procedure => |procedure| self.moduleForCheckedModuleId(procedure.template.artifact),
+                    .local_proc => contract.view,
+                    .structural => boxyPlanInvariant("callable generated codec resolution named a structural target"),
+                };
+                const lookup = MethodTargetLookup{
+                    .view = target_view,
+                    .method = exact_call.method,
+                    .target = node.target,
+                };
+                const nested = switch (node.nested) {
+                    .resolved => |span| span,
+                    .from_callable => boxyPlanInvariant("generated codec call retained callable-derived evidence"),
+                };
+                source = self.workerSourceForMethodTarget(lookup, dispatch_type, null);
+                source_fn_type = .{ .module = target_view.key, .ty = node.target.callable_ty };
+                checked_evidence = .{ .start = nested.start, .len = nested.len };
+                break :blk;
+            },
+            .structural => |derivation_id| blk: {
+                if (@intFromEnum(derivation_id) >= contract.view.static_dispatch_plans.generated_codec_derivations.len) {
+                    boxyPlanInvariant("generated codec call referenced a missing nested derivation");
+                }
+                const nested = contract.view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(derivation_id)];
+                source = .{ .generated_codec = .{
+                    .kind = if (nested.kind == .parser) .parser_constructor else .encoder_constructor,
+                    .shape = dispatch_type,
+                    .contract_derivation = derivation_id,
+                } };
+                source_fn_type = .{ .module = contract.view.key, .ty = nested.constructor_ty };
+                break :blk;
+            },
+            .pending => boxyPlanInvariant("unlinked generated codec call reached Boxy planning"),
+            .checked_error => boxyPlanInvariant("rejected generated codec call reached Boxy planning"),
+        }
         const worker = try self.ensureWorker(source, source_fn_type, null);
         const exact_fn_rep = try self.analyzeType(contract.view, exact_call.callable_ty);
         const function = (self.repQuery().functionChildren(exact_fn_rep)) orelse
@@ -2698,7 +2742,7 @@ const Builder = struct {
             .worker = worker,
             .arg_types = .{ .start = arg_start, .len = function.arg_count },
             .ret_type = self.plan.representations.items[@intFromEnum(function.ret)].source_type,
-            .checked_evidence = .{ .start = exact_call.nested.start, .len = exact_call.nested.len },
+            .checked_evidence = checked_evidence,
         };
         try self.plan.generated_codec_calls.append(self.allocator, planned);
         return planned;
@@ -2787,44 +2831,22 @@ const Builder = struct {
         const shape_key = view.checked_types.rootKey(codec.shape.ty);
         const encoding_key = view.checked_types.rootKey(encoding_type.ty);
         const state_key = view.checked_types.rootKey(state_ty);
-        if (codec.contract_derivation) |derivation_id| {
-            if (@intFromEnum(derivation_id) >= view.static_dispatch_plans.generated_codec_derivations.len) {
-                boxyPlanInvariant("generated codec constructor referenced a missing checked derivation");
-            }
-            const derivation = view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(derivation_id)];
-            if (derivation.kind != expected_kind or
-                !std.meta.eql(constructor_key, view.checked_types.rootKey(derivation.constructor_ty)) or
-                !std.meta.eql(encoding_key, view.checked_types.rootKey(derivation.encoding_ty)) or
-                !std.meta.eql(state_key, view.checked_types.rootKey(derivation.state_ty)) or
-                !std.meta.eql(view.checked_types.rootKey(runtime_type.ty), view.checked_types.rootKey(derivation.runtime_ty)))
-            {
-                boxyPlanInvariant("generated codec constructor disagreed with its checked derivation reference");
-            }
-            return .{ .view = view, .derivation = derivation };
+        const derivation_id = codec.contract_derivation orelse
+            boxyPlanInvariant("generated codec constructor had no checked contract identity");
+        if (@intFromEnum(derivation_id) >= view.static_dispatch_plans.generated_codec_derivations.len) {
+            boxyPlanInvariant("generated codec constructor referenced a missing checked derivation");
         }
-        var found: ?static_dispatch.GeneratedCodecDerivation = null;
-        for (view.static_dispatch_plans.generated_codec_derivations) |derivation| {
-            if (derivation.kind != expected_kind or
-                !std.meta.eql(constructor_key, view.checked_types.rootKey(derivation.constructor_ty)) or
-                !std.meta.eql(shape_key, view.checked_types.rootKey(derivation.shape_ty)) or
-                !std.meta.eql(encoding_key, view.checked_types.rootKey(derivation.encoding_ty)) or
-                !std.meta.eql(state_key, view.checked_types.rootKey(derivation.state_ty)))
-            {
-                continue;
-            }
-            if (found) |existing| {
-                if (!generatedCodecDerivationsEql(view.static_dispatch_plans, existing, derivation)) {
-                    boxyPlanInvariant("generated codec constructor matched multiple checked contracts");
-                }
-                continue;
-            }
-            found = derivation;
+        const derivation = view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(derivation_id)];
+        if (derivation.kind != expected_kind or
+            !std.meta.eql(constructor_key, view.checked_types.rootKey(derivation.constructor_ty)) or
+            !std.meta.eql(shape_key, view.checked_types.rootKey(derivation.shape_ty)) or
+            !std.meta.eql(encoding_key, view.checked_types.rootKey(derivation.encoding_ty)) or
+            !std.meta.eql(state_key, view.checked_types.rootKey(derivation.state_ty)) or
+            !std.meta.eql(view.checked_types.rootKey(runtime_type.ty), view.checked_types.rootKey(derivation.runtime_ty)))
+        {
+            boxyPlanInvariant("generated codec constructor disagreed with its checked derivation reference");
         }
-        return .{
-            .view = view,
-            .derivation = found orelse
-                boxyPlanInvariant("generated codec constructor had no checked derivation contract"),
-        };
+        return .{ .view = view, .derivation = derivation };
     }
 
     fn generatedCodecContractForWorker(self: *Builder, worker_id: WorkerPlanId) GeneratedCodecContractLookup {
@@ -2879,40 +2901,21 @@ const Builder = struct {
             boxyPlanInvariant("generated codec capture and runtime contract belonged to different checked modules");
         }
         const runtime_type = contract_codec.runtime_type orelse contract_worker.checked_type;
-        if (contract_codec.contract_derivation) |derivation_id| {
-            if (@intFromEnum(derivation_id) >= view.static_dispatch_plans.generated_codec_derivations.len) {
-                boxyPlanInvariant("generated codec worker referenced a missing checked derivation");
-            }
-            const derivation = view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(derivation_id)];
-            if (derivation.kind != expected_kind or
-                !std.meta.eql(view.checked_types.rootKey(runtime_type.ty), view.checked_types.rootKey(derivation.runtime_ty)) or
-                !std.meta.eql(view.checked_types.rootKey(capture_type.ty), view.checked_types.rootKey(derivation.encoding_ty)))
-            {
-                boxyPlanInvariant("generated codec worker disagreed with its checked derivation reference");
-            }
-            return .{ .view = view, .derivation = derivation };
+        const derivation_id = contract_codec.contract_derivation orelse
+            boxyPlanInvariant("generated codec worker had no checked contract identity");
+        if (@intFromEnum(derivation_id) >= view.static_dispatch_plans.generated_codec_derivations.len) {
+            boxyPlanInvariant("generated codec worker referenced a missing checked derivation");
         }
-        var found: ?static_dispatch.GeneratedCodecDerivation = null;
-        for (view.static_dispatch_plans.generated_codec_derivations) |derivation| {
-            const identity_matches = moduleKeyEqual(runtime_type.module, view.key) and
-                derivation.runtime_ty == runtime_type.ty and
-                derivation.shape_ty == contract_codec.shape.ty;
-            if (derivation.kind != expected_kind or !identity_matches or derivation.encoding_ty != capture_type.ty) {
-                continue;
-            }
-            if (found) |existing| {
-                if (!generatedCodecDerivationsEql(view.static_dispatch_plans, existing, derivation)) {
-                    boxyPlanInvariant("generated codec worker matched multiple checked contracts");
-                }
-                continue;
-            }
-            found = derivation;
+        const derivation = view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(derivation_id)];
+        if (derivation.kind != expected_kind or
+            !moduleKeyEqual(runtime_type.module, view.key) or
+            !std.meta.eql(view.checked_types.rootKey(runtime_type.ty), view.checked_types.rootKey(derivation.runtime_ty)) or
+            !std.meta.eql(view.checked_types.rootKey(contract_codec.shape.ty), view.checked_types.rootKey(derivation.shape_ty)) or
+            !std.meta.eql(view.checked_types.rootKey(capture_type.ty), view.checked_types.rootKey(derivation.encoding_ty)))
+        {
+            boxyPlanInvariant("generated codec worker disagreed with its checked derivation reference");
         }
-        return .{
-            .view = view,
-            .derivation = found orelse
-                boxyPlanInvariant("generated codec worker had no checked derivation contract"),
-        };
+        return .{ .view = view, .derivation = derivation };
     }
 
     fn planGeneratedParserShape(
@@ -7195,7 +7198,6 @@ const Builder = struct {
         const call_path: []const static_dispatch.EvidencePathStep = switch (param.source) {
             .scheme_callable => path,
             .constraint_callable, .use_site_only, .explicit_default, .erased_row_remainder => &.{},
-            .checked_error => boxyPlanInvariant("checked-error evidence parameter reached worker descriptor planning"),
         };
         const source_arg_index = evidencePathSourceArgIndex(call_path, call_arg_types.len);
 
@@ -8492,7 +8494,7 @@ const Builder = struct {
                         .resolution = resolution,
                     };
                 },
-                .constraint, .from_callable, .from_constraint_callable => .{
+                .constraint, .from_callable => .{
                     .requirement_type = requirement.fn_ty,
                     .callable_type = requirement.fn_ty,
                     .resolution = .constraint,
@@ -10131,25 +10133,19 @@ const Builder = struct {
         kind: GeneratedCodecKind,
         derivation_kind: static_dispatch.GeneratedCodecDerivationKind,
     ) Allocator.Error!GeneratedCodecSource {
-        var found: ?static_dispatch.GeneratedCodecDerivation = null;
-        for (view.static_dispatch_plans.generated_codec_derivations) |derivation| {
-            if (derivation.kind != derivation_kind or derivation.source_runtime_ty != requested_runtime_type) continue;
-            if (!try self.storedTypeMatchesCheckedType(store_view, stored_encoding_type, view, derivation.encoding_ty)) continue;
-            if (found) |existing| {
-                if (!generatedCodecDerivationsEql(view.static_dispatch_plans, existing, derivation)) {
-                    boxyPlanInvariant("stored generated codec encoding matched multiple checked derivations");
-                }
-                continue;
-            }
-            found = derivation;
+        const selected = self.generatedCodecContractForRuntimeExpr(view, expr_id, derivation_kind);
+        const derivation = selected.derivation;
+        if (derivation.source_runtime_ty != requested_runtime_type or
+            !try self.storedTypeMatchesCheckedType(store_view, stored_encoding_type, view, derivation.encoding_ty))
+        {
+            boxyPlanInvariant("stored generated codec encoding disagreed with its checked contract");
         }
-        const derivation = found orelse
-            boxyPlanInvariant("stored generated codec encoding had no checked derivation");
         return .{
             .kind = kind,
             .shape = typeRef(view, derivation.shape_ty),
             .runtime_type = typeRef(view, derivation.runtime_ty),
             .capture_type = typeRef(view, derivation.encoding_ty),
+            .contract_derivation = selected.id,
             .contract_expr = .{ .module = view.key, .expr = expr_id },
         };
     }

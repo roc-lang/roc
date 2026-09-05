@@ -476,9 +476,11 @@ pub fn typeProblemCount(self: *TestEnv) TestEnvError!usize {
 /// expected type string.
 ///
 /// Also assert that there were no problems processing the source code.
-pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expected: []const u8, comptime options: struct { allow_type_errors: bool }) TestEnvError!void {
+pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expected: []const u8, comptime options: struct { allow_type_errors: bool, allow_can_errors: bool = false }) TestEnvError!void {
     try self.assertNoParseProblems();
-    try self.assertNoCanProblems();
+    if (!options.allow_can_errors) {
+        try self.assertNoCanProblems();
+    }
     if (!options.allow_type_errors) {
         try self.assertNoTypeProblems();
     }
@@ -516,6 +518,7 @@ fn findDefVar(self: *const TestEnv, target_def_name: []const u8) TestEnvError!Va
         for (binders.items) |binder| {
             const ident = switch (self.module_env.store.getPattern(binder)) {
                 .assign => |assign| assign.ident,
+                .var_assign => |assign| assign.ident,
                 .as => |as_pattern| as_pattern.ident,
                 .applied_tag,
                 .nominal,

@@ -34,6 +34,10 @@ pub const Pattern = union(enum) {
     assign: struct {
         ident: Ident.Idx,
     },
+    /// An identifier introduced by an explicit `var` construct.
+    var_assign: struct {
+        ident: Ident.Idx,
+    },
     /// A `as` pattern used to rename an identifier
     ///
     /// ```roc
@@ -346,6 +350,17 @@ pub const Pattern = union(enum) {
             .assign => |p| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-assign");
+                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
+
+                const ident = ir.getIdentText(p.ident);
+                try tree.pushStringPair("ident", ident);
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .var_assign => |p| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-var-assign");
                 try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
 
                 const ident = ir.getIdentText(p.ident);

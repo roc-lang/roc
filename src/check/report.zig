@@ -113,6 +113,7 @@ const VarWithSnapshot = problem_mod.VarWithSnapshot;
 
 // Context types for precise error reporting
 const Context = problem_mod.Context;
+const TypeMismatchEvidence = problem_mod.TypeMismatchEvidence;
 
 /// Returns singular form if count is 1, plural form otherwise.
 /// Usage: pluralize(count, "argument", "arguments")
@@ -916,9 +917,10 @@ pub const ReportBuilder = struct {
                     .binop_lhs => |ctx| self.buildBinopReport(mismatch.types, ctx, .lhs),
                     .binop_rhs => |ctx| self.buildBinopReport(mismatch.types, ctx, .rhs),
                     .try_operator_expr => |ctx| self.buildTryOperatorExprReport(mismatch.types, ctx),
+                    .try_operator_value => |ctx| self.buildTryOperatorValueReport(mismatch.types, ctx),
                     .statement_value => self.buildStatementValueReport(mismatch.types),
                     .early_return => self.buildEarlyReturnReport(mismatch.types),
-                    .try_operator => self.buildTryOperatorReport(mismatch.types),
+                    .try_operator => |ctx| self.buildTryOperatorReport(mismatch.types, ctx),
                     .nominal_constructor => |ctx| switch (ctx.backing_type) {
                         .tag => self.buildInvalidNominalTag(mismatch.types),
                         .record => self.buildInvalidNominalRecord(mismatch.types),
@@ -928,8 +930,8 @@ pub const ReportBuilder = struct {
                     .fn_args_bound_var => |ctx| self.buildIncompatibleFnArgsBoundVar(mismatch.types, ctx),
                     .method_type => |ctx| self.buildIncompatibleMethodType(mismatch.types, ctx),
                     .expect => self.buildExpect(mismatch.types),
-                    .record_access => |ctx| self.buildRecordAccess(mismatch.types, ctx),
-                    .record_update => |ctx| self.buildRecordUpdate(mismatch.types, ctx),
+                    .record_access => |ctx| self.buildRecordAccess(mismatch.types, mismatch.evidence, ctx),
+                    .record_update => |ctx| self.buildRecordUpdate(mismatch.types, mismatch.evidence, ctx),
                     .recursive_def => |ctx| self.buildRecursiveDef(mismatch.types, ctx),
                     .platform_requirement => |ctx| {
                         var report = try self.makeMismatchReport(
@@ -1619,28 +1621,152 @@ pub const ReportBuilder = struct {
         );
     }
 
-    /// Build a report for try operator return type mismatch
-    fn buildTryOperatorReport(self: *Self, types: TypePair) Allocator.Error!Report {
+    /// Build a report for a `?` whose unwrapped value does not match what its position expects
+    fn buildTryOperatorValueReport(self: *Self, types: TypePair, ctx: Context.TryOperatorContext) Allocator.Error!Report {
         return try self.makeMismatchReport(
-            .{ .simple = regionIdxFrom(types.actual_var) },
+            .{ .simple = regionIdxFrom(ctx.expr) },
             &.{
                 D.bytes("This"),
                 D.bytes("?").withAnnotation(.inline_code),
-                D.bytes("may return early with a type that doesn't match the function body."),
+                D.bytes("unwraps to a value whose type doesn't match what is needed here."),
             },
-            &.{D.bytes("On error, this would return:")},
-            types.actual_snapshot,
-            &.{D.bytes("But the function body evaluates to:")},
-            types.expected_snapshot,
             &.{
-                &.{
-                    D.bytes("Hint:").withAnnotation(.emphasized),
-                    D.bytes("The error types from all"),
-                    D.bytes("?").withAnnotation(.inline_code),
-                    D.bytes("operators and the function body must be compatible since any of them could be the actual return value."),
-                },
+                D.bytes("On success, this"),
+                D.bytes("?").withAnnotation(.inline_code),
+                D.bytes("unwraps to:"),
             },
+            types.actual_snapshot,
+            &.{D.bytes("But this position needs:")},
+            types.expected_snapshot,
+            &.{},
         );
+    }
+
+    /// Build a report for a `?` whose early return does not match the function body
+    fn buildTryOperatorReport(self: *Self, types: TypePair, ctx: Context.TryReturnContext) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
+            D.bytes("This"),
+            D.bytes("?").withAnnotation(.inline_code),
+            D.bytes("may return early with a type that doesn't match the function body."),
+        }, self, &report, &report.headline);
+
+        try self.addSourceHighlight(&report, regionIdxFrom(types.actual_var));
+        try report.document.addLineBreak();
+
+        const has_error_payload_type = try self.addTryErrorPayloadType(&report, types);
+        if (has_error_payload_type) {
+            try D.renderSlice(&.{
+                D.bytes("Returning an"),
+                D.bytes("Err").withAnnotation(.inline_code),
+                D.bytes("with that type only works if the function itself returns a"),
+                D.bytes("Try").withAnnotation(.inline_code),
+                D.bytes("with a compatible error type, but this function's return type is:"),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("On error, this"),
+                D.bytes("?").withAnnotation(.inline_code),
+                D.bytes("returns an"),
+                D.bytes("Err").withAnnotation(.inline_code),
+                D.bytes(", so this function must return a").withNoPrecedingSpace(),
+                D.bytes("Try").withAnnotation(.inline_code),
+                D.bytes(".").withNoPrecedingSpace(),
+            }, self, &report);
+        }
+        if (!has_error_payload_type) {
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{D.bytes("But its body evaluates to:")}, self, &report);
+        }
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        const body_type_str = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        try report.document.addCodeBlock(body_type_str);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        if (ctx.body_tail_try) |tail_try| {
+            try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("The function body ends with a"),
+                D.bytes("?").withAnnotation(.inline_code),
+                D.bytes(":").withNoPrecedingSpace(),
+            }, self, &report);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try self.addSourceHighlightRegion(&report, self.trySuffixOperatorRegion(tail_try));
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{
+                D.bytes("That"),
+                D.bytes("?").withAnnotation(.inline_code),
+                D.bytes("unwraps the"),
+                D.bytes("Try").withAnnotation(.inline_code),
+                D.bytes("the body would otherwise return. Removing it may fix this."),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("The error types from all"),
+                D.bytes("?").withAnnotation(.inline_code),
+                D.bytes("operators and the function body must be compatible, since any of them could be the actual return value."),
+            }, self, &report);
+        }
+
+        return report;
+    }
+
+    /// The region to highlight for a `?` desugared into `expr_idx`: just the
+    /// `?` itself when the expression's source ends with it (the suffix form),
+    /// and the whole expression otherwise (the `lhs ? handler` form).
+    fn trySuffixOperatorRegion(self: *const Self, expr_idx: CIR.Expr.Idx) Region {
+        const region = self.can_ir.store.getExprRegion(expr_idx);
+        const region_source = self.source[region.start.offset..region.end.offset];
+        if (region_source.len > 0 and region_source[region_source.len - 1] == '?') {
+            return Region{
+                .start = .{ .offset = region.end.offset - 1 },
+                .end = region.end,
+            };
+        }
+        return region;
+    }
+
+    /// Describe the `Err` a `?` returns early with, showing its payload type
+    /// as a code block when that type is known. Reports whether it was.
+    ///
+    /// The error slot can still be unresolved when the mismatch is found: a
+    /// `?` on a call whose dispatch settles only once the enclosing function's
+    /// own type is known. Naming a bare type variable there would read as a
+    /// type called `err`, so the payload is described without one.
+    fn addTryErrorPayloadType(self: *Self, report: *Report, types: TypePair) Allocator.Error!bool {
+        const content = self.snapshots.getContentUnwrapAlias(types.actual_snapshot);
+        if (content != .structure or content.structure != .nominal_type) return false;
+        const snapshot_args = self.snapshots.sliceVars(content.structure.nominal_type.vars);
+        if (snapshot_args.len == 0) return false;
+        const err_snapshot = snapshot_args[snapshot_args.len - 1];
+        if (self.snapshots.getContent(err_snapshot) == .flex) return false;
+        const err_type = self.getFormattedString(err_snapshot);
+
+        try D.renderSlice(&.{
+            D.bytes("If this"),
+            D.bytes("Try").withAnnotation(.inline_code),
+            D.bytes("is an"),
+            D.bytes("Err").withAnnotation(.inline_code),
+            D.bytes(",").withNoPrecedingSpace(),
+            D.bytes("then the"),
+            D.bytes("?").withAnnotation(.inline_code),
+            D.bytes("after it immediately returns an"),
+            D.bytes("Err").withAnnotation(.inline_code),
+            D.bytes("whose payload has this type:"),
+        }, self, report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        const err_type_str = try report.addOwnedString(err_type);
+        try report.document.addCodeBlock(err_type_str);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        return true;
     }
 
     /// Build a report for function argument type mismatch
@@ -3467,11 +3593,16 @@ pub const ReportBuilder = struct {
     fn buildRecordAccess(
         self: *Self,
         types: TypePair,
+        evidence: TypeMismatchEvidence,
         ctx: Context.RecordAccessContext,
     ) Allocator.Error!Report {
         self.diff_fields.items.clearRetainingCapacity();
 
-        const record = try self.snapshots.gatherRecordFields(types.actual_snapshot, self.gpa, &self.diff_fields);
+        const actual_snapshot = switch (evidence) {
+            .record => |record| record.actual_snapshot,
+            .none => types.actual_snapshot,
+        };
+        const record = try self.snapshots.gatherRecordFields(actual_snapshot, self.gpa, &self.diff_fields);
 
         const region = ProblemRegion{ .simple = regionIdxFrom(types.actual_var) };
         switch (record) {
@@ -3534,12 +3665,22 @@ pub const ReportBuilder = struct {
     fn buildRecordUpdate(
         self: *Self,
         types: TypePair,
+        evidence: TypeMismatchEvidence,
         ctx: Context.RecordUpdateContext,
     ) Allocator.Error!Report {
         self.diff_fields.items.clearRetainingCapacity();
 
+        const expected_snapshot = switch (evidence) {
+            .record => |record| record.expected_snapshot,
+            .none => types.expected_snapshot,
+        };
+        const actual_snapshot = switch (evidence) {
+            .record => |record| record.actual_snapshot,
+            .none => types.actual_snapshot,
+        };
+
         // Get the record data of the type we tried to  update
-        const expected_record = try self.snapshots.gatherRecordFields(types.expected_snapshot, self.gpa, &self.diff_fields);
+        const expected_record = try self.snapshots.gatherRecordFields(expected_snapshot, self.gpa, &self.diff_fields);
         switch (expected_record) {
             .not_a_record => {
                 return try self.makeBadTypeReport(
@@ -3578,7 +3719,7 @@ pub const ReportBuilder = struct {
                 // robust full record builder
 
                 // Get the record data of the type we tried to  update
-                const actual_record = try self.snapshots.gatherRecordFields(types.actual_snapshot, self.gpa, &self.diff_fields);
+                const actual_record = try self.snapshots.gatherRecordFields(actual_snapshot, self.gpa, &self.diff_fields);
                 const actual_field = switch (actual_record) {
                     .record => |fields| blk: {
                         const slice = self.diff_fields.sliceRange(fields);

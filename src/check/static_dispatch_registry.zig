@@ -1347,10 +1347,6 @@ pub const CheckedEvidence = struct {
         /// The checker proved this nested-procedure obligation is the matching
         /// evidence parameter projected from the concrete callable request.
         from_callable,
-        /// The receiver belongs to the exact constraint-callable occurrence
-        /// named by the evidence parameter's introducing dispatch plan. The
-        /// concrete specialization resolves it from that plan's dispatcher.
-        from_constraint_callable: ConstraintCallableEvidence,
         checked_error,
         /// The edge left this obligation's dispatcher unsolved: no value of that
         /// type can ever reach the dispatch (e.g. the `Ok` payload of a `Try` that
@@ -1358,15 +1354,6 @@ pub const CheckedEvidence = struct {
         /// lowers to an unreachable crash, never to a resolved call.
         unreachable_value,
     };
-};
-
-/// Exact checked source recipe for evidence introduced by a dispatch-plan callable.
-pub const ConstraintCallableEvidence = struct {
-    plan: StaticDispatchPlanId,
-    callable_ty: CheckedTypeId,
-    method: canonical.MethodNameId,
-    structural: ?StructuralKind,
-    path: artifact_serialize.Span,
 };
 
 /// Exact checked identities for one compiler-derived evidence entry.
@@ -1466,15 +1453,11 @@ pub const EvidenceParamSource = union(enum) {
     use_site_only,
     explicit_default: NumericDefaultPhase,
     erased_row_remainder,
-    /// Error-reporting-only parameter whose introducing expression published
-    /// no dispatch plan and cannot reach post-check lowering.
-    checked_error,
 };
 
-/// Exact callable root enumerated for a constraint plus the dispatch occurrence
-/// that supplies its concrete specialization relation.
+/// Exact scheme-side constraint callable through which the dispatcher was
+/// enumerated; the parameter's path is relative to this callable.
 pub const ConstraintCallableRoot = struct {
-    plan: StaticDispatchPlanId,
     callable_ty: CheckedTypeId,
 };
 
@@ -1527,6 +1510,9 @@ pub const StaticDispatchCallPlan = struct {
     /// Range into `StaticDispatchPlanTable.operand_pool` (transform B).
     args: artifact_serialize.Span = .{},
     result_mode: StaticDispatchResultMode,
+    /// Exact generated-codec contract selected for a structural parser or
+    /// encoder call. Null for every other resolution kind.
+    generated_codec_derivation: ?GeneratedCodecDerivationId = null,
     /// Assigned by `resolveTotalDispatchPlans` during CheckedModule construction; the default is
     /// a construction placeholder the pass overwrites for every plan.
     resolution: CheckedCallResolution = .checked_error,
@@ -1549,16 +1535,30 @@ pub const GeneratedCodecDerivationKind = enum(u8) {
 /// Stable index of a checked generated-codec derivation contract.
 pub const GeneratedCodecDerivationId = enum(u32) { _ };
 
+/// The exact checked resolution of one compiler-generated codec call.
+/// `pending` exists only while CheckedModule publication links the checker
+/// snapshot to its target evidence or nested structural derivation.
+pub const GeneratedCodecCallResolution = union(enum(u8)) {
+    pending,
+    checked_error,
+    callable: EvidenceNodeId,
+    structural: GeneratedCodecDerivationId,
+};
+
 /// One exact method edge inside a compiler-generated parser or encoder.
 pub const GeneratedCodecCall = struct {
     method: canonical.MethodNameId,
+    /// This checked edge is consumed only by a specialization whose boundary
+    /// selects the corresponding generated-code path.
+    conditional: bool = false,
+    /// Dense producer role among distinct subject obligations for `method`.
+    /// This is the post-check selection key; subject types remain validation
+    /// metadata and are never rediscovered from a Monotype graph.
+    method_role: u32,
     dispatcher_ty: CheckedTypeId,
     callable_ty: CheckedTypeId,
     subject_ty: ?CheckedTypeId = null,
-    generated_codec_derivation: ?GeneratedCodecDerivationId = null,
-    /// Nested evidence for the instantiated target callable, in its canonical
-    /// evidence-parameter order.
-    nested: artifact_serialize.Span = .{},
+    resolution: GeneratedCodecCallResolution = .pending,
 };
 
 /// Exact checked contract for one compiler-generated codec instantiation.
@@ -1567,12 +1567,17 @@ pub const GeneratedCodecDerivation = struct {
     source_constructor_ty: CheckedTypeId,
     source_runtime_ty: CheckedTypeId,
     source_shape_ty: CheckedTypeId,
+    /// Exact structural shape walked by the generated body. This differs from
+    /// `source_shape_ty` for a declaration-backed nominal codec.
+    source_body_shape_ty: CheckedTypeId,
     source_encoding_ty: CheckedTypeId,
     source_state_ty: CheckedTypeId,
     source_error_ty: CheckedTypeId,
     constructor_ty: CheckedTypeId,
     runtime_ty: CheckedTypeId,
     shape_ty: CheckedTypeId,
+    /// Frozen counterpart of `source_body_shape_ty`.
+    body_shape_ty: CheckedTypeId,
     encoding_ty: CheckedTypeId,
     state_ty: CheckedTypeId,
     error_ty: CheckedTypeId,
@@ -1720,7 +1725,6 @@ pub const StaticDispatchPlanTable = struct {
     evidence_nodes: []EvidenceNode = &.{},
     /// Flat pool of evidence: node `nested` ranges and site-evidence ranges.
     evidence_refs: []CheckedEvidence = &.{},
-    constraint_callable_paths: []const EvidencePathStep = &.{},
     /// Checked-expr-keyed evidence for instantiation sites, sorted by key.
     site_evidence: []SiteEvidenceEntry = &.{},
     /// Exact generated-codec contracts emitted by checking.
@@ -1743,15 +1747,14 @@ pub const StaticDispatchPlanTable = struct {
         iter_operand_pool: SerializedSlice(IteratorDispatchOperand) = .{},
         evidence_nodes: SerializedSlice(EvidenceNode) = .{},
         evidence_refs: SerializedSlice(CheckedEvidence) = .{},
-        constraint_callable_paths: SerializedSlice(EvidencePathStep) = .{},
         site_evidence: SerializedSlice(SiteEvidenceEntry) = .{},
         generated_codec_derivations: SerializedSlice(GeneratedCodecDerivation) = .{},
         generated_codec_calls: SerializedSlice(GeneratedCodecCall) = .{},
 
         comptime {
-            // 18 side lists → 18 base-pointer fixups on deserialize, never a
+            // 17 side lists → 17 base-pointer fixups on deserialize, never a
             // function of how many plans/operands the table holds.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 18);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 17);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(StaticDispatchPlanTable, @This());
@@ -1925,18 +1928,72 @@ pub const StaticDispatchPlanTable = struct {
         }
 
         const module_env = module.moduleEnvConst();
+        const checked_type_view = checked_types.store.view();
         for (module_env.generated_codec_derivations.items.items) |derivation| {
             const source_calls = module_env.generated_codec_calls.items.items[derivation.calls_start..][0..derivation.calls_len];
             const calls_start: u32 = @intCast(generated_codec_calls.items.len);
+            const GeneratedCodecRoleKey = struct {
+                method: canonical.MethodNameId,
+                has_subject: bool,
+                subject_key: canonical.CanonicalTypeKey,
+            };
+            const GeneratedCodecRoleCandidate = struct {
+                subject_ty: ?CheckedTypeId,
+                role: u32,
+            };
+            var role_candidates = std.AutoHashMap(GeneratedCodecRoleKey, std.ArrayListUnmanaged(GeneratedCodecRoleCandidate)).init(allocator);
+            defer {
+                var candidate_lists = role_candidates.valueIterator();
+                while (candidate_lists.next()) |list| list.deinit(allocator);
+                role_candidates.deinit();
+            }
+            var next_role_by_method = collections.DenseMap(canonical.MethodNameId, u32).init(allocator);
+            defer next_role_by_method.deinit();
             for (source_calls) |call| {
+                const method = try names.internMethodIdent(module.identStoreConst(), @bitCast(call.method_ident));
+                const dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(call.dispatcher_var));
+                const callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(call.callable_var));
+                const subject_ty = if (call.subject_var == ModuleEnv.GeneratedCodecCall.no_subject_var)
+                    null
+                else
+                    try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(call.subject_var));
+                const role_key = GeneratedCodecRoleKey{
+                    .method = method,
+                    .has_subject = subject_ty != null,
+                    .subject_key = if (subject_ty) |subject| checked_type_view.rootKey(subject) else .{},
+                };
+                const candidates_entry = try role_candidates.getOrPut(role_key);
+                if (!candidates_entry.found_existing) candidates_entry.value_ptr.* = .empty;
+                var method_role: ?u32 = null;
+                for (candidates_entry.value_ptr.items) |candidate| {
+                    if (subject_ty == null) {
+                        method_role = candidate.role;
+                        break;
+                    }
+                    if (candidate.subject_ty.? == subject_ty.? or
+                        try checked_type_view.rootExactEql(allocator, candidate.subject_ty.?, subject_ty.?))
+                    {
+                        method_role = candidate.role;
+                        break;
+                    }
+                }
+                if (method_role == null) {
+                    const next_entry = try next_role_by_method.getOrPut(method);
+                    if (!next_entry.found_existing) next_entry.value_ptr.* = 0;
+                    method_role = next_entry.value_ptr.*;
+                    next_entry.value_ptr.* += 1;
+                    try candidates_entry.value_ptr.append(allocator, .{
+                        .subject_ty = subject_ty,
+                        .role = method_role.?,
+                    });
+                }
                 try generated_codec_calls.append(allocator, .{
-                    .method = try names.internMethodIdent(module.identStoreConst(), @bitCast(call.method_ident)),
-                    .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(call.dispatcher_var)),
-                    .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(call.callable_var)),
-                    .subject_ty = if (call.subject_var == ModuleEnv.GeneratedCodecCall.no_subject_var)
-                        null
-                    else
-                        try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(call.subject_var)),
+                    .method = method,
+                    .conditional = call.conditional != 0,
+                    .method_role = method_role.?,
+                    .dispatcher_ty = dispatcher_ty,
+                    .callable_ty = callable_ty,
+                    .subject_ty = subject_ty,
                 });
             }
             try generated_codec_derivations.append(allocator, .{
@@ -1947,12 +2004,14 @@ pub const StaticDispatchPlanTable = struct {
                 .source_constructor_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.source_constraint_fn_var)),
                 .source_runtime_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.source_runtime_fn_var)),
                 .source_shape_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.source_shape_var)),
+                .source_body_shape_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.source_body_shape_var)),
                 .source_encoding_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.source_encoding_var)),
                 .source_state_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.source_state_var)),
                 .source_error_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.source_error_var)),
                 .constructor_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.constraint_fn_var)),
                 .runtime_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.runtime_fn_var)),
                 .shape_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.shape_var)),
+                .body_shape_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.body_shape_var)),
                 .encoding_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.encoding_var)),
                 .state_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.state_var)),
                 .error_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(derivation.error_var)),
@@ -2221,7 +2280,28 @@ pub const StaticDispatchPlanTable = struct {
     }
 
     pub fn generatedCodecCallEvidence(self: *const StaticDispatchPlanTable, call: GeneratedCodecCall) []const CheckedEvidence {
-        return self.evidence_refs[call.nested.start .. call.nested.start + call.nested.len];
+        const node = switch (call.resolution) {
+            .callable => |node_id| self.evidenceNode(node_id),
+            .pending => {
+                if (builtin_config.mode == .Debug) {
+                    std.debug.panic("unlinked generated codec call had no checked evidence", .{});
+                }
+                unreachable;
+            },
+            .checked_error => {
+                if (builtin_config.mode == .Debug) {
+                    std.debug.panic("rejected generated codec call had no checked evidence", .{});
+                }
+                unreachable;
+            },
+            .structural => {
+                if (builtin_config.mode == .Debug) {
+                    std.debug.panic("structural generated codec call had no callable evidence", .{});
+                }
+                unreachable;
+            },
+        };
+        return self.nestedEvidence(node);
     }
 
     /// Evidence for the scheme instantiated at `expr` (a constrained
@@ -2260,7 +2340,6 @@ pub const StaticDispatchPlanTable = struct {
         allocator.free(@constCast(self.iter_operand_pool));
         allocator.free(self.evidence_nodes);
         allocator.free(self.evidence_refs);
-        allocator.free(@constCast(self.constraint_callable_paths));
         allocator.free(self.site_evidence);
         allocator.free(self.generated_codec_derivations);
         allocator.free(self.generated_codec_calls);
@@ -2755,7 +2834,7 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
     // The fixup count is fixed by the number of serialized base pointers, never
     // by how much data each pool holds. The two tables below differ in operand
     // count by three orders of magnitude yet relocate identically.
-    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".fields.len == 18);
+    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".fields.len == 17);
 
     inline for (.{ @as(u32, 4), @as(u32, 4000) }) |operand_count| {
         const operands = try gpa.alloc(StaticDispatchOperand, operand_count);

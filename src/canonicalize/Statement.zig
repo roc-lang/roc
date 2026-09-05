@@ -42,7 +42,7 @@ pub const Statement = union(enum) {
     /// Not valid at the top level of a module.
     ///
     /// ```roc
-    /// var foo_ = "bar"
+    /// var $foo_ = "bar"
     /// ```
     s_var: struct {
         pattern_idx: Pattern.Idx,
