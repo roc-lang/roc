@@ -793,6 +793,14 @@ fn typeIdentFromDeprecatedSuffix(self: *Parser, suffix: NumericLiteral.Deprecate
     return try self.tok_buf.env.insertIdent(self.gpa, base.Ident.for_text(type_name));
 }
 
+inline fn consumeSingleQuoteTypeSuffix(self: *Parser) ?base.Ident.Idx {
+    if (self.peek() != .NoSpaceDotUpperIdent) return null;
+
+    const type_token = self.pos;
+    self.advance();
+    return self.tok_buf.resolveIdentifier(type_token) orelse unreachable;
+}
+
 fn pushDeprecatedNumberSuffixDiagnostic(self: *Parser, suffix: NumericLiteral.DeprecatedSuffix, region: AST.TokenizedRegion) std.mem.Allocator.Error!void {
     if (suffix != .none) {
         try self.pushDiagnostic(.deprecated_number_suffix, region);
@@ -3438,8 +3446,10 @@ fn runExprStatementKernel(
                 if (tok == .SingleQuote) {
                     const start = self.pos;
                     self.advance();
+                    const type_ident = self.consumeSingleQuoteTypeSuffix();
                     const expr = try self.store.addExpr(.{ .single_quote = .{
                         .token = start,
+                        .type_ident = type_ident,
                         .region = .{ .start = start, .end = self.pos },
                     } });
                     expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
@@ -6358,8 +6368,10 @@ fn runExprStatementKernel(
                 if (tok == .SingleQuote) {
                     const start = self.pos;
                     self.advance();
+                    const type_ident = self.consumeSingleQuoteTypeSuffix();
                     last_pattern = try self.store.addPattern(.{ .single_quote = .{
                         .token = start,
+                        .type_ident = type_ident,
                         .region = .{ .start = start, .end = self.pos },
                     } });
                     continue :expr_kernel .pattern_complete;

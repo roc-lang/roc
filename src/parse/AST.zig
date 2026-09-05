@@ -1357,6 +1357,7 @@ pub const Pattern = union(enum) {
     },
     single_quote: struct {
         token: Token.Idx,
+        type_ident: ?base.Ident.Idx = null,
         region: TokenizedRegion,
     },
     record: struct {
@@ -1515,6 +1516,9 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-single-quote");
                 try ast.appendRegionInfoToSexprTree(env, tree, sq.region);
                 try tree.pushStringPair("raw", ast.resolve(sq.token));
+                if (sq.type_ident) |type_ident| {
+                    try tree.pushStringPair("type", env.getIdent(type_ident));
+                }
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -2832,6 +2836,7 @@ pub const Expr = union(enum) {
     },
     single_quote: struct {
         token: Token.Idx,
+        type_ident: ?base.Ident.Idx = null,
         region: TokenizedRegion,
     },
     string_part: struct { // TODO: this should be more properly represented in its own union enum
@@ -3074,6 +3079,9 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-single-quote");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
+                if (a.type_ident) |type_ident| {
+                    try tree.pushStringPair("type", env.getIdent(type_ident));
+                }
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
