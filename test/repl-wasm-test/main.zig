@@ -64,17 +64,6 @@ fn requireContains(response: []const u8, expected: []const u8) anyerror!void {
     return error.UnexpectedResponse;
 }
 
-fn requireInOrder(response: []const u8, expected: []const []const u8) anyerror!void {
-    var offset: usize = 0;
-    for (expected) |fragment| {
-        const relative = std.mem.find(u8, response[offset..], fragment) orelse {
-            std.debug.print("Expected ordered fragment:\n{s}\nAfter offset {d} in response:\n{s}\n", .{ fragment, offset, response });
-            return error.UnexpectedResponse;
-        };
-        offset += relative + fragment.len;
-    }
-}
-
 fn sendAndRequire(interface: Interface, allocator: std.mem.Allocator, request: []const u8, expected: []const []const u8) anyerror!void {
     const response = try invoke(interface, allocator, request);
     defer allocator.free(response);
@@ -127,9 +116,9 @@ pub fn main(init: std.process.Init) anyerror!void {
         .free_response = try instance.getFunctionHandle("roc_repl_free_response"),
     };
 
-    try sendAndRequire(interface, gpa,
+    try sendAndCheck(interface, gpa,
         \\{"protocol":1,"id":1,"op":"capabilities"}
-    , &.{ "\"ok\":true", "one_session_per_wasm_instance", "\"revision_bits\":32", "\"presentation_strings\":false", "\"diagnostic_scope\":\"blocking_only\"", "\"completion_scope\":\"session_definitions\"", "\"filesystem\":false", "\"platform_effects\":\"one_way_events\"", "\"effect_module\":\"Repl\"", "\"effect_function\":\"emit!\"", "\"effect_payload_encoding\":\"caller_defined_utf8\"", "\"effect_responses\":false" });
+    , &.{ "\"ok\":true", "one_session_per_wasm_instance", "\"revision_bits\":32", "\"presentation_strings\":false", "\"diagnostic_scope\":\"blocking_only\"", "\"completion_scope\":\"session_definitions\"", "\"filesystem\":false", "\"platform_effects\":false" }, &.{ "one_way_events", "\"effect_module\"", "\"effect_function\"", "\"effect_payload_encoding\"", "\"effect_responses\"" });
 
     try sendAndCheck(interface, gpa,
         \\{"protocol":1,"id":2,"op":"eval","params":{"source":"x = 41"}}
@@ -175,43 +164,29 @@ pub fn main(init: std.process.Init) anyerror!void {
         \\{"protocol":1,"id":11,"op":"eval","params":{"source":"dbg \"hello\""}}
     , &.{ "\"kind\":\"dbg\"", "hello" });
 
-    try sendAndRequire(interface, gpa,
+    try sendAndCheck(interface, gpa,
         \\{"protocol":1,"id":111,"op":"eval","params":{"source":"{ expect 1 == 0\n42 }"}}
-    , &.{ "\"kind\":\"expect_failed\"", "expect failed", "\"value\":\"42.0\"" });
+    , &.{ "\"status\":\"diagnostic\"", "\"code\":\"compile_error\"", "Compile Time Expect Failed", "expect failed", "\"events\":[]", "\"completed\":false", "\"stop_reason\":\"diagnostic\"", "\"committed_count\":0" }, &.{ "\"kind\":\"expect_failed\"", "\"value\":\"42.0\"" });
 
-    try sendAndRequire(interface, gpa,
+    try sendAndCheck(interface, gpa,
         \\{"protocol":1,"id":12,"op":"eval","params":{"source":"crash \"boom\""}}
-    , &.{ "\"status\":\"crashed\"", "\"crash\":{\"message\":\"boom\"}", "\"kind\":\"crashed\"" });
+    , &.{ "\"status\":\"diagnostic\"", "\"code\":\"compile_error\"", "Compile Time Crash", "boom", "\"events\":[]", "\"completed\":false", "\"stop_reason\":\"diagnostic\"", "\"committed_count\":0" }, &.{ "\"status\":\"crashed\"", "\"crash\":{\"message\":\"boom\"}", "\"kind\":\"crashed\"" });
 
     try sendAndRequire(interface, gpa,
         \\{"protocol":1,"id":13,"op":"eval","params":{"source":"1 + 1"}}
     , &.{ "\"status\":\"ok\"", "\"value\":\"2.0\"" });
 
-    const effect_response = try invoke(interface, gpa,
+    try sendAndCheck(interface, gpa,
         \\{"protocol":1,"id":130,"op":"eval","params":{"source":"import Repl\n{\n    Repl.emit!({ name: \"log\", payload: \"héllo\" })\n    dbg \"middle\"\n    Repl.emit!({ name: \"toast\", payload: \"done\" })\n}"}}
-    );
-    defer gpa.free(effect_response);
-    try requireInOrder(effect_response, &.{
-        "\"definition_kind\":\"import\"",
-        "\"kind\":\"effect\",\"name\":\"log\",\"payload\":\"héllo\"",
-        "\"kind\":\"dbg\"",
-        "\"kind\":\"effect\",\"name\":\"toast\",\"payload\":\"done\"",
-    });
-    try requireContains(effect_response, "\"type\":\"{}\"");
+    , &.{ "\"definition_kind\":\"import\"", "\"status\":\"diagnostic\"", "\"code\":\"compile_error\"", "Effectful Compile Time Expression", "\"events\":[]", "\"completed\":false", "\"stop_reason\":\"diagnostic\"", "\"committed_count\":1" }, &.{ "\"kind\":\"effect\"", "\"kind\":\"dbg\"", "\"type\":\"{}\"" });
 
     try sendAndRequire(interface, gpa,
         \\{"protocol":1,"id":1300,"op":"inspect","params":{"source":"Repl.emit!({ name: \"log\", payload: \"inspection does not run\" })"}}
     , &.{ "\"status\":\"ok\"", "\"type\":\"{}\"" });
 
-    const crashed_effect_response = try invoke(interface, gpa,
+    try sendAndCheck(interface, gpa,
         \\{"protocol":1,"id":1301,"op":"eval","params":{"source":"{\n    Repl.emit!({ name: \"log\", payload: \"before crash\" })\n    crash \"effect boom\"\n}"}}
-    );
-    defer gpa.free(crashed_effect_response);
-    try requireContains(crashed_effect_response, "\"crash\":{\"message\":\"effect boom\"}");
-    try requireInOrder(crashed_effect_response, &.{
-        "\"kind\":\"effect\",\"name\":\"log\",\"payload\":\"before crash\"",
-        "\"kind\":\"crashed\"",
-    });
+    , &.{ "\"status\":\"diagnostic\"", "\"code\":\"compile_error\"", "Effectful Compile Time Expression", "\"events\":[]", "\"completed\":false", "\"stop_reason\":\"diagnostic\"", "\"committed_count\":0" }, &.{ "\"kind\":\"effect\"", "\"crash\":{\"message\":\"effect boom\"}", "\"kind\":\"crashed\"" });
 
     try sendAndRequire(interface, gpa,
         \\{"protocol":1,"id":131,"op":"eval","params":{"source":"pending : Str"}}
@@ -285,7 +260,7 @@ pub fn main(init: std.process.Init) anyerror!void {
         \\{"protocol":1,"id":19,"op":"set_modules","params":{"modules":[{"name":"Other","source":"Other := [].{\n    emit! : { name : Str, payload : Str } => {}\n}"}]}}
     , &.{ "\"ok\":true", "\"module_names\":[\"Other\"]" });
 
-    try sendAndRequire(interface, gpa,
+    try sendAndCheck(interface, gpa,
         \\{"protocol":1,"id":20,"op":"eval","params":{"source":"import Other\nOther.emit!({ name: \"log\", payload: \"not Repl\" })"}}
-    , &.{ "\"status\":\"diagnostic\"", "This REPL only supports the hosted function Repl.emit!." });
+    , &.{ "\"status\":\"diagnostic\"", "\"code\":\"compile_error\"", "Effectful Compile Time Expression", "\"events\":[]", "\"completed\":false", "\"stop_reason\":\"diagnostic\"", "\"committed_count\":1" }, &.{ "This REPL only supports the hosted function Repl.emit!.", "\"kind\":\"effect\"" });
 }
