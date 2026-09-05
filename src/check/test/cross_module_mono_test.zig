@@ -95,6 +95,7 @@ const MonoTestEnv = struct {
                 .builtin_module_env = builtin_module.env,
                 .builtin_indices = builtin_indices,
             },
+            .is_entry_module = true,
             .imported_modules = &module_envs,
         });
         errdefer can_instance.deinit();
@@ -201,6 +202,7 @@ const MonoTestEnv = struct {
                 .builtin_module_env = builtin_env,
                 .builtin_indices = builtin_indices,
             },
+            .is_entry_module = true,
             .imported_modules = &module_envs,
         });
         errdefer can_instance.deinit();
@@ -319,6 +321,7 @@ const MonoTestEnv = struct {
                 .builtin_module_env = builtin_env,
                 .builtin_indices = builtin_indices,
             },
+            .is_entry_module = true,
             .imported_modules = &module_envs,
         });
         errdefer can_instance.deinit();
@@ -670,6 +673,7 @@ test "type checker catches polymorphic recursion (infinite type)" {
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
         },
+        .is_entry_module = true,
         .imported_modules = &module_envs,
     });
     defer can_instance.deinit();

@@ -1098,6 +1098,11 @@ pub const Coordinator = struct {
     /// True when the build's root is not an app, recorded explicitly so the
     /// hosted transform never has to guess whether an app exists.
     app_package_absent: bool,
+    /// The package holding the file the compiler was pointed at, when that file
+    /// is not its package's root module. See `markTargetedModule`.
+    targeted_module_package: ?[]const u8,
+    /// The module for that file, paired with the package name above.
+    targeted_module_id: ?ModuleId,
 
     /// Shared read-only builtin modules
     builtin_modules: *const BuiltinModules,
@@ -1212,6 +1217,8 @@ pub const Coordinator = struct {
             .total_remaining = 0,
             .app_package_name = null,
             .app_package_absent = false,
+            .targeted_module_package = null,
+            .targeted_module_id = null,
             .builtin_modules = builtin_modules,
             .roc_ctx = roc_ctx,
             .compiler_version = compiler_version,
@@ -1314,6 +1321,19 @@ pub const Coordinator = struct {
 
     pub fn markAppPackage(self: *Coordinator, package_name: []const u8) void {
         self.app_package_name = package_name;
+    }
+
+    /// Record the module for the file the compiler was pointed at, for builds
+    /// where that file is not the root of its package: `roc test --main`, and
+    /// a checked file whose owning `main.roc` supplied the dependency graph.
+    ///
+    /// The build's root is then the `main.roc` that names the packages, while
+    /// this is the file the user asked about. Both are the user's own files
+    /// rather than anything a dependency ships, so both count as entry modules
+    /// for `isEntryModule`.
+    pub fn markTargetedModule(self: *Coordinator, package_name: []const u8, module_id: ModuleId) void {
+        self.targeted_module_package = package_name;
+        self.targeted_module_id = module_id;
     }
 
     /// Record that this build has no app package (its root is a platform,
@@ -4793,8 +4813,39 @@ pub const Coordinator = struct {
                 .depth = mod.depth,
                 .imported_modules = imported_modules,
                 .validation = mod.validation,
+                .is_entry_module = self.isEntryModule(pkg, module_id),
             },
         });
+    }
+
+    /// Whether this module is one of the build's entry modules: a file the
+    /// compiler was pointed at, rather than one it reached by following
+    /// imports.
+    ///
+    /// That is the root module of the app package, and—when the two differ—the
+    /// file explicitly targeted while some owning `main.roc` supplied the
+    /// dependency graph (`markTargetedModule`).
+    ///
+    /// Only those modules may be classified `default_app`, and so only they
+    /// receive the synthetic `echo!` hosted lambda. Any other headerless
+    /// module with a valid `main!` is an ordinary type module, whichever
+    /// package it lives in.
+    ///
+    /// This is the same shape as the `is_platform_pkg` gate on the hosted
+    /// transform in `handleCanonicalized`, and for the same reason: a
+    /// host-reaching capability must stay tied to the one package entitled to
+    /// it instead of falling out of a file-local property that any dependency
+    /// can satisfy.
+    fn isEntryModule(self: *const Coordinator, pkg: *const PackageState, module_id: ModuleId) bool {
+        if (self.targeted_module_package) |targeted_package| {
+            if (std.mem.eql(u8, pkg.name, targeted_package) and self.targeted_module_id == module_id) {
+                return true;
+            }
+        }
+        const app_package_name = self.app_package_name orelse return false;
+        if (!std.mem.eql(u8, pkg.name, app_package_name)) return false;
+        const root_module_id = pkg.root_module_id orelse return false;
+        return root_module_id == module_id;
     }
 
     /// Schedule an external import in its owning package
@@ -5217,6 +5268,7 @@ pub const Coordinator = struct {
             known_modules.items,
             task.imported_modules,
             task.validation,
+            task.is_entry_module,
         );
 
         const canonicalize_ns = readStageTimer(self.roc_ctx.std_io, &canonicalize_timer);

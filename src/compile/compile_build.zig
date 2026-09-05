@@ -969,6 +969,12 @@ pub const BuildEnv = struct {
                 const entry_id = try coord_pkg.ensureModule(self.gpa, entry_module_name, entry_file);
                 const entry_module = &coord_pkg.modules.items[entry_id];
                 entry_module.validation = .explicit_roots;
+                // The build's root is the `main.roc` that supplied the
+                // packages, so the coordinator would otherwise take this
+                // file—the one the compiler was actually pointed at—for a
+                // module reached through imports, and withhold `default_app`
+                // from it. See `Coordinator.markTargetedModule`.
+                coord.markTargetedModule(coord_pkg.name, entry_id);
                 if (entry_module.phase == .Parse) {
                     entry_module.depth = 0;
                     coord_pkg.remaining_modules += 1;

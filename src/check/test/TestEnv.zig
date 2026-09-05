@@ -127,6 +127,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
             .builtin_module_env = builtin_env,
             .builtin_indices = builtin_indices,
         },
+        .is_entry_module = true,
         .imported_modules = &module_envs,
     });
     errdefer can.deinit();
@@ -253,6 +254,7 @@ pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, 
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
         },
+        .is_entry_module = true,
         .imported_modules = &module_envs,
     });
     errdefer can.deinit();
@@ -359,6 +361,7 @@ pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const 
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
         },
+        .is_entry_module = true,
         .imported_modules = &module_envs,
     });
     defer czer.deinit();
