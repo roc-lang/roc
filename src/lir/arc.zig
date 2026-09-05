@@ -13669,6 +13669,77 @@ test "RC borrow survives the lender moving into an aggregate" {
     try testing.expect(f.countRc(payload, .incref) >= 1);
 }
 
+test "RC recursive tail carrier stops at an owned alias" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const param = try f.local(.str);
+    const original = try f.local(.str);
+    const owned_alias = try f.local(.str);
+    const borrowed_alias = try f.local(.str);
+    const stored = try f.local(f.pair_str);
+    const result = try f.local(.str);
+    const ignored = try f.local(.i64);
+    const proc = try f.addProcPendingBody(&.{param}, .str);
+    const tail = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = proc,
+        .args = try f.span(&.{borrowed_alias}),
+        .next = try f.ret(result),
+    } });
+    // Storing the alias demands an owned binding. The later original use
+    // keeps its independent unit alive; the tail argument borrows the alias.
+    const use_original = try f.expectStmt(original, tail);
+    const borrow = try f.assignRefLocal(borrowed_alias, owned_alias, use_original);
+    const consume_stored = try f.assignCall(ignored, &.{stored}, borrow);
+    const store = try f.assignStruct(stored, &.{ owned_alias, owned_alias }, consume_stored);
+    const own = try f.assignRefLocal(owned_alias, original, store);
+    f.store.setProcSpecBody(proc, try f.assignStr(original, "still live", own));
+    const rc = [_]bool{ true, true, true, true, true, true, false };
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    defer solution.deinit();
+    try testing.expect(!solution.isBorrowed(owned_alias));
+    try testing.expect(solution.isBorrowed(borrowed_alias));
+    try testing.expectEqual(owned_alias, solution.tailCallAt(proc, tail).?.carrier(0).?);
+    try f.run();
+}
+
+test "RC borrowed alias transfers its nearest owned carrier" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const param = try f.local(.str);
+    const identity = try f.addProc(&.{param}, try f.ret(param), .str);
+    const original = try f.local(.str);
+    const owned_alias = try f.local(.str);
+    const borrowed_alias = try f.local(.str);
+    const stored = try f.local(f.pair_str);
+    const result = try f.local(.str);
+    const ignored = try f.local(.i64);
+
+    const ret = try f.ret(original);
+    const use_result = try f.expectStmt(result, ret);
+    const consume_stored = try f.assignCall(ignored, &.{stored}, use_result);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = identity,
+        .args = try f.span(&.{borrowed_alias}),
+        .next = consume_stored,
+    } });
+    // The aggregate gives owned_alias an owned binding, while the identity
+    // call's argument remains borrowed. The original is still returned later.
+    const borrow = try f.assignRefLocal(borrowed_alias, owned_alias, call);
+    const store = try f.assignStruct(stored, &.{ owned_alias, owned_alias }, borrow);
+    const own = try f.assignRefLocal(owned_alias, original, store);
+    const body = try f.assignStr(original, "still live", own);
+    _ = try f.addProc(&.{}, body, .str);
+    const rc = [_]bool{ true, true, true, true, true, true, false };
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    defer solution.deinit();
+    try testing.expect(!solution.isBorrowed(owned_alias));
+    try testing.expect(solution.isBorrowed(borrowed_alias));
+    try testing.expectEqual(owned_alias, solution.unitLocalOf(borrowed_alias));
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+}
+
 test "RC alias chain into a consuming call moves the unit through" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
