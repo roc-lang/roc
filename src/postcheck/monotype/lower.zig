@@ -659,7 +659,6 @@ pub fn run(
 
     var builder = Builder.init(allocator, modules, &program, options);
     defer builder.deinit();
-    defer builder.recordParallelLaneMetrics();
     try builder.initHostedCatalog();
     try builder.loadCandidateSpecializationShards();
     setup_timing_scope.end();
@@ -2198,6 +2197,9 @@ const TemplateBodyScheduling = enum { immediate, queued };
 /// the completed shards retained until each batch reaches its commit barrier.
 const parallel_spec_jobs_per_lane: usize = 4;
 
+const SpecJobRunId = enum(u64) { _ };
+var next_spec_job_run_id = std.atomic.Value(u64).init(0);
+
 /// One reserved specialization whose body has not lowered yet, in the
 /// deterministic scheduler FIFO. Every field is durable for the builder's
 /// lifetime: evidence lives in the evidence arena, the requested type is
@@ -2398,13 +2400,15 @@ const SpecJobWorkspace = struct {
     }
 };
 
-/// Lowering-owned persistent state for one executor worker across the complete
-/// Monotype run. Executor barriers end task-result ownership, while the
-/// workspace retains cumulative relocation state for later tasks on its lane.
+/// Persistent state for one specialization execution lane. Executor-backed
+/// lanes retain it for the worker-pool lifetime; the serial path owns the same
+/// shape directly. Barriers end task-result ownership, while the workspace
+/// retains cumulative relocation state for later tasks.
 pub const SpecJobWorkerState = struct {
     worker_id: SpecJobWorkerId,
     allocator: Allocator,
     workspace: SpecJobWorkspace,
+    graph: ?*InstGraph = null,
     builder: ?*Builder = null,
     tasks_started: u64 = 0,
     counters: SpecializationCounters = .{},
@@ -2423,13 +2427,16 @@ pub const SpecJobWorkerState = struct {
             builder.deinit();
             self.allocator.destroy(builder);
         }
+        if (self.graph) |graph| graph.destroy();
         self.workspace.deinit();
         self.* = undefined;
     }
 };
 
-/// Coordinator-owned cumulative copy of one worker's type/name domain.
-/// Result epochs are absorbed in dispatch order before any contained id is read.
+/// Cumulative copy of one worker's type/name domain. Executor lanes own their
+/// copy for the pool lifetime; the serial path owns an equivalent directly.
+/// Only the coordinator mutates it, in dispatch order, before any contained id
+/// is read.
 const SpecJobCommitDomain = struct {
     allocator: Allocator,
     types: Type.Store,
@@ -2490,10 +2497,45 @@ const SpecJobCommitDomain = struct {
     }
 };
 
+/// Monotype state retained by one physical executor lane. Keeping the source
+/// workspace and its ordered destination copy together makes their cumulative
+/// relocation domains follow the worker rather than a particular coordinator
+/// `Builder`. A new Monotype run reinitializes the same retained entry because
+/// its stores belong to a different destination program.
+const SpecJobLaneState = struct {
+    run_id: SpecJobRunId,
+    worker: SpecJobWorkerState,
+    commit_domain: SpecJobCommitDomain,
+
+    fn init(
+        allocator: Allocator,
+        worker_id: SpecJobWorkerId,
+        run_id: SpecJobRunId,
+    ) SpecJobLaneState {
+        return .{
+            .run_id = run_id,
+            .worker = SpecJobWorkerState.init(allocator, worker_id),
+            .commit_domain = SpecJobCommitDomain.init(allocator),
+        };
+    }
+
+    fn deinit(self: *SpecJobLaneState) void {
+        self.commit_domain.deinit();
+        self.worker.deinit();
+        self.* = undefined;
+    }
+};
+
+/// Address identity used to reserve this module's entry in an executor lane.
+const SpecJobLaneStateKey = struct {
+    var value: u8 = undefined;
+};
+
 /// One immutable graph-free result handed from ordinary body lowering to
 /// ordered coordinator commit.
 const CompletedSpecJobShard = struct {
     worker_id: SpecJobWorkerId,
+    commit_domain: *SpecJobCommitDomain,
     dispatch_index: u64,
     worker_local_symbol_count: u32,
     specialization_counter_delta: ?SpecializationCounters = null,
@@ -2519,6 +2561,7 @@ const CompletedSpecJobShard = struct {
 /// root commit concerns from leaking into ordinary specialization shards.
 const CompletedProcedureRootShard = struct {
     worker_id: SpecJobWorkerId,
+    commit_domain: *SpecJobCommitDomain,
     worker_local_symbol_count: u32,
     specialization_counter_delta: ?SpecializationCounters = null,
     store_epoch: SpecJobStoreEpoch,
@@ -2540,6 +2583,7 @@ const CompletedProcedureRootShard = struct {
 
 /// Immutable coordinator input shared by one frozen ordinary-specialization batch.
 const SpecJobWorkerInputs = struct {
+    run_id: SpecJobRunId,
     modules: Common.CheckedModules,
     program: *Ast.Program,
     proc_debug_names: bool,
@@ -2566,13 +2610,14 @@ const PreparedSpecJob = struct {
 /// Caller-owned task storage. Executor callbacks write only their own element.
 const SpecJobTaskContext = struct {
     inputs: *const SpecJobWorkerInputs,
-    workers: []?SpecJobWorkerState,
     prepared: PreparedSpecJob,
     shard: ?CompletedSpecJobShard = null,
     failed: bool = false,
     retry_serial: bool = false,
     completed: bool = false,
     worker_work_ns: u64 = 0,
+    lane_task_started: bool = false,
+    first_task_on_lane: bool = false,
 };
 
 /// Reusable caller-owned scheduler storage. Executor runs are synchronous, so
@@ -2596,13 +2641,14 @@ const SpecJobTaskBuffers = struct {
 /// validated before any ordered coordinator commit begins.
 const ProcedureRootTaskContext = struct {
     inputs: *const SpecJobWorkerInputs,
-    workers: []?SpecJobWorkerState,
     request: checked.RootRequest,
     shard: ?CompletedProcedureRootShard = null,
     failed: bool = false,
     retry_serial: bool = false,
     completed: bool = false,
     worker_work_ns: u64 = 0,
+    lane_task_started: bool = false,
+    first_task_on_lane: bool = false,
 };
 
 const FinalBodyOutputCounts = struct {
@@ -2896,6 +2942,7 @@ const SymbolDomains = struct {
 
 const Builder = struct {
     allocator: Allocator,
+    spec_job_run_id: SpecJobRunId,
     modules: Common.CheckedModules,
     root_view: checked.ImportedModuleView,
     program: *Ast.Program,
@@ -2939,9 +2986,6 @@ const Builder = struct {
     /// epochs. It is the concrete source for cumulative workspace-to-program
     /// relocation after worker results stop borrowing the mutable workspace.
     spec_job_commit_domain: ?SpecJobCommitDomain = null,
-    /// Fixed worker-indexed ownership for executor-backed ordinary jobs.
-    spec_job_parallel_workers: []?SpecJobWorkerState = &.{},
-    spec_job_parallel_commit_domains: []SpecJobCommitDomain = &.{},
     spec_job_task_buffers: SpecJobTaskBuffers = .{},
     spec_store: specialize.SpecBuilder,
     lowered_templates: collections.DenseMap(Ast.FnId, LoweredTemplate),
@@ -3048,10 +3092,15 @@ const Builder = struct {
     fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program, options: Options) Builder {
         const counters = options.specialization_counters orelse
             if (options.diagnostics) |diagnostics| &diagnostics.specialization else null;
+        const raw_spec_job_run_id = next_spec_job_run_id.fetchAdd(1, .monotonic);
+        if (raw_spec_job_run_id == std.math.maxInt(u64)) {
+            Common.compilerBug("Monotype specialization run identity overflow");
+        }
         var spec_store = specialize.SpecBuilder.init(allocator, &program.names, &program.types, &program.specs);
         spec_store.counters = counters;
         return .{
             .allocator = allocator,
+            .spec_job_run_id = @enumFromInt(raw_spec_job_run_id),
             .modules = modules,
             .root_view = checked.importedView(modules.root.module),
             .program = program,
@@ -3110,6 +3159,51 @@ const Builder = struct {
         builder.current_region = inputs.current_region;
         worker.builder = builder;
         return builder;
+    }
+
+    fn deinitSpecJobLaneState(opaque_state: *anyopaque) void {
+        const state: *SpecJobLaneState = @ptrCast(@alignCast(opaque_state));
+        const allocator = state.worker.allocator;
+        state.deinit();
+        allocator.destroy(state);
+    }
+
+    fn ensureSpecJobLaneState(
+        executor_worker: base.post_check_task_executor.Worker,
+        inputs: *const SpecJobWorkerInputs,
+    ) Allocator.Error!*SpecJobLaneState {
+        const key: *const anyopaque = @ptrCast(&SpecJobLaneStateKey.value);
+        if (executor_worker.lane_state.get(key)) |opaque_state| {
+            const state: *SpecJobLaneState = @ptrCast(@alignCast(opaque_state));
+            if (@intFromEnum(state.worker.worker_id) != executor_worker.id) {
+                Common.compilerBug("Monotype lane state moved between executor workers");
+            }
+            if (state.run_id != inputs.run_id) {
+                state.deinit();
+                state.* = SpecJobLaneState.init(
+                    executor_worker.allocator,
+                    @enumFromInt(executor_worker.id),
+                    inputs.run_id,
+                );
+            }
+            return state;
+        }
+
+        if (executor_worker.id >= std.math.maxInt(u32)) {
+            Common.compilerBug("post-check executor returned an invalid specialization worker id");
+        }
+        const state = try executor_worker.allocator.create(SpecJobLaneState);
+        state.* = SpecJobLaneState.init(
+            executor_worker.allocator,
+            @enumFromInt(executor_worker.id),
+            inputs.run_id,
+        );
+        errdefer {
+            state.deinit();
+            executor_worker.allocator.destroy(state);
+        }
+        try executor_worker.lane_state.put(key, state, deinitSpecJobLaneState);
+        return state;
     }
 
     fn loadCandidateSpecializationShards(self: *Builder) Allocator.Error!void {
@@ -3182,12 +3276,6 @@ const Builder = struct {
 
     fn deinit(self: *Builder) void {
         self.spec_job_task_buffers.deinit(self.allocator);
-        for (self.spec_job_parallel_workers) |*worker| {
-            if (worker.*) |*initialized| initialized.deinit();
-        }
-        for (self.spec_job_parallel_commit_domains) |*domain| domain.deinit();
-        self.allocator.free(self.spec_job_parallel_commit_domains);
-        self.allocator.free(self.spec_job_parallel_workers);
         if (self.spec_job_commit_domain) |*domain| domain.deinit();
         if (self.spec_job_worker) |*worker| worker.deinit();
         self.scoped_method_targets.deinit(self.allocator);
@@ -3280,6 +3368,32 @@ const Builder = struct {
         if (self.graphDiagnosticSink()) |graph_diagnostics| {
             graph.setDiagnostics(graph_diagnostics);
         }
+        return graph;
+    }
+
+    /// Borrow the graph tied to this worker lane, resetting only per-body
+    /// solver state while retaining its allocated capacity and store identity.
+    fn acquireSpecJobGraph(
+        self: *Builder,
+        worker: *SpecJobWorkerState,
+    ) Allocator.Error!*InstGraph {
+        if (worker.graph) |graph| {
+            if (graph.types != &worker.workspace.types or
+                graph.name_store != &worker.workspace.name_store)
+            {
+                Common.compilerBug("Monotype worker graph changed lane-local stores");
+            }
+            graph.reset();
+            if (self.graphDiagnosticSink()) |graph_diagnostics| {
+                graph.setDiagnostics(graph_diagnostics);
+            }
+            return graph;
+        }
+        const graph = try self.createGraphForStores(
+            &worker.workspace.types,
+            &worker.workspace.name_store,
+        );
+        worker.graph = graph;
         return graph;
     }
 
@@ -3703,7 +3817,6 @@ const Builder = struct {
         executor: base.post_check_task_executor.Executor,
         requests: []const checked.RootRequest,
     ) Allocator.Error!void {
-        try self.ensureParallelSpecJobState(executor.worker_count);
         const contexts = try self.allocator.alloc(ProcedureRootTaskContext, requests.len);
         defer self.allocator.free(contexts);
         const tasks = try self.allocator.alloc(base.post_check_task_executor.Task, requests.len);
@@ -3711,6 +3824,7 @@ const Builder = struct {
         const completions = try self.allocator.alloc(base.post_check_task_executor.Completion, requests.len);
         defer self.allocator.free(completions);
         const inputs = SpecJobWorkerInputs{
+            .run_id = self.spec_job_run_id,
             .modules = self.modules,
             .program = self.program,
             .proc_debug_names = self.proc_debug_names,
@@ -3729,7 +3843,6 @@ const Builder = struct {
         for (requests, 0..) |request, task_id| {
             contexts[task_id] = .{
                 .inputs = &inputs,
-                .workers = self.spec_job_parallel_workers,
                 .request = request,
             };
             tasks[task_id] = .{ .id = task_id, .context = &contexts[task_id], .run = runProcedureRootTask };
@@ -3929,16 +4042,22 @@ const Builder = struct {
         procedure: checked.ProcedureUseTemplate,
     ) Allocator.Error!Ast.DefId {
         const worker = self.ensureSerialSpecJobWorker();
-        var shard = try self.lowerProcedureUseRootToShard(worker, request, procedure);
+        var shard = try self.lowerProcedureUseRootToShard(
+            worker,
+            self.ensureSpecJobCommitDomain(),
+            request,
+            procedure,
+        );
         defer shard.deinit();
         return self.commitCompletedProcedureRootShard(&shard);
     }
 
     /// Produce a root entirely in a worker epoch, sealing every graph-qualified
-    /// cell before destroying the graph and handing ownership to the coordinator.
+    /// cell before the lane retains its graph for the next task.
     fn lowerProcedureUseRootToShard(
         self: *Builder,
         worker: *SpecJobWorkerState,
+        commit_domain: *SpecJobCommitDomain,
         request: checked.RootRequest,
         procedure: checked.ProcedureUseTemplate,
     ) Allocator.Error!CompletedProcedureRootShard {
@@ -3977,8 +4096,7 @@ const Builder = struct {
         } else self.templateRefForProcedureUse(procedure);
         var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
         defer graph_setup_timing_scope.end();
-        const graph = try self.createGraphForStores(&workspace.types, &workspace.name_store);
-        errdefer graph.destroy();
+        const graph = try self.acquireSpecJobGraph(worker);
         const saved_graph = self.active_graph;
         const saved_body_draft = self.active_body_draft;
         self.active_graph = graph;
@@ -4100,10 +4218,10 @@ const Builder = struct {
         }
         var store_epoch = try workspace.captureStoreEpoch(epoch);
         errdefer store_epoch.deinit();
-        graph.destroy();
         workspace.finishEpoch(epoch);
         return .{
             .worker_id = worker.worker_id,
+            .commit_domain = commit_domain,
             .worker_local_symbol_count = body_draft.worker_local_symbol_count,
             .store_epoch = store_epoch,
             .body_draft = body_draft,
@@ -4869,7 +4987,6 @@ const Builder = struct {
             return self.drainPendingSpecJobsSerial();
         }
 
-        try self.ensureParallelSpecJobState(executor.worker_count);
         const batch_capacity = executor.worker_count *| parallel_spec_jobs_per_lane;
         const buffers = try self.ensureSpecJobTaskBuffers(batch_capacity);
         const prepared = buffers.prepared;
@@ -4878,6 +4995,7 @@ const Builder = struct {
         const completions = buffers.completions;
 
         const inputs = SpecJobWorkerInputs{
+            .run_id = self.spec_job_run_id,
             .modules = self.modules,
             .program = self.program,
             .proc_debug_names = self.proc_debug_names,
@@ -4941,7 +5059,6 @@ const Builder = struct {
             for (0..batch_len) |index| {
                 contexts[index] = .{
                     .inputs = &inputs,
-                    .workers = self.spec_job_parallel_workers,
                     .prepared = prepared[index],
                 };
                 tasks[index] = .{
@@ -5018,8 +5135,7 @@ const Builder = struct {
                         // cumulative type/name suffix must still be absorbed so
                         // later epochs from that worker retain exact ids.
                         if (context.shard) |*shard| {
-                            const commit_domain = self.specJobCommitDomainFor(shard.worker_id);
-                            try commit_domain.absorb(&shard.store_epoch);
+                            try shard.commit_domain.absorb(&shard.store_epoch);
                             shard.store_epoch_absorbed = true;
                             shard.deinit();
                             if (self.timing) |timing| timing.parallel.specialization_tasks_discarded_ready +%= 1;
@@ -5067,19 +5183,16 @@ const Builder = struct {
             const finished_ns = timingNowNs(std_io);
             context.worker_work_ns = @intCast(@max(0, finished_ns - task_started_ns));
         };
-        if (executor_worker.id >= context.workers.len or
-            executor_worker.id >= std.math.maxInt(u32))
-        {
+        if (executor_worker.id >= std.math.maxInt(u32)) {
             Common.compilerBug("post-check executor returned an invalid specialization worker id");
         }
-        const slot = &context.workers[executor_worker.id];
-        if (slot.* == null) {
-            slot.* = SpecJobWorkerState.init(
-                executor_worker.allocator,
-                @enumFromInt(executor_worker.id),
-            );
-        }
-        const worker = &slot.*.?;
+        const lane = Builder.ensureSpecJobLaneState(executor_worker, context.inputs) catch {
+            context.failed = true;
+            return context;
+        };
+        const worker = &lane.worker;
+        context.lane_task_started = true;
+        context.first_task_on_lane = worker.tasks_started == 0;
         if (context.inputs.timing_std_io != null) worker.tasks_started +%= 1;
         worker.counters = .{};
         worker.diagnostics = .{};
@@ -5099,6 +5212,7 @@ const Builder = struct {
         defer builder.spec_job_parallel_callback = false;
         var shard = builder.lowerPendingSpecJobToShard(
             worker,
+            &lane.commit_domain,
             context.prepared.job,
             context.prepared.view,
             context.prepared.method_scope,
@@ -5132,14 +5246,16 @@ const Builder = struct {
             const finished_ns = timingNowNs(std_io);
             context.worker_work_ns = @intCast(@max(0, finished_ns - task_started_ns));
         };
-        if (executor_worker.id >= context.workers.len or executor_worker.id >= std.math.maxInt(u32)) {
+        if (executor_worker.id >= std.math.maxInt(u32)) {
             Common.compilerBug("post-check executor returned an invalid root worker id");
         }
-        const slot = &context.workers[executor_worker.id];
-        if (slot.* == null) {
-            slot.* = SpecJobWorkerState.init(executor_worker.allocator, @enumFromInt(executor_worker.id));
-        }
-        const worker = &slot.*.?;
+        const lane = Builder.ensureSpecJobLaneState(executor_worker, context.inputs) catch {
+            context.failed = true;
+            return context;
+        };
+        const worker = &lane.worker;
+        context.lane_task_started = true;
+        context.first_task_on_lane = worker.tasks_started == 0;
         if (context.inputs.timing_std_io != null) worker.tasks_started +%= 1;
         worker.counters = .{};
         worker.diagnostics = .{};
@@ -5154,6 +5270,7 @@ const Builder = struct {
         defer builder.spec_job_parallel_callback = false;
         var shard = builder.lowerProcedureUseRootToShard(
             worker,
+            &lane.commit_domain,
             context.request,
             context.request.procedure_use orelse
                 Common.compilerBug("procedure root task lost its procedure use"),
@@ -5233,6 +5350,7 @@ const Builder = struct {
                 const worker = self.ensureSerialSpecJobWorker();
                 var shard = try self.lowerPendingSpecJobToShard(
                     worker,
+                    self.ensureSpecJobCommitDomain(),
                     job,
                     view,
                     self.moduleForId(job.method_scope),
@@ -5274,43 +5392,15 @@ const Builder = struct {
         for (contexts) |*context| {
             timing.parallel.worker_work_ns +%= context.worker_work_ns;
             context.worker_work_ns = 0;
-        }
-    }
-
-    fn recordParallelLaneMetrics(self: *Builder) void {
-        const timing = self.timing orelse return;
-        var lanes_used: u64 = 0;
-        var lane_reuse_tasks: u64 = 0;
-        for (self.spec_job_parallel_workers) |worker| {
-            const initialized = worker orelse continue;
-            lanes_used += 1;
-            lane_reuse_tasks +%= initialized.tasks_started -| 1;
-        }
-        timing.parallel.peak_worker_lanes_used = @max(timing.parallel.peak_worker_lanes_used, lanes_used);
-        timing.parallel.within_lowering_lane_reuse_tasks +%= lane_reuse_tasks;
-    }
-
-    fn ensureParallelSpecJobState(self: *Builder, worker_count: usize) Allocator.Error!void {
-        if (self.spec_job_parallel_workers.len != 0) {
-            if (self.spec_job_parallel_workers.len != worker_count or
-                self.spec_job_parallel_commit_domains.len != worker_count)
-            {
-                Common.compilerBug("post-check executor changed worker count between specialization waves");
+            if (context.lane_task_started) {
+                if (context.first_task_on_lane) {
+                    timing.parallel.peak_worker_lanes_used +%= 1;
+                } else {
+                    timing.parallel.within_lowering_lane_reuse_tasks +%= 1;
+                }
+                context.lane_task_started = false;
             }
-            return;
         }
-        if (worker_count <= 1) {
-            Common.compilerBug("parallel specialization state requested without multiple workers");
-        }
-
-        const workers = try self.allocator.alloc(?SpecJobWorkerState, worker_count);
-        errdefer self.allocator.free(workers);
-        @memset(workers, null);
-        const domains = try self.allocator.alloc(SpecJobCommitDomain, worker_count);
-        errdefer self.allocator.free(domains);
-        for (domains) |*domain| domain.* = SpecJobCommitDomain.init(self.allocator);
-        self.spec_job_parallel_workers = workers;
-        self.spec_job_parallel_commit_domains = domains;
     }
 
     fn ensureSpecJobTaskBuffers(
@@ -5345,21 +5435,9 @@ const Builder = struct {
         return buffers;
     }
 
-    fn specJobCommitDomainFor(self: *Builder, worker_id: SpecJobWorkerId) *SpecJobCommitDomain {
-        if (worker_id == .serial) return self.ensureSpecJobCommitDomain();
-        if (self.spec_job_parallel_commit_domains.len == 0) {
-            Common.compilerBug("parallel specialization shard reached a serial commit domain");
-        }
-        const raw: usize = @intFromEnum(worker_id);
-        if (raw >= self.spec_job_parallel_commit_domains.len) {
-            Common.compilerBug("specialization shard referenced an unknown executor worker");
-        }
-        return &self.spec_job_parallel_commit_domains[raw];
-    }
-
     /// Lower one ordinary queued specialization into an owned workspace epoch
-    /// and a graph-free sealed draft. The graph is destroyed before the result
-    /// crosses the handoff; only ordered program appends happen afterward.
+    /// and a graph-free sealed draft. The lane retains the resettable graph, but
+    /// only ordered program appends happen after the result crosses the handoff.
     ///
     /// Deferred preparation executes against the worker's private Builder and
     /// workspace. A representation-sensitive immediate callee still needs
@@ -5368,6 +5446,7 @@ const Builder = struct {
     fn lowerPendingSpecJobToShard(
         self: *Builder,
         worker: *SpecJobWorkerState,
+        commit_domain: *SpecJobCommitDomain,
         job: PendingSpecJob,
         view: ModuleView,
         method_scope: ModuleView,
@@ -5407,8 +5486,7 @@ const Builder = struct {
         errdefer if (shard_diagnostics) |diagnostics| self.allocator.destroy(diagnostics);
         self.active_spec_job_diagnostics = shard_diagnostics;
         defer self.active_spec_job_diagnostics = null;
-        const graph = try self.createGraphForStores(&workspace.types, &workspace.name_store);
-        errdefer graph.destroy();
+        const graph = try self.acquireSpecJobGraph(worker);
         var body_draft = BodyDraftStore.init(self.allocator);
         errdefer body_draft.deinit();
         body_draft.spec_job_workspace = workspace;
@@ -5457,10 +5535,10 @@ const Builder = struct {
         var store_epoch = try workspace.captureStoreEpoch(epoch);
         errdefer store_epoch.deinit();
         self.countBodyDiagnostic("spec_job_shards_lowered");
-        graph.destroy();
         workspace.finishEpoch(epoch);
         return .{
             .worker_id = worker.worker_id,
+            .commit_domain = commit_domain,
             .dispatch_index = job.dispatch_index,
             .worker_local_symbol_count = body_draft.worker_local_symbol_count,
             .store_epoch = store_epoch,
@@ -5489,7 +5567,7 @@ const Builder = struct {
         self.active_spec_job_diagnostics = shard.diagnostics;
         defer self.active_spec_job_diagnostics = null;
 
-        const commit_domain = self.specJobCommitDomainFor(shard.worker_id);
+        const commit_domain = shard.commit_domain;
         try commit_domain.absorb(&shard.store_epoch);
         shard.store_epoch_absorbed = true;
         const committed_type_relocation = commit_domain.committedTypeRelocation(
@@ -5541,7 +5619,7 @@ const Builder = struct {
         if (shard.diagnostics_committed or shard.store_epoch_absorbed) {
             Common.compilerBug("procedure root shard was committed more than once");
         }
-        const commit_domain = self.specJobCommitDomainFor(shard.worker_id);
+        const commit_domain = shard.commit_domain;
         try commit_domain.absorb(&shard.store_epoch);
         shard.store_epoch_absorbed = true;
         var committed_types = CommittedGraphTypes.relocatedStore(
@@ -57202,6 +57280,32 @@ test "specialization store epoch absorption preserves boundaries on allocation f
         Helper.run,
         .{ &first_epoch, &second_epoch, record, union_ty },
     );
+}
+
+test "executor lane retains Monotype state within a run and resets it between runs" {
+    const allocator = std.testing.allocator;
+    var lane_state = base.post_check_task_executor.LaneState.init(allocator);
+    defer lane_state.deinit();
+    const executor_worker = base.post_check_task_executor.Worker{
+        .id = 0,
+        .allocator = allocator,
+        .scratch = allocator,
+        .lane_state = &lane_state,
+    };
+    var inputs: SpecJobWorkerInputs = undefined;
+    inputs.run_id = @enumFromInt(1);
+
+    const first = try Builder.ensureSpecJobLaneState(executor_worker, &inputs);
+    first.worker.tasks_started = 7;
+    const same_run = try Builder.ensureSpecJobLaneState(executor_worker, &inputs);
+    try std.testing.expectEqual(first, same_run);
+    try std.testing.expectEqual(@as(u64, 7), same_run.worker.tasks_started);
+
+    inputs.run_id = @enumFromInt(2);
+    const next_run = try Builder.ensureSpecJobLaneState(executor_worker, &inputs);
+    try std.testing.expectEqual(first, next_run);
+    try std.testing.expectEqual(@as(u64, 0), next_run.worker.tasks_started);
+    try std.testing.expectEqual(inputs.run_id, next_run.run_id);
 }
 
 test "body draft commit relocates core type and name fields out of private stores" {
