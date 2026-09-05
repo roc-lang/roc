@@ -1769,6 +1769,14 @@ a function of source bytes alone—a type module's main type takes its name
 from the module's file name—so no key or identity derived from module
 content may be computed from source bytes without the module name.
 
+`ModuleEnv.module_name` is that source-visible final path segment, such as
+`Foo` for the normalized logical path `Folder/Foo`. The logical path belongs
+to module discovery and coordinator state; it must never replace the
+source-visible name when restoring a serialized `ModuleEnv`. Because the
+runtime slice itself is not serialized, a cache consumer supplies the exact
+source-visible name already produced by the current canonicalization, and a
+debug invariant checks it against the serialized `display_module_name_idx`.
+
 The cache id does not include target ABI, pointer width, layout ids, field offsets,
 alignment decisions, backend choice, object format, code-generation options,
 post-check lowering strategy, or post-check specialization state.
