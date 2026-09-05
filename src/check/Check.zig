@@ -21995,6 +21995,7 @@ fn checkMatchExpr(
         defer self.endHoistLexicalScope(branch_hoist_scope);
 
         const first_branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(first_branch.patterns);
+        const deferred_pattern_constraints_start = env.deferred_static_dispatch_constraints.items.items.len;
 
         // Check each of the first branch's patterns and unify it with the
         // condition type. (A failed unify poisons the target to .err, so subsequent
@@ -22019,6 +22020,11 @@ fn checkMatchExpr(
         if (try self.unifyMatchAltPatternBindings(first_branch_ptrn_idxs, 0, @intCast(match.branches.span.len), expr_idx, env)) {
             had_type_error = true;
         }
+        inheritDeferredConstraintFailureExpr(
+            env,
+            deferred_pattern_constraints_start,
+            .from(@intFromEnum(expr_idx)),
+        );
 
         if (!had_type_error) {
             try self.recordHoistSingleBranchMatchPatternProvenance(match, first_branch, first_branch_ptrn_idxs, child_expected.hoist_position);
@@ -22071,6 +22077,7 @@ fn checkMatchExpr(
 
         // First, check the patterns of this branch (skip if invalid try to avoid confusing errors)
         const branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(branch.patterns);
+        const deferred_pattern_constraints_start = env.deferred_static_dispatch_constraints.items.items.len;
         for (branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
             // Check the pattern's sub types
             const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
@@ -22093,6 +22100,11 @@ fn checkMatchExpr(
         if (try self.unifyMatchAltPatternBindings(branch_ptrn_idxs, @intCast(branch_cur_index), @intCast(match.branches.span.len), expr_idx, env)) {
             had_type_error = true;
         }
+        inheritDeferredConstraintFailureExpr(
+            env,
+            deferred_pattern_constraints_start,
+            .from(@intFromEnum(expr_idx)),
+        );
         try self.recordHoistMatchBranchContextualBindings(branch_ptrn_idxs, match_hoist_owner);
 
         // Check guard if present
@@ -22144,6 +22156,7 @@ fn checkMatchExpr(
 
                     // Still check the other patterns (skip if invalid try to avoid confusing errors)
                     const other_branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(other_branch.patterns);
+                    const deferred_recovery_pattern_constraints_start = env.deferred_static_dispatch_constraints.items.items.len;
                     for (other_branch_ptrn_idxs, 0..) |other_branch_ptrn_idx, other_cur_ptrn_index| {
                         // Check the pattern's sub types
                         const other_branch_ptrn = self.cir.store.getMatchBranchPattern(other_branch_ptrn_idx);
@@ -22161,6 +22174,11 @@ fn checkMatchExpr(
                             } });
                         }
                     }
+                    inheritDeferredConstraintFailureExpr(
+                        env,
+                        deferred_recovery_pattern_constraints_start,
+                        .from(@intFromEnum(expr_idx)),
+                    );
                     try self.recordHoistMatchBranchContextualBindings(other_branch_ptrn_idxs, match_hoist_owner);
 
                     // Then check the other branch's exprs

@@ -14164,7 +14164,11 @@ const CheckedBodyPayloadCopier = struct {
         const node = ModuleEnv.nodeIdxFrom(pattern_idx);
         const plan = self.module.moduleEnvConst().quoteDispatchPlanForNode(node) orelse return null;
         switch (plan.dispatchResolution()) {
-            .builtin_direct, .checked_error => return null,
+            .builtin_direct => return null,
+            .checked_error => checkedArtifactInvariant(
+                "checked-error quote pattern reached checked body publication",
+                .{},
+            ),
             .custom_dispatch, .specialization_dispatch => {},
             .unresolved => checkedArtifactInvariant("unresolved quote pattern reached checked body publication", .{}),
         }
@@ -14231,7 +14235,11 @@ const CheckedBodyPayloadCopier = struct {
         const node = ModuleEnv.nodeIdxFrom(pattern_idx);
         const plan = self.module.moduleEnvConst().numeralDispatchPlanForNode(node) orelse return null;
         switch (plan.dispatchResolution()) {
-            .builtin_direct, .checked_error => return null,
+            .builtin_direct => return null,
+            .checked_error => checkedArtifactInvariant(
+                "checked-error numeral pattern reached checked body publication",
+                .{},
+            ),
             .custom_dispatch, .specialization_dispatch => {},
             .unresolved => checkedArtifactInvariant("unresolved numeral pattern reached checked body publication", .{}),
         }

@@ -2791,6 +2791,15 @@ Every live literal-origin record leaves checking with one explicit resolution:
   callable, runtime dispatch plan, or compile-time root for it; the containing
   checked `runtime_error` expression is the failure.
 
+Literal-pattern deferred static-dispatch constraint groups are owned by the
+enclosing match. The checker records that owner on every group emitted while
+checking each branch's complete pattern matrix, including groups from nested
+patterns and alternative-pattern binding unification. If any constraint in
+such a group is rejected, diagnostic recovery replaces the whole match with
+the checked `runtime_error`; a reachable `checked_error` literal pattern may
+not enter a checked body. This ownership is recorded when each group is
+enqueued and must not be reconstructed by scanning patterns or solved types.
+
 `unresolved` is construction-only and may not cross the checked boundary.
 Checking finalizes each live record exactly once after constraint solving;
 diagnostic recovery either retires the record with its owner or seals it as
