@@ -8,14 +8,25 @@ type=snippet
 f=||{var c:[]}
 ~~~
 # EXPECTED
-UNUSED VARIABLE - fmt_var_in_record_field.md:1:6:1:14
+VAR NAME MISSING `$` - fmt_var_in_record_field.md:1:10:1:11
+UNUSED VARIABLE - fmt_var_in_record_field.md:1:10:1:11
 # PROBLEMS
-── ● unused variable ──────────────────────────── fmt_var_in_record_field.md:1:6
+── ● var name missing `$` ────────────────────── fmt_var_in_record_field.md:1:10
+
+The mutable binding c is declared with var but its name does not start with $.
+
+f=||{var c:[]}
+         ^
+
+Rename this binding and all of its uses to $c. The name is only a convention;
+mutability comes from the var declaration.
+
+── ● unused variable ─────────────────────────── fmt_var_in_record_field.md:1:10
 
 Variable c is defined here and then never used:
 
 f=||{var c:[]}
-     ^^^^^^^^
+         ^
 
 If you don't need this variable, prefix it with an underscore like _c to
 suppress this warning.
@@ -55,7 +66,7 @@ f = || {
 			(args)
 			(e-block
 				(s-var-uninitialized
-					(p-assign (ident "c")))
+					(p-var-assign (ident "c")))
 				(e-empty_record)))))
 ~~~
 # TYPES

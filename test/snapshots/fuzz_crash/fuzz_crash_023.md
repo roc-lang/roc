@@ -232,11 +232,11 @@ UNDECLARED TYPE - fuzz_crash_023.md:52:4:52:6
 UNDECLARED TYPE - fuzz_crash_023.md:53:8:53:17
 NAME NOT IN SCOPE - fuzz_crash_023.md:72:4:72:13
 UNUSED VARIABLE - fuzz_crash_023.md:97:3:97:8
-UNUSED VARIABLE - fuzz_crash_023.md:1:1:1:1
+UNUSED VARIABLE - fuzz_crash_023.md:102:19:102:23
 NOT IMPLEMENTED - fuzz_crash_023.md:108:7:108:12
-UNUSED VARIABLE - fuzz_crash_023.md:1:1:1:1
+UNUSED VARIABLE - fuzz_crash_023.md:108:23:108:27
 NOT IMPLEMENTED - fuzz_crash_023.md:111:4:111:9
-UNUSED VARIABLE - fuzz_crash_023.md:1:1:1:1
+UNUSED VARIABLE - fuzz_crash_023.md:115:6:115:10
 NOT IMPLEMENTED - fuzz_crash_023.md:120:7:120:12
 NAME NOT IN SCOPE - fuzz_crash_023.md:121:37:121:40
 UNUSED VARIABLE - fuzz_crash_023.md:121:21:121:27
@@ -246,6 +246,7 @@ NOT IMPLEMENTED - fuzz_crash_023.md:133:9:133:14
 UNUSED VARIABLE - fuzz_crash_023.md:82:2:82:3
 NAME NOT IN SCOPE - fuzz_crash_023.md:141:2:141:6
 UNDECLARED TYPE - fuzz_crash_023.md:143:14:143:20
+VAR NAME MISSING `$` - fuzz_crash_023.md:146:6:146:12
 NAME NOT IN SCOPE - fuzz_crash_023.md:147:9:147:13
 UNRECOGNIZED SYNTAX - fuzz_crash_023.md:154:2:154:5
 NAME NOT IN SCOPE - fuzz_crash_023.md:158:2:158:11
@@ -456,12 +457,12 @@ lower # After pattern comment
 If you don't need this variable, prefix it with an underscore like _lower to
 suppress this warning.
 
-── ● unused variable ───────────────────────────────────── fuzz_crash_023.md:1:1
+── ● unused variable ────────────────────────────────── fuzz_crash_023.md:102:19
 
 Variable rest is defined here and then never used:
 
-# This is a mod comment!
-^
+[1, 2, 3, .. as rest] # After pattern comment
+                ^^^^
 
 If you don't need this variable, prefix it with an underscore like _rest to
 suppress this warning.
@@ -477,12 +478,12 @@ expression.
 This error doesn't have a proper diagnostic report yet. Let us know if you want
 to help improve Roc's error messages!
 
-── ● unused variable ───────────────────────────────────── fuzz_crash_023.md:1:1
+── ● unused variable ────────────────────────────────── fuzz_crash_023.md:108:23
 
 Variable rest is defined here and then never used:
 
-# This is a mod comment!
-^
+[1, 2 | 5, 3, .. as rest] => 123
+                    ^^^^
 
 If you don't need this variable, prefix it with an underscore like _rest to
 suppress this warning.
@@ -498,12 +499,12 @@ expression.
 This error doesn't have a proper diagnostic report yet. Let us know if you want
 to help improve Roc's error messages!
 
-── ● unused variable ───────────────────────────────────── fuzz_crash_023.md:1:1
+── ● unused variable ─────────────────────────────────── fuzz_crash_023.md:115:6
 
 Variable rest is defined here and then never used:
 
-# This is a mod comment!
-^
+rest, # After last pattern in list
+^^^^
 
 If you don't need this variable, prefix it with an underscore like _rest to
 suppress this warning.
@@ -595,6 +596,17 @@ The type String is not declared in this scope.
 
 main! : List(String) -> Try({}, _)
              ^^^^^^
+
+── ● var name missing `$` ────────────────────────────── fuzz_crash_023.md:146:6
+
+The mutable binding number is declared with var but its name does not start
+with $.
+
+var number = 123
+    ^^^^^^
+
+Rename this binding and all of its uses to $number. The name is only a
+convention; mutability comes from the var declaration.
 
 ── ✗ name not in scope ───────────────────────────────── fuzz_crash_023.md:147:9
 

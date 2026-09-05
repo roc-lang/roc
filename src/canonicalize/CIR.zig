@@ -420,6 +420,7 @@ pub const Def = struct {
         const pattern_node_idx: @TypeOf(cir.store.nodes).Idx = @enumFromInt(@intFromEnum(self.pattern));
         const pattern_node = cir.store.nodes.get(pattern_node_idx);
         const is_valid_pattern = pattern_node.tag == .pattern_identifier or
+            pattern_node.tag == .pattern_var_identifier or
             pattern_node.tag == .pattern_as or
             pattern_node.tag == .pattern_applied_tag or
             pattern_node.tag == .pattern_nominal or

@@ -1200,7 +1200,7 @@ fn initParsedResources(self: *ReplSession) ReplStepError!eval.Inspected.ParsedRe
 
 fn bindingPatternOfName(env: *ModuleEnv, pattern_idx: can.CIR.Pattern.Idx, name: []const u8) ?can.CIR.Pattern.Idx {
     switch (env.store.getPattern(pattern_idx)) {
-        .assign => |assign| {
+        inline .assign, .var_assign => |assign| {
             if (std.mem.eql(u8, env.getIdent(assign.ident), name)) return pattern_idx;
         },
         .as => |as_pattern| {

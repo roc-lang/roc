@@ -47,5 +47,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(Error)"))
+(expr (type "List(U8)"))
 ~~~

@@ -518,6 +518,7 @@ fn findDefVar(self: *const TestEnv, target_def_name: []const u8) TestEnvError!Va
         for (binders.items) |binder| {
             const ident = switch (self.module_env.store.getPattern(binder)) {
                 .assign => |assign| assign.ident,
+                .var_assign => |assign| assign.ident,
                 .as => |as_pattern| as_pattern.ident,
                 .applied_tag,
                 .nominal,

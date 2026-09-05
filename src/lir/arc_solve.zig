@@ -310,10 +310,14 @@ pub const Solution = struct {
     /// aliases already have their own retained unit, and field/payload borrows
     /// are not the same value as their liveness leader.
     pub fn unitLocalOf(self: *const Solution, local: LIR.LocalId) LIR.LocalId {
-        if (!self.isBorrowed(local)) return local;
         var cursor = @intFromEnum(local);
         var steps: usize = 0;
-        while (cursor < self.alias_source.len and self.alias_source[cursor] != no_local) {
+        // Every owned binding has an independent unit, even when its value
+        // came from another local. Only borrowed links forward that unit.
+        while (cursor < self.alias_source.len and
+            self.isBorrowed(@enumFromInt(cursor)) and
+            self.alias_source[cursor] != no_local)
+        {
             cursor = self.alias_source[cursor];
             steps += 1;
             if (steps > self.alias_source.len) solveInvariant("ARC alias-source chain contained a cycle");
@@ -1807,7 +1811,7 @@ fn buildTailCallTable(
         for (0..@min(GuardedList.borrowLen(args), arc_sig.tracked_param_count)) |position| {
             const argument = solver.domain.indexOf(GuardedList.at(args, position)) orelse continue;
             if (!binding.borrowed.isSet(argument)) continue;
-            fact.carriers[position] = tailArgumentCarrier(solver, argument);
+            fact.carriers[position] = tailArgumentCarrier(solver, binding, argument);
             const leader = binding.leader[argument];
             if (!paramIsBorrowed(solver, leader)) continue;
             if (solver.param_proc[leader] != call.caller) continue;
@@ -1836,10 +1840,10 @@ fn tailCallLifetimeLessThan(_: void, left: TailCallLifetime, right: TailCallLife
 /// Mirrors `Solution.unitLocalOf` in the dense solver domain. Borrowed pure
 /// aliases transfer their source's unit; other borrowed definitions need an
 /// owned override on their own binding when a tail-call lifetime escapes.
-fn tailArgumentCarrier(solver: *const Solver, argument: u32) u32 {
+fn tailArgumentCarrier(solver: *const Solver, binding: *const BindingResult, argument: u32) u32 {
     var cursor = argument;
     var steps: usize = 0;
-    while (solver.alias_source[cursor] != no_local) {
+    while (binding.borrowed.isSet(cursor) and solver.alias_source[cursor] != no_local) {
         cursor = solver.alias_source[cursor];
         steps += 1;
         if (steps > solver.alias_source.len) solveInvariant("ARC tail-call carrier alias chain contained a cycle");

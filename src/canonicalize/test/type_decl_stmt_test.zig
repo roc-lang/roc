@@ -236,7 +236,7 @@ fn expectCanonicalizationKernelsUseExplicitPayloadStacks(can_source: []const u8)
     try expectSourceSliceBetweenDoesNotContain(can_source, "const ExprKernelWork = struct", "const ExprRecordFieldWork = struct", "std.ArrayList(struct");
     try expectSourceSliceBetweenDoesNotContain(can_source, "const TypeAnnoKernelWork = struct", "fn runTypeAnnoKernel(", "std.ArrayList(struct");
     try expectSourceSliceBetweenDoesNotContain(can_source, "fn runExprKernel(", "fn addBoolTagExpr", "frames.");
-    try expectSourceSliceBetweenDoesNotContain(can_source, "pub fn canonicalizePattern(", "fn enterFunction", "frames.");
+    try expectSourceSliceBetweenDoesNotContain(can_source, "pub fn canonicalizePattern(", "fn isVarPattern", "frames.");
     try expectSourceSliceBetweenDoesNotContain(can_source, "fn runTypeAnnoKernel(", "/// Handle basic type lookup", "frames.");
 }
 
@@ -254,8 +254,8 @@ fn expectCanonicalizationKernelsDoNotCallRecursiveWrappers(can_source: []const u
     try expectSourceSliceBetweenDoesNotContain(can_source, "fn runExprKernel(", "fn addBoolTagExpr", "canonicalizeExprOrMalformed(");
     try expectSourceSliceBetweenDoesNotContain(can_source, "fn runExprKernel(", "fn addBoolTagExpr", "canonicalizeStatement");
     try expectSourceSliceBetweenDoesNotContain(can_source, "fn runExprKernel(", "fn addBoolTagExpr", "processAssociatedBlock(");
-    try expectSourceSliceBetweenDoesNotContain(can_source, "pub fn canonicalizePattern(", "fn enterFunction", "self.canonicalizePattern(");
-    try expectSourceSliceBetweenDoesNotContain(can_source, "pub fn canonicalizePattern(", "fn enterFunction", "canonicalizePatternOrMalformed(");
+    try expectSourceSliceBetweenDoesNotContain(can_source, "pub fn canonicalizePattern(", "fn isVarPattern", "self.canonicalizePattern(");
+    try expectSourceSliceBetweenDoesNotContain(can_source, "pub fn canonicalizePattern(", "fn isVarPattern", "canonicalizePatternOrMalformed(");
     try expectSourceSliceBetweenDoesNotContain(can_source, "fn runTypeAnnoKernel(", "/// Handle basic type lookup", "canonicalizeTypeAnno(");
     try expectSourceSliceBetweenDoesNotContain(can_source, "fn runTypeAnnoKernel(", "/// Handle basic type lookup", "self.runTypeAnnoKernel(");
 }

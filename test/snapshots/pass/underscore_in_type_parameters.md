@@ -164,24 +164,24 @@ MultiType(_, _, c) : c
 	(s-alias-decl
 		(ty-header (name "MyType")
 			(ty-args
-				(ty-underscore)))
+				(ty-malformed)))
 		(ty-lookup (name "Str") (builtin)))
 	(s-alias-decl
 		(ty-header (name "MyType2")
 			(ty-args
-				(ty-underscore)
+				(ty-malformed)
 				(ty-rigid-var (name "b"))))
 		(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
 	(s-alias-decl
 		(ty-header (name "MyType3")
 			(ty-args
 				(ty-rigid-var (name "a"))
-				(ty-underscore)))
+				(ty-malformed)))
 		(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
 	(s-alias-decl
 		(ty-header (name "ComplexType")
 			(ty-args
-				(ty-underscore)
+				(ty-malformed)
 				(ty-rigid-var (name "b"))))
 		(ty-record
 			(field (field "field")
@@ -189,8 +189,8 @@ MultiType(_, _, c) : c
 	(s-alias-decl
 		(ty-header (name "MultiType")
 			(ty-args
-				(ty-underscore)
-				(ty-underscore)
+				(ty-malformed)
+				(ty-malformed)
 				(ty-rigid-var (name "c"))))
 		(ty-rigid-var-lookup (ty-rigid-var (name "c")))))
 ~~~
@@ -199,30 +199,30 @@ MultiType(_, _, c) : c
 (inferred-types
 	(defs)
 	(type_decls
-		(alias (type "MyType(Error)")
+		(alias (type "Error")
 			(ty-header (name "MyType")
 				(ty-args
-					(ty-underscore))))
-		(alias (type "MyType2(Error, b)")
+					(ty-malformed))))
+		(alias (type "Error")
 			(ty-header (name "MyType2")
 				(ty-args
-					(ty-underscore)
+					(ty-malformed)
 					(ty-rigid-var (name "b")))))
-		(alias (type "MyType3(a, Error)")
+		(alias (type "Error")
 			(ty-header (name "MyType3")
 				(ty-args
 					(ty-rigid-var (name "a"))
-					(ty-underscore))))
-		(alias (type "ComplexType(Error, b)")
+					(ty-malformed))))
+		(alias (type "Error")
 			(ty-header (name "ComplexType")
 				(ty-args
-					(ty-underscore)
+					(ty-malformed)
 					(ty-rigid-var (name "b")))))
-		(alias (type "MultiType(Error, Error, c)")
+		(alias (type "Error")
 			(ty-header (name "MultiType")
 				(ty-args
-					(ty-underscore)
-					(ty-underscore)
+					(ty-malformed)
+					(ty-malformed)
 					(ty-rigid-var (name "c"))))))
 	(expressions))
 ~~~
