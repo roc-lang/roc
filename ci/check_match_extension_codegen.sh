@@ -65,9 +65,19 @@ cd "$repo_root"
 # store pair replacing a longer scalar sequence. The pinned compare loop is
 # untouched, still load, load, compare, advance with the `from_le_bytes` bounds
 # test doubling as the loop's termination.
+# Both counts then rose (x64musl 102 to 105, arm64musl 94 to 102) when the list
+# allocation builtins gained overflow guards on their size arithmetic: a
+# `capacity * element_width (+ header)` that overflows `usize` now crashes
+# deterministically instead of wrapping to a tiny allocation and letting the
+# next write run off the heap buffer (a primitive reachable from pure Roc code
+# the compiler also evaluates at compile time). The added branch inlines into
+# the same one-time `List.repeat` buffer setup the vectorization above rewrote,
+# and costs it the same three and eight instructions it cost the scalar setup,
+# so the two changes are independent rather than interacting. The pinned
+# eight-byte compare loop, which allocates nothing, is unchanged.
 expectations=(
-    "x64musl:102"
-    "arm64musl:94"
+    "x64musl:105"
+    "arm64musl:102"
 )
 
 failed=0
