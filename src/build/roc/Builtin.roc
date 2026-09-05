@@ -4226,6 +4226,14 @@ Builtin :: [].{
 			fun!(item)
 		}
 
+		for_each_try! : List(item), (item => Try({}, err)) => Try({}, err)
+		for_each_try! = |items, fun!| {
+			for item in items {
+				fun!(item)?
+			}
+			Ok({})
+		}
+
 		## Convert each item in the list to something new, by calling a conversion
 		## function on each of them. Then return a new list of the converted values.
 		## ```roc
