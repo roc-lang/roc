@@ -33,3 +33,21 @@ test "issue 11098: rejecting one inferred literal specialization preserves anoth
         \\}
     , .{ .allow_user_errors = true });
 }
+
+test "issue 11098: every invalid use sharing one receiver lowers to a runtime error" {
+    try expectLowersToLirWithOptions(
+        \\get_n = |{}| 300
+        \\
+        \\choose : Bool -> U8
+        \\choose = |first| if first {
+        \\    get_n({})
+        \\} else {
+        \\    get_n({})
+        \\}
+        \\
+        \\main! = |args| {
+        \\    choose(args.is_empty())
+        \\    Ok({})
+        \\}
+    , .{ .allow_user_errors = true });
+}

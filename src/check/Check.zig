@@ -9932,10 +9932,12 @@ fn finishAmbiguityPinnableSets(
     }
 }
 
-/// The introducing dispatch expression recorded in a constraint's provenance,
-/// or null for a synthetic constraint with no source expression. Provenance is
-/// set at creation and copied verbatim by instantiation and unification, so it
-/// travels with the constraint instead of alongside it in a var-keyed map.
+/// The expression recorded in a constraint's provenance, or null for a
+/// synthetic constraint with no source expression. Type-store constraints set
+/// this at creation and copy it verbatim through instantiation and unification.
+/// A checker-local open-numeral worklist copy instead records the exact use
+/// owned by that occurrence; it never writes that occurrence back to the type
+/// store.
 fn constraintIntroExpr(constraint: StaticDispatchConstraint) ?CIR.Expr.Idx {
     const raw = constraint.provenance.intro_expr.get() orelse return null;
     return @enumFromInt(raw);
@@ -9943,7 +9945,8 @@ fn constraintIntroExpr(constraint: StaticDispatchConstraint) ?CIR.Expr.Idx {
 
 /// The source expression whose checked value becomes invalid when this
 /// dispatch constraint fails. Ordinary dispatch records it in provenance;
-/// literal conversions own it through their checked literal plan.
+/// source literal conversions own it through their checked literal plan, and
+/// instantiated numeral worklist entries carry their exact use in provenance.
 fn constraintSourceExpr(
     self: *Self,
     dispatcher_var: Var,
@@ -32673,6 +32676,7 @@ fn reportInvalidBuiltinFromNumeralLiteral(
     // table retains the source literal responsible for a concrete rejection.
     const rejected_entry = self.firstRejectedOpenNumeral(
         dispatcher_var,
+        constraint,
         num_kind,
     );
     const rejected_constraint = if (rejected_entry) |entry| entry.constraint else constraint;
@@ -32682,17 +32686,22 @@ fn reportInvalidBuiltinFromNumeralLiteral(
 fn firstRejectedOpenNumeral(
     self: *Self,
     dispatcher_var: Var,
+    requested_constraint: StaticDispatchConstraint,
     num_kind: CIR.NumKind,
 ) ?OpenNumeralLiteral {
     const dispatcher_root = self.types.resolveVar(dispatcher_var).var_;
+    var first_rejected: ?OpenNumeralLiteral = null;
     for (self.open_numeral_literals.items) |entry| {
         if (self.types.resolveVar(entry.var_).var_ != dispatcher_root) continue;
         const info = entry.constraint.origin.numeralInfo() orelse continue;
         if (validateBuiltinFromNumeralLiteral(num_kind, info) != null) {
-            return entry;
+            // Raw constraint fn vars retain occurrence identity even when
+            // unification puts several callables in one rejected class.
+            if (entry.constraint.fn_var == requested_constraint.fn_var) return entry;
+            if (first_rejected == null) first_rejected = entry;
         }
     }
-    return null;
+    return first_rejected;
 }
 
 fn reportInvalidBuiltinFromNumeralInfo(
@@ -32734,10 +32743,13 @@ fn rejectInvalidBuiltinNumeralOccurrence(
 ) Allocator.Error!bool {
     const num_literal = constraint.origin.numeralInfo() orelse return false;
     if (validateBuiltinFromNumeralLiteral(num_kind, num_literal) == null) return false;
-    if (self.staticDispatchConstraintIsInactive(constraint)) return true;
-    try self.appendInvalidBuiltinNumeralProblem(dispatcher_var, num_literal);
-
     const failure_expr = constraintIntroExpr(constraint) orelse self.constraintSourceExpr(dispatcher_var, constraint);
+    if (self.staticDispatchConstraintIsInactive(constraint)) {
+        try self.poisonConstraintFailureSource(dispatcher_var, constraint, failure_expr);
+        return true;
+    }
+
+    try self.appendInvalidBuiltinNumeralProblem(dispatcher_var, num_literal);
     try self.poisonConstraintFailureSource(dispatcher_var, constraint, failure_expr);
     try self.markStaticDispatchRejected(constraint);
     if (failure_expr == null) {
@@ -32754,6 +32766,11 @@ fn reportUnmaterializableNumeralLiteral(
 ) Allocator.Error!bool {
     const num_literal = constraint.origin.numeralInfo() orelse return false;
     if (num_literal.can_materialize_numeral) return false;
+    const failure_expr = constraintIntroExpr(constraint) orelse self.constraintSourceExpr(dispatcher_var, constraint);
+    if (self.staticDispatchConstraintIsInactive(constraint)) {
+        try self.poisonConstraintFailureSource(dispatcher_var, constraint, failure_expr);
+        return true;
+    }
 
     const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     _ = try self.problems.appendProblem(self.gpa, .{ .invalid_numeric_literal = .{
@@ -32763,7 +32780,6 @@ fn reportUnmaterializableNumeralLiteral(
         .region = num_literal.region,
     } });
 
-    const failure_expr = constraintIntroExpr(constraint) orelse self.constraintSourceExpr(dispatcher_var, constraint);
     try self.poisonConstraintFailureSource(dispatcher_var, constraint, failure_expr);
     try self.markStaticDispatchRejected(constraint);
     if (failure_expr == null) {
