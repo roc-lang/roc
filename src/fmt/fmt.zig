@@ -3607,7 +3607,7 @@ const Formatter = struct {
                         try fmt.newline();
                     }
                 } else if (!fmt.has_newline) {
-                    try fmt.push(' ');
+                    fmt.setInlineCommentSeparator();
                 }
                 try fmt.push('#');
                 const comment_text = between_text[comment_start..comment_end];
@@ -3683,7 +3683,7 @@ const Formatter = struct {
                 if (newline_count > 0 or fmt.has_newline) {
                     try fmt.pushIndent();
                 } else {
-                    try fmt.push(' ');
+                    fmt.setInlineCommentSeparator();
                 }
                 try fmt.push('#');
                 const comment_text = between_text[comment_start..comment_end];
@@ -3726,6 +3726,11 @@ const Formatter = struct {
 
         // Return true if there was a newline, whether or not there was a comment
         return newline_count > 0;
+    }
+
+    inline fn setInlineCommentSeparator(fmt: *Formatter) void {
+        std.debug.assert(!fmt.has_newline);
+        fmt.pending_spaces = 1;
     }
 
     fn push(fmt: *Formatter, c: u8) error{WriteFailed}!void {
@@ -4956,6 +4961,15 @@ test "pipe keeps comments from removed empty argument lists" {
             "\tfoo\n",
         result,
     );
+}
+
+test "issue 11043: parenthesized pipe target with a comment-only argument list is idempotent" {
+    // Repro for https://github.com/roc-lang/roc/issues/11043
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\t=0|>(0)(#
+        \\)
+    , false);
+    defer std.testing.allocator.free(result);
 }
 
 test "multiline pipes start indented lines" {
