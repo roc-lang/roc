@@ -175,7 +175,9 @@ pub const Constants = struct {
     /// 79: Recursive-reference provenance is separate from shared scheme uses.
     /// 80: CIR has an explicit mutable-binder pattern and binding-name warning
     ///     diagnostic node tags.
-    pub const CACHE_VERSION = 80;
+    /// 81: Stored functions retain callable-path dispatch evidence across
+    ///     reusable compile-time values.
+    pub const CACHE_VERSION = 81;
 };
 
 /// Configuration for the Roc cache system.

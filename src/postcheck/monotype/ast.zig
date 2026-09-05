@@ -335,6 +335,10 @@ pub fn fnEvidenceDigest(
                     );
                 } else writeU8(&hasher, 0);
             },
+            .from_callable => |use| {
+                writeU32(&hasher, use.index);
+                writeU8(&hasher, @intFromBool(use.independent_callable));
+            },
             .unreachable_value, .checked_error => {},
         }
     }
@@ -370,11 +374,15 @@ pub fn fnEvidenceEql(
                 .target => |right_target| {
                     if (!fnEvidenceTargetEql(left_target, right_target)) return false;
                 },
-                .structural, .unreachable_value, .checked_error => return false,
+                .structural, .from_callable, .unreachable_value, .checked_error => return false,
             },
             .structural => |left_structural| switch (right) {
                 .structural => |right_structural| if (!std.meta.eql(left_structural, right_structural)) return false,
-                .target, .unreachable_value, .checked_error => return false,
+                .target, .from_callable, .unreachable_value, .checked_error => return false,
+            },
+            .from_callable => |left_use| switch (right) {
+                .from_callable => |right_use| if (!std.meta.eql(left_use, right_use)) return false,
+                .target, .structural, .unreachable_value, .checked_error => return false,
             },
             .unreachable_value => if (right != .unreachable_value) return false,
             .checked_error => if (right != .checked_error) return false,
@@ -493,6 +501,21 @@ test "function evidence identity uses checked callable type keys" {
     right[0].target.instantiation.?.callable_key.bytes[0] = 9;
     try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
     try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
+
+    const symbolic_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),
+    };
+    const symbolic_left = [_]check.ConstStore.ConstFnEvidence{.{
+        .from_callable = .{ .index = 0, .independent_callable = false },
+    }};
+    const symbolic_right = [_]check.ConstStore.ConstFnEvidence{.{
+        .from_callable = .{ .index = 1, .independent_callable = false },
+    }};
+    try std.testing.expect(!fnEvidenceEql(&symbolic_left, &symbolic_frames, 0, &symbolic_right, &symbolic_frames, 0));
+    try std.testing.expect(!std.meta.eql(
+        fnEvidenceDigest(&symbolic_left, &symbolic_frames, 0),
+        fnEvidenceDigest(&symbolic_right, &symbolic_frames, 0),
+    ));
 }
 
 fn writeFnDef(hasher: *std.crypto.hash.sha2.Sha256, fn_def: FnDef) void {

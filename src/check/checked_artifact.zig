@@ -19176,6 +19176,30 @@ const EvidencePass = struct {
         const source_node = self.source_by_checked_expr.get(site_key) orelse return;
 
         if (self.value_use_by_node.get(source_node)) |record_idx| {
+            const procedure_value = switch (rec.ref) {
+                .top_level_proc,
+                .imported_proc,
+                .hosted_proc,
+                .promoted_top_level_proc,
+                .platform_required_proc,
+                => true,
+                .local_param,
+                .local_value,
+                .local_mutable_version,
+                .pattern_binder,
+                .local_proc,
+                .selected_hoisted_const,
+                .top_level_const,
+                .imported_const,
+                .platform_required_declaration,
+                .platform_required_checked_error,
+                .platform_required_const,
+                => false,
+            };
+            if (procedure_value) {
+                try self.emitProcedureValueSiteEvidence(record_idx, site_key, chain);
+                return;
+            }
             try self.emitSchemeUseSiteEvidence(record_idx, site_key, chain);
             return;
         }
@@ -19231,6 +19255,64 @@ const EvidencePass = struct {
         // have no site evidence. Shared recursive uses are explicit records
         // and therefore returned through the branch above.
         return;
+    }
+
+    /// Publish a procedure value's evidence without committing an unpinned
+    /// callable component to `unreachable`. A containing record,
+    /// tuple, list, tag, or nominal can cross a module boundary before that
+    /// component is selected; its eventual function request supplies every
+    /// path-bearing entry exactly.
+    fn emitProcedureValueSiteEvidence(
+        self: *EvidencePass,
+        record_idx: u32,
+        site_key: u32,
+        chain: []const []const EvidenceParam,
+    ) Allocator.Error!void {
+        if (self.site_seen.contains(site_key)) return;
+
+        self.current_chain = chain;
+        defer self.current_chain = &.{};
+
+        const module_env = self.module.moduleEnvConst();
+        const record = module_env.scheme_uses.items.items[record_idx];
+        const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+        var params = std.ArrayListUnmanaged(EvidenceParam).empty;
+        defer params.deinit(self.allocator);
+        try self.enumerateParams(@enumFromInt(record.scheme_root), &params);
+
+        var entries = std.ArrayListUnmanaged(static_dispatch.CheckedEvidence).empty;
+        defer entries.deinit(self.allocator);
+        try entries.ensureTotalCapacity(self.allocator, params.items.len);
+        for (params.items) |param| {
+            if (try self.evidenceForRecordParam(pairs, param, false)) |evidence| {
+                entries.appendAssumeCapacity(evidence);
+                continue;
+            }
+            if (param.path.len == 0 or param.source == .constraint_callable) {
+                entries.appendAssumeCapacity((try self.evidenceForRecordParam(pairs, param, true)).?);
+                continue;
+            }
+            const dispatcher_root = self.types.resolveVar(param.dispatcher_var).var_;
+            const dispatcher_var = self.pairForResolved(pairs, dispatcher_root) orelse param.dispatcher_var;
+            const dispatcher_ty = self.checked_types.rootForSourceVar(self.module, dispatcher_var) orelse
+                checkedArtifactInvariant("checked procedure-value dispatcher type was not published", .{});
+            entries.appendAssumeCapacity(.{
+                .dispatcher_ty = dispatcher_ty,
+                .runtime_dictionary = param.constraint.origin.literalKind() == null,
+                .resolution = .from_callable,
+            });
+        }
+
+        const span = try self.appendEvidenceRefs(entries.items);
+        const subst = try self.appendSiteSubstitution(@enumFromInt(record.scheme_root), pairs);
+        try self.site_seen.put(site_key, {});
+        try self.site_evidence.append(self.allocator, .{
+            .key = site_key,
+            .start = span.start,
+            .len = span.len,
+            .subst_start = subst.start,
+            .subst_len = subst.len,
+        });
     }
 
     fn emitSchemeUseSiteEvidence(
@@ -30493,7 +30575,9 @@ pub const CheckedModuleArtifact = struct {
     // Version 83 records each procedure template's root evidence.
     // Version 84 separates recursive-reference provenance from shared scheme
     // uses without changing the resolved-reference layout.
-    const serialized_layout_version: u32 = 84;
+    // Version 85 retains callable-path recipes in stored function evidence so
+    // procedure values inside reusable constants specialize at their uses.
+    const serialized_layout_version: u32 = 85;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -36946,8 +37030,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x3B, 0x3E, 0x1D, 0x5A, 0xF0, 0x25, 0xD1, 0xCA, 0xAB, 0x7C, 0x15, 0x82, 0x6C, 0x3A, 0xFE, 0xFC,
-        0x62, 0x8F, 0x7C, 0xEE, 0x5E, 0xBC, 0x25, 0xC6, 0x28, 0xA7, 0x8E, 0x2F, 0x2B, 0x4B, 0xF7, 0x31,
+        0x88, 0xB1, 0xEA, 0xEE, 0x2B, 0x8E, 0xF0, 0x03, 0x3C, 0xEC, 0x6A, 0x2A, 0xDB, 0x2D, 0xA1, 0xA5,
+        0xF0, 0x83, 0x6C, 0x66, 0x35, 0xE0, 0xDB, 0x3A, 0xA1, 0x40, 0xF1, 0xF7, 0xF7, 0x6F, 0xD7, 0x54,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
