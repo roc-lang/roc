@@ -64,3 +64,24 @@ test "issue 10893: rejected equality dispatch on a converted numeral pattern inv
         \\}
     , .{ .allow_user_errors = true, .monotype_only = true });
 }
+
+test "issue 10893: a shared rejected literal dispatch invalidates every owning match" {
+    try expectLowersToLirWithOptions(
+        \\f = |x| {
+        \\    first = match x {
+        \\        1 => 1
+        \\        _ => 0
+        \\    }
+        \\    second = match x {
+        \\        2 => 1
+        \\        _ => 0
+        \\    }
+        \\    first + second
+        \\}
+        \\
+        \\main! = |_args| {
+        \\    echo!(f(Z).to_str())
+        \\    Ok({})
+        \\}
+    , .{ .allow_user_errors = true, .monotype_only = true });
+}

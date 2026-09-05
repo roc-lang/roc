@@ -2830,7 +2830,8 @@ processed, that plan supplies the group's failure owner. If either constraint
 is rejected, diagnostic recovery replaces the whole match with the checked
 `runtime_error`; a reachable `checked_error` literal pattern may not enter a
 checked body. A later scheme instantiation still owns failure of its copied
-obligation at the use expression. Ownership is explicit producer data and must
+static-dispatch constraint at the use expression. Ownership is explicit
+producer data and must
 not be reconstructed from pattern structure. The plan packs its kind and
 resolution into one word, so recording the owner does not increase plan size.
 
