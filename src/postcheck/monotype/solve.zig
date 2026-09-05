@@ -673,6 +673,56 @@ pub const InstGraph = struct {
         self.diagnostics = diagnostics;
     }
 
+    /// Begin an unrelated specialization while retaining this lane's allocated
+    /// graph capacity. Every prior node identity and snapshot becomes invalid;
+    /// the cumulative destination type and name stores remain unchanged.
+    pub fn reset(self: *InstGraph) void {
+        self.relation_state = .producing;
+        self.diagnostics = null;
+        self.nodes.clearRetainingCapacity();
+        self.field_kinds.clearRetainingCapacity();
+        self.versions.clearRetainingCapacity();
+        self.class_member_next.clearRetainingCapacity();
+        self.class_member_head.clearRetainingCapacity();
+        self.class_member_tail.clearRetainingCapacity();
+        self.processed_relations.clearRetainingCapacity();
+        var views = self.node_snapshots.valueIterator();
+        while (views.next()) |list| list.deinit(self.allocator);
+        self.node_snapshots.clearRetainingCapacity();
+        self.current_snapshots.clearRetainingCapacity();
+        self.current_snapshots_dirty = false;
+        self.active_snapshot_nodes.clearRetainingCapacity();
+        self.imported_type_nodes.clearRetainingCapacity();
+        self.provisional_view_shareable.clearRetainingCapacity();
+        self.imported_monos.clearRetainingCapacity();
+        self.nominal_backing_index.clearRetainingCapacity();
+        self.nominal_backing_instances.clearRetainingCapacity();
+        var backing_occurrences = self.nominal_backings_by_root.valueIterator();
+        while (backing_occurrences.next()) |occurrences| occurrences.deinit(self.allocator);
+        self.nominal_backings_by_root.clearRetainingCapacity();
+        self.nominal_backing_affected.clearRetainingCapacity();
+        self.nominal_backing_migration_epochs.clearRetainingCapacity();
+        self.nominal_backing_migration_epoch = 0;
+        self.nominal_backing_collisions.clearRetainingCapacity();
+        self.processing_nominal_backing_collisions = false;
+        self.request_source_interfaces.clearRetainingCapacity();
+        self.forced_dynamic_iterator_roots.clearRetainingCapacity();
+        self.recursive_argument_slots.clearRetainingCapacity();
+        self.containment_pending.clearRetainingCapacity();
+        self.containment_visit_epochs.clearRetainingCapacity();
+        self.containment_visit_epoch = 0;
+        var containment_entries = self.containment_cache.valueIterator();
+        while (containment_entries.next()) |entry| entry.deinit(self.allocator);
+        self.containment_cache.clearRetainingCapacity();
+        self.resolved_roots.clearRetainingCapacity();
+        self.resolved_epoch = 0;
+        self.structure_epoch = 0;
+        self.snapshot_free_types.clearRetainingCapacity();
+        self.generated_private_nodes = 0;
+        self.current_durable.clearRetainingCapacity();
+        _ = self.arena_impl.reset(.retain_capacity);
+    }
+
     fn countDiagnostic(self: *InstGraph, comptime field: []const u8) void {
         if (self.diagnostics) |diagnostics| {
             @field(diagnostics, field) += 1;
@@ -7393,6 +7443,36 @@ test "final sealed graph node does not allocate an active snapshot" {
     const sealed = try graph.sealNode(row);
     try std.testing.expectEqual(@as(usize, 0), graph.node_snapshots.count());
     try std.testing.expectEqual(@as(usize, 1), type_store.fieldSpan(type_store.get(sealed).record).len);
+}
+
+test "reset starts an unrelated graph while retaining its stores" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const first = try graph.newNode(.{ .primitive = .u64 });
+    _ = try graph.activeTypeViewForNode(first);
+    try graph.freezeRelations();
+    try std.testing.expect(!graph.acceptsRelationMutation());
+    try std.testing.expect(graph.node_snapshots.count() != 0);
+
+    graph.reset();
+    try std.testing.expect(graph.acceptsRelationMutation());
+    try std.testing.expectEqual(@as(usize, 0), graph.nodes.items.len);
+    try std.testing.expectEqual(@as(usize, 0), graph.node_snapshots.count());
+
+    const second = try graph.newNode(.{ .primitive = .str });
+    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(second));
+    try graph.freezeRelations();
+    const sealed = try graph.sealNode(second);
+    try std.testing.expectEqual(Type.Content{ .primitive = .str }, type_store.get(sealed));
 }
 
 test "active view of an imported recursive type preserves its exact immutable representation" {
