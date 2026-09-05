@@ -103,6 +103,7 @@ const ExprNodeTag = enum {
     record_update,
     field_access,
     method_call,
+    pipe_method_call,
     tuple_access,
     arrow_call,
     lambda,
@@ -1023,6 +1024,35 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
     return @enumFromInt(@intFromEnum(nid));
 }
 
+/// Converts the current unowned tail method-call node into a pipe-method call.
+pub fn finishPipeMethodCall(
+    store: *NodeStore,
+    method_call: AST.Expr.Idx,
+    left: AST.Expr.Idx,
+    operator: Token.Idx,
+    region: AST.TokenizedRegion,
+) std.mem.Allocator.Error!AST.Expr.Idx {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(method_call));
+    var node = store.nodes.get(node_idx);
+    std.debug.assert(node.tag == .method_call);
+    std.debug.assert(@intFromEnum(node_idx) + 1 == store.nodes.len());
+
+    const receiver = node.data.lhs;
+    const call_data_idx = node.data.rhs;
+    std.debug.assert(@as(usize, call_data_idx) + 2 == store.extra_data.items.len);
+    try store.extra_data.ensureUnusedCapacity(store.gpa, 2);
+    store.extra_data.appendAssumeCapacity(operator);
+    store.extra_data.appendAssumeCapacity(node.main_token);
+
+    node.tag = .pipe_method_call;
+    node.region = region;
+    node.data.lhs = @intFromEnum(left);
+    node.data.rhs = receiver;
+    node.main_token = call_data_idx;
+    store.nodes.set(node_idx, node);
+    return method_call;
+}
+
 /// Adds an expression node (literal, variable, call, record, etc.) and returns its index.
 pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Expr.Idx {
     var node = Node{
@@ -1180,6 +1210,13 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             try store.extra_data.append(store.gpa, mc.args.span.start);
             try store.extra_data.append(store.gpa, mc.args.span.len);
             node.data.rhs = @as(u32, @intCast(args_data_idx));
+        },
+        .pipe_method_call => |pmc| {
+            node.tag = .pipe_method_call;
+            node.region = pmc.region;
+            node.data.lhs = @intFromEnum(pmc.left);
+            node.data.rhs = @intFromEnum(pmc.receiver);
+            node.main_token = pmc.call_data_idx;
         },
         .tuple_access => |ta| {
             node.tag = .tuple_access;
@@ -2277,6 +2314,18 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
     }
 }
 
+/// Retrieves the out-of-line token and argument data for a pipe-method call.
+pub fn getPipeMethodCallDetails(store: *const NodeStore, call: AST.PipeMethodCall) AST.PipeMethodCallDetails {
+    return .{
+        .args = .{ .span = .{
+            .start = store.extra_data.items[call.call_data_idx],
+            .len = store.extra_data.items[call.call_data_idx + 1],
+        } },
+        .operator = store.extra_data.items[call.call_data_idx + 2],
+        .method_token = store.extra_data.items[call.call_data_idx + 3],
+    };
+}
+
 /// Retrieves expression data from a stored expression node, reconstructing the appropriate expression type.
 pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(expr_idx)));
@@ -2456,6 +2505,14 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                     .start = store.extra_data.items[args_data_idx],
                     .len = store.extra_data.items[args_data_idx + 1],
                 } },
+                .region = node.region,
+            } };
+        },
+        .pipe_method_call => {
+            return .{ .pipe_method_call = .{
+                .left = @enumFromInt(node.data.lhs),
+                .receiver = @enumFromInt(node.data.rhs),
+                .call_data_idx = node.main_token,
                 .region = node.region,
             } };
         },

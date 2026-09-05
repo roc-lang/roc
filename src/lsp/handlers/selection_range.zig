@@ -444,6 +444,9 @@ fn collectContainingRegionsFromExpr(
                 try collectContainingRegionsFromExpr(allocator, ast, arg, target_offset, regions);
             }
         },
+        .pipe_method_call => |m| {
+            try collectContainingRegionsFromExpr(allocator, ast, m.left, target_offset, regions);
+        },
         .arrow_call => |d| {
             try collectContainingRegionsFromExpr(allocator, ast, d.left, target_offset, regions);
         },

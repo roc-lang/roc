@@ -448,6 +448,12 @@ pub const Tag = enum {
     /// * lhs - receiver expr
     /// * rhs - extra_data index storing [args_start, args_len]
     method_call,
+    /// A pipe whose target is an attached method call.
+    /// * main_token - extra_data index storing
+    ///   [args_start, args_len, operator, method_token]
+    /// * lhs - piped expr
+    /// * rhs - method receiver expr
+    pipe_method_call,
     /// Tuple element access: tuple.0, tuple.1, etc.
     /// * lhs - node index of tuple expression
     /// * main_token - the element index token (NoSpaceDotInt or DotInt)

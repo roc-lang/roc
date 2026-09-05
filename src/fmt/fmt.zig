@@ -1480,6 +1480,68 @@ const Formatter = struct {
         try fmt.push(')');
     }
 
+    fn formatPipeStart(
+        fmt: *Formatter,
+        left_idx: AST.Expr.Idx,
+        operator: Token.Idx,
+        multiline: bool,
+        format_behavior: ExprFormatBehavior,
+    ) FormatAstError!void {
+        const left = try fmt.formatExprWithInfo(left_idx);
+        if (multiline) {
+            const already_broke = try fmt.flushCommentsBefore(operator);
+            if (format_behavior == .normal) {
+                fmt.curr_indent += 1;
+            }
+            if (!already_broke) {
+                try fmt.ensureNewline();
+            }
+            try fmt.pushIndent();
+        } else {
+            _ = try fmt.continueAfterMultilineStringLine(left);
+            try fmt.push(' ');
+        }
+        try fmt.pushAll("|>");
+        if (multiline and try fmt.flushCommentsAfter(operator)) {
+            try fmt.pushIndent();
+        } else {
+            try fmt.push(' ');
+        }
+    }
+
+    fn formatMethodCallSyntax(
+        fmt: *Formatter,
+        receiver_idx: AST.Expr.Idx,
+        method_token: Token.Idx,
+        args: AST.Expr.Span,
+        args_region: AST.TokenizedRegion,
+        layout: AST.CollectionLayout,
+        multiline: bool,
+        format_behavior: ExprFormatBehavior,
+    ) FormatAstError!void {
+        const receiver_expr = fmt.ast.store.getExpr(receiver_idx);
+        const flatten_pipe_receiver = receiver_expr == .arrow_call and multiline;
+        const parenthesize_receiver = (receiver_expr == .arrow_call and !flatten_pipe_receiver) or fmt.exprIsNumericAccessReceiver(receiver_idx);
+        const expand_parenthesized_receiver = receiver_expr == .arrow_call and
+            fmt.nodeWillBeMultiline(AST.Expr.Idx, receiver_idx);
+        const receiver = if (parenthesize_receiver)
+            try fmt.formatParenthesizedExpr(null, receiver_idx, expand_parenthesized_receiver)
+        else
+            try fmt.formatExprWithInfo(receiver_idx);
+        if (flatten_pipe_receiver) {
+            try fmt.continuePipeReceiverPostfix(method_token, format_behavior);
+        } else if (!parenthesize_receiver) {
+            const continued = try fmt.continueAfterMultilineStringLine(receiver);
+            if (!continued and multiline and try fmt.flushCommentsBefore(method_token)) {
+                fmt.adjustMultilineAccessIndent(format_behavior);
+                try fmt.pushIndent();
+            }
+        }
+        try fmt.push('.');
+        try fmt.pushTokenText(method_token);
+        try fmt.formatApplyArgs(args_region, layout, fmt.ast.store.exprSlice(args));
+    }
+
     fn formatExprInner(fmt: *Formatter, ei: AST.Expr.Idx, format_context: ExprFormatContext) FormatAstError!FormattedExpr {
         const expr = fmt.ast.store.getExpr(ei);
         const region = fmt.nodeRegion(@intFromEnum(ei));
@@ -1646,54 +1708,40 @@ const Formatter = struct {
                 }
             },
             .method_call => |mc| {
-                const left_expr = fmt.ast.store.getExpr(mc.receiver);
-                const flatten_pipe_receiver = left_expr == .arrow_call and multiline;
-                const parenthesize_receiver = (left_expr == .arrow_call and !flatten_pipe_receiver) or fmt.exprIsNumericAccessReceiver(mc.receiver);
-                const expand_parenthesized_receiver = left_expr == .arrow_call and
-                    fmt.nodeWillBeMultiline(AST.Expr.Idx, mc.receiver);
-                const receiver = if (parenthesize_receiver)
-                    try fmt.formatParenthesizedExpr(null, mc.receiver, expand_parenthesized_receiver)
-                else
-                    try fmt.formatExprWithInfo(mc.receiver);
-                if (flatten_pipe_receiver) {
-                    try fmt.continuePipeReceiverPostfix(mc.method_token, format_behavior);
-                } else if (!parenthesize_receiver) {
-                    const continued = try fmt.continueAfterMultilineStringLine(receiver);
-                    if (!continued and multiline and try fmt.flushCommentsBefore(mc.method_token)) {
-                        fmt.adjustMultilineAccessIndent(format_behavior);
-                        try fmt.pushIndent();
-                    }
-                }
-                try fmt.push('.');
-                try fmt.pushTokenText(mc.method_token);
                 // Only the argument list (from the method token onwards) should
                 // determine whether the call is multiline. Using the full
                 // `mc.region` would include newlines from the receiver chain and
                 // wrongly expand short, inline arguments. (See issue #9646)
                 const args_region = AST.TokenizedRegion{ .start = mc.method_token + 1, .end = mc.region.end };
-                try fmt.formatApplyArgs(args_region, fmt.ast.store.getCollectionLayout(ei), fmt.ast.store.exprSlice(mc.args));
+                try fmt.formatMethodCallSyntax(
+                    mc.receiver,
+                    mc.method_token,
+                    mc.args,
+                    args_region,
+                    fmt.ast.store.getCollectionLayout(ei),
+                    multiline,
+                    format_behavior,
+                );
+            },
+            .pipe_method_call => |pmc| {
+                const details = fmt.ast.store.getPipeMethodCallDetails(pmc);
+                try fmt.formatPipeStart(pmc.left, details.operator, multiline, format_behavior);
+                const method_multiline = fmt.ast.store.getCollectionLayout(ei) == .expanded or
+                    fmt.groupedExprWillBeMultiline(pmc.receiver) or
+                    fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(details.args));
+                const args_region = AST.TokenizedRegion{ .start = details.method_token + 1, .end = pmc.region.end };
+                try fmt.formatMethodCallSyntax(
+                    pmc.receiver,
+                    details.method_token,
+                    details.args,
+                    args_region,
+                    fmt.ast.store.getCollectionLayout(ei),
+                    method_multiline,
+                    .no_indent_on_access,
+                );
             },
             .arrow_call => |ld| {
-                const left = try fmt.formatExprWithInfo(ld.left);
-                if (multiline) {
-                    const already_broke = try fmt.flushCommentsBefore(ld.operator);
-                    if (format_behavior == .normal) {
-                        fmt.curr_indent += 1;
-                    }
-                    if (!already_broke) {
-                        try fmt.ensureNewline();
-                    }
-                    try fmt.pushIndent();
-                } else {
-                    _ = try fmt.continueAfterMultilineStringLine(left);
-                    try fmt.push(' ');
-                }
-                try fmt.pushAll("|>");
-                if (multiline and try fmt.flushCommentsAfter(ld.operator)) {
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
+                try fmt.formatPipeStart(ld.left, ld.operator, multiline, format_behavior);
 
                 const right_expr = fmt.ast.store.getExpr(ld.right);
                 switch (right_expr) {
@@ -1704,6 +1752,10 @@ const Formatter = struct {
                         const apply_fn_idx = apply.@"fn";
                         const apply_fn = fmt.ast.store.getExpr(apply_fn_idx);
                         const args = fmt.ast.store.exprSlice(apply.args);
+                        const fn_is_call = apply_fn == .apply or
+                            apply_fn == .method_call or
+                            apply_fn == .nominal_apply or
+                            apply_fn == .pipe_method_call;
 
                         // A direct empty argument list contributes no arguments
                         // beyond the piped value. Remove it unless a following
@@ -1711,7 +1763,7 @@ const Formatter = struct {
                         // doing so would expose another application as the RHS.
                         // (`value |> make()()` must remain distinct from
                         // `value |> make()`.)
-                        if (args.len == 0 and apply_fn != .apply and !format_context.question_suffix_follows) {
+                        if (args.len == 0 and !fn_is_call and !format_context.question_suffix_follows) {
                             const right_region = fmt.nodeRegion(@intFromEnum(ld.right));
                             const closing_token = right_region.end - 1;
                             if (fmt.hasCommentBefore(closing_token) and try fmt.flushCommentsBefore(closing_token)) {
@@ -1755,6 +1807,7 @@ const Formatter = struct {
                     .record_updater,
                     .field_access,
                     .method_call,
+                    .pipe_method_call,
                     .tuple_access,
                     .arrow_call,
                     .bin_op,
@@ -2287,6 +2340,7 @@ const Formatter = struct {
                     .record_updater,
                     .field_access,
                     .method_call,
+                    .pipe_method_call,
                     .tuple_access,
                     .arrow_call,
                     .bin_op,
@@ -3876,6 +3930,7 @@ const Formatter = struct {
             .record,
             .lambda,
             .record_updater,
+            .pipe_method_call,
             .arrow_call,
             .bin_op,
             .unary_op,
@@ -3898,10 +3953,14 @@ const Formatter = struct {
 
     fn groupedExprWillBeMultiline(fmt: *Formatter, expr_idx: AST.Expr.Idx) bool {
         const expr = fmt.ast.store.getExpr(expr_idx);
-        if (expr == .method_call) {
-            const method = expr.method_call;
-            const receiver_region = fmt.nodeRegion(@intFromEnum(method.receiver));
-            if (fmt.ast.regionIsMultiline(.{ .start = receiver_region.start, .end = method.method_token + 1 })) {
+        if (expr == .method_call or expr == .pipe_method_call) {
+            const receiver = if (expr == .method_call) expr.method_call.receiver else expr.pipe_method_call.receiver;
+            const method_token = if (expr == .method_call)
+                expr.method_call.method_token
+            else
+                fmt.ast.store.getPipeMethodCallDetails(expr.pipe_method_call).method_token;
+            const receiver_region = fmt.nodeRegion(@intFromEnum(receiver));
+            if (fmt.ast.regionIsMultiline(.{ .start = receiver_region.start, .end = method_token + 1 })) {
                 return true;
             }
         }
@@ -3941,6 +4000,7 @@ const Formatter = struct {
                 (fmt.ast.store.getExpr(m.receiver) == .arrow_call and fmt.nodeWillBeMultiline(AST.Expr.Idx, m.receiver)) or
                 fmt.groupedExprWillBeMultiline(m.receiver) or
                 fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(m.args)),
+            .pipe_method_call => fmt.nodeWillBeMultiline(AST.Expr.Idx, expr_idx),
             .nominal_apply => |na| fmt.ast.store.getCollectionLayout(expr_idx) == .expanded or
                 fmt.groupedExprWillBeMultiline(na.mapper) or
                 fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(na.args)),
@@ -3978,10 +4038,14 @@ const Formatter = struct {
     fn nodeWillBeMultiline(fmt: *Formatter, comptime T: type, item: T) bool {
         if (T == AST.Expr.Idx) {
             const expr = fmt.ast.store.getExpr(item);
-            if (expr == .method_call) {
-                const method = expr.method_call;
-                const receiver_region = fmt.nodeRegion(@intFromEnum(method.receiver));
-                if (fmt.ast.regionIsMultiline(.{ .start = receiver_region.start, .end = method.method_token + 1 })) {
+            if (expr == .method_call or expr == .pipe_method_call) {
+                const receiver = if (expr == .method_call) expr.method_call.receiver else expr.pipe_method_call.receiver;
+                const method_token = if (expr == .method_call)
+                    expr.method_call.method_token
+                else
+                    fmt.ast.store.getPipeMethodCallDetails(expr.pipe_method_call).method_token;
+                const receiver_region = fmt.nodeRegion(@intFromEnum(receiver));
+                if (fmt.ast.regionIsMultiline(.{ .start = receiver_region.start, .end = method_token + 1 })) {
                     return true;
                 }
             }
@@ -4060,6 +4124,13 @@ const Formatter = struct {
                     }
 
                     return fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(m.args));
+                },
+                .pipe_method_call => |m| {
+                    const details = fmt.ast.store.getPipeMethodCallDetails(m);
+                    if (fmt.nodeWillBeMultiline(AST.Expr.Idx, m.left)) return true;
+                    if (fmt.ast.store.getCollectionLayout(item) == .expanded) return true;
+                    if (fmt.nodeWillBeMultiline(AST.Expr.Idx, m.receiver)) return true;
+                    return fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.exprSlice(details.args));
                 },
                 .nominal_apply => |na| {
                     if (fmt.ast.store.getCollectionLayout(item) == .expanded) return true;
@@ -4923,6 +4994,26 @@ test "pipe drops direct empty target argument lists" {
     const result = try moduleFmtsStable(std.testing.allocator, "a=(x|>foo(),x|>Ok(),x|>(|v|v)())", false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("a = (x |> foo, x |> Ok, x |> (|v| v))\n", result);
+}
+
+test "issue 11045: pipe keeps empty argument lists on method targets" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\my_const = []
+        \\
+        \\_ = [1, 2, 3] |> my_const.concat()
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "my_const = []\n\n" ++
+            "_ = [1, 2, 3] |> my_const.concat()\n",
+        result,
+    );
+}
+
+test "pipe keeps an empty target application after a method call" {
+    const result = try moduleFmtsStable(std.testing.allocator, "a=x|>receiver.method()()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = x |> receiver.method()()\n", result);
 }
 
 test "pipe keeps comments from removed empty argument lists" {

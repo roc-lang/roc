@@ -11932,6 +11932,39 @@ fn runExprKernel(
                     }
                     try stacks.pushParse(frame_allocator, .{ .idx = e.receiver, .target = .scratch });
                 },
+                .pipe_method_call => |e| {
+                    const details = self.parse_ir.store.getPipeMethodCallDetails(e);
+                    const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+                    const method_name = self.parse_ir.tokens.resolveIdentifier(details.method_token) orelse {
+                        const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                            .region = region,
+                        } });
+                        try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
+                        continue :expr_kernel_loop .dispatch;
+                    };
+
+                    const raw_method_region = self.parse_ir.tokens.resolve(details.method_token);
+                    const method_name_region = if (raw_method_region.end.offset > raw_method_region.start.offset)
+                        Region{ .start = .{ .offset = raw_method_region.start.offset + 1 }, .end = raw_method_region.end }
+                    else
+                        raw_method_region;
+
+                    const args_slice = self.parse_ir.store.exprSlice(details.args);
+                    try stacks.pushFinishPipeMethodCall(frame_allocator, .{
+                        .region = region,
+                        .free_vars_start = self.scratch_free_vars.top(),
+                        .method_name = method_name,
+                        .method_name_region = method_name_region,
+                        .arg_count = args_slice.len,
+                    });
+                    var i = args_slice.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try stacks.pushParse(frame_allocator, .{ .idx = args_slice[i], .target = .scratch });
+                    }
+                    try stacks.pushParse(frame_allocator, .{ .idx = e.receiver, .target = .scratch });
+                    try stacks.pushParse(frame_allocator, .{ .idx = e.left, .target = .scratch });
+                },
                 .arrow_call => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const free_vars_start = self.scratch_free_vars.top();
@@ -13303,6 +13336,45 @@ fn runExprKernel(
 
             const scratch_top = self.env.store.scratchExprTop();
             for (child_slice[1..]) |maybe_arg| {
+                if (maybe_arg.expr) |can_arg| {
+                    try self.env.store.addScratchExpr(can_arg.idx);
+                }
+            }
+            const args_span = try self.env.store.exprSpanFrom(scratch_top);
+
+            const expr_idx = try self.env.addExpr(CIR.Expr{ .e_method_call = .{
+                .receiver = can_receiver.idx,
+                .method_name = state.method_name,
+                .method_name_region = state.method_name_region,
+                .args = args_span,
+            } }, state.region);
+
+            const free_vars_span = self.scratch_free_vars.spanFrom(state.free_vars_start);
+            child_slots.shrinkRetainingCapacity(result_start);
+            try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span });
+
+            continue :expr_kernel_loop .dispatch;
+        },
+        .finish_pipe_method_call => {
+            const state = stacks.takeFinishPipeMethodCall();
+            const child_count = state.arg_count + 2;
+            const result_start = child_slots.items.len - child_count;
+            const child_slice = child_slots.items[result_start..];
+
+            const can_piped_arg = child_slice[0].expr orelse {
+                child_slots.shrinkRetainingCapacity(result_start);
+                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
+                continue :expr_kernel_loop .dispatch;
+            };
+            const can_receiver = child_slice[1].expr orelse {
+                child_slots.shrinkRetainingCapacity(result_start);
+                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
+                continue :expr_kernel_loop .dispatch;
+            };
+
+            const scratch_top = self.env.store.scratchExprTop();
+            try self.env.store.addScratchExpr(can_piped_arg.idx);
+            for (child_slice[2..]) |maybe_arg| {
                 if (maybe_arg.expr) |can_arg| {
                     try self.env.store.addScratchExpr(can_arg.idx);
                 }
@@ -16591,6 +16663,7 @@ const ExprKernelLabel = enum {
     finish_bin_op,
     finish_single_question_binop,
     finish_method_call,
+    finish_pipe_method_call,
     finish_arrow_apply,
     finish_arrow_tag_apply,
     finish_arrow_call,
@@ -16855,6 +16928,8 @@ const ExprFinishMethodCallWork = struct {
     method_name_region: Region,
     arg_count: usize,
 };
+
+const ExprFinishPipeMethodCallWork = ExprFinishMethodCallWork;
 
 const ExprFinishArrowApplyWork = struct {
     region: Region,
@@ -17131,6 +17206,7 @@ const ExprKernelWork = struct {
             .finish_bin_op => _ = self.takeFinishBinOp(),
             .finish_single_question_binop => _ = self.takeFinishSingleQuestionBinop(),
             .finish_method_call => _ = self.takeFinishMethodCall(),
+            .finish_pipe_method_call => _ = self.takeFinishPipeMethodCall(),
             .finish_arrow_apply => _ = self.takeFinishArrowApply(),
             .finish_arrow_tag_apply => _ = self.takeFinishArrowTagApply(),
             .finish_arrow_call => _ = self.takeFinishArrowCall(),
@@ -17205,6 +17281,7 @@ const ExprKernelWork = struct {
                 .finish_bin_op,
                 .finish_single_question_binop,
                 .finish_method_call,
+                .finish_pipe_method_call,
                 .finish_arrow_apply,
                 .finish_arrow_tag_apply,
                 .finish_arrow_call,
@@ -17546,6 +17623,12 @@ const ExprKernelWork = struct {
         try self.pushLabel(allocator, .finish_method_call, self.current_target);
     }
 
+    inline fn pushFinishPipeMethodCall(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishPipeMethodCallWork) std.mem.Allocator.Error!void {
+        try self.finish_method_call.append(allocator, item);
+        errdefer _ = self.finish_method_call.pop();
+        try self.pushLabel(allocator, .finish_pipe_method_call, self.current_target);
+    }
+
     inline fn pushFinishArrowApply(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishArrowApplyWork) std.mem.Allocator.Error!void {
         try self.finish_arrow_apply.append(allocator, item);
         errdefer _ = self.finish_arrow_apply.pop();
@@ -17803,6 +17886,10 @@ const ExprKernelWork = struct {
     }
 
     inline fn takeFinishMethodCall(self: *ExprKernelWork) ExprFinishMethodCallWork {
+        return self.finish_method_call.pop() orelse unreachable;
+    }
+
+    inline fn takeFinishPipeMethodCall(self: *ExprKernelWork) ExprFinishPipeMethodCallWork {
         return self.finish_method_call.pop() orelse unreachable;
     }
 

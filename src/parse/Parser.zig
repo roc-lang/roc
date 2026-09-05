@@ -2558,9 +2558,16 @@ const ExprArrowAfterInnerState = struct {
     operator: Token.Idx,
 };
 
+const PipeMethodTargetState = enum(u8) {
+    available,
+    candidate,
+    unavailable,
+};
+
 const ExprPipeAfterRhsState = struct {
     start: Token.Idx,
     min_bp: u8,
+    method_target: PipeMethodTargetState,
     left: AST.Expr.Idx,
     operator: Token.Idx,
 };
@@ -2789,6 +2796,11 @@ const OpenSyntaxStack = struct {
     inline fn peekPayload(self: *OpenSyntaxStack, comptime Payload: type) Payload {
         const stack = self.payloadStack(Payload);
         return stack.items[stack.items.len - 1];
+    }
+
+    inline fn peekPayloadPtr(self: *OpenSyntaxStack, comptime Payload: type) *Payload {
+        const stack = self.payloadStack(Payload);
+        return &stack.items[stack.items.len - 1];
     }
 
     inline fn pushWithKind(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind_stack: anytype, kind: anytype, comptime Payload: type, payload: Payload) std.mem.Allocator.Error!void {
@@ -3750,6 +3762,24 @@ fn runExprStatementKernel(
                 continue :expr_kernel .complete;
             }
 
+            if (open_syntax.peekExpr() == .expr_pipe_rhs and
+                open_syntax.peekPayload(ExprPipeAfterRhsState).method_target == .candidate)
+            {
+                if (tok == .NoSpaceOpQuestion) {
+                    last_expr = expr_finish_state.expr;
+                    continue :expr_kernel .complete;
+                }
+                if (tok == .NoSpaceOpenRound or
+                    tok == .NoSpaceDotInt or
+                    tok == .NoSpaceDotLowerIdent or
+                    tok == .NoSpaceDotUpperIdent or
+                    tok == .NoSpaceDotQuestionLowerIdent or
+                    tok == .Dot)
+                {
+                    open_syntax.peekPayloadPtr(ExprPipeAfterRhsState).method_target = .unavailable;
+                }
+            }
+
             if (tok == .Dot and self.peekN(1) == .OpenCurly) {
                 const record_start = self.pos + 1;
                 self.advance();
@@ -3903,9 +3933,23 @@ fn runExprStatementKernel(
                 try open_syntax.pushExpr(open_allocator, .expr_pipe_rhs, ExprPipeAfterRhsState, .{
                     .start = expr_finish_state.start,
                     .min_bp = expr_finish_state.min_bp,
+                    .method_target = .available,
                     .left = expr_finish_state.expr,
                     .operator = op_pos,
                 });
+
+                if (first_token_tag == .LowerIdent and self.peekN(1) != .NoSpaceDotUpperIdent) {
+                    const ident_start = self.pos;
+                    const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
+                    self.advance();
+                    const rhs = try self.store.addExpr(.{ .ident = .{
+                        .region = .{ .start = ident_start, .end = self.pos },
+                        .token = ident_start,
+                        .qualifiers = empty_qualifiers,
+                    } });
+                    expr_finish_state = .{ .start = ident_start, .min_bp = 100, .expr = rhs };
+                    continue :expr_kernel .suffix;
+                }
 
                 if (first_token_tag == .LowerIdent or first_token_tag == .UpperIdent) {
                     const ident_start = self.pos;
@@ -4109,12 +4153,16 @@ fn runExprStatementKernel(
                     .expr_pipe_rhs => {
                         const state = open_syntax.popExprPayload(.expr_pipe_rhs, ExprPipeAfterRhsState);
                         last_expr = null;
-                        const expr = try self.store.addExpr(.{ .arrow_call = .{
-                            .region = .{ .start = state.start, .end = self.pos },
-                            .operator = state.operator,
-                            .left = state.left,
-                            .right = completed,
-                        } });
+                        const region = AST.TokenizedRegion{ .start = state.start, .end = self.pos };
+                        const expr = if (state.method_target == .candidate and self.store.getExpr(completed) == .method_call)
+                            try self.store.finishPipeMethodCall(completed, state.left, state.operator, region)
+                        else
+                            try self.store.addExpr(.{ .arrow_call = .{
+                                .region = region,
+                                .operator = state.operator,
+                                .left = state.left,
+                                .right = completed,
+                            } });
                         expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
                         continue :expr_kernel .suffix;
                     },
@@ -4557,6 +4605,9 @@ fn runExprStatementKernel(
                                 .region = .{ .start = apply_state.start, .end = self.pos },
                             } });
                             self.store.setCollectionLayout(expr, layout);
+                            if (open_syntax.peekExpr() == .expr_pipe_rhs) {
+                                open_syntax.peekPayloadPtr(ExprPipeAfterRhsState).method_target = .unavailable;
+                            }
                             // A direct target call makes the following `?` apply
                             // to the completed pipe rather than to its RHS.
                             if (self.peek() == .NoSpaceOpQuestion and open_syntax.peekExpr() == .expr_pipe_rhs) {
@@ -4574,6 +4625,11 @@ fn runExprStatementKernel(
                                 .region = .{ .start = method_state.start, .end = self.pos },
                             } });
                             self.store.setCollectionLayout(expr, layout);
+                            if (open_syntax.peekExpr() == .expr_pipe_rhs and
+                                open_syntax.peekPayload(ExprPipeAfterRhsState).method_target == .available)
+                            {
+                                open_syntax.peekPayloadPtr(ExprPipeAfterRhsState).method_target = .candidate;
+                            }
                             expr_finish_state = .{ .start = method_state.start, .min_bp = method_state.min_bp, .expr = expr };
                             continue :expr_kernel .suffix;
                         },
@@ -4584,6 +4640,9 @@ fn runExprStatementKernel(
                                 .region = .{ .start = nominal_state.start, .end = self.pos },
                             } });
                             self.store.setCollectionLayout(expr, layout);
+                            if (open_syntax.peekExpr() == .expr_pipe_rhs) {
+                                open_syntax.peekPayloadPtr(ExprPipeAfterRhsState).method_target = .unavailable;
+                            }
                             expr_finish_state = .{ .start = nominal_state.start, .min_bp = nominal_state.min_bp, .expr = expr };
                             continue :expr_kernel .suffix;
                         },
