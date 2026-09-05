@@ -2489,11 +2489,7 @@ fn renderCheckedModuleProblemsWithConfig(
         try reporting.renderReportWithConfig(&report, &out.writer, config);
     }
     const raw = try out.toOwnedSlice();
-    const trimmed = std.mem.trimEnd(u8, raw, "\r\n");
-    if (trimmed.len == raw.len) return raw;
-    const result = try allocator.dupe(u8, trimmed);
-    allocator.free(raw);
-    return result;
+    return reporting.trimOwnedTrailingLineBreaks(allocator, raw);
 }
 
 fn cleanupCheckedModule(allocator: Allocator, module: CheckedModule) void {
@@ -3425,11 +3421,11 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacksAndExpectSites(
         compile_options.options,
     );
     defer {
-        std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, std.mem.sliceTo(dylib_path, 0)) catch {};
+        std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, dylib_path) catch {};
         allocator.free(dylib_path);
     }
 
-    var lib = try EvalDynLib.open(allocator, std.mem.sliceTo(dylib_path, 0));
+    var lib = try EvalDynLib.open(allocator, dylib_path);
     defer lib.close();
 
     var longjmp_on_crash = true;
